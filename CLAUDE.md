@@ -40,6 +40,8 @@ rust-nmap/
 
 ## Development Principles
 
+### 0. Pay Attention to Code Quality Hook Error Messages Do not attempt to bypass or disable the Hook
+
 ### 1. No Simplification
 
 **CRITICAL**: This project aims for 100% functional parity with Nmap. NO simplifications are permitted:

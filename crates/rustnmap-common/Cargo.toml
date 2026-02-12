@@ -1,0 +1,23 @@
+[package]
+name = "rustnmap-common"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+description = "Common types, errors, and utilities for the RustNmap network scanner"
+keywords = ["network", "scanning", "security", "nmap"]
+categories = ["network-programming", "parser-implementations"]
+
+[dependencies]
+thiserror = { workspace = true }
+serde = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+
+[lints]
+workspace = true

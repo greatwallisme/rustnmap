@@ -1,0 +1,24 @@
+[package]
+name = "rustnmap-target"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+description = "Target parsing and host discovery for RustNmap"
+keywords = ["network", "target", "scanning", "cidr"]
+categories = ["network-programming", "parser-implementations"]
+
+[dependencies]
+rustnmap-common = { path = "../rustnmap-common" }
+tokio = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+
+[lints]
+workspace = true
+

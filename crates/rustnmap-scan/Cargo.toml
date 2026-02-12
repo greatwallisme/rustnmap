@@ -1,0 +1,29 @@
+[package]
+name = "rustnmap-scan"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+description = "Port scanning implementations for RustNmap"
+keywords = ["network", "scanning", "port", "security"]
+categories = ["network-programming"]
+
+[dependencies]
+rustnmap-common = { path = "../rustnmap-common" }
+rustnmap-net = { path = "../rustnmap-net" }
+rustnmap-packet = { path = "../rustnmap-packet" }
+rustnmap-target = { path = "../rustnmap-target" }
+tokio = { workspace = true }
+pnet = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+
+[lints]
+workspace = true

@@ -243,3 +243,64 @@ init:
     echo "======================================"
     echo "Project initialization complete!"
     echo "======================================"
+
+# Build recipes
+build *args="":
+    cargo build {{args}}
+
+check *args="":
+    cargo check --workspace {{args}}
+
+test *args="":
+    cargo test --workspace {{args}}
+
+clippy *args="":
+    cargo clippy --workspace -- -D warnings {{args}}
+
+fmt:
+    cargo fmt --all
+
+fmt-check:
+    cargo fmt --all -- --check
+
+run *args="":
+    cargo run --release {{args}}
+
+release:
+    cargo build --workspace --release
+
+clean:
+    cargo clean
+
+doc:
+    cargo doc --workspace --no-deps --all-features
+
+# Update dependencies
+update:
+    cargo update
+
+# Lock and check
+lock-check:
+    cargo check --locked
+
+# Show dependency tree
+tree:
+    cargo tree
+
+# Full check (fmt + clippy + test)
+ci: fmt-check clippy test
+
+# Workspace info
+info:
+    cargo workspace info
+
+# List all crates
+list:
+    echo "RustNmap workspace crates:"
+    cargo tree --depth 0
+
+# Install development tools
+install-tools:
+    cargo install cargo-watch
+    cargo install cargo-edit
+    cargo install cargo-criterion
