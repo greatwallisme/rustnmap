@@ -51,6 +51,9 @@
 | 文档 | 描述 | 文件 |
 |------|------|------|
 | Nmap 命令对照 | Nmap 命令参数对照 | [appendix/nmap-commands.md](appendix/nmap-commands.md) |
+| 数据结构参考 | Nmap 核心数据结构映射 | [appendix/nmap-data-structures.md](appendix/nmap-data-structures.md) |
+| 函数参考 | Nmap 核心函数签名参考 | [appendix/nmap-function-reference.md](appendix/nmap-function-reference.md) |
+| 常量参考 | Nmap 源码常量定义 | [appendix/nmap-constants.md](appendix/nmap-constants.md) |
 | 参考资料 | 相关技术文档链接 | [appendix/references.md](appendix/references.md) |
 | 部署指南 | Linux x86_64 部署指南 | [appendix/deployment.md](appendix/deployment.md) |
 

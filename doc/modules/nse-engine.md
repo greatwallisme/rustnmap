@@ -743,5 +743,513 @@ pub struct ScriptTimings {
 }
 ```
 
----
+### 3.5.5 NSE 实现细节
 
+基于 Nmap `nse_main.cc/h`, `nse_nmaplib.cc` 的实现。
+
+#### 3.5.5.1 核心数据结构 (Nmap 源码映射)
+
+```rust
+// 对应 Nmap nse_main.h 中的 ScriptResult
+pub struct NseScriptResult {
+    // 脚本标识符
+    pub id: Cow<'static, str>,
+
+    // 结构化输出表 (在 LUA_REGISTRYINDEX 中的引用)
+    pub output_ref: i32,
+
+    // 原始输出字符串
+    pub output_str: String,
+}
+
+impl NseScriptResult {
+    // 对应 get_output_str()
+    pub fn get_output_string(&self) -> Cow<'static, str> {
+        if self.output_ref != LUA_NOREF {
+            // 从注册表获取输出
+            get_registry_output(self.output_ref)
+        } else {
+            Cow::Borrowed(&self.output_str)
+        }
+    }
+
+    // 对应 write_xml()
+    pub fn write_xml(&self) {
+        // 将脚本结果输出为 XML
+        xml::start_element("script");
+        xml::attribute("id", self.id);
+        xml::attribute("output", self.get_output_string());
+        xml::end_element();
+    }
+
+    // 对应 operator<
+    impl Ord for NseScriptResult {
+        fn cmp(&self, other: &Self) -> Ordering {
+            strcmp(self.id, other.id) < 0
+        }
+    }
+}
+
+// 对应 ScriptResults = std::multiset<ScriptResult*>
+pub struct NseScriptResults {
+    results: BTreeSet<NseScriptResult>,
+}
+
+// 对应 nse_main.h 中的函数
+impl NseScriptResults {
+    // 对应 get_script_scan_results_obj()
+    pub fn new() -> Self {
+        Self {
+            results: BTreeSet::new(),
+        }
+    }
+
+    pub fn insert(&mut self, result: NseScriptResult) {
+        self.results.insert(result);
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &NseScriptResult> {
+        self.results.iter()
+    }
+}
+```
+
+#### 3.5.5.2 Lua 状态管理
+
+```rust
+// 对应 nse_yield(), nse_restore() - 协程支持
+pub struct NseCoroutine {
+    lua_state: *mut lua_State,
+    continuation_index: i32,
+    saved_stack_top: i32,
+}
+
+impl NseCoroutine {
+    // 对应 nse_yield()
+    pub fn yield(&mut self, nresults: i32) -> Result<()> {
+        unsafe {
+            // 保存当前状态
+            self.saved_stack_top = lua_gettop(self.lua_state);
+
+            // 创建续体
+            self.continuation_index = lua_getctx(
+                self.lua_state,
+                nresults,
+            )?;
+
+            // 返回给调用者
+            lua_yield(self.lua_state, nresults);
+        }
+
+        Ok(())
+    }
+
+    // 对应 nse_restore()
+    pub fn restore(&mut self, args: &[LuaValue]) -> Result<()> {
+        unsafe {
+            // 恢复栈
+            lua_settop(self.lua_state, self.saved_stack_top);
+
+            // 传递参数给续体
+            for arg in args {
+                lua_pushvalue(self.lua_state, arg);
+            }
+
+            // 恢复执行
+            lua_resume(self.lua_state, args.len());
+        }
+
+        Ok(())
+    }
+}
+```
+
+#### 3.5.5.3 Nmap 库绑定 (nse_nmaplib.cc)
+
+```rust
+// 对应 set_version() - 暴露服务版本信息到 Lua
+fn expose_service_version(lua: &mut LuaState,
+                           sd: &ServiceDeductions) {
+    let version_table = lua.create_table(0, NSE_NUM_VERSION_FIELDS);
+
+    // name
+    if let Some(name) = sd.name {
+        lua.set_field("name", name);
+    }
+
+    // name_confidence (0-10)
+    lua.set_field("name_confidence", sd.name_confidence);
+
+    // product
+    if let Some(product) = sd.product {
+        lua.set_field("product", product);
+    }
+
+    // version
+    if let Some(version) = sd.version {
+        lua.set_field("version", version);
+    }
+
+    // extrainfo
+    if let Some(extrainfo) = sd.extrainfo {
+        lua.set_field("extrainfo", extrainfo);
+    }
+
+    // hostname
+    if let Some(hostname) = sd.hostname {
+        lua.set_field("hostname", hostname);
+    }
+
+    // ostype
+    if let Some(ostype) = sd.ostype {
+        lua.set_field("ostype", ostype);
+    }
+
+    // devicetype
+    if let Some(devicetype) = sd.devicetype {
+        lua.set_field("devicetype", devicetype);
+    }
+
+    // service_tunnel ("none" 或 "ssl")
+    let tunnel = match sd.service_tunnel {
+        SERVICE_TUNNEL_NONE => "none",
+        SERVICE_TUNNEL_SSL => "ssl",
+    };
+    lua.set_field("service_tunnel", tunnel);
+
+    // service_fp (用于提交的指纹)
+    if let Some(fp) = sd.service_fp {
+        lua.set_field("service_fp", fp);
+    }
+
+    // service_dtype ("table" 或 "probed")
+    let dtype = match sd.dtype {
+        SERVICE_DETECTION_TABLE => "table",
+        SERVICE_DETECTION_PROBED => "probed",
+    };
+    lua.set_field("service_dtype", dtype);
+
+    // cpe (数组)
+    let cpe_table = lua.create_table(sd.cpe.len(), 0);
+    for (i, cpe) in sd.cpe.iter().enumerate() {
+        lua.push_string(cpe);
+        lua.raw_set_i(cpe_table, (i + 1) as i32);
+    }
+    lua.set_field("cpe", cpe_table);
+}
+
+// 对应 set_portinfo() - 暴露端口信息到 Lua
+fn expose_port_info(lua: &mut LuaState,
+                     target: &Target,
+                     port: &Port) {
+    let port_table = lua.create_table(0, 4);
+
+    // port number
+    lua.set_field("number", port.portno);
+
+    // service name
+    let mut sd = ServiceDeductions::default();
+    target.get_service_deductions(port.portno, port.proto, &mut sd);
+
+    if let Some(name) = sd.name {
+        lua.set_field("service", name);
+    }
+
+    // protocol
+    let proto_str = ipproto2str(port.proto);
+    lua.set_field("protocol", proto_str);
+
+    // state
+    let state_str = statenum2str(port.state);
+    lua.set_field("state", state_str);
+
+    // reason
+    let reason_str = reason_str(port.reason.reason_id, true);
+    lua.set_field("reason", reason_str);
+
+    // reason_ttl
+    lua.set_field("reason_ttl", port.reason.ttl);
+
+    // version 子表
+    let version_table = lua.create_table(0, NSE_NUM_VERSION_FIELDS);
+    expose_service_version_to_table(lua, &sd, version_table);
+    lua.set_field("version", version_table);
+}
+```
+
+#### 3.5.5.4 套接字绑定 (nse_nsock.cc)
+
+```rust
+// 对应 nsock 库的 Rust 封装
+pub struct NseSocket {
+    inner: Socket,
+    protocol: Protocol,
+    timeout: Duration,
+    address_family: AddressFamily,
+}
+
+// 套接字操作 (对应 NSE socket API)
+impl NseSocket {
+    // 对应 nsock_connect()
+    pub async fn connect(addr: &SocketAddr) -> Result<Self> {
+        Ok(Self {
+            inner: Socket::connect(addr).await?,
+            protocol: Protocol::detect(addr)?,
+            timeout: Duration::from_secs(30),
+            address_family: addr.family(),
+        })
+    }
+
+    // 对应 nsock_send()
+    pub async fn send(&mut self, data: &[u8]) -> Result<usize> {
+        let n = self.inner.write(data).await?;
+        Ok(n)
+    }
+
+    // 对应 nsock_receive()
+    pub async fn receive(&mut self, buf: &mut [u8]) -> Result<usize> {
+        let n = self.inner.read(buf).await?;
+        Ok(n)
+    }
+
+    // 对应 nsock_close()
+    pub fn close(mut self) -> Result<()> {
+        self.inner.shutdown()?;
+        Ok(())
+    }
+}
+
+// 将套接字暴露给 Lua
+fn register_socket_type(lua: &mut LuaState) {
+    lua.register_type::<NseSocket>("nsock.Socket");
+
+    // 方法: connect
+    lua.register_method("connect", |lua, this| {
+        let addr = lua.check_string(1)?;
+        let socket = NseSocket::connect(&addr).await?;
+        lua.push_userdata(socket);
+        Ok(1)
+    });
+
+    // 方法: send
+    lua.register_method("send", |lua, this| {
+        let socket = lua.check_userdata::<NseSocket>(0)?;
+        let data = lua.check_string(1)?;
+        let n = socket.send(data.as_bytes()).await?;
+        lua.push_integer(n as i64);
+        Ok(1)
+    });
+
+    // 方法: receive
+    lua.register_method("receive", |lua, this| {
+        let socket = lua.check_userdata::<NseSocket>(0)?;
+        let mut buf = vec![0u8; 4096];
+        let n = socket.receive(&mut buf).await?;
+        lua.push_lstring(&buf[..n]);
+        Ok(1)
+    });
+
+    // 方法: close
+    lua.register_method("close", |lua, this| {
+        let mut socket = lua.check_userdata::<NseSocket>(0)?;
+        socket.close()?;
+        Ok(1)
+    });
+}
+```
+
+#### 3.5.5.5 脚本加载和选择
+
+```rust
+// 对应 nse_selectedbyname() - 脚本选择
+pub struct ScriptSelector {
+    database: ScriptDatabase,
+    selected: Vec<Arc<NseScript>>,
+}
+
+impl ScriptSelector {
+    // 对应 Nmap 的 --script 参数处理
+    pub fn select_scripts(&mut self,
+                           patterns: Vec<String>,
+                           categories: Vec<ScriptCategory>)
+        -> Result<Vec<Arc<NseScript>>> {
+        let mut result = Vec::new();
+
+        // 处理文件名模式 (e.g., "vuln")
+        for pattern in &patterns {
+            if pattern.contains('/') || pattern.contains('.') {
+                // 直接文件路径
+                let script = self.database.load_script(pattern)?;
+                result.push(script);
+            } else {
+                // 通配符匹配
+                for script in self.database.find_by_name(pattern)? {
+                    result.push(script.clone());
+                }
+            }
+        }
+        }
+
+        // 处理类别选择 (e.g., "default", "vuln")
+        if !categories.is_empty() {
+            for script in self.database.all_scripts() {
+                if script.categories.iter()
+                    .any(|c| categories.contains(c)) {
+                    if !result.contains(&script) {
+                        result.push(script.clone());
+                    }
+                }
+            }
+        }
+        }
+
+        // 解析依赖关系
+        self.resolve_dependencies(&mut result)?;
+
+        Ok(result)
+    }
+
+    // 递归解析依赖
+    fn resolve_dependencies(&self, scripts: &mut Vec<Arc<NseScript>>)
+        -> Result<()> {
+        let mut resolved = std::collections::HashSet::new();
+
+        for script in scripts.iter() {
+            self.resolve_script_dependencies(script, &mut resolved)?;
+        }
+    }
+}
+```
+
+#### 3.5.5.6 脚本执行引擎
+
+```rust
+// 对应 script_scan() - 主扫描函数
+pub struct ScriptEngine {
+    lua: Lua,
+    scripts: Vec<Arc<NseScript>>,
+    targets: Vec<Target>,
+    config: EngineConfig,
+}
+
+impl ScriptEngine {
+    // 对应 nse_main.cc::script_scan()
+    pub async fn scan_targets(&mut self, targets: Vec<Target>)
+        -> Result<Vec<NseScriptResults>> {
+        let mut all_results = Vec::new();
+
+        for target in targets {
+            // 获取目标的所有端口
+            let ports = target.get_ports();
+
+            // Pre-scan scripts (hostrule)
+            let pre_scripts = self.filter_pre_scan_scripts();
+            for script in pre_scripts {
+                let ctx = ScriptContext::new(target.clone(), None);
+                let result = self.execute_script(script, ctx).await?;
+                all_results.push(result);
+            }
+
+            // Port scripts (portrule)
+            for port in ports {
+                let port_scripts = self.filter_port_scripts(port)?;
+                for script in port_scripts {
+                    let ctx = ScriptContext::new(
+                        target.clone(),
+                        Some(port.clone())
+                    );
+                    let result = self.execute_script(script, ctx).await?;
+                    all_results.push(result);
+                }
+            }
+
+            // Post-scan scripts
+            let post_scripts = self.filter_post_scan_scripts();
+            for script in post_scripts {
+                let ctx = ScriptContext::new(target.clone(), None);
+                let result = self.execute_script(script, ctx).await?;
+                all_results.push(result);
+            }
+        }
+
+        Ok(all_results)
+    }
+
+    // 执行单个脚本
+    async fn execute_script(&self,
+                               script: &Arc<NseScript>,
+                               context: ScriptContext)
+        -> Result<NseScriptResult> {
+        // 设置超时
+        let timeout = context.timeout
+            .max(script.specific_timeout)
+            .unwrap_or(self.config.default_timeout);
+
+        // 在协程中执行
+        match tokio::time::timeout(timeout, self.run_lua(script)).await {
+            Ok(Ok(output)) => Ok(NseScriptResult {
+                id: script.id.clone(),
+                output_ref: store_in_registry(output),
+                output_str: String::new(),
+            }),
+            Ok(Err(NseError::Timeout)) => {
+                Ok(NseScriptResult {
+                    id: script.id.clone(),
+                    output_ref: LUA_NOREF,
+                    output_str: format!("TIMEOUT"),
+                })
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    // 准备 Lua 环境
+    fn prepare_lua_environment(&self, context: &ScriptContext)
+        -> Result<()> {
+        // 创建 host 表
+        let host_table = create_host_table(&context.host)?;
+        self.lua.set_global("host", host_table)?;
+
+        // 创建 port 表 (如果存在)
+        if let Some(port) = &context.port {
+            let port_table = create_port_table(port)?;
+            self.lua.set_global("port", port_table)?;
+        }
+
+        // 设置注册表
+        self.lua.set_global("registry", context.registry.clone())?;
+
+        Ok(())
+    }
+}
+```
+
+#### 3.5.5.7 常量定义 (Nmap 源码映射)
+
+```rust
+// 对应 nse_main.h
+pub const SCRIPT_ENGINE: &str = "NSE";
+pub const SCRIPT_ENGINE_LUA_DIR: &str = "scripts/";
+pub const SCRIPT_ENGINE_LIB_DIR: &str = "nselib/";
+pub const SCRIPT_ENGINE_DATABASE: &str = "scripts/script.db";
+pub const SCRIPT_ENGINE_EXTENSION: &str = ".nse";
+
+// 对应 nse_nmaplib.cc
+pub const NSE_NUM_VERSION_FIELDS: i32 = 12;
+
+// 对应 nse_main.h 中的协议定义
+pub const NSE_PROTOCOL_OP: [&str] = ["tcp", "udp", "sctp"];
+pub const NSE_PROTOCOL: [i32] = [IPPROTO_TCP, IPPROTO_UDP, IPPROTO_SCTP];
+
+// 对应 nse_lua.h
+pub const LUA_REGISTRYINDEX: i32 = -10000;
+pub const LUA_NOREF: i32 = -10001;
+pub const LUA_OK: i32 = 0;
+pub const LUA_YIELD: i32 = 1;
+pub const LUA_ERRRUN: i32 = 2;
+pub const LUA_ERRSYNTAX: i32 = 3;
+pub const LUA_ERRMEM: i32 = 4;
+pub const LUA_ERRERR: i32 = 5;
+```
+
+---
