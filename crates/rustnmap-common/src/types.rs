@@ -360,6 +360,12 @@ impl PortList {
     pub fn iter(&self) -> impl Iterator<Item = Port> + '_ {
         self.ports.iter().copied()
     }
+
+    /// Creates a new port list from a vector of ports.
+    #[must_use]
+    pub fn from_ports(ports: Vec<Port>) -> Self {
+        Self { ports }
+    }
 }
 
 impl IntoIterator for PortList {
