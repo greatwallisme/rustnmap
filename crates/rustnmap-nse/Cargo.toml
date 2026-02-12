@@ -1,0 +1,48 @@
+[package]
+name = "rustnmap-nse"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+description = "Nmap Script Engine (NSE) implementation for RustNmap - Lua 5.4 script runtime"
+keywords = ["nmap", "lua", "scripting", "security", "network"]
+categories = ["network-programming", "scripting-language-bindings"]
+
+[dependencies]
+# Core dependencies
+rustnmap-common = { path = "../rustnmap-common" }
+
+# Async runtime
+tokio = { workspace = true }
+
+# Lua runtime
+mlua = { version = "0.11.6", features = ["lua54", "async", "serialize", "send", "vendored"] }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+
+# Networking
+socket2 = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+
+# Utilities
+bytes = { workspace = true }
+regex = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+mockall = { workspace = true }
+
+[lints]
+workspace = true

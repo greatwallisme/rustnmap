@@ -8,6 +8,7 @@ members = [
     "crates/rustnmap-fingerprint",
     "crates/rustnmap-traceroute",
     "crates/rustnmap-evasion",
+    "crates/rustnmap-nse",
 ]
 resolver = "2"
 
