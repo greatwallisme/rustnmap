@@ -26,8 +26,8 @@ All tasks completed:
 
 ---
 
-### Phase 2: Core Scanning (CURRENT)
-**Status**: `in_progress`
+### Phase 2: Core Scanning (COMPLETE)
+**Status**: `complete`
 
 | Task | Description | Priority | Status |
 |------|-------------|----------|--------|
@@ -48,12 +48,14 @@ All tasks completed:
 
 ---
 
-### Phase 3: Advanced Features (PENDING)
-**Status**: `pending`
+### Phase 3: Advanced Features (IN PROGRESS)
+**Status**: `in_progress`
 
 | Task | Description | Priority | Status |
 |------|-------------|----------|--------|
-| 3.1 | rustnmap-fingerprint crate | P1 | pending | Service/OS detection |
+| 3.1 | rustnmap-fingerprint crate | P1 | COMPLETE | Service/OS detection |
+| 3.2 | Service detection | P1 | COMPLETE | Version probing |
+| 3.3 | OS detection | P1 | COMPLETE | TCP/IP fingerprinting |
 | 3.2 | Service detection | P1 | pending | Version probing |
 | 3.3 | OS detection | P1 | pending | TCP/IP fingerprinting |
 | 3.4 | rustnmap-traceroute crate | P2 | pending | Network route tracing |

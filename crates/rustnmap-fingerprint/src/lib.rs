@@ -1,0 +1,96 @@
+//! Service and OS fingerprinting for network detection.
+//!
+//! This crate provides network service version detection and operating system
+//! fingerprinting capabilities compatible with Nmap's detection algorithms.
+//!
+//! # Architecture
+//!
+//! The crate is organized into two main subsystems:
+//!
+//! - **Service Detection** ([`service`]) - Identifies network services by sending
+//!   version probes and matching responses against known service fingerprints
+//! - **OS Detection** ([`os`]) - Determines the operating system by analyzing
+//!   TCP/IP stack behavior and matching against fingerprint databases
+//!
+//! # Service Detection
+//!
+//! Service detection works by:
+//! 1. Sending probes to open ports
+//! 2. Analyzing responses with regex patterns
+//! 3. Extracting version information with confidence scores
+//!
+//! ```no_run
+//! use rustnmap_fingerprint::service::{ProbeDatabase, ServiceDetector};
+//! use std::net::SocketAddr;
+//!
+//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+//! let db = ProbeDatabase::load_from_nmap_db("nmap-service-probes").await?;
+//! let detector = ServiceDetector::new(db);
+//!
+//! let target: SocketAddr = "127.0.0.1:80".parse().unwrap();
+//! let results = detector.detect_service(&target, 80).await?;
+//!
+//! if let Some(service) = results.first() {
+//!     println!("Service: {} {}", service.name, service.version.as_ref().unwrap_or(&"?".into()));
+//! }
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! # OS Detection
+//!
+//! OS detection analyzes TCP/IP stack characteristics:
+//! - TCP ISN (Initial Sequence Number) patterns
+//! - IP ID increment behavior
+//! - TCP options ordering and values
+//! - TCP window size characteristics
+//! - Responses to specially crafted TCP/ICMP probes
+//!
+//! ```no_run
+//! use rustnmap_fingerprint::os::{FingerprintDatabase, OsDetector};
+//! use std::net::SocketAddr;
+//!
+//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+//! let db = FingerprintDatabase::load_from_nmap_db("nmap-os-db").await?;
+//! let detector = OsDetector::new(db);
+//!
+//! let target: SocketAddr = "127.0.0.1:80".parse().unwrap();
+//! let matches = detector.detect_os(&target).await?;
+//! for os_match in matches.iter().take(3) {
+//!     println!("{}: {}%", os_match.name, os_match.accuracy);
+//! }
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! # Database Formats
+//!
+//! This crate supports Nmap's standard database formats:
+//! - `nmap-service-probes` - Service version detection patterns
+//! - `nmap-os-db` - OS fingerprint reference database
+//!
+//! # Performance
+//!
+//! Both detection systems are optimized for:
+//! - Minimal allocations in hot paths
+//! - Efficient regex compilation and caching
+//! - Parallel probing where network conditions allow
+//!
+//! # Testing
+//!
+//! Enable the `test-util` feature for testing utilities.
+
+#![warn(missing_docs)]
+#![warn(unused_crate_dependencies)]
+
+pub mod error;
+pub mod service;
+pub mod os;
+
+/// Result type for fingerprinting operations.
+pub type Result<T> = std::result::Result<T, error::FingerprintError>;
+
+// Re-exports for convenience
+pub use error::FingerprintError;
+pub use service::{ProbeDatabase, ServiceDetector, ServiceInfo, ProbeDefinition};
+pub use os::{FingerprintDatabase, OsDetector, OsMatch, OsFingerprint, SeqFingerprint, OpsFingerprint};

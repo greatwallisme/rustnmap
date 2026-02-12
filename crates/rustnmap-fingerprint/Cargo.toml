@@ -1,0 +1,33 @@
+[package]
+name = "rustnmap-fingerprint"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Service and OS fingerprinting for RustNmap"
+readme = "README.md"
+keywords = ["nmap", "fingerprinting", "os-detection", "service-detection"]
+categories = ["network-programming"]
+
+[dependencies]
+# Async runtime
+tokio = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+
+# Regex for pattern matching
+regex = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+
+[features]
+default = []
+test-util = []

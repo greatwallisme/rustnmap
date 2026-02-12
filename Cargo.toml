@@ -5,6 +5,7 @@ members = [
     "crates/rustnmap-packet",
     "crates/rustnmap-target",
     "crates/rustnmap-scan",
+    "crates/rustnmap-fingerprint",
 ]
 resolver = "2"
 
@@ -24,11 +25,15 @@ tokio = { version = "1.42", features = ["full"] }
 
 # Networking
 pnet = { version = "0.35", features = ["std"] }
-socket2 = { version = "0.5", features = ["all"] }
+socket2 = { version = "0.6.2", features = ["all"] }
 
 # Serialization
-serde = { version = "1.0", features = ["derive"] }
+serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0"
+serde_bytes = "0.11.19"
+
+# Regex
+regex = "1.0"
 
 # Error handling
 thiserror = "2.0"
@@ -43,8 +48,8 @@ bytes = "1.9"
 
 # Testing
 proptest = "1.5"
-criterion = { version = "0.5", features = ["html_reports"] }
-mockall = "0.13"
+criterion = { version = "0.8.2", features = ["html_reports"] }
+mockall = "0.14.0"
 
 # Lint configuration
 [workspace.lints.rust]

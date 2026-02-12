@@ -40,7 +40,7 @@ rust-nmap/
 
 ## Development Principles
 
-### 0. Pay Attention to Code Quality Hook Error Messages Do not attempt to bypass or disable the Hook
+### 0. Pay Attention to Code Quality Hook Error Messages. Do not attempt to bypass or disable the Hook
 
 ### 1. No Simplification
 
