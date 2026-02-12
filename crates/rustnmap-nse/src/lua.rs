@@ -3,8 +3,6 @@
 //! This module provides the Lua runtime environment with NSE-specific
 //! libraries and sandboxing.
 
-#![allow(unused_variables)]
-
 use mlua::{Lua, Value};
 
 use crate::error::{Error, Result};
@@ -93,7 +91,7 @@ impl NseLua {
     pub fn create_table(&mut self) -> Result<mlua::Table> {
         self.lua.create_table().map_err(|e| Error::LuaError {
             script: "runtime".to_string(),
-            message: format!("failed to create table: {}", e),
+            message: format!("failed to create table: {e}"),
         })
     }
 
@@ -136,7 +134,7 @@ impl NseLua {
             .set(name, value)
             .map_err(|e| Error::LuaError {
                 script: "runtime".to_string(),
-                message: format!("failed to set global '{}': {}", name, e),
+                message: format!("failed to set global '{name}': {e}"),
             })?;
 
         Ok(())
@@ -161,7 +159,7 @@ impl NseLua {
             .get(name)
             .map_err(|e| Error::LuaError {
                 script: "runtime".to_string(),
-                message: format!("failed to get global '{}': {}", name, e),
+                message: format!("failed to get global '{name}': {e}"),
             })
     }
 
@@ -183,7 +181,7 @@ impl NseLua {
     {
         let lua_func = self.lua.create_function(func).map_err(|e| Error::LuaError {
             script: "runtime".to_string(),
-            message: format!("failed to create function '{}': {}", name, e),
+            message: format!("failed to create function '{name}': {e}"),
         })?;
 
         self.lua
@@ -191,7 +189,7 @@ impl NseLua {
             .set(name, lua_func)
             .map_err(|e| Error::LuaError {
                 script: "runtime".to_string(),
-                message: format!("failed to register function '{}': {}", name, e),
+                message: format!("failed to register function '{name}': {e}"),
             })?;
 
         Ok(())
@@ -210,13 +208,13 @@ impl NseLua {
     pub fn register_table(&mut self, name: &str, values: &[(&str, Value)]) -> Result<()> {
         let table = self.lua.create_table().map_err(|e| Error::LuaError {
             script: "runtime".to_string(),
-            message: format!("failed to create table '{}': {}", name, e),
+            message: format!("failed to create table '{name}': {e}"),
         })?;
 
         for (key, value) in values {
             table.set(*key, value.clone()).map_err(|e| Error::LuaError {
                 script: "runtime".to_string(),
-                message: format!("failed to set table key '{}': {}", key, e),
+                message: format!("failed to set table key '{key}': {e}"),
             })?;
         }
 
@@ -225,7 +223,7 @@ impl NseLua {
             .set(name, table)
             .map_err(|e| Error::LuaError {
                 script: "runtime".to_string(),
-                message: format!("failed to register table '{}': {}", name, e),
+                message: format!("failed to register table '{name}': {e}"),
             })?;
 
         Ok(())
@@ -235,7 +233,7 @@ impl NseLua {
     pub fn gc_collect(&mut self) -> Result<()> {
         self.lua.gc_collect().map_err(|e| Error::LuaError {
             script: "runtime".to_string(),
-            message: format!("garbage collection failed: {}", e),
+            message: format!("garbage collection failed: {e}"),
         })
     }
 

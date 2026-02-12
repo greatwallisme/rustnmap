@@ -3,7 +3,11 @@
 //! This module defines the core types representing NSE scripts,
 //! including their metadata, categories, and execution results.
 
-#![allow(clippy::should_implement_trait, unused_variables)]
+#![allow(
+    clippy::should_implement_trait,
+    unused_variables,
+    reason = "Partial implementation - traits and variable usage will be completed"
+)]
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -270,7 +274,7 @@ fn match_pattern(text: &str, pattern: &str) -> bool {
 ///
 /// Scripts can return structured data in various formats.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(clippy::derivable_impls)]
+#[expect(clippy::derivable_impls, reason = "Custom serialization needed for NSE output formats")]
 #[non_exhaustive]
 pub enum ScriptOutput {
     /// Plain text output.

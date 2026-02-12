@@ -19,7 +19,8 @@ use crate::error::{OutputError, Result};
 use crate::models::*;
 use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
 use quick_xml::writer::Writer;
-use std::io::Write;
+use std::io::Write as IoWrite;
+use std::fmt::Write;
 
 /// Verbosity level for output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -163,7 +164,7 @@ impl OutputFormatter for NormalFormatter {
                 .count();
 
             if closed_count > 0 {
-                output.push_str(&format!("Not shown: {} closed ports\n", closed_count));
+                writeln!(output, "Not shown: {closed_count} closed ports").unwrap();
             }
 
             output.push_str("PORT     STATE SERVICE\n");
@@ -245,11 +246,11 @@ impl OutputFormatter for NormalFormatter {
 
     fn format_script(&self, script: &ScriptResult) -> Result<String> {
         let mut output = String::new();
-        output.push_str(&format!("| {}\n", script.id));
+        writeln!(output, "| {}", script.id).unwrap();
 
         // Format multi-line output with pipe prefix
         for line in script.output.lines() {
-            output.push_str(&format!("|_ {}\n", line));
+            writeln!(output, "|_ {line}").unwrap();
         }
 
         Ok(output)
@@ -394,7 +395,7 @@ impl XmlFormatter {
         0
     }
 
-    fn write_host<W: Write>(&self, writer: &mut Writer<W>, host: &HostResult) -> Result<()> {
+    fn write_host<W: IoWrite>(&self, writer: &mut Writer<W>, host: &HostResult) -> Result<()> {
         let mut host_start = BytesStart::new("host");
         match host.ip {
             std::net::IpAddr::V4(_addr) => {
@@ -481,7 +482,7 @@ impl XmlFormatter {
         Ok(())
     }
 
-    fn write_port<W: Write>(&self, writer: &mut Writer<W>, port: &PortResult) -> Result<()> {
+    fn write_port<W: IoWrite>(&self, writer: &mut Writer<W>, port: &PortResult) -> Result<()> {
         let proto = match port.protocol {
             Protocol::Tcp => "tcp",
             Protocol::Udp => "udp",
@@ -530,7 +531,7 @@ impl XmlFormatter {
         Ok(())
     }
 
-    fn write_service<W: Write>(&self, writer: &mut Writer<W>, service: &ServiceInfo) -> Result<()> {
+    fn write_service<W: IoWrite>(&self, writer: &mut Writer<W>, service: &ServiceInfo) -> Result<()> {
         let mut service_start = BytesStart::new("service");
         service_start.push_attribute(("name", service.name.as_str()));
         service_start.push_attribute(("method", service.method.as_str()));
@@ -556,7 +557,7 @@ impl XmlFormatter {
         Ok(())
     }
 
-    fn write_script<W: Write>(&self, writer: &mut Writer<W>, script: &ScriptResult) -> Result<()> {
+    fn write_script<W: IoWrite>(&self, writer: &mut Writer<W>, script: &ScriptResult) -> Result<()> {
         let mut script_start = BytesStart::new("script");
         script_start.push_attribute(("id", script.id.as_str()));
 
@@ -575,7 +576,7 @@ impl XmlFormatter {
         Ok(())
     }
 
-    fn write_script_element<W: Write>(
+    fn write_script_element<W: IoWrite>(
         &self,
         writer: &mut Writer<W>,
         element: &ScriptElement,
@@ -593,7 +594,7 @@ impl XmlFormatter {
         Ok(())
     }
 
-    fn write_os_match<W: Write>(&self, writer: &mut Writer<W>, os_match: &OsMatch) -> Result<()> {
+    fn write_os_match<W: IoWrite>(&self, writer: &mut Writer<W>, os_match: &OsMatch) -> Result<()> {
         let mut os_start = BytesStart::new("osmatch");
         os_start.push_attribute(("name", os_match.name.as_str()));
         os_start.push_attribute(("accuracy", os_match.accuracy.to_string().as_str()));
@@ -805,7 +806,8 @@ impl OutputFormatter for ScriptKiddieFormatter {
         // Header
         output.push_str(&format!("{} ({})", host.ip, host.ip));
         if let Some(ref hostname) = host.hostname {
-            output.push_str(&format!(" [{}]", hostname));
+            use std::fmt::Write;
+            write!(output, " [{hostname}]").unwrap();
         }
         output.push('\n');
 

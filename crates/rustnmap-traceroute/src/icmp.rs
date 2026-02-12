@@ -6,7 +6,7 @@ use std::net::Ipv4Addr;
 /// ICMP Echo-based traceroute implementation.
 #[derive(Debug)]
 pub struct IcmpTraceroute {
-    #[allow(dead_code)]
+    #[expect(dead_code, reason = "Feature not yet implemented")]
     config: TracerouteConfig,
     sequence: u16,
 }

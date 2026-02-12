@@ -122,7 +122,7 @@ impl ScriptEngine {
     pub fn new(database: ScriptDatabase) -> Self {
         let db = Arc::new(database);
         let config = SchedulerConfig::default();
-        let scheduler = ScriptScheduler::new(db.clone(), config);
+        let scheduler = ScriptScheduler::new(Arc::clone(&db), config);
 
         Self { database: db, scheduler }
     }
@@ -140,7 +140,7 @@ impl ScriptEngine {
     #[must_use]
     pub fn with_config(database: ScriptDatabase, config: SchedulerConfig) -> Self {
         let db = Arc::new(database);
-        let scheduler = ScriptScheduler::new(db.clone(), config);
+        let scheduler = ScriptScheduler::new(Arc::clone(&db), config);
 
         Self { database: db, scheduler }
     }

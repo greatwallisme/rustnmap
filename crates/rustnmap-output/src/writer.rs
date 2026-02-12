@@ -131,7 +131,7 @@ impl OutputManager {
     ) -> Result<()> {
         match destination {
             OutputDestination::Stdout => {
-                print!("{}", data);
+                print!("{data}");
                 io::stdout().flush().map_err(OutputError::from)?;
             }
             OutputDestination::File(path) => {

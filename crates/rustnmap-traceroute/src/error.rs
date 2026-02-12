@@ -37,7 +37,7 @@ pub enum TracerouteError {
     #[error("Probe timed out")]
     Timeout,
 
-    /// Permission denied (requires root/CAP_NET_RAW).
+    /// Permission denied (requires `root`/`CAP_NET_RAW`).
     #[error("Permission denied: traceroute requires CAP_NET_RAW capability")]
     PermissionDenied,
 
@@ -70,8 +70,6 @@ impl From<std::io::Error> for TracerouteError {
     fn from(err: std::io::Error) -> Self {
         match err.kind() {
             std::io::ErrorKind::PermissionDenied => Self::PermissionDenied,
-            std::io::ErrorKind::AddrNotAvailable
-            | std::io::ErrorKind::AddrInUse => Self::Network(err.to_string()),
             _ => Self::Network(err.to_string()),
         }
     }

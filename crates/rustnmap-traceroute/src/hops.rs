@@ -105,12 +105,13 @@ impl HopInfo {
     ///
     /// Returns `None` if no probes were successful.
     #[must_use]
+    #[allow(clippy::cast_precision_loss, reason = "f64 has limited mantissa, precision loss acceptable")]
     pub fn avg_rtt(&self) -> Option<Duration> {
         if self.rtts.is_empty() {
             return None;
         }
-        let total: u128 = self.rtts.iter().map(|d| d.as_micros()).sum();
-        Some(Duration::from_micros((total / self.rtts.len() as u128) as u64))
+        let total: u128 = self.rtts.iter().map(Duration::as_micros).sum();
+        Some(Duration::from_micros(u64::try_from(total / self.rtts.len() as u128).unwrap_or(u64::MAX)))
     }
 
     /// Returns the minimum round-trip time.
@@ -127,10 +128,12 @@ impl HopInfo {
 
     /// Returns the standard deviation of round-trip times.
     #[must_use]
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, reason = "f64 sqrt is positive, truncation acceptable")]
     pub fn rtt_stddev(&self) -> Option<Duration> {
         if self.rtts.len() < 2 {
             return None;
         }
+        #[allow(clippy::cast_precision_loss, reason = "f64 has limited mantissa, precision loss acceptable for RTT calculations")]
         let avg = self.avg_rtt()?.as_micros() as f64;
         let variance: f64 = self
             .rtts
@@ -180,14 +183,15 @@ impl std::fmt::Display for HopInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "TTL: {}", self.ttl)?;
         if let Some(ip) = self.ip {
-            write!(f, " IP: {}", ip)?;
+            write!(f, " IP: {ip}")?;
         } else {
             write!(f, " IP: *")?;
         }
         if let Some(hostname) = &self.hostname {
-            write!(f, " ({})", hostname)?;
+            write!(f, " ({hostname})")?;
         }
         if let Some(avg) = self.avg_rtt() {
+            #[allow(clippy::cast_precision_loss, reason = "f64 has limited mantissa, precision loss acceptable for RTT display")]
             write!(f, " RTT: {:.2}ms", avg.as_micros() as f64 / 1000.0)?;
         }
         Ok(())

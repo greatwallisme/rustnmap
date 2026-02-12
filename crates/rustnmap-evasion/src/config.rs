@@ -142,14 +142,12 @@ impl EvasionConfigBuilder {
     }
 
     /// Sets the source MAC address.
-    #[allow(dead_code)]
     pub fn source_mac(mut self, mac: [u8; 6]) -> Self {
         self.config.source.source_mac = Some(mac);
         self
     }
 
     /// Sets the network interface.
-    #[allow(dead_code)]
     pub fn interface(mut self, iface: String) -> Self {
         self.config.source.interface = Some(iface);
         self
@@ -219,7 +217,7 @@ impl EvasionConfigBuilder {
                     "decoy list cannot be empty".into(),
                 ));
             }
-            if decoys.real_ip_position >= decoys.decoys.len() + 1 {
+            if decoys.real_ip_position > decoys.decoys.len() {
                 return Err(super::Error::InvalidDecoyConfig(
                     "real IP position exceeds decoy list length".into(),
                 ));
@@ -502,9 +500,9 @@ mod tests {
             .build();
 
         assert!(result.is_err());
-        match result.unwrap_err() {
-            super::super::Error::InvalidFragmentSize { .. } => {}
-            _ => panic!("expected InvalidFragmentSize error"),
+        if let Err(err) = result {
+            let is_fragment_error = matches!(err, super::super::Error::InvalidFragmentSize { .. });
+            assert!(is_fragment_error, "expected InvalidFragmentSize error, got: {err}");
         }
     }
 

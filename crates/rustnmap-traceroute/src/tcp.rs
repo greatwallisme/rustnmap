@@ -6,14 +6,14 @@ use std::net::Ipv4Addr;
 /// TCP SYN-based traceroute implementation.
 #[derive(Debug)]
 pub struct TcpSynTraceroute {
-    #[allow(dead_code)]
+    #[expect(dead_code, reason = "Feature not yet implemented")]
     config: TracerouteConfig,
 }
 
 /// TCP ACK-based traceroute implementation.
 #[derive(Debug)]
 pub struct TcpAckTraceroute {
-    #[allow(dead_code)]
+    #[expect(dead_code, reason = "Feature not yet implemented")]
     config: TracerouteConfig,
 }
 

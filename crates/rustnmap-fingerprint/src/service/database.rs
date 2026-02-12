@@ -199,8 +199,8 @@ impl ProbeDatabase {
                                 // Hex escape \xHH
                                 let hex1 = chars.next().unwrap_or('0');
                                 let hex2 = chars.next().unwrap_or('0');
-                                let byte = u8::from_str_radix(&format!("{}{}", hex1, hex2), 16)
-                                    .unwrap_or(0);
+                                let hex_str = format!("{hex1}{hex2}");
+                                let byte = u8::from_str_radix(&hex_str, 16).unwrap_or(0);
                                 bytes.push(byte);
                             }
                             _ => {
@@ -274,12 +274,12 @@ impl ProbeDatabase {
                 let start: u16 = part[..range_idx].parse()
                     .map_err(|_| FingerprintError::ParseError {
                         line: 0,
-                        content: format!("Invalid port range start: {}", part),
+                        content: format!("Invalid port range start: {part}"),
                     })?;
                 let end: u16 = part[range_idx + 1..].parse()
                     .map_err(|_| FingerprintError::ParseError {
                         line: 0,
-                        content: format!("Invalid port range end: {}", part),
+                        content: format!("Invalid port range end: {part}"),
                     })?;
                 ports.extend(start..=end);
             } else {
@@ -287,7 +287,7 @@ impl ProbeDatabase {
                 let port: u16 = part.parse()
                     .map_err(|_| FingerprintError::ParseError {
                         line: 0,
-                        content: format!("Invalid port: {}", part),
+                        content: format!("Invalid port: {part}"),
                     })?;
                 ports.push(port);
             }
@@ -301,7 +301,7 @@ impl ProbeDatabase {
         let rarity: u8 = s.trim().parse()
             .map_err(|_| FingerprintError::ParseError {
                 line: 0,
-                content: format!("Invalid rarity: {}", s),
+                content: format!("Invalid rarity: {s}"),
             })?;
         Ok(rarity.clamp(1, 9))
     }
@@ -313,7 +313,7 @@ impl ProbeDatabase {
         // Check for duplicate probe names
         if self.probes.contains_key(&name) {
             return Err(FingerprintError::InvalidProbe {
-                reason: format!("Duplicate probe name: {}", name),
+                reason: format!("Duplicate probe name: {name}"),
             });
         }
 

@@ -3,8 +3,6 @@
 //! This module provides the script database that manages loading,
 //! caching, and selecting NSE scripts.
 
-#![allow(unused_variables)]
-
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -86,7 +84,7 @@ impl ScriptDatabase {
             if path.is_dir() {
                 // Recursively load subdirectories
                 self.load_directory(&path)?;
-            } else if path.extension().map_or(false, |e| e == "nse") {
+            } else if path.extension().is_some_and( |e| e == "nse") {
                 // Load NSE script file
                 self.load_script(&path)?;
             }
@@ -108,7 +106,7 @@ impl ScriptDatabase {
             .to_string();
 
         let script = self.parse_script(&id, path, &source)?;
-        self.register_script(script);
+        self.register_script(&script);
 
         Ok(())
     }
@@ -159,9 +157,9 @@ impl ScriptDatabase {
     fn extract_field(&self, source: &str, field: &str) -> Option<String> {
         // Try pattern: field = [[...]] or field = "..." or field = '...'
         let patterns = [
-            format!("{field} = {{{{{{", field = field),
-            format!("{field} = \"", field = field),
-            format!("{field} = '", field = field),
+            format!("{field} = {{{{{{"),
+            format!("{field} = \""),
+            format!("{field} = '"),
         ];
 
         for pattern in patterns {
@@ -185,7 +183,7 @@ impl ScriptDatabase {
         }
 
         // Try comment pattern: --@field value
-        let comment_pattern = format!("--@{field} ", field = field);
+        let comment_pattern = format!("--@{field} ");
         if let Some(pos) = source.find(&comment_pattern) {
             let start = pos + comment_pattern.len();
             let remaining = &source[start..];
@@ -254,7 +252,7 @@ impl ScriptDatabase {
     }
 
     /// Register a script in all indices.
-    pub fn register_script(&mut self, script: NseScript) {
+    pub fn register_script(&mut self, script: &NseScript) {
         let id = script.id.clone();
 
         // Add to main index
@@ -296,7 +294,7 @@ impl ScriptDatabase {
         ];
 
         for prefix in prefixes {
-            if id.starts_with(prefix) || id.starts_with(&format!("{}-", prefix)) {
+            if id.starts_with(prefix) || id.starts_with(&format!("{prefix}-")) {
                 return Some(prefix.to_string());
             }
         }
@@ -474,9 +472,9 @@ author = "Test Author"
         let script2 = NseScript::new("ssh-auth", PathBuf::from("/test2.nse"), String::new());
         let script3 = NseScript::new("ftp-anon", PathBuf::from("/test3.nse"), String::new());
 
-        db.register_script(script1);
-        db.register_script(script2);
-        db.register_script(script3);
+        db.register_script(&script1);
+        db.register_script(&script2);
+        db.register_script(&script3);
 
         let http_scripts = db.select_by_pattern("http*");
         assert_eq!(http_scripts.len(), 1);
@@ -499,9 +497,9 @@ author = "Test Author"
         let mut script3 = NseScript::new("auth-test", PathBuf::from("/test3.nse"), String::new());
         script3.categories = vec![ScriptCategory::Auth];
 
-        db.register_script(script1);
-        db.register_script(script2);
-        db.register_script(script3);
+        db.register_script(&script1);
+        db.register_script(&script2);
+        db.register_script(&script3);
 
         let vuln_scripts = db.select_by_category(&[ScriptCategory::Vuln]);
         assert_eq!(vuln_scripts.len(), 1);

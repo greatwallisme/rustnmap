@@ -18,14 +18,16 @@ pub struct TimingController {
 }
 
 impl TimingController {
-    /// Creates a new timing controller with the given template.
+    /// Creates a new timing controller with given template.
+    #[must_use]
     pub fn new(template: TimingTemplate) -> Self {
         let values = template.config();
         Self { template, values }
     }
 
-    /// Creates a controller with the default (Normal) timing.
-    pub fn default() -> Self {
+    /// Creates a controller with default (Normal) timing.
+    #[must_use]
+    pub fn new_default() -> Self {
         Self {
             template: DEFAULT_TEMPLATE,
             values: DEFAULT_TEMPLATE.config(),
@@ -33,46 +35,55 @@ impl TimingController {
     }
 
     /// Returns the current timing template.
+    #[must_use]
     pub fn template(&self) -> TimingTemplate {
         self.template
     }
 
     /// Returns the timing values for this template.
+    #[must_use]
     pub fn values(&self) -> &TimingValues {
         &self.values
     }
 
     /// Returns the initial RTT timeout in milliseconds.
+    #[must_use]
     pub fn initial_rtt_timeout(&self) -> std::time::Duration {
         std::time::Duration::from_millis(self.values.initial_rtt_timeout_ms)
     }
 
     /// Returns the minimum RTT timeout in milliseconds.
+    #[must_use]
     pub fn min_rtt_timeout(&self) -> std::time::Duration {
         std::time::Duration::from_millis(self.values.min_rtt_timeout_ms)
     }
 
     /// Returns the maximum RTT timeout in milliseconds.
+    #[must_use]
     pub fn max_rtt_timeout(&self) -> std::time::Duration {
         std::time::Duration::from_millis(self.values.max_rtt_timeout_ms)
     }
 
     /// Returns the maximum number of retries.
+    #[must_use]
     pub fn max_retries(&self) -> u8 {
         self.values.max_retries
     }
 
     /// Returns the delay between scans.
+    #[must_use]
     pub fn scan_delay(&self) -> std::time::Duration {
         std::time::Duration::from_millis(self.values.scan_delay_ms)
     }
 
     /// Returns the maximum number of parallel probes.
+    #[must_use]
     pub fn max_parallel(&self) -> usize {
         self.values.max_parallel
     }
 
     /// Returns true if this template prioritizes stealth over speed.
+    #[must_use]
     pub fn is_stealthy(&self) -> bool {
         matches!(
             self.template,
@@ -81,6 +92,7 @@ impl TimingController {
     }
 
     /// Returns true if this template prioritizes speed over accuracy.
+    #[must_use]
     pub fn is_aggressive(&self) -> bool {
         matches!(self.template,
             TimingTemplate::Aggressive | TimingTemplate::Insane
@@ -91,6 +103,7 @@ impl TimingController {
     ///
     /// For stealthy templates, returns a delay. For aggressive templates,
     /// returns zero delay.
+    #[must_use]
     pub fn calculate_scan_delay(&self, probe_count: usize) -> std::time::Duration {
         if self.values.scan_delay_ms == 0 {
             return std::time::Duration::ZERO;
@@ -98,7 +111,7 @@ impl TimingController {
 
         // Scale delay based on number of probes
         let base_delay = self.values.scan_delay_ms;
-        let scaled_delay = base_delay.saturating_mul(probe_count as u64 / 100);
+        let scaled_delay = base_delay.saturating_mul(u64::try_from(probe_count).unwrap_or(u64::MAX) / 100);
         std::time::Duration::from_millis(scaled_delay)
     }
 
@@ -112,6 +125,11 @@ impl TimingController {
     /// # Returns
     ///
     /// The timeout duration for this attempt.
+    ///
+    /// # Errors
+    ///
+    /// This function does not return errors.
+    #[must_use]
     pub fn calculate_probe_timeout(
         &self,
         attempt: u8,
@@ -120,7 +138,7 @@ impl TimingController {
         let base_timeout = self.initial_rtt_timeout();
 
         // Back off on retries
-        let backoff_multiplier = 2u32.saturating_pow(attempt as u32);
+        let backoff_multiplier = 2u32.saturating_pow(u32::from(attempt));
         let backed_off = base_timeout.saturating_mul(backoff_multiplier);
 
         // Cap at max timeout
@@ -136,6 +154,7 @@ impl TimingController {
     }
 
     /// Returns the template as a string (T0-T5).
+    #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self.template {
             TimingTemplate::Paranoid => "T0",
@@ -156,6 +175,10 @@ impl TimingController {
     /// # Returns
     ///
     /// `Ok(template)` if valid, `Err` otherwise.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(Error::InvalidTimingTemplate)` if the string is not a valid template.
     pub fn parse_template(s: &str) -> crate::Result<TimingTemplate> {
         match s.to_uppercase().as_str() {
             "T0" | "PARANOID" => Ok(TimingTemplate::Paranoid),
@@ -177,7 +200,7 @@ impl TimingController {
 
 impl Default for TimingController {
     fn default() -> Self {
-        Self::default()
+        Self::new_default()
     }
 }
 

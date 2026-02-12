@@ -206,7 +206,7 @@ impl Traceroute {
     ///
     /// This is the main entry point for traceroute operations. The method
     /// sends probes with incrementally increasing TTL values until
-    /// the destination is reached or max_hops is exceeded.
+    /// the destination is reached or `max_hops` is exceeded.
     ///
     /// # Errors
     ///
@@ -280,10 +280,8 @@ impl Traceroute {
             if probe_num + 1 < self.config.probes_per_hop {
                 let wait = if self.config.max_wait > self.config.min_wait {
                     let mut rng = rand::thread_rng();
-                    let diff = self.config.max_wait.as_millis() as u64
-                        - self.config.min_wait.as_millis() as u64;
-                    self.config.min_wait
-                        + Duration::from_millis(rng.gen_range(0..=diff))
+                    let diff = u64::try_from(self.config.max_wait.as_millis()) - u64::try_from(self.config.min_wait.as_millis());
+                    self.config.min_wait + Duration::from_millis(rng.gen_range(0..=diff))
                 } else {
                     self.config.min_wait
                 };

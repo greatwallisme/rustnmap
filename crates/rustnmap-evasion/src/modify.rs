@@ -160,6 +160,7 @@ impl IpOptionsBuilder {
     }
 
     /// Builds the options vector.
+    #[must_use]
     pub fn build(self) -> Vec<crate::config::IpOption> {
         self.options
     }
@@ -168,16 +169,17 @@ impl IpOptionsBuilder {
 /// Calculates a checksum for the given data.
 ///
 /// This is a simple internet checksum used by IP, TCP, and UDP.
+#[must_use]
 pub fn calculate_checksum(data: &[u8]) -> u16 {
     let mut sum: u32 = 0;
 
     for chunk in data.chunks(2) {
         if chunk.len() == 2 {
-            let word = u16::from_be_bytes([chunk[0], chunk[1]]) as u32;
+            let word = u32::from(u16::from_be_bytes([chunk[0], chunk[1]]));
             sum += word;
         } else if chunk.len() == 1 {
             // Handle odd-length data
-            let word = (chunk[0] as u32) << 8;
+            let word = u32::from(chunk[0]) << 8;
             sum += word;
         }
     }
@@ -186,29 +188,30 @@ pub fn calculate_checksum(data: &[u8]) -> u16 {
         sum = (sum & 0xFFFF) + (sum >> 16);
     }
 
-    u16::from_be((!sum as u16).to_be())
+    u16::from_be(u16::from(!sum).to_be())
 }
 
 /// Generates a random padding sequence of the specified length.
 ///
 /// In production, this would use a cryptographically secure RNG.
 /// For deterministic testing, uses a simple pattern.
+#[must_use]
 pub fn generate_padding(length: usize) -> Vec<u8> {
     if length == 0 {
         return Vec::new();
     }
 
     // Use timestamp-based seed for pseudo-randomness
-    let seed = SystemTime::now()
+    let seed = u64::try_from(SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap()
-        .as_nanos() as u64;
+        .as_nanos());
 
     // Simple LCG for deterministic pseudo-randomness
     let mut state = seed;
     (0..length)
         .map(|_| {
-            state = state.wrapping_mul(1103515245).wrapping_add(12345);
+            state = state.wrapping_mul(1_103_515_245).wrapping_add(12345);
             ((state >> 16) & 0xFF) as u8
         })
         .collect()
