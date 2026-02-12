@@ -6,6 +6,7 @@ members = [
     "crates/rustnmap-target",
     "crates/rustnmap-scan",
     "crates/rustnmap-fingerprint",
+    "crates/rustnmap-traceroute",
 ]
 resolver = "2"
 
@@ -69,6 +70,9 @@ pedantic = { level = "warn", priority = -1 }
 perf = { level = "warn", priority = -1 }
 style = { level = "warn", priority = -1 }
 suspicious = { level = "warn", priority = -1 }
+
+# Allow multiple crate versions for transitive dependencies (Linux-only project)
+multiple_crate_versions = "allow"
 
 # Restriction lints for additional safety
 allow_attributes_without_reason = "warn"

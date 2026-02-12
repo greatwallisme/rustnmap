@@ -1,0 +1,29 @@
+[package]
+name = "rustnmap-traceroute"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+description = "Network route tracing for RustNmap"
+keywords = ["traceroute", "network", "tcp", "udp", "icmp"]
+categories = ["network-programming"]
+
+[dependencies]
+rustnmap-common = { path = "../rustnmap-common" }
+rustnmap-net = { path = "../rustnmap-net" }
+tokio = { workspace = true }
+pnet = { workspace = true }
+socket2 = { workspace = true }
+tracing = { workspace = true }
+rand = "0.8"
+thiserror = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+
+[lints]
+workspace = true
