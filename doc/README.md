@@ -32,6 +32,7 @@
 | 输出模块 | 多格式输出设计 | [modules/output.md](modules/output.md) |
 | 目标解析 | 目标规格解析 | [modules/target-parsing.md](modules/target-parsing.md) |
 | 原始数据包 | Linux x86_64 数据包引擎 | [modules/raw-packet.md](modules/raw-packet.md) |
+| 并发模型 | Rust 并发与零拷贝优化 | [modules/concurrency.md](modules/concurrency.md) |
 
 ### 第三部分：数据库与项目结构
 

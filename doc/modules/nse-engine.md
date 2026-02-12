@@ -1252,4 +1252,273 @@ pub const LUA_ERRMEM: i32 = 4;
 pub const LUA_ERRERR: i32 = 5;
 ```
 
+#### 3.5.5.8 资源限制与沙箱 (Deepseek 增强)
+
+##### Lua 内存限制
+
+```rust
+use mlua::{Lua, Error as LuaError};
+
+/// NSE 执行器配置
+pub struct NseExecutorConfig {
+    /// 最大内存使用量 (字节)
+    pub memory_limit: usize,
+    /// CPU 时间限制 (秒)
+    pub cpu_timeout: Duration,
+    /// 指令计数间隔 (每 N 条指令检查时间)
+    pub instruction_check_interval: u32,
+}
+
+impl Default for NseExecutorConfig {
+    fn default() -> Self {
+        Self {
+            memory_limit: 10 * 1024 * 1024,  // 10MB
+            cpu_timeout: Duration::from_secs(5),
+            instruction_check_interval: 1000,
+        }
+    }
+}
+
+impl NseExecutor {
+    /// 创建受限的 Lua 环境
+    pub fn new_with_limits(config: NseExecutorConfig) -> Result<Self, NseError> {
+        // 创建 Lua 实例并启用沙箱
+        let lua = Lua::new_with(
+            mlua::LuaOptions {
+                sandbox: true,  // 启用沙箱模式
+                ..Default::default()
+            }
+        )?;
+
+        // 设置内存限制
+        #[cfg(feature = "lua_memory_limit")]
+        lua.set_memory_limit(config.memory_limit)?;
+
+        // 设置指令钩子 (CPU 时间限制)
+        lua.set_hook(
+            mlua::HookMask::COUNT,
+            config.instruction_check_interval,
+        )?;
+
+        Ok(Self { lua, config })
+    }
+
+    /// 指令钩子 (检查 CPU 时间)
+    fn hook_callback(&self, lua: &Lua) -> Result<(), mlua::Error> {
+        static START_TIME: std::sync::Mutex<HashMap<usize, Instant>> =
+            std::sync::Mutex::new(HashMap::new());
+
+        let lua_id = lua.id();
+        let mut times = START_TIME.lock().unwrap();
+        let start = times.entry(lua_id).or_insert_with(Instant::now);
+
+        if start.elapsed() > self.config.cpu_timeout {
+            return Err(mlua::Error::RuntimeError(
+                "Script CPU time limit exceeded".to_string()
+            ));
+        }
+
+        Ok(())
+    }
+}
+```
+
+##### SELinux 策略集成
+
+```bash
+# /usr/share/selinux/packages/rustnmap.pp
+# RustNmap SELinux 策略模块
+
+policy_module(rustnmap, 1.0.0)
+
+# 允许 rustnmap 使用网络套接字
+allow rustnmap_t self:capabil2 { net_raw net_admin };
+
+# 允许写入指纹库目录
+allow rustnmap_t rustnmap_var_lib_t:file { create write setattr unlink };
+
+# 允许读取系统指纹库
+allow rustnmap_t fingerprint_file_t:file { read open getattr };
+
+# 允许 systemd timer 管理
+allow rustnmap_t systemd_unit_file_t:file { read open };
+```
+
+##### 脚本版本检查
+
+```lua
+-- NSE 脚本版本声明示例
+-- @nse_version 1.0.0
+
+description = [[Example script with version requirement]]
+
+-- 脚本逻辑
+action = function(host, port)
+    -- 如果引擎版本 < 1.0.0，此脚本将拒绝加载
+    return "Script executed successfully"
+end
+```
+
+```rust
+/// 脚本版本检查
+pub fn check_script_compatibility(
+    script: &NseScript,
+    engine_version: &Version,
+) -> Result<(), NseError> {
+    if let Some(req_version) = &script.required_version {
+        if req_version > &engine_version {
+            return Err(NseError::IncompatibleVersion {
+                script: script.id.clone(),
+                required: req_version.clone(),
+                current: engine_version.clone(),
+            });
+        }
+    }
+    Ok(())
+}
+```
+
+#### 3.5.6 脚本自动更新机制
+
+基于 Deepseek 设计文档的指纹库自动更新。
+
+##### systemd Timer 配置
+
+```ini
+# /usr/lib/systemd/system/rustnmap-update-fingerprint.service
+[Unit]
+Description=RustNmap Fingerprint Database Updater
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/rustnmap --fingerprint-update
+User=rustnmap
+Group=rustnmap
+Nice=10
+IOSchedulingClass=idle
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```ini
+# /usr/lib/systemd/systemd/rustnmap-update-fingerprint.timer
+[Unit]
+Description=Weekly RustNmap Fingerprint Update
+Requires=rustnmap-update-fingerprint.service
+
+[Timer]
+OnCalendar=Tue 03:00  # 每周二凌晨3点
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+```
+
+##### MVCC 存储模式
+
+```rust
+use std::path::{Path, PathBuf};
+use std::fs;
+
+/// MVCC 指纹库管理器
+pub struct FingerprintStore {
+    base_dir: PathBuf,
+    current_symlink: PathBuf,
+}
+
+impl FingerprintStore {
+    pub fn new(base_dir: PathBuf) -> Self {
+        let current_symlink = base_dir.join("current");
+        Self {
+            base_dir,
+            current_symlink,
+        }
+    }
+
+    /// 安装新版本 (原子切换)
+    pub fn install_version(&self, data: &[u8]) -> Result<(), StoreError> {
+        // 1. 生成唯一版本标识 (时间戳 + 序列号)
+        let version_id = format!(
+            "r{}_{:02}",
+            chrono::Utc::now().format("%Y%m%d"),
+            fastrand::u16(0..=99)
+        );
+        let version_dir = self.base_dir.join(&version_id);
+
+        // 2. 创建临时目录
+        let tmp_dir = self.base_dir.join(format!("tmp_{}", version_id));
+        fs::create_dir_all(&tmp_dir)?;
+
+        // 3. 写入新数据
+        let data_path = tmp_dir.join("nmap-os-db");
+        fs::write(&data_path, data)?;
+
+        // 4. 原子性重命名
+        fs::rename(&tmp_dir, &version_dir)?;
+
+        // 5. 创建备份 (硬链接)
+        let backup = self.create_backup()?;
+
+        // 6. 原子性切换符号链接
+        let tmp_link = self.base_dir.join("current.tmp");
+        self.create_symlink(&version_dir, &tmp_link)?;
+        fs::rename(&tmp_link, &self.current_symlink)?;
+
+        // 7. 验证新版本
+        if let Err(e) = self.verify_version(&version_dir) {
+            // 回滚到备份
+            self.rollback_to_backup(&backup)?;
+            return Err(e);
+        }
+
+        Ok(())
+    }
+
+    /// 创建版本符号链接
+    fn create_symlink(&self, target: &Path, link: &Path) -> Result<(), StoreError> {
+        use std::os::unix::fs::symlink;
+
+        // 删除旧链接
+        let _ = fs::remove_file(link);
+
+        // 创建新链接
+        symlink(target, link)?;
+        Ok(())
+    }
+
+    /// 验证版本完整性
+    fn verify_version(&self, version_dir: &Path) -> Result<(), StoreError> {
+        let db_path = version_dir.join("nmap-os-db");
+
+        // 检查文件存在
+        if !db_path.exists() {
+            return Err(StoreError::Corrupted);
+        }
+
+        // 计算 SHA256 校验和
+        let hash = self.compute_sha256(&db_path)?;
+
+        // 对比预期校验和 (从签名文件)
+        let expected = self.load_expected_hash()?;
+
+        if hash != expected {
+            return Err(StoreError::ChecksumMismatch);
+        }
+
+        Ok(())
+    }
+
+    /// 回滚到备份版本
+    fn rollback_to_backup(&self, backup: &Path) -> Result<(), StoreError> {
+        let tmp_link = self.base_dir.join("current.tmp");
+        self.create_symlink(backup, &tmp_link)?;
+        fs::rename(&tmp_link, &self.current_symlink)?;
+        Ok(())
+    }
+}
+```
+
 ---
