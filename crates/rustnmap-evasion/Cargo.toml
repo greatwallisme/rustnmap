@@ -7,6 +7,10 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
+readme.workspace = true
+description = "Firewall and IDS evasion techniques for RustNmap network scanner"
+keywords = ["nmap", "evasion", "firewall", "decoy", "fragmentation"]
+categories = ["network-programming", "security"]
 
 [dependencies]
 # Workspace dependencies

@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use tokio::sync::Semaphore;
 
-use crate::error::{Error, Result};
+use crate::error::Result;
 use crate::lua::NseLua;
 use crate::registry::ScriptDatabase;
 use crate::script::{ExecutionStatus, NseScript, ScriptCategory, ScriptOutput, ScriptResult};
