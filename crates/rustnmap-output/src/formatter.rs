@@ -603,8 +603,8 @@ impl XmlFormatter {
             osclass.push_attribute(("osfamily", os_family.as_str()));
             osclass.push_attribute(("vendor", ""));
             osclass.push_attribute(("osfamily", os_family.as_str()));
-            let osgen = os_match.os_generation.as_deref().map(|s| s.to_string()).unwrap_or("");
-            osclass.push_attribute(("osgen", osgen));
+            let osgen = os_match.os_generation.as_deref().map(|s| s.to_string()).unwrap_or("".to_string());
+            osclass.push_attribute(("osgen", osgen.as_str()));
 
             writer
                 .write_event(Event::Empty(osclass))
@@ -746,6 +746,13 @@ impl OutputFormatter for GrepableFormatter {
             .as_ref()
             .and_then(|s| s.version.as_deref())
             .map(|v| v.clone())
+            .unwrap_or_default();
+
+        let version = port
+            .service
+            .as_ref()
+            .and_then(|s| s.version.as_ref())
+            .map(|v| v.to_owned())
             .unwrap_or_default();
 
         Ok(format!(

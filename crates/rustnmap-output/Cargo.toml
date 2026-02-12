@@ -22,7 +22,7 @@ tracing = { workspace = true }
 
 # Additional dependencies
 chrono = { version = "0.4", features = ["serde"] }
-quick-xml = { version = "0.37", features = ["serialize"] }
+quick-xml = { version = "0.39.0", features = ["serialize"] }
 
 [dev-dependencies]
 # Workspace dependencies
