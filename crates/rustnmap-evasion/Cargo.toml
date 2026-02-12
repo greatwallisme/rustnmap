@@ -1,0 +1,28 @@
+[package]
+name = "rustnmap-evasion"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+# Workspace dependencies
+rustnmap-common = { path = "../rustnmap-common" }
+rustnmap-net = { path = "../rustnmap-net" }
+
+# External dependencies
+tokio = { workspace = true }
+pnet = { workspace = true }
+socket2 = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+bytes = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+
+[lints]
+workspace = true

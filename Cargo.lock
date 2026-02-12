@@ -574,6 +574,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustnmap-evasion"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "pnet",
+ "proptest",
+ "rustnmap-common",
+ "rustnmap-net",
+ "serde",
+ "socket2",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
 name = "rustnmap-fingerprint"
 version = "0.1.0"
 dependencies = [

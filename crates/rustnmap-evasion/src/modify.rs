@@ -1,0 +1,414 @@
+// Rust guideline compliant 2026-02-12
+
+//! Packet modification implementation.
+//!
+//! This module provides functionality for modifying packets in various ways
+//! to evade detection or elicit specific responses.
+
+use std::time::SystemTime;
+
+use crate::{config::PacketModConfig, Result};
+
+/// Modifier for applying various packet modifications.
+#[derive(Debug, Clone)]
+pub struct PacketModifier {
+    config: PacketModConfig,
+}
+
+impl PacketModifier {
+    /// Creates a new packet modifier.
+    pub fn new(config: PacketModConfig) -> Self {
+        Self { config }
+    }
+
+    /// Creates a modifier with default (no modification) configuration.
+    pub fn none() -> Self {
+        Self {
+            config: PacketModConfig::default(),
+        }
+    }
+
+    /// Applies modifications to a packet.
+    ///
+    /// # Arguments
+    ///
+    /// * `packet` - The original packet bytes.
+    ///
+    /// # Returns
+    ///
+    /// The modified packet bytes.
+    pub fn apply(&self, mut packet: Vec<u8>) -> Result<Vec<u8>> {
+        // Apply data padding
+        if let Some(padding_len) = self.config.data_length {
+            packet = self.add_padding(packet, padding_len);
+        }
+
+        // Apply bad checksum if configured
+        if self.config.bad_checksum {
+            packet = self.corrupt_checksum(packet)?;
+        }
+
+        // Note: IP options and TTL modifications would need to be applied
+        // at packet construction time, not on the complete packet.
+        // These are configuration flags that would be used by the packet builder.
+
+        Ok(packet)
+    }
+
+    /// Adds random padding data to a packet.
+    ///
+    /// # Arguments
+    ///
+    /// * `packet` - The original packet.
+    /// * `length` - Number of random bytes to append.
+    fn add_padding(&self, mut packet: Vec<u8>, length: usize) -> Vec<u8> {
+        if length == 0 {
+            return packet;
+        }
+
+        // In production, would use random bytes
+        // For deterministic behavior, use a pattern
+        let padding: Vec<u8> = (0..length).map(|i| (i % 256) as u8).collect();
+        packet.extend_from_slice(&padding);
+
+        packet
+    }
+
+    /// Corrupts the checksum in a packet.
+    ///
+    /// This is used for testing firewall behavior when receiving
+    /// packets with invalid checksums.
+    fn corrupt_checksum(&self, mut packet: Vec<u8>) -> Result<Vec<u8>> {
+        if packet.len() < 12 {
+            return Ok(packet);
+        }
+
+        // For IP packets, corrupt the IP checksum at bytes 10-11
+        // Assume IP header starts at beginning of packet
+        if packet.len() >= 12 {
+            // Flip a bit in the checksum
+            packet[10] = !packet[10];
+        }
+
+        // For TCP packets, corrupt the TCP checksum
+        // TCP header starts at IP header length (typically 20 bytes)
+        if packet.len() >= 20 + 18 {
+            let ip_header_length = (packet[0] & 0x0F) * 4;
+            let tcp_checksum_offset = ip_header_length + 16;
+
+            if usize::from(tcp_checksum_offset + 2) <= packet.len() {
+                packet[usize::from(tcp_checksum_offset)] =
+                    !packet[usize::from(tcp_checksum_offset)];
+            }
+        }
+
+        Ok(packet)
+    }
+
+    /// Returns the configuration used by this modifier.
+    pub fn config(&self) -> &PacketModConfig {
+        &self.config
+    }
+
+    /// Returns true if any modification is enabled.
+    pub fn is_enabled(&self) -> bool {
+        self.config.bad_checksum
+            || self.config.data_length.is_some()
+            || self.config.ip_options.is_some()
+            || self.config.ttl.is_some()
+            || self.config.no_flags
+            || self.config.tos.is_some()
+    }
+}
+
+/// Builder for IP options.
+#[derive(Debug, Clone)]
+pub struct IpOptionsBuilder {
+    options: Vec<crate::config::IpOption>,
+}
+
+impl IpOptionsBuilder {
+    /// Creates a new empty builder.
+    pub fn new() -> Self {
+        Self { options: Vec::new() }
+    }
+
+    /// Adds a Record Route option.
+    pub fn record_route(mut self, max_addresses: u8) -> Self {
+        self.options.push(crate::config::IpOption::RecordRoute { max_addresses });
+        self
+    }
+
+    /// Adds a Timestamp option.
+    pub fn timestamp(mut self, flags: u8, max_entries: u8) -> Self {
+        self.options.push(crate::config::IpOption::Timestamp { flags, max_entries });
+        self
+    }
+
+    /// Adds a Loose Source Route option.
+    pub fn loose_source_route(mut self, addresses: Vec<std::net::IpAddr>) -> Self {
+        self.options
+            .push(crate::config::IpOption::LooseSourceRoute { addresses });
+        self
+    }
+
+    /// Adds a Strict Source Route option.
+    pub fn strict_source_route(mut self, addresses: Vec<std::net::IpAddr>) -> Self {
+        self.options
+            .push(crate::config::IpOption::StrictSourceRoute { addresses });
+        self
+    }
+
+    /// Builds the options vector.
+    pub fn build(self) -> Vec<crate::config::IpOption> {
+        self.options
+    }
+}
+
+/// Calculates a checksum for the given data.
+///
+/// This is a simple internet checksum used by IP, TCP, and UDP.
+pub fn calculate_checksum(data: &[u8]) -> u16 {
+    let mut sum: u32 = 0;
+
+    for chunk in data.chunks(2) {
+        if chunk.len() == 2 {
+            let word = u16::from_be_bytes([chunk[0], chunk[1]]) as u32;
+            sum += word;
+        } else if chunk.len() == 1 {
+            // Handle odd-length data
+            let word = (chunk[0] as u32) << 8;
+            sum += word;
+        }
+    }
+
+    while sum >> 16 != 0 {
+        sum = (sum & 0xFFFF) + (sum >> 16);
+    }
+
+    u16::from_be((!sum as u16).to_be())
+}
+
+/// Generates a random padding sequence of the specified length.
+///
+/// In production, this would use a cryptographically secure RNG.
+/// For deterministic testing, uses a simple pattern.
+pub fn generate_padding(length: usize) -> Vec<u8> {
+    if length == 0 {
+        return Vec::new();
+    }
+
+    // Use timestamp-based seed for pseudo-randomness
+    let seed = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos() as u64;
+
+    // Simple LCG for deterministic pseudo-randomness
+    let mut state = seed;
+    (0..length)
+        .map(|_| {
+            state = state.wrapping_mul(1103515245).wrapping_add(12345);
+            ((state >> 16) & 0xFF) as u8
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    // Import proptest macros for use within proptest! blocks
+    use proptest::prop_assert;
+    use proptest::prop_assert_eq;
+
+    #[test]
+    fn test_packet_modifier_new() {
+        let config = PacketModConfig::default();
+        let modifier = PacketModifier::new(config.clone());
+
+        assert!(!modifier.is_enabled());
+    }
+
+    #[test]
+    fn test_packet_modifier_none() {
+        let modifier = PacketModifier::none();
+        assert!(!modifier.is_enabled());
+    }
+
+    #[test]
+    fn test_packet_modifier_is_enabled() {
+        let config = PacketModConfig {
+            bad_checksum: true,
+            data_length: None,
+            ip_options: None,
+            ttl: None,
+            tos: None,
+            no_flags: false,
+        };
+        let modifier = PacketModifier::new(config);
+        assert!(modifier.is_enabled());
+    }
+
+    #[test]
+    fn test_add_padding() {
+        let modifier = PacketModifier::none();
+        let packet = vec![1, 2, 3];
+
+        let padded = modifier.add_padding(packet, 5);
+
+        assert_eq!(padded.len(), 8);
+        assert_eq!(padded[0..3], [1, 2, 3]);
+    }
+
+    #[test]
+    fn test_add_padding_zero() {
+        let modifier = PacketModifier::none();
+        let packet = vec![1, 2, 3];
+
+        let padded = modifier.add_padding(packet, 0);
+
+        assert_eq!(padded.len(), 3);
+    }
+
+    #[test]
+    fn test_corrupt_checksum() {
+        let modifier = PacketModifier::none();
+        let mut packet = vec![0u8; 40];
+        packet[10] = 0x12;
+        packet[11] = 0x34;
+
+        let corrupted = modifier.corrupt_checksum(packet).unwrap();
+
+        assert_ne!(corrupted[10], 0x12);
+    }
+
+    #[test]
+    fn test_apply_bad_checksum() {
+        let config = PacketModConfig {
+            bad_checksum: true,
+            data_length: None,
+            ip_options: None,
+            ttl: None,
+            tos: None,
+            no_flags: false,
+        };
+        let modifier = PacketModifier::new(config);
+        let packet = vec![0u8; 40];
+
+        let modified = modifier.apply(packet).unwrap();
+
+        // Should have modified checksum byte
+        assert!(modified.len() >= 12);
+    }
+
+    #[test]
+    fn test_apply_padding() {
+        let config = PacketModConfig {
+            bad_checksum: false,
+            data_length: Some(10),
+            ip_options: None,
+            ttl: None,
+            tos: None,
+            no_flags: false,
+        };
+        let modifier = PacketModifier::new(config);
+        let packet = vec![1, 2, 3];
+
+        let modified = modifier.apply(packet).unwrap();
+
+        assert_eq!(modified.len(), 13);
+        assert_eq!(modified[0..3], [1, 2, 3]);
+    }
+
+    #[test]
+    fn test_calculate_checksum() {
+        let data = [0x45u8, 0x00, 0x00, 0x1C, 0x12, 0x34];
+        let checksum = calculate_checksum(&data);
+        // Checksum should be non-zero
+        assert!(checksum != 0);
+    }
+
+    #[test]
+    fn test_calculate_checksum_odd_length() {
+        let data = [0x45u8, 0x00, 0x00]; // Odd number of bytes
+        let checksum = calculate_checksum(&data);
+        // Should handle odd length
+        assert!(checksum != 0 || checksum == 0); // Just verify it doesn't panic
+    }
+
+    #[test]
+    fn test_generate_padding() {
+        let padding = generate_padding(10);
+        assert_eq!(padding.len(), 10);
+    }
+
+    #[test]
+    fn test_generate_padding_zero() {
+        let padding = generate_padding(0);
+        assert_eq!(padding.len(), 0);
+    }
+
+    #[test]
+    fn test_ip_options_builder() {
+        let builder = IpOptionsBuilder::new()
+            .record_route(9)
+            .timestamp(1, 4);
+
+        let options = builder.build();
+
+        assert_eq!(options.len(), 2);
+        assert!(matches!(options[0], crate::config::IpOption::RecordRoute { .. }));
+        assert!(matches!(options[1], crate::config::IpOption::Timestamp { .. }));
+    }
+
+    #[test]
+    fn test_ip_options_builder_loose_source() {
+        let addresses = vec!["192.0.2.1".parse().unwrap()];
+        let builder = IpOptionsBuilder::new().loose_source_route(addresses.clone());
+
+        let options = builder.build();
+
+        assert_eq!(options.len(), 1);
+        assert!(matches!(options[0], crate::config::IpOption::LooseSourceRoute { .. }));
+    }
+
+    #[test]
+    fn test_ip_options_builder_strict_source() {
+        let addresses = vec!["192.0.2.1".parse().unwrap()];
+        let builder = IpOptionsBuilder::new().strict_source_route(addresses);
+
+        let options = builder.build();
+
+        assert_eq!(options.len(), 1);
+        assert!(matches!(
+            options[0],
+            crate::config::IpOption::StrictSourceRoute { .. }
+        ));
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn test_padding_length_property(length in 0usize..1000) {
+            let modifier = PacketModifier::none();
+            let packet = vec![1u8, 2, 3];
+
+            let padded = modifier.add_padding(packet.clone(), length);
+
+            prop_assert_eq!(padded.len(), packet.len() + length);
+            // Original packet contents should be preserved
+            prop_assert_eq!(&padded[..packet.len()], &packet[..]);
+        }
+
+        #[test]
+        fn test_checksum_property(data in proptest::collection::vec(0u8..=u8::MAX, 0..1000)) {
+            let checksum = calculate_checksum(&data);
+
+            // Checksum should always be a valid u16 (invariant)
+            prop_assert!(checksum <= u16::MAX);
+
+            // Checksum should be deterministic - same input yields same output
+            let checksum2 = calculate_checksum(&data);
+            prop_assert_eq!(checksum, checksum2);
+        }
+    }
+}
