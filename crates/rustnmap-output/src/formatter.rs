@@ -184,10 +184,7 @@ impl OutputFormatter for NormalFormatter {
         if !host.os_matches.is_empty() {
             output.push_str("OS detection:\n");
             for os_match in &host.os_matches {
-                output.push_str(&format!(
-                    "{} ({}%)\n",
-                    os_match.name, os_match.accuracy
-                ));
+                output.push_str(&format!("{} ({}%)\n", os_match.name, os_match.accuracy));
             }
         }
 
@@ -240,7 +237,10 @@ impl OutputFormatter for NormalFormatter {
             .map(|s| s.name.clone())
             .unwrap_or_else(|| "unknown".to_string());
 
-        Ok(format!("{}/{}  {:7} {}\n", port.number, proto, state, service))
+        Ok(format!(
+            "{}/{}  {:7} {}\n",
+            port.number, proto, state, service
+        ))
     }
 
     fn format_script(&self, script: &ScriptResult) -> Result<String> {
@@ -284,7 +284,10 @@ impl OutputFormatter for XmlFormatter {
         let mut start = BytesStart::new("nmaprun");
         start.push_attribute(("scanner", "rustnmap"));
         start.push_attribute(("args", result.metadata.command_line.as_str()));
-        start.push_attribute(("start", result.metadata.start_time.timestamp().to_string().as_str()));
+        start.push_attribute((
+            "start",
+            result.metadata.start_time.timestamp().to_string().as_str(),
+        ));
         start.push_attribute((
             "startstr",
             result
@@ -325,7 +328,10 @@ impl OutputFormatter for XmlFormatter {
         let mut scaninfo = BytesStart::new("scaninfo");
         scaninfo.push_attribute(("type", scan_type));
         scaninfo.push_attribute(("protocol", proto));
-        scaninfo.push_attribute(("numservices", result.statistics.total_ports.to_string().as_str()));
+        scaninfo.push_attribute((
+            "numservices",
+            result.statistics.total_ports.to_string().as_str(),
+        ));
         scaninfo.push_attribute(("services", "1-65535"));
 
         writer.write_event(Event::Empty(scaninfo))?;
@@ -352,8 +358,7 @@ impl OutputFormatter for XmlFormatter {
         // End root
         writer.write_event(Event::End(BytesEnd::new("nmaprun")))?;
 
-        Ok(String::from_utf8(buffer)
-            .map_err(OutputError::from)?)
+        String::from_utf8(buffer).map_err(OutputError::from)
     }
 
     fn format_host(&self, _host: &HostResult) -> Result<String> {
@@ -393,8 +398,14 @@ impl XmlFormatter {
         let mut host_start = BytesStart::new("host");
         match host.ip {
             std::net::IpAddr::V4(_addr) => {
-                host_start.push_attribute(("starttime", host.times.srtt.unwrap_or(0).to_string().as_str()));
-                host_start.push_attribute(("endtime", host.times.timeout.unwrap_or(0).to_string().as_str()));
+                host_start.push_attribute((
+                    "starttime",
+                    host.times.srtt.unwrap_or(0).to_string().as_str(),
+                ));
+                host_start.push_attribute((
+                    "endtime",
+                    host.times.timeout.unwrap_or(0).to_string().as_str(),
+                ));
             }
             std::net::IpAddr::V6(_addr) => {
                 // IPv6 addresses use different timestamp handling
@@ -419,7 +430,9 @@ impl XmlFormatter {
         let mut address = BytesStart::new("address");
         address.push_attribute(("addr", host.ip.to_string().as_str()));
         address.push_attribute(("addrtype", "ipv4"));
-        writer.write_event(Event::Empty(address)).map_err(OutputError::from)?;
+        writer
+            .write_event(Event::Empty(address))
+            .map_err(OutputError::from)?;
 
         // MAC
         if let Some(ref mac) = host.mac {
@@ -496,7 +509,10 @@ impl XmlFormatter {
         let mut state_elem = BytesStart::new("state");
         state_elem.push_attribute(("state", state));
         state_elem.push_attribute(("reason", port.state_reason.as_str()));
-        state_elem.push_attribute(("reason_ttl", port.state_ttl.unwrap_or(0).to_string().as_str()));
+        state_elem.push_attribute((
+            "reason_ttl",
+            port.state_ttl.unwrap_or(0).to_string().as_str(),
+        ));
 
         writer
             .write_event(Event::Empty(state_elem))
@@ -514,11 +530,7 @@ impl XmlFormatter {
         Ok(())
     }
 
-    fn write_service<W: Write>(
-        &self,
-        writer: &mut Writer<W>,
-        service: &ServiceInfo,
-    ) -> Result<()> {
+    fn write_service<W: Write>(&self, writer: &mut Writer<W>, service: &ServiceInfo) -> Result<()> {
         let mut service_start = BytesStart::new("service");
         service_start.push_attribute(("name", service.name.as_str()));
         service_start.push_attribute(("method", service.method.as_str()));
@@ -544,11 +556,7 @@ impl XmlFormatter {
         Ok(())
     }
 
-    fn write_script<W: Write>(
-        &self,
-        writer: &mut Writer<W>,
-        script: &ScriptResult,
-    ) -> Result<()> {
+    fn write_script<W: Write>(&self, writer: &mut Writer<W>, script: &ScriptResult) -> Result<()> {
         let mut script_start = BytesStart::new("script");
         script_start.push_attribute(("id", script.id.as_str()));
 
@@ -577,18 +585,15 @@ impl XmlFormatter {
 
         writer.write_event(Event::Start(elem_start))?;
         writer
-            .write_event(Event::Text(BytesText::new(element.value.to_string().as_str())))
+            .write_event(Event::Text(BytesText::new(
+                element.value.to_string().as_str(),
+            )))
             .map_err(OutputError::from)?;
         writer.write_event(Event::End(BytesEnd::new("table")))?;
         Ok(())
     }
 
-    #[expect(clippy::ref_option, reason = "Clippy false positive on as_deref pattern")]
-    fn write_os_match<W: Write>(
-        &self,
-        writer: &mut Writer<W>,
-        os_match: &OsMatch,
-    ) -> Result<()> {
+    fn write_os_match<W: Write>(&self, writer: &mut Writer<W>, os_match: &OsMatch) -> Result<()> {
         let mut os_start = BytesStart::new("osmatch");
         os_start.push_attribute(("name", os_match.name.as_str()));
         os_start.push_attribute(("accuracy", os_match.accuracy.to_string().as_str()));
@@ -596,14 +601,17 @@ impl XmlFormatter {
         writer.write_event(Event::Start(os_start))?;
 
         if let Some(ref os_family) = os_match.os_family {
-            #[expect(clippy::ref_option, reason = "as_deref on Option is necessary for the code logic")]
             let mut osclass = BytesStart::new("osclass");
             osclass.push_attribute(("type", "general purpose"));
             osclass.push_attribute(("vendor", ""));
             osclass.push_attribute(("osfamily", os_family.as_str()));
             osclass.push_attribute(("vendor", ""));
             osclass.push_attribute(("osfamily", os_family.as_str()));
-            let osgen = os_match.os_generation.as_deref().map(|s| s.to_string()).unwrap_or("".to_string());
+            let osgen = os_match
+                .os_generation
+                .as_deref()
+                .map(|s| s.to_string())
+                .unwrap_or("".to_string());
             osclass.push_attribute(("osgen", osgen.as_str()));
 
             writer
@@ -740,13 +748,6 @@ impl OutputFormatter for GrepableFormatter {
             .as_ref()
             .map(|s| s.name.clone())
             .unwrap_or_else(|| "unknown".to_string());
-
-        let version = port
-            .service
-            .as_ref()
-            .and_then(|s| s.version.as_deref())
-            .map(|v| v.clone())
-            .unwrap_or_default();
 
         let version = port
             .service
@@ -941,7 +942,8 @@ mod tests {
         };
 
         let result = formatter.format_port(&port).unwrap();
-        assert!(result.contains("80/tcp"));
+        // Grepable format is "Ports: 80//tcp/open/unknown/"
+        assert!(result.contains("80//tcp"));
         assert!(result.contains("open"));
     }
 

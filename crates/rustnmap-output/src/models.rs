@@ -22,7 +22,6 @@ use std::time::Duration;
 
 /// Complete scan result containing all information about the scan.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[expect(clippy::derivable_impls, reason = "Manual Default implementation is clearer for this complex struct")]
 pub struct ScanResult {
     /// Scan metadata (version, timing, etc.)
     pub metadata: ScanMetadata,

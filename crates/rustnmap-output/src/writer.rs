@@ -66,7 +66,10 @@ impl OutputManager {
 
     /// Add a formatter to the manager.
     pub fn add_formatter(&mut self, formatter: Box<dyn OutputFormatter>) {
-        debug!(formatter = formatter.format_name(), "Added output formatter");
+        debug!(
+            formatter = formatter.format_name(),
+            "Added output formatter"
+        );
         self.formatters.push(formatter);
     }
 
