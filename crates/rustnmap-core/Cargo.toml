@@ -1,0 +1,46 @@
+[package]
+name = "rustnmap-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+description = "Core scan orchestrator for RustNmap network scanner"
+keywords = ["network", "scanning", "security", "nmap", "orchestrator"]
+categories = ["network-programming"]
+
+[dependencies]
+rustnmap-common = { path = "../rustnmap-common" }
+rustnmap-net = { path = "../rustnmap-net" }
+rustnmap-packet = { path = "../rustnmap-packet" }
+rustnmap-target = { path = "../rustnmap-target" }
+rustnmap-scan = { path = "../rustnmap-scan" }
+rustnmap-fingerprint = { path = "../rustnmap-fingerprint" }
+rustnmap-nse = { path = "../rustnmap-nse" }
+rustnmap-output = { path = "../rustnmap-output" }
+rustnmap-traceroute = { path = "../rustnmap-traceroute" }
+rustnmap-evasion = { path = "../rustnmap-evasion" }
+
+async-trait = "0.1"
+tokio = { workspace = true }
+tokio-stream = "0.1"
+bytes = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+tracing = { workspace = true }
+dashmap = "6.1"
+papaya = "0.2"
+libc = "0.2"
+num_cpus = "1.16"
+chrono = "0.4"
+futures-util = "0.3"
+
+[dev-dependencies]
+proptest = { workspace = true }
+tokio-test = "0.4"
+
+[lints]
+workspace = true

@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/rustnmap-common",
+    "crates/rustnmap-core",
     "crates/rustnmap-net",
     "crates/rustnmap-packet",
     "crates/rustnmap-target",
@@ -10,6 +11,7 @@ members = [
     "crates/rustnmap-evasion",
     "crates/rustnmap-nse",
     "crates/rustnmap-output",
+    "crates/rustnmap-cli",
 ]
 resolver = "2"
 

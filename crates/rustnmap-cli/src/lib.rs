@@ -20,7 +20,6 @@
 
 pub mod args;
 pub mod cli;
-pub mod orchestrator;
 
 // Re-export main types
 pub use args::Args;

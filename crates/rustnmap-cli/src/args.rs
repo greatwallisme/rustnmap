@@ -56,7 +56,7 @@ use std::path::PathBuf;
 /// ```bash
 /// rustnmap -sS -oA scan_results 192.168.1.1
 /// ```
-#[derive(Debug, Clone, Parser)]
+#[derive(Debug, Clone, Default, Parser)]
 #[command(
     name = "rustnmap",
     author = "greatwallisme <greatwallisme@gmail.com>",
@@ -204,11 +204,7 @@ pub struct Args {
     // Service/OS Detection
     // ============================================
     /// Probe open ports to determine service/version info
-    #[arg(
-        short = 's',
-        long,
-        help_heading = "Service/OS Detection"
-    )]
+    #[arg(short = 's', long, help_heading = "Service/OS Detection")]
     pub service_detection: bool,
 
     /// Intensity level of service detection (0-9)
@@ -221,27 +217,15 @@ pub struct Args {
     pub version_intensity: Option<u8>,
 
     /// Detect operating system
-    #[arg(
-        short = 'O',
-        long,
-        help_heading = "Service/OS Detection"
-    )]
+    #[arg(short = 'O', long, help_heading = "Service/OS Detection")]
     pub os_detection: bool,
 
     /// Limit OS detection to promising targets
-    #[arg(
-        long,
-        help_heading = "Service/OS Detection",
-        requires = "os_detection"
-    )]
+    #[arg(long, help_heading = "Service/OS Detection", requires = "os_detection")]
     pub osscan_limit: bool,
 
     /// Guess OS more aggressively
-    #[arg(
-        long,
-        help_heading = "Service/OS Detection",
-        requires = "os_detection"
-    )]
+    #[arg(long, help_heading = "Service/OS Detection", requires = "os_detection")]
     pub osscan_guess: bool,
 
     // ============================================
@@ -257,43 +241,23 @@ pub struct Args {
     pub timing: Option<u8>,
 
     /// Minimum milliseconds between probes
-    #[arg(
-        long,
-        help_heading = "Timing and Performance",
-        value_name = "MS"
-    )]
+    #[arg(long, help_heading = "Timing and Performance", value_name = "MS")]
     pub scan_delay: Option<u64>,
 
     /// Maximum milliseconds overall probe timeout
-    #[arg(
-        long,
-        help_heading = "Timing and Performance",
-        value_name = "MS"
-    )]
+    #[arg(long, help_heading = "Timing and Performance", value_name = "MS")]
     pub min_parallelism: Option<usize>,
 
     /// Maximum number of parallel probes
-    #[arg(
-        long,
-        help_heading = "Timing and Performance",
-        value_name = "NUM"
-    )]
+    #[arg(long, help_heading = "Timing and Performance", value_name = "NUM")]
     pub max_parallelism: Option<usize>,
 
     /// Minimum rate (packets per second)
-    #[arg(
-        long,
-        help_heading = "Timing and Performance",
-        value_name = "NUM"
-    )]
+    #[arg(long, help_heading = "Timing and Performance", value_name = "NUM")]
     pub min_rate: Option<u64>,
 
     /// Maximum rate (packets per second)
-    #[arg(
-        long,
-        help_heading = "Timing and Performance",
-        value_name = "NUM"
-    )]
+    #[arg(long, help_heading = "Timing and Performance", value_name = "NUM")]
     pub max_rate: Option<u64>,
 
     // ============================================
@@ -345,19 +309,11 @@ pub struct Args {
     pub source_port: Option<u16>,
 
     /// Use specific data length
-    #[arg(
-        long,
-        help_heading = "Firewall/IDS Evasion",
-        value_name = "LEN"
-    )]
+    #[arg(long, help_heading = "Firewall/IDS Evasion", value_name = "LEN")]
     pub data_length: Option<usize>,
 
     /// Append custom binary data to packets
-    #[arg(
-        long,
-        help_heading = "Firewall/IDS Evasion",
-        value_name = "HEX"
-    )]
+    #[arg(long, help_heading = "Firewall/IDS Evasion", value_name = "HEX")]
     pub data_hex: Option<String>,
 
     // ============================================
@@ -415,25 +371,15 @@ pub struct Args {
     pub output_all: Option<PathBuf>,
 
     /// Script Kiddie output
-    #[arg(
-        short = 'o',
-        long,
-        help_heading = "Output"
-    )]
+    #[arg(short = 'o', long, help_heading = "Output")]
     pub output_script_kiddie: bool,
 
     /// No output (suppress default output)
-    #[arg(
-        long,
-        help_heading = "Output"
-    )]
+    #[arg(long, help_heading = "Output")]
     pub no_output: bool,
 
     /// Append to output files (don't overwrite)
-    #[arg(
-        long,
-        help_heading = "Output"
-    )]
+    #[arg(long, help_heading = "Output")]
     pub append_output: bool,
 
     /// Increase verbosity level (use -v, -vv, -vvv)
@@ -446,11 +392,7 @@ pub struct Args {
     pub verbose: u8,
 
     /// Decrease verbosity level (quiet mode)
-    #[arg(
-        short = 'q',
-        long,
-        help_heading = "Output"
-    )]
+    #[arg(short = 'q', long, help_heading = "Output")]
     pub quiet: bool,
 
     /// Increase debugging level (use -d, -dd, -ddd...)
@@ -463,134 +405,74 @@ pub struct Args {
     pub debug: u8,
 
     /// Display reason codes for port status
-    #[arg(
-        long,
-        help_heading = "Output"
-    )]
+    #[arg(long, help_heading = "Output")]
     pub reasons: bool,
 
     /// Show open ports in summary
-    #[arg(
-        long,
-        help_heading = "Output"
-    )]
+    #[arg(long, help_heading = "Output")]
     pub open: bool,
 
     /// Show packet trace of scan
-    #[arg(
-        long,
-        help_heading = "Output"
-    )]
+    #[arg(long, help_heading = "Output")]
     pub packet_trace: bool,
 
     /// Show interface list and routes
-    #[arg(
-        long,
-        help_heading = "Output"
-    )]
+    #[arg(long, help_heading = "Output")]
     pub if_list: bool,
 
     // ============================================
     // Misc
     // ============================================
     /// NSE scripts to run
-    #[arg(
-        long,
-        help_heading = "Scripting",
-        value_name = "SCRIPTS"
-    )]
+    #[arg(long, help_heading = "Scripting", value_name = "SCRIPTS")]
     pub script: Option<String>,
 
     /// Script arguments
-    #[arg(
-        long,
-        help_heading = "Scripting",
-        value_name = "ARGS"
-    )]
-        pub script_args: Option<String>,
+    #[arg(long, help_heading = "Scripting", value_name = "ARGS")]
+    pub script_args: Option<String>,
 
     /// Script update database
-    #[arg(
-        long,
-        help_heading = "Scripting"
-    )]
+    #[arg(long, help_heading = "Scripting")]
     pub script_updatedb: bool,
 
     /// Script help for specified script
-    #[arg(
-        long,
-        help_heading = "Scripting",
-        value_name = "SCRIPT"
-    )]
+    #[arg(long, help_heading = "Scripting", value_name = "SCRIPT")]
     pub script_help: Option<String>,
 
     /// Trace hop path to host
-    #[arg(
-        long,
-        help_heading = "Misc"
-    )]
+    #[arg(long, help_heading = "Misc")]
     pub traceroute: bool,
 
     /// Number of traceroute probes
-    #[arg(
-        long,
-        help_heading = "Misc",
-        value_name = "NUM"
-    )]
+    #[arg(long, help_heading = "Misc", value_name = "NUM")]
     pub traceroute_hops: Option<u8>,
 
     /// Read target specifications from file
-    #[arg(
-        short = 'i',
-        long,
-        help_heading = "Misc",
-        value_name = "FILE"
-    )]
+    #[arg(short = 'i', long, help_heading = "Misc", value_name = "FILE")]
     pub input_file: Option<PathBuf>,
 
     /// Randomize target host order
-    #[arg(
-        long,
-        help_heading = "Misc"
-    )]
+    #[arg(long, help_heading = "Misc")]
     pub randomize_hosts: bool,
 
     /// Host group size
-    #[arg(
-        long,
-        help_heading = "Misc",
-        value_name = "NUM"
-    )]
+    #[arg(long, help_heading = "Misc", value_name = "NUM")]
     pub host_group_size: Option<usize>,
 
     /// Ping type for host discovery
-    #[arg(
-        long,
-        help_heading = "Misc",
-        value_name = "TYPE"
-    )]
+    #[arg(long, help_heading = "Misc", value_name = "TYPE")]
     pub ping_type: Option<String>,
 
     /// Disable ping (skip host discovery)
-    #[arg(
-        long,
-        help_heading = "Misc"
-    )]
+    #[arg(long, help_heading = "Misc")]
     pub disable_ping: bool,
 
     /// Retry ratio for host discovery
-    #[arg(
-        long,
-        help_heading = "Misc",
-        value_name = "RATIO"
-    )]
+    #[arg(long, help_heading = "Misc", value_name = "RATIO")]
     pub host_timeout: Option<u64>,
 
     /// Print the interacted URLs
-    #[arg(
-        long,
-        help_heading = "Misc"
-    )]
+    #[arg(long, help_heading = "Misc")]
     pub print_urls: bool,
 }
 
@@ -605,7 +487,9 @@ impl Args {
         // Validate timing level
         if let Some(timing) = self.timing {
             if timing > 5 {
-                return Err(format!("Timing level must be between 0 and 5, got {timing}"));
+                return Err(format!(
+                    "Timing level must be between 0 and 5, got {timing}"
+                ));
             }
         }
 
@@ -615,13 +499,6 @@ impl Args {
                 return Err(format!(
                     "Version intensity must be between 0 and 9, got {intensity}"
                 ));
-            }
-        }
-
-        // Validate top ports
-        if let Some(top) = self.top_ports {
-            if top == 0 || top > 65535 {
-                return Err(format!("Top ports must be between 1 and 65535, got {top}"));
             }
         }
 
@@ -719,71 +596,5 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(args.scan_type(), ScanType::Connect);
-    }
-}
-
-impl Default for Args {
-    fn default() -> Self {
-        Self {
-            targets: Vec::new(),
-            scan_syn: false,
-            scan_connect: false,
-            scan_udp: false,
-            scan_fin: false,
-            scan_null: false,
-            scan_xmas: false,
-            scan_maimon: false,
-            ports: None,
-            port_range_all: false,
-            top_ports: None,
-            fast_scan: false,
-            protocol: None,
-            service_detection: false,
-            version_intensity: None,
-            os_detection: false,
-            osscan_limit: false,
-            osscan_guess: false,
-            timing: None,
-            scan_delay: None,
-            max_parallelism: None,
-            min_parallelism: None,
-            max_rate: None,
-            min_rate: None,
-            decoys: None,
-            spoof_ip: None,
-            interface: None,
-            fragment_mtu: None,
-            source_port: None,
-            data_length: None,
-            data_hex: None,
-            output_normal: None,
-            output_xml: None,
-            output_grepable: None,
-            output_json: None,
-            output_all: None,
-            output_script_kiddie: false,
-            no_output: false,
-            append_output: false,
-            verbose: 0,
-            quiet: false,
-            debug: 0,
-            reasons: false,
-            open: false,
-            packet_trace: false,
-            if_list: false,
-            script: None,
-            script_args: None,
-            script_updatedb: false,
-            script_help: None,
-            traceroute: false,
-            traceroute_hops: None,
-            input_file: None,
-            randomize_hosts: false,
-            host_group_size: None,
-            ping_type: None,
-            disable_ping: false,
-            host_timeout: None,
-            print_urls: false,
-        }
     }
 }
