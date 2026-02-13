@@ -121,9 +121,6 @@ mod tests {
     #[test]
     fn test_timeout_error() {
         let err = Error::timeout("test-script", std::time::Duration::from_secs(5));
-        assert_eq!(
-            err.to_string(),
-            "script 'test-script' timed out after 5s"
-        );
+        assert_eq!(err.to_string(), "script 'test-script' timed out after 5s");
     }
 }

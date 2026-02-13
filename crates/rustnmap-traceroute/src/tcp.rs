@@ -34,7 +34,8 @@ impl TcpSynTraceroute {
     /// # Errors
     ///
     /// Returns an error if probe cannot be sent.
-    pub async fn send_probe(&self, target: Ipv4Addr, ttl: u8) -> Result<Option<ProbeResponse>> {
+    // TODO: This is a placeholder implementation. Actual sending and receiving of TCP SYN packets
+    pub fn send_probe(&self, target: Ipv4Addr, ttl: u8) -> Result<Option<ProbeResponse>> {
         let _ = (target, ttl);
         Ok(None)
     }
@@ -57,7 +58,8 @@ impl TcpAckTraceroute {
     /// # Errors
     ///
     /// Returns an error if probe cannot be sent.
-    pub async fn send_probe(&self, target: Ipv4Addr, ttl: u8) -> Result<Option<ProbeResponse>> {
+    // TODO: This is a placeholder implementation. Actual sending and receiving of TCP ACK packets
+    pub fn send_probe(&self, target: Ipv4Addr, ttl: u8) -> Result<Option<ProbeResponse>> {
         let _ = (target, ttl);
         Ok(None)
     }

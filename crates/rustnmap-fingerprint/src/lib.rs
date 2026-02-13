@@ -84,13 +84,15 @@
 #![warn(unused_crate_dependencies)]
 
 pub mod error;
-pub mod service;
 pub mod os;
+pub mod service;
 
 /// Result type for fingerprinting operations.
 pub type Result<T> = std::result::Result<T, error::FingerprintError>;
 
 // Re-exports for convenience
 pub use error::FingerprintError;
-pub use service::{ProbeDatabase, ServiceDetector, ServiceInfo, ProbeDefinition};
-pub use os::{FingerprintDatabase, OsDetector, OsMatch, OsFingerprint, SeqFingerprint, OpsFingerprint};
+pub use os::{
+    FingerprintDatabase, OpsFingerprint, OsDetector, OsFingerprint, OsMatch, SeqFingerprint,
+};
+pub use service::{ProbeDatabase, ProbeDefinition, ServiceDetector, ServiceInfo};

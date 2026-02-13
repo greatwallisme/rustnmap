@@ -133,9 +133,7 @@ impl TargetParser {
         // Check for port specification
         if let Some((addr_part, ports_part)) = token.split_once(':') {
             if ports_part.chars().all(|c| c.is_ascii_digit() || c == ',') {
-                let ports = Self::parse_ports(ports_part)?
-                    .into_iter()
-                    .collect();
+                let ports = Self::parse_ports(ports_part)?.into_iter().collect();
                 let inner_spec = Self::parse_token(addr_part)?;
                 return Ok(TargetSpec::WithPort(Box::new(inner_spec), ports));
             }
@@ -149,10 +147,7 @@ impl TargetParser {
             if let Some((addr, prefix)) = token.split_once('/') {
                 if let Ok(addr) = addr.parse::<Ipv6Addr>() {
                     if let Ok(prefix) = prefix.parse::<u8>() {
-                        return Ok(TargetSpec::Ipv6Cidr {
-                            base: addr,
-                            prefix,
-                        });
+                        return Ok(TargetSpec::Ipv6Cidr { base: addr, prefix });
                     }
                 }
             }
@@ -162,10 +157,7 @@ impl TargetParser {
         if let Some((addr, prefix)) = token.split_once('/') {
             if let Ok(addr) = addr.parse::<Ipv4Addr>() {
                 if let Ok(prefix) = prefix.parse::<u8>() {
-                    return Ok(TargetSpec::Ipv4Cidr {
-                        base: addr,
-                        prefix,
-                    });
+                    return Ok(TargetSpec::Ipv4Cidr { base: addr, prefix });
                 }
             }
         }
@@ -199,7 +191,10 @@ impl TargetParser {
     }
 
     /// Parses an octet range pattern like `192.168.1-10.*`.
-    #[expect(clippy::unnecessary_wraps, reason = "Using Result for consistent error handling")]
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "Using Result for consistent error handling"
+    )]
     fn parse_octet_range(input: &str) -> crate::Result<Option<TargetSpec>> {
         let octets: Vec<&str> = input.split('.').collect();
         if octets.len() != 4 {
@@ -234,9 +229,9 @@ impl TargetParser {
         let mut ports = Vec::new();
 
         for part in input.split(',') {
-            let port = part.parse::<u16>().map_err(|_e| {
-                Error::Target(TargetError::PortOutOfRange { port: 0 })
-            })?;
+            let port = part
+                .parse::<u16>()
+                .map_err(|_e| Error::Target(TargetError::PortOutOfRange { port: 0 }))?;
             if port == 0 {
                 return Err(Error::Target(TargetError::PortOutOfRange { port }));
             }
@@ -247,7 +242,10 @@ impl TargetParser {
     }
 
     /// Expands a target specification into individual targets.
-    #[expect(clippy::only_used_in_recursion, reason = "Required for recursive expansion")]
+    #[expect(
+        clippy::self_only_used_in_recursion,
+        reason = "Required for recursive expansion"
+    )]
     fn expand_spec(&self, spec: &TargetSpec) -> crate::Result<Vec<Target>> {
         match spec {
             TargetSpec::SingleIpv4(addr) => Ok(vec![Target::from(*addr)]),
@@ -350,10 +348,7 @@ mod tests {
         let parser = TargetParser::new();
         let group = parser.parse("192.168.1.1:80,443").unwrap();
         assert_eq!(group.len(), 1);
-        assert_eq!(
-            group.targets[0].ports,
-            Some(vec![80, 443])
-        );
+        assert_eq!(group.targets[0].ports, Some(vec![80, 443]));
     }
 
     #[test]

@@ -105,13 +105,18 @@ impl HopInfo {
     ///
     /// Returns `None` if no probes were successful.
     #[must_use]
-    #[allow(clippy::cast_precision_loss, reason = "f64 has limited mantissa, precision loss acceptable")]
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "f64 has limited mantissa, precision loss acceptable"
+    )]
     pub fn avg_rtt(&self) -> Option<Duration> {
         if self.rtts.is_empty() {
             return None;
         }
         let total: u128 = self.rtts.iter().map(Duration::as_micros).sum();
-        Some(Duration::from_micros(u64::try_from(total / self.rtts.len() as u128).unwrap_or(u64::MAX)))
+        Some(Duration::from_micros(
+            u64::try_from(total / self.rtts.len() as u128).unwrap_or(u64::MAX),
+        ))
     }
 
     /// Returns the minimum round-trip time.
@@ -128,13 +133,24 @@ impl HopInfo {
 
     /// Returns the standard deviation of round-trip times.
     #[must_use]
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, reason = "f64 sqrt is positive, truncation acceptable")]
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "f64 sqrt is positive, truncation acceptable"
+    )]
     pub fn rtt_stddev(&self) -> Option<Duration> {
         if self.rtts.len() < 2 {
             return None;
         }
-        #[allow(clippy::cast_precision_loss, reason = "f64 has limited mantissa, precision loss acceptable for RTT calculations")]
+        #[allow(
+            clippy::cast_precision_loss,
+            reason = "f64 has limited mantissa, precision loss acceptable for RTT calculations"
+        )]
         let avg = self.avg_rtt()?.as_micros() as f64;
+        #[allow(
+            clippy::cast_precision_loss,
+            reason = "f64 has limited mantissa, precision loss acceptable for RTT calculations"
+        )]
         let variance: f64 = self
             .rtts
             .iter()
@@ -191,7 +207,10 @@ impl std::fmt::Display for HopInfo {
             write!(f, " ({hostname})")?;
         }
         if let Some(avg) = self.avg_rtt() {
-            #[allow(clippy::cast_precision_loss, reason = "f64 has limited mantissa, precision loss acceptable for RTT display")]
+            #[allow(
+                clippy::cast_precision_loss,
+                reason = "f64 has limited mantissa, precision loss acceptable for RTT display"
+            )]
             write!(f, " RTT: {:.2}ms", avg.as_micros() as f64 / 1000.0)?;
         }
         Ok(())

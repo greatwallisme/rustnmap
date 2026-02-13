@@ -32,12 +32,17 @@ impl DecoyScheduler {
     ///
     /// # Panics
     ///
-    /// This function will not panic under normal conditions. The unwrap() call
-    /// is safe because decoy_iter is guaranteed to have enough elements:
-    /// - We iterate through 0..=decoys.len() positions (decoys.len() + 1 positions)
-    /// - One position is reserved for real_ip_position
-    /// - The remaining decoys.len() positions are filled from decoy_iter
-    /// - Therefore, decoy_iter will always have a value when unwrap() is called
+    /// This function will not panic under normal conditions. The `unwrap()` call
+    /// is safe because `decoy_iter` is guaranteed to have enough elements:
+    /// - We iterate through `0..=decoys.len()` positions (`decoys.len()` + 1 positions)
+    /// - One position is reserved for `real_ip_position`
+    /// - The remaining `decoys.len()` positions are filled from `decoy_iter`
+    /// - Therefore, `decoy_iter` will always have a value when `unwrap()` is called
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the decoy list is empty or if the real IP position
+    /// exceeds the decoy list length.
     pub fn new(config: DecoyConfig, real_ip: IpAddr) -> std::result::Result<Self, crate::Error> {
         if config.decoys.is_empty() {
             return Err(crate::Error::InvalidDecoyConfig(
@@ -76,6 +81,7 @@ impl DecoyScheduler {
     }
 
     /// Returns the total number of sources (decoys + real IP).
+    #[must_use]
     pub fn total_sources(&self) -> usize {
         self.config.decoys.len() + 1
     }
@@ -112,6 +118,7 @@ impl DecoyScheduler {
     /// // Second packet uses real IP
     /// assert_eq!(scheduler.next_source(), Some("192.0.2.100".parse().unwrap()));
     /// ```
+    #[must_use]
     pub fn next_source(&mut self) -> Option<IpAddr> {
         if self.current_index >= self.shuffle_order.len() {
             return None;
@@ -131,7 +138,7 @@ impl DecoyScheduler {
     /// Returns the source IP at a given position.
     ///
     /// Position 0 through (decoys.len()-1) returns decoys.
-    /// Position decoys.len() returns the real IP.
+    /// Position `decoys.len()` returns the real IP.
     fn source_at_position(&self, position: usize) -> IpAddr {
         if position < self.config.decoys.len() {
             self.config.decoys[position]
@@ -141,21 +148,25 @@ impl DecoyScheduler {
     }
 
     /// Returns true if the given IP is the real scanner IP.
+    #[must_use]
     pub fn is_real_ip(&self, ip: &IpAddr) -> bool {
         *ip == self.real_ip
     }
 
     /// Returns the position of the real IP in the sequence.
+    #[must_use]
     pub fn real_ip_position(&self) -> usize {
         self.config.real_ip_position
     }
 
     /// Returns a reference to the decoy configuration.
+    #[must_use]
     pub fn config(&self) -> &DecoyConfig {
         &self.config
     }
 
     /// Returns the current index in the sequence.
+    #[must_use]
     pub fn current_index(&self) -> usize {
         self.current_index
     }
@@ -208,10 +219,7 @@ mod tests {
     #[test]
     fn test_decoy_scheduler_next_source() {
         let config = DecoyConfig {
-            decoys: vec![
-                "192.0.2.1".parse().unwrap(),
-                "192.0.2.2".parse().unwrap(),
-            ],
+            decoys: vec!["192.0.2.1".parse().unwrap(), "192.0.2.2".parse().unwrap()],
             real_ip_position: 1, // Real IP at position 1
             random_order: false,
         };
@@ -220,10 +228,7 @@ mod tests {
         let mut scheduler = DecoyScheduler::new(config, real_ip).unwrap();
 
         // First: decoy[0]
-        assert_eq!(
-            scheduler.next_source(),
-            Some("192.0.2.1".parse().unwrap())
-        );
+        assert_eq!(scheduler.next_source(), Some("192.0.2.1".parse().unwrap()));
 
         // Second: real IP (position 1)
         assert_eq!(
@@ -232,10 +237,7 @@ mod tests {
         );
 
         // Third: decoy[1]
-        assert_eq!(
-            scheduler.next_source(),
-            Some("192.0.2.2".parse().unwrap())
-        );
+        assert_eq!(scheduler.next_source(), Some("192.0.2.2".parse().unwrap()));
 
         // No more sources
         assert_eq!(scheduler.next_source(), None);
@@ -271,9 +273,9 @@ mod tests {
 
         // Exhaust sources
         assert_eq!(scheduler.current_index(), 0);
-        scheduler.next_source();
+        let _ = scheduler.next_source();
         assert_eq!(scheduler.current_index(), 1);
-        scheduler.next_source();
+        let _ = scheduler.next_source();
         assert_eq!(scheduler.current_index(), 2);
 
         // Reset

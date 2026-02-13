@@ -3,17 +3,13 @@
 //! Parses nmap-os-db files containing reference fingerprints
 //! for OS matching.
 
-use std::{
-    collections::HashMap,
-    fs,
-    path::Path,
-};
+use std::{collections::HashMap, fs, path::Path};
 
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
+use super::fingerprint::OsFingerprint;
 use crate::{FingerprintError, Result};
-use super::fingerprint::{OsFingerprint};
 
 /// Database of OS fingerprints for matching.
 ///
@@ -106,19 +102,25 @@ impl FingerprintDatabase {
                 // - SEQ, OPS, WIN, ECN test results
                 // - T1-T7, U1, IE test fingerprints
                 let fp_name = "Unknown".to_string();
-                db.fingerprints.insert(fp_name.clone(), OsReference {
-                    name: fp_name,
-                    family: OsFamily::Other("Unknown".to_string()).clone(),
-                    vendor: None,
-                    generation: None,
-                    device_type: None,
-                    cpe: None,
-                    fingerprint: OsFingerprint::new(),
-                });
+                db.fingerprints.insert(
+                    fp_name.clone(),
+                    OsReference {
+                        name: fp_name,
+                        family: OsFamily::Other("Unknown".to_string()).clone(),
+                        vendor: None,
+                        generation: None,
+                        device_type: None,
+                        cpe: None,
+                        fingerprint: OsFingerprint::new(),
+                    },
+                );
             }
         }
 
-        info!("Loaded {} OS fingerprints from database", db.fingerprints.len());
+        info!(
+            "Loaded {} OS fingerprints from database",
+            db.fingerprints.len()
+        );
         Ok(db)
     }
 
@@ -185,7 +187,11 @@ impl FingerprintDatabase {
     ) -> f64 {
         match (seq1, seq2) {
             (Some(s1), Some(s2)) => {
-                if s1.class == s2.class { 0.0 } else { 10.0 }
+                if s1.class == s2.class {
+                    0.0
+                } else {
+                    10.0
+                }
             }
             (None, None) => 0.0,
             _ => 5.0,
@@ -203,7 +209,11 @@ impl FingerprintDatabase {
         diff += if ops1.mss == ops2.mss { 0.0 } else { 2.0 };
         diff += if ops1.wscale == ops2.wscale { 0.0 } else { 1.0 };
         diff += if ops1.sack == ops2.sack { 0.0 } else { 1.0 };
-        diff += if ops1.timestamp == ops2.timestamp { 0.0 } else { 1.0 };
+        diff += if ops1.timestamp == ops2.timestamp {
+            0.0
+        } else {
+            1.0
+        };
         diff += (ops1.nop_count as f64 - ops2.nop_count as f64).abs() / 2.0;
         diff += if ops1.eol == ops2.eol { 0.0 } else { 1.0 };
 

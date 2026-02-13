@@ -139,6 +139,9 @@ mod tests {
 
     #[test]
     fn test_concurrent_limit_positive() {
-        assert!(MAX_CONCURRENT_SCRIPTS > 0, "Concurrent limit must be positive");
+        assert!(
+            MAX_CONCURRENT_SCRIPTS > 0,
+            "Concurrent limit must be positive"
+        );
     }
 }

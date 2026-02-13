@@ -217,10 +217,7 @@ impl MatchRule {
     }
 
     /// Substitute template variables with captured values.
-    fn substitute_template_vars(
-        template: &str,
-        captures: &HashMap<usize, String>,
-    ) -> String {
+    fn substitute_template_vars(template: &str, captures: &HashMap<usize, String>) -> String {
         let mut result = String::new();
         let mut chars = template.chars().peekable();
 
@@ -230,9 +227,7 @@ impl MatchRule {
                     if next_ch.is_ascii_digit() {
                         let _ = chars.next(); // consume the digit
                         let group_num = next_ch.to_digit(10).unwrap() as usize;
-                        let value = captures.get(&group_num)
-                            .cloned()
-                            .unwrap_or_default();
+                        let value = captures.get(&group_num).cloned().unwrap_or_default();
                         result.push_str(&value);
                     } else if next_ch == '$' {
                         let _ = chars.next();
@@ -258,7 +253,8 @@ mod tests {
 
     #[test]
     fn test_probe_definition_creation() {
-        let probe = ProbeDefinition::new_tcp("TestProbe".to_string(), b"GET / HTTP/1.0\r\n\r\n".to_vec());
+        let probe =
+            ProbeDefinition::new_tcp("TestProbe".to_string(), b"GET / HTTP/1.0\r\n\r\n".to_vec());
         assert_eq!(probe.name, "TestProbe");
         assert_eq!(probe.protocol, Protocol::Tcp);
         assert_eq!(probe.rarity, 5);

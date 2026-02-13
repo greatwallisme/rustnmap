@@ -18,17 +18,17 @@ pub mod tcp;
 pub mod udp;
 
 // Re-exports
-pub use error::{TracerouteError, Result};
+pub use error::{Result, TracerouteError};
 pub use hops::{HopInfo, PathMtu};
 pub use icmp::IcmpTraceroute;
 pub use probe::{ProbeConfig, ProbeResponse, ProbeType, ProbeType as TracerouteProbeType};
 pub use tcp::{TcpAckTraceroute, TcpSynTraceroute};
 pub use udp::UdpTraceroute;
 
+use rand::Rng;
 use rustnmap_common::Ipv4Addr;
 use std::time::Duration;
-use tokio::time::{timeout, sleep};
-use rand::Rng;
+use tokio::time::{sleep, timeout};
 
 /// Main traceroute engine.
 #[derive(Debug)]
@@ -249,7 +249,6 @@ impl Traceroute {
 
     /// Sends probes for a single hop (TTL value).
     async fn probe_hop(&self, target: Ipv4Addr, ttl: u8) -> Result<HopInfo> {
-
         let mut rtts = Vec::with_capacity(self.config.probes_per_hop as usize);
         let mut last_ip: Option<Ipv4Addr> = None;
         let last_hostname: Option<String> = None;
@@ -259,19 +258,11 @@ impl Traceroute {
         for probe_num in 0..self.config.probes_per_hop {
             let start = std::time::Instant::now();
 
-            match self.send_probe(target, ttl).await {
-                Ok(Some(response)) => {
-                    let rtt = start.elapsed();
-                    rtts.push(rtt);
-                    last_ip = Some(response.ip());
-                    probes_received += 1;
-                }
-                Ok(None) => {
-                    // Timeout - no response
-                }
-                Err(_) => {
-                    // Error sending probe
-                }
+            if let Ok(Some(response)) = self.send_probe(target, ttl).await {
+                let rtt = start.elapsed();
+                rtts.push(rtt);
+                last_ip = Some(response.ip());
+                probes_received += 1;
             }
 
             probes_sent += 1;
@@ -280,7 +271,9 @@ impl Traceroute {
             if probe_num + 1 < self.config.probes_per_hop {
                 let wait = if self.config.max_wait > self.config.min_wait {
                     let mut rng = rand::thread_rng();
-                    let diff = u64::try_from(self.config.max_wait.as_millis() - self.config.min_wait.as_millis())?;
+                    let diff = u64::try_from(
+                        self.config.max_wait.as_millis() - self.config.min_wait.as_millis(),
+                    )?;
                     self.config.min_wait + Duration::from_millis(rng.gen_range(0..=diff))
                 } else {
                     self.config.min_wait
@@ -290,6 +283,10 @@ impl Traceroute {
         }
 
         // Calculate packet loss
+        #[allow(
+            clippy::cast_precision_loss,
+            reason = "f32 has limited mantissa, precision loss acceptable for packet loss calculations"
+        )]
         let loss = if probes_sent > 0 {
             1.0 - (probes_received as f32 / probes_sent as f32)
         } else {
@@ -300,11 +297,8 @@ impl Traceroute {
     }
 
     /// Sends a single probe packet.
-    async fn send_probe(
-        &self,
-        target: Ipv4Addr,
-        ttl: u8,
-    ) -> Result<Option<ProbeResponse>> {
+    // TODO: This is a placeholder implementation. Actual probe dispatch to protocol-specific implementations
+    async fn send_probe(&self, target: Ipv4Addr, ttl: u8) -> Result<Option<ProbeResponse>> {
         // Create probe configuration
         let probe_config = ProbeConfig {
             source_port: self.config.source_port,
@@ -315,36 +309,15 @@ impl Traceroute {
 
         // Match on probe type and send appropriate probe
         match self.config.probe_type {
-            ProbeType::Udp => {
+            ProbeType::Udp | ProbeType::TcpSyn | ProbeType::TcpAck | ProbeType::Icmp => {
                 let _ = probe_config;
                 let _ = target;
-                timeout(self.config.probe_timeout, sleep(Duration::from_secs(100))).await.ok();
-                Ok(None)
-            }
-            ProbeType::TcpSyn => {
-                let _ = probe_config;
-                let _ = target;
-                timeout(self.config.probe_timeout, sleep(Duration::from_secs(100))).await.ok();
-                Ok(None)
-            }
-            ProbeType::TcpAck => {
-                let _ = probe_config;
-                let _ = target;
-                timeout(self.config.probe_timeout, sleep(Duration::from_secs(100))).await.ok();
-                Ok(None)
-            }
-            ProbeType::Icmp => {
-                let _ = probe_config;
-                let _ = target;
-                timeout(self.config.probe_timeout, sleep(Duration::from_secs(100))).await.ok();
+                let _ = timeout(self.config.probe_timeout, sleep(Duration::from_secs(100))).await;
                 Ok(None)
             }
         }
     }
-
 }
-
-
 
 impl TracerouteResult {
     /// Returns the target address.
@@ -353,20 +326,17 @@ impl TracerouteResult {
         self.target
     }
 
-
     /// Returns the list of discovered hops.
     #[must_use]
     pub fn hops(&self) -> &[HopInfo] {
         &self.hops
     }
 
-
     /// Returns the number of hops discovered.
     #[must_use]
     pub fn hop_count(&self) -> usize {
         self.hops.len()
     }
-
 
     /// Returns the path MTU if discovered.
     #[must_use]
@@ -387,35 +357,46 @@ impl TracerouteResult {
     }
 
     /// Formats the result as a string (human-readable).
+    #[must_use]
     pub fn format(&self) -> String {
         use std::fmt::Write;
 
         let mut output = String::new();
-        writeln!(output, "traceroute to {}, {} hops max", self.target, self.hops.len()).unwrap();
+        writeln!(
+            output,
+            "traceroute to {}, {} hops max",
+            self.target,
+            self.hops.len()
+        )
+        .unwrap();
 
         for hop in &self.hops {
-            let ip = hop.ip().map_or_else(
-                || "*".to_string(),
-                |ip| ip.to_string(),
-            );
+            let ip = hop
+                .ip()
+                .map_or_else(|| "*".to_string(), |ip| ip.to_string());
             let _ = write!(output, "  {:2}  {}", hop.ttl(), ip);
 
             if let Some(avg_rtt) = hop.avg_rtt() {
+                #[allow(
+                    clippy::cast_precision_loss,
+                    reason = "f64 has limited mantissa, precision loss acceptable for RTT calculations"
+                )]
                 let _ = write!(output, " {:.2} ms", avg_rtt.as_micros() as f64 / 1000.0);
             }
 
             if let Some(hostname) = hop.hostname() {
-                let _ = write!(output, " ({})", hostname);
+                let _ = write!(output, " ({hostname})");
             }
             let _ = writeln!(output);
         }
 
         if self.completed {
-            writeln!(
-                output,
-                "\nReached destination in {:.2} ms",
-                self.duration.as_micros() as f64 / 1000.0
-            ).unwrap();
+            #[allow(
+                clippy::cast_precision_loss,
+                reason = "f64 has limited mantissa, precision loss acceptable for duration calculations"
+            )]
+            let duration_ms = self.duration.as_micros() as f64 / 1000.0;
+            writeln!(output, "\nReached destination in {duration_ms:.2} ms",).unwrap();
         }
 
         output

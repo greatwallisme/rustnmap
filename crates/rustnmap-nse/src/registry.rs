@@ -75,16 +75,14 @@ impl ScriptDatabase {
             .map_err(|e| Error::ScriptLoadError(dir.display().to_string(), e))?;
 
         for entry in entries {
-            let entry = entry.map_err(|e| {
-                Error::ScriptLoadError(dir.display().to_string(), e)
-            })?;
+            let entry = entry.map_err(|e| Error::ScriptLoadError(dir.display().to_string(), e))?;
 
             let path = entry.path();
 
             if path.is_dir() {
                 // Recursively load subdirectories
                 self.load_directory(&path)?;
-            } else if path.extension().is_some_and( |e| e == "nse") {
+            } else if path.extension().is_some_and(|e| e == "nse") {
                 // Load NSE script file
                 self.load_script(&path)?;
             }
@@ -95,9 +93,8 @@ impl ScriptDatabase {
 
     /// Load a single script file.
     fn load_script(&mut self, path: &Path) -> Result<()> {
-        let source = std::fs::read_to_string(path).map_err(|e| {
-            Error::ScriptLoadError(path.display().to_string(), e)
-        })?;
+        let source = std::fs::read_to_string(path)
+            .map_err(|e| Error::ScriptLoadError(path.display().to_string(), e))?;
 
         let id = path
             .file_stem()
@@ -105,56 +102,51 @@ impl ScriptDatabase {
             .unwrap_or("unknown")
             .to_string();
 
-        let script = self.parse_script(&id, path, &source)?;
+        let script = Self::parse_script(&id, path, &source)?;
         self.register_script(&script);
 
         Ok(())
     }
 
     /// Parse script metadata from Lua source.
-    fn parse_script(
-        &self,
-        id: &str,
-        path: &Path,
-        source: &str,
-    ) -> Result<NseScript> {
+    fn parse_script(id: &str, path: &Path, source: &str) -> Result<NseScript> {
         let mut script = NseScript::new(id, path.to_path_buf(), source.to_string());
 
         // Parse description field
-        if let Some(desc) = self.extract_field(source, "description") {
-            script.description = self.clean_string_literal(&desc);
+        if let Some(desc) = Self::extract_field(source, "description") {
+            script.description = Self::clean_string_literal(&desc);
         }
 
         // Parse categories
-        if let Some(cats) = self.extract_field(source, "categories") {
-            script.categories = self.parse_categories(&cats)?;
+        if let Some(cats) = Self::extract_field(source, "categories") {
+            script.categories = Self::parse_categories(&cats)?;
         }
 
         // Parse author
-        if let Some(auth) = self.extract_field(source, "author") {
-            script.author = self.parse_string_list(&auth);
+        if let Some(auth) = Self::extract_field(source, "author") {
+            script.author = Self::parse_string_list(&auth);
         }
 
         // Parse license
-        if let Some(lic) = self.extract_field(source, "license") {
-            script.license = self.clean_string_literal(&lic);
+        if let Some(lic) = Self::extract_field(source, "license") {
+            script.license = Self::clean_string_literal(&lic);
         }
 
         // Parse dependencies
-        if let Some(deps) = self.extract_field(source, "dependencies") {
-            script.dependencies = self.parse_string_list(&deps);
+        if let Some(deps) = Self::extract_field(source, "dependencies") {
+            script.dependencies = Self::parse_string_list(&deps);
         }
 
         // Parse required NSE version
-        if let Some(v) = self.extract_field(source, "@nse_version") {
-            script.required_version = Some(self.clean_string_literal(&v));
+        if let Some(v) = Self::extract_field(source, "@nse_version") {
+            script.required_version = Some(Self::clean_string_literal(&v));
         }
 
         Ok(script)
     }
 
     /// Extract a field value from Lua source.
-    fn extract_field(&self, source: &str, field: &str) -> Option<String> {
+    fn extract_field(source: &str, field: &str) -> Option<String> {
         // Try pattern: field = [[...]] or field = "..." or field = '...'
         let patterns = [
             format!("{field} = {{{{{{"),
@@ -196,12 +188,12 @@ impl ScriptDatabase {
     }
 
     /// Clean a string literal (remove quotes/brackets).
-    fn clean_string_literal(&self, s: &str) -> String {
+    fn clean_string_literal(s: &str) -> String {
         s.trim().to_string()
     }
 
     /// Parse category list from Lua syntax.
-    fn parse_categories(&self, input: &str) -> Result<Vec<ScriptCategory>> {
+    fn parse_categories(input: &str) -> Result<Vec<ScriptCategory>> {
         let mut categories = Vec::new();
 
         // Remove braces and whitespace
@@ -216,7 +208,10 @@ impl ScriptDatabase {
             if let Some(cat) = ScriptCategory::from_str(part) {
                 categories.push(cat);
             } else if !part.is_empty() {
-                return Err(Error::InvalidCategory(part.to_string(), "parse".to_string()));
+                return Err(Error::InvalidCategory(
+                    part.to_string(),
+                    "parse".to_string(),
+                ));
             }
         }
 
@@ -229,7 +224,7 @@ impl ScriptDatabase {
     }
 
     /// Parse a list of strings from Lua syntax.
-    fn parse_string_list(&self, input: &str) -> Vec<String> {
+    fn parse_string_list(input: &str) -> Vec<String> {
         let mut result = Vec::new();
 
         // Simple split by comma and clean
@@ -277,20 +272,17 @@ impl ScriptDatabase {
         }
 
         // Index by service name
-        if let Some(service) = self.guess_service(&id) {
-            self.by_service
-                .entry(service)
-                .or_default()
-                .push(id.clone());
+        if let Some(service) = Self::guess_service(&id) {
+            self.by_service.entry(service).or_default().push(id.clone());
         }
     }
 
     /// Guess service name from script ID.
-    fn guess_service(&self, id: &str) -> Option<String> {
+    fn guess_service(id: &str) -> Option<String> {
         // Common service prefixes
         let prefixes = [
-            "http", "ssh", "ftp", "smtp", "dns", "tls", "ssl",
-            "smb", "ldap", "mysql", "pgsql", "rdp", "vnc",
+            "http", "ssh", "ftp", "smtp", "dns", "tls", "ssl", "smb", "ldap", "mysql", "pgsql",
+            "rdp", "vnc",
         ];
 
         for prefix in prefixes {
@@ -389,7 +381,7 @@ mod tests {
 
     #[test]
     fn test_extract_field() {
-        let db = ScriptDatabase::new();
+        let _db = ScriptDatabase::new();
 
         // Test with quoted string format
         let source = r#"
@@ -398,26 +390,21 @@ author = "Test Author"
 "#;
 
         assert_eq!(
-            db.extract_field(source, "description"),
+            ScriptDatabase::extract_field(source, "description"),
             Some("Test description".to_string())
         );
         assert_eq!(
-            db.extract_field(source, "author"),
+            ScriptDatabase::extract_field(source, "author"),
             Some("Test Author".to_string())
         );
         // Test that non-existent field returns None
-        assert_eq!(
-            db.extract_field(source, "nonexistent"),
-            None
-        );
+        assert_eq!(ScriptDatabase::extract_field(source, "nonexistent"), None);
     }
 
     #[test]
     fn test_parse_categories() {
-        let db = ScriptDatabase::new();
-
         let input = r#"{"vuln", "safe", "auth"}"#;
-        let result = db.parse_categories(input).unwrap();
+        let result = ScriptDatabase::parse_categories(input).unwrap();
 
         assert_eq!(result.len(), 3);
         assert!(result.contains(&ScriptCategory::Vuln));
@@ -427,10 +414,8 @@ author = "Test Author"
 
     #[test]
     fn test_parse_categories_empty() {
-        let db = ScriptDatabase::new();
-
         let input = "{}";
-        let result = db.parse_categories(input).unwrap();
+        let result = ScriptDatabase::parse_categories(input).unwrap();
 
         assert_eq!(result.len(), 1);
         assert_eq!(result[0], ScriptCategory::Safe); // Default
@@ -438,21 +423,23 @@ author = "Test Author"
 
     #[test]
     fn test_parse_categories_invalid() {
-        let db = ScriptDatabase::new();
-
         let input = r#"{"vuln", "invalidcat"}"#;
-        let result = db.parse_categories(input);
+        let result = ScriptDatabase::parse_categories(input);
 
         assert!(result.is_err());
     }
 
     #[test]
     fn test_guess_service() {
-        let db = ScriptDatabase::new();
-
-        assert_eq!(db.guess_service("http-vuln-cve"), Some("http".to_string()));
-        assert_eq!(db.guess_service("ssh-auth"), Some("ssh".to_string()));
-        assert_eq!(db.guess_service("unknown-script"), None);
+        assert_eq!(
+            ScriptDatabase::guess_service("http-vuln-cve"),
+            Some("http".to_string())
+        );
+        assert_eq!(
+            ScriptDatabase::guess_service("ssh-auth"),
+            Some("ssh".to_string())
+        );
+        assert_eq!(ScriptDatabase::guess_service("unknown-script"), None);
     }
 
     #[test]

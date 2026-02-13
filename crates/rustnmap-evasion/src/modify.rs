@@ -17,11 +17,13 @@ pub struct PacketModifier {
 
 impl PacketModifier {
     /// Creates a new packet modifier.
+    #[must_use]
     pub fn new(config: PacketModConfig) -> Self {
         Self { config }
     }
 
     /// Creates a modifier with default (no modification) configuration.
+    #[must_use]
     pub fn none() -> Self {
         Self {
             config: PacketModConfig::default(),
@@ -37,15 +39,20 @@ impl PacketModifier {
     /// # Returns
     ///
     /// The modified packet bytes.
+    ///
+    /// # Errors
+    ///
+    /// This function currently does not return errors but may in the future
+    /// if validation is added for packet modifications.
     pub fn apply(&self, mut packet: Vec<u8>) -> Result<Vec<u8>> {
         // Apply data padding
         if let Some(padding_len) = self.config.data_length {
-            packet = self.add_padding(packet, padding_len);
+            packet = Self::add_padding(packet, padding_len);
         }
 
         // Apply bad checksum if configured
         if self.config.bad_checksum {
-            packet = self.corrupt_checksum(packet)?;
+            packet = Self::corrupt_checksum(packet);
         }
 
         // Note: IP options and TTL modifications would need to be applied
@@ -61,14 +68,16 @@ impl PacketModifier {
     ///
     /// * `packet` - The original packet.
     /// * `length` - Number of random bytes to append.
-    fn add_padding(&self, mut packet: Vec<u8>, length: usize) -> Vec<u8> {
+    fn add_padding(mut packet: Vec<u8>, length: usize) -> Vec<u8> {
         if length == 0 {
             return packet;
         }
 
         // In production, would use random bytes
         // For deterministic behavior, use a pattern
-        let padding: Vec<u8> = (0..length).map(|i| (i % 256) as u8).collect();
+        let padding: Vec<u8> = (0..length)
+            .map(|i| u8::try_from(i % 256).expect("mod 256 always fits in u8"))
+            .collect();
         packet.extend_from_slice(&padding);
 
         packet
@@ -78,9 +87,9 @@ impl PacketModifier {
     ///
     /// This is used for testing firewall behavior when receiving
     /// packets with invalid checksums.
-    fn corrupt_checksum(&self, mut packet: Vec<u8>) -> Result<Vec<u8>> {
+    fn corrupt_checksum(mut packet: Vec<u8>) -> Vec<u8> {
         if packet.len() < 12 {
-            return Ok(packet);
+            return packet;
         }
 
         // For IP packets, corrupt the IP checksum at bytes 10-11
@@ -102,15 +111,17 @@ impl PacketModifier {
             }
         }
 
-        Ok(packet)
+        packet
     }
 
     /// Returns the configuration used by this modifier.
+    #[must_use]
     pub fn config(&self) -> &PacketModConfig {
         &self.config
     }
 
     /// Returns true if any modification is enabled.
+    #[must_use]
     pub fn is_enabled(&self) -> bool {
         self.config.bad_checksum
             || self.config.data_length.is_some()
@@ -129,21 +140,26 @@ pub struct IpOptionsBuilder {
 
 impl IpOptionsBuilder {
     /// Creates a new empty builder.
+    #[must_use]
     pub fn new() -> Self {
-        Self { options: Vec::new() }
+        Self {
+            options: Vec::new(),
+        }
     }
 
     /// Adds a Record Route option.
     #[must_use]
     pub fn record_route(mut self, max_addresses: u8) -> Self {
-        self.options.push(crate::config::IpOption::RecordRoute { max_addresses });
+        self.options
+            .push(crate::config::IpOption::RecordRoute { max_addresses });
         self
     }
 
     /// Adds a Timestamp option.
     #[must_use]
     pub fn timestamp(mut self, flags: u8, max_entries: u8) -> Self {
-        self.options.push(crate::config::IpOption::Timestamp { flags, max_entries });
+        self.options
+            .push(crate::config::IpOption::Timestamp { flags, max_entries });
         self
     }
 
@@ -170,9 +186,19 @@ impl IpOptionsBuilder {
     }
 }
 
+impl Default for IpOptionsBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Calculates a checksum for the given data.
 ///
 /// This is a simple internet checksum used by IP, TCP, and UDP.
+///
+/// # Panics
+///
+/// Panics if the checksum calculation overflows a `u16`.
 #[must_use]
 pub fn calculate_checksum(data: &[u8]) -> u16 {
     let mut sum: u32 = 0;
@@ -210,11 +236,13 @@ pub fn generate_padding(length: usize) -> Vec<u8> {
     }
 
     // Use timestamp-based seed for pseudo-randomness
-    let seed = u64::try_from(SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos())
-        .unwrap_or(123456789); // 如果转换失败，使用默认种子
+    let seed = u64::try_from(
+        SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos(),
+    )
+    .unwrap_or(123_456_789); // Use default seed if conversion fails
 
     // Simple LCG for deterministic pseudo-randomness
     let mut state = seed;
@@ -263,10 +291,8 @@ mod tests {
 
     #[test]
     fn test_add_padding() {
-        let modifier = PacketModifier::none();
         let packet = vec![1, 2, 3];
-
-        let padded = modifier.add_padding(packet, 5);
+        let padded = PacketModifier::add_padding(packet, 5);
 
         assert_eq!(padded.len(), 8);
         assert_eq!(padded[0..3], [1, 2, 3]);
@@ -274,22 +300,19 @@ mod tests {
 
     #[test]
     fn test_add_padding_zero() {
-        let modifier = PacketModifier::none();
         let packet = vec![1, 2, 3];
-
-        let padded = modifier.add_padding(packet, 0);
+        let padded = PacketModifier::add_padding(packet, 0);
 
         assert_eq!(padded.len(), 3);
     }
 
     #[test]
     fn test_corrupt_checksum() {
-        let modifier = PacketModifier::none();
         let mut packet = vec![0u8; 40];
         packet[10] = 0x12;
         packet[11] = 0x34;
 
-        let corrupted = modifier.corrupt_checksum(packet).unwrap();
+        let corrupted = PacketModifier::corrupt_checksum(packet);
 
         assert_ne!(corrupted[10], 0x12);
     }
@@ -362,15 +385,19 @@ mod tests {
 
     #[test]
     fn test_ip_options_builder() {
-        let builder = IpOptionsBuilder::new()
-            .record_route(9)
-            .timestamp(1, 4);
+        let builder = IpOptionsBuilder::new().record_route(9).timestamp(1, 4);
 
         let options = builder.build();
 
         assert_eq!(options.len(), 2);
-        assert!(matches!(options[0], crate::config::IpOption::RecordRoute { .. }));
-        assert!(matches!(options[1], crate::config::IpOption::Timestamp { .. }));
+        assert!(matches!(
+            options[0],
+            crate::config::IpOption::RecordRoute { .. }
+        ));
+        assert!(matches!(
+            options[1],
+            crate::config::IpOption::Timestamp { .. }
+        ));
     }
 
     #[test]
@@ -381,7 +408,10 @@ mod tests {
         let options = builder.build();
 
         assert_eq!(options.len(), 1);
-        assert!(matches!(options[0], crate::config::IpOption::LooseSourceRoute { .. }));
+        assert!(matches!(
+            options[0],
+            crate::config::IpOption::LooseSourceRoute { .. }
+        ));
     }
 
     #[test]
@@ -401,10 +431,9 @@ mod tests {
     proptest::proptest! {
         #[test]
         fn test_padding_length_property(length in 0usize..1000) {
-            let modifier = PacketModifier::none();
             let packet = vec![1u8, 2, 3];
 
-            let padded = modifier.add_padding(packet.clone(), length);
+            let padded = PacketModifier::add_padding(packet.clone(), length);
 
             prop_assert_eq!(padded.len(), packet.len() + length);
             // Original packet contents should be preserved

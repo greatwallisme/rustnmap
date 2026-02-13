@@ -107,6 +107,7 @@ impl TcpSynScanner {
     /// # Returns
     ///
     /// Simulated port state based on port number.
+    // TODO: This is a simulation method. Replace with actual raw socket packet transmission
     #[must_use]
     fn simulate_probe_response(&self, _addr: Ipv4Addr, port: Port) -> PortState {
         if COMMON_OPEN_PORTS.contains(&port) {

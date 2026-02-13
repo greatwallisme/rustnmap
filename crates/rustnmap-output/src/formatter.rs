@@ -19,8 +19,8 @@ use crate::error::{OutputError, Result};
 use crate::models::*;
 use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
 use quick_xml::writer::Writer;
-use std::io::Write as IoWrite;
 use std::fmt::Write;
+use std::io::Write as IoWrite;
 
 /// Verbosity level for output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -531,7 +531,11 @@ impl XmlFormatter {
         Ok(())
     }
 
-    fn write_service<W: IoWrite>(&self, writer: &mut Writer<W>, service: &ServiceInfo) -> Result<()> {
+    fn write_service<W: IoWrite>(
+        &self,
+        writer: &mut Writer<W>,
+        service: &ServiceInfo,
+    ) -> Result<()> {
         let mut service_start = BytesStart::new("service");
         service_start.push_attribute(("name", service.name.as_str()));
         service_start.push_attribute(("method", service.method.as_str()));
@@ -557,7 +561,11 @@ impl XmlFormatter {
         Ok(())
     }
 
-    fn write_script<W: IoWrite>(&self, writer: &mut Writer<W>, script: &ScriptResult) -> Result<()> {
+    fn write_script<W: IoWrite>(
+        &self,
+        writer: &mut Writer<W>,
+        script: &ScriptResult,
+    ) -> Result<()> {
         let mut script_start = BytesStart::new("script");
         script_start.push_attribute(("id", script.id.as_str()));
 

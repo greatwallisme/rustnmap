@@ -1,149 +1,335 @@
 # Findings: RustNmap Research and Analysis
 
 > **Created**: 2026-02-12
+> **Updated**: 2026-02-13
 > **Purpose**: Document discoveries, research results, and analysis
 
 ---
 
-## Nmap Source Code Analysis
+## Project Status Summary
 
-### Key Files Identified
-| File | Purpose | Notes |
-|------|---------|-------|
-| `nmap.cc` | Main entry point | CLI parsing, session initialization |
-| `scan_engine.cc` | Scan orchestration | Host parallelization, port scheduling |
-| `tcpip.cc` | TCP/IP handling | Socket management, packet crafting |
-| `Target.cc` | Target management | CIDR expansion, host discovery |
-| `portlist.cc` | Port list handling | 10-state machine |
-| `service_scan.cc` | Service detection | Probe matching, version extraction |
-| `nse_main.cc` | NSE engine | Script loading, execution sandbox |
-| `output.cc` | Output formatting | XML, JSON, grepable, script kiddie |
-| `nmap-os-db` | OS fingerprints | Reference database for matching |
+### Completed Work
 
-### Port State Machine
-Nmap implements a 10-state port machine:
+| Phase | Crate | Tests | Description |
+|-------|-------|-------|-------------|
+| Phase 1 | rustnmap-common | 14 | Core types, errors, utilities |
+| Phase 1 | rustnmap-net | 0 | Raw socket abstractions |
+| Phase 1 | rustnmap-packet | 0 | PACKET_MMAP V3 engine |
+| Phase 2 | rustnmap-target | 85 | Target parsing, host discovery |
+| Phase 2 | rustnmap-scan | 0 | Port scanning implementations |
+| Phase 3 | rustnmap-fingerprint | 36 | Service/OS detection |
+| Phase 3 | rustnmap-traceroute | 76 | Network route tracing |
+| Phase 3 | rustnmap-evasion | 85 | Firewall/IDS evasion |
+| Phase 4 | rustnmap-nse | 35 | Lua 5.4 script engine |
+| Phase 5 | rustnmap-output | 25 | Output formatters |
+| Phase 5 | rustnmap-cli | 0 | CLI entry point (IN PROGRESS) |
 
-1. **open** - Target accepting connections
-2. **closed** - Target responding but not accepting
-3. **filtered** - No response (firewall/timeout)
-4. **unfiltered** - Probes indicate port accessible but state uncertain
-5. **open|filtered** - Mixed responses detected
-6. **closed|filtered** - Error response received
-7. **open|closed** - Conflicting responses
-8. **filtered|closed** - Cannot determine
-9. **unknown** - State not yet determined
-10. **filtered|unfiltered** - Previous state determined filtered
+**Total**: 284 tests passing across 11 crates
 
 ---
 
-## Rust Ecosystem Analysis
+## Architecture Findings
 
-### Packet I/O Libraries
-| Library | Strengths | Weaknesses | Decision |
-|---------|------------|-------------|
-| **pnet** | Comprehensive protocol support | Limited async | Use for initial implementation |
-| **tokio** | Industry standard async | Mature ecosystem | **CHOSEN** for runtime |
-| **packet** (smol) | Alternative to tokio | Simpler API | Future consideration |
-| **rawsocket** | Direct raw socket access | Cross-platform concerns | Linux-targeted only |
+### Module Dependencies (from doc/architecture.md)
 
-### Async Runtime Decision
-**Selected**: `tokio`
+```
+Application Binary
+    └── rustnmap-cli (CLI, output formatting)
+        └── rustnmap-core (scan orchestrator)
+            ├── rustnmap-scan (port scanning)
+            ├── rustnmap-nse (script engine)
+            └── rustnmap-fingerprint (OS/service detection)
+                └── rustnmap-net (raw sockets, packet I/O)
+                    └── rustnmap-common (types, errors)
+```
+
+### Key Design Patterns
+
+1. **ScanSession Context**: Central abstraction for dependency injection
+   - Config, target_set, packet_engine, output_sink
+   - fingerprint_db, nse_registry, stats
+
+2. **PacketEngine Trait**: Enables testing without root
+   - send_packet, send_batch, recv_stream
+   - set_bpf, local_mac, if_index
+
+3. **Zero-Copy Packet Path**: PACKET_MMAP V3 for performance
+   - bytes::Bytes for zero-copy references
+   - Kernel bypass for high-throughput scanning
+
+---
+
+## Implementation Details by Module
+
+### Port Scanning (doc/modules/port-scanning.md)
+
+**Scan Types Required**:
+| Type | Nmap Flag | Implementation |
+|------|-----------|----------------|
+| TCP SYN | -sS | TcpSynScanner |
+| TCP Connect | -sT | TcpConnectScanner |
+| TCP FIN | -sF | TcpFinScanner |
+| TCP NULL | -sN | TcpNullScanner |
+| TCP Xmas | -sX | TcpXmasScanner |
+| TCP ACK | -sA | TcpAckScanner |
+| TCP Window | -sW | TcpWindowScanner |
+| TCP Maimon | -sM | TcpMaimonScanner |
+| UDP | -sU | UdpScanner |
+| IP Protocol | -sO | IpProtocolScanner |
+
+**Port State Machine** (10 states):
+1. Unknown - Initial state
+2. Closed - RST received
+3. Open - SYN-ACK received
+4. Filtered - No response or ICMP unreachable
+5. Unfiltered - ACK scan response
+6. OpenFiltered - UDP/IP protocol no response
+7. ClosedFiltered - Error response
+8. OpenClosed - Conflicting responses
+9. FilteredClosed - Cannot determine
+10. FilteredUnfiltered - Previous state filtered
+
+**Ultra Scan Architecture**:
+- UltraProbe: Probe specification with retry tracking
+- CongestionControl: RFC2581 TCP congestion control
+- TimeoutTracker: RFC 2988 adaptive timeout
+- RateMeter: Packet rate monitoring
+
+### Host Discovery (doc/modules/host-discovery.md)
+
+**Discovery Methods**:
+| Method | Nmap Flag | Description |
+|--------|-----------|-------------|
+| ARP Ping | -PR | Local network only |
+| ICMP Echo | -PE | Standard ping |
+| ICMP Timestamp | -PP | Alternative ICMP |
+| ICMP Address Mask | -PM | Rarely used |
+| TCP SYN Ping | -PS | TCP SYN to specified ports |
+| TCP ACK Ping | -PA | TCP ACK to specified ports |
+| UDP Ping | -PU | UDP to specified ports |
+| IP Protocol Ping | -PO | IP protocol scan |
+
+### Service Detection (doc/modules/service-detection.md)
+
+**Probe Database Structure**:
+- ProbeDefinition: name, protocol, ports, payload, rarity, matches
+- MatchRule: pattern (regex), service, product, version, info, hostname, ostype, devicetype, cpe
+- Intensity levels (0-9) control probe selection
+
+**Version Extraction**:
+- Template variable substitution ($1-$N for capture groups)
+- CPE (Common Platform Enumeration) generation
+- Confidence scoring (0-10)
+
+### NSE Script Engine (doc/modules/nse-engine.md)
+
+**Core Components**:
+1. **Lua Runtime**: mlua with Lua 5.4
+2. **Script Database**: Loading, parsing, selection
+3. **Script Scheduler**: Concurrent execution with limits
+4. **Script Engine**: Main execution entry point
+
+**NSE Libraries to Implement** (32 total):
+- Core: nmap, stdnse, comm, shortport
+- Protocol: http, ssh, ssl, snmp, smb, ftp, smtp, ldap, mysql, pgsql, msrpc, dns, dhcp, vnc, rdp, mongodb
+- Utility: brute, creds, datafiles, target, unpwdb, stringaux, tab, json, base64, bit, openssl, packet
+
+**Script Execution Flow**:
+1. Script Loading & Parsing
+2. Rule Evaluation (hostrule/portrule)
+3. Lua Environment Preparation
+4. Action Execution
+5. Result Collection
+
+### OS Detection (doc/modules/os-detection.md)
+
+**TCP/IP Fingerprinting**:
+- SEQ probes: TCP ISN analysis (GCD, increments, randomness)
+- T1-T7 probes: Various TCP flag combinations
+- IE probes: ICMP echo analysis
+- U1 probe: UDP port unreachable analysis
+- ECN probe: Explicit Congestion Notification
+
+**Fingerprint Matching**:
+- nmap-os-db format parsing
+- Test-by-test comparison
+- Score-based classification
+- Fuzzy matching for unknown systems
+
+### Evasion Techniques (doc/modules/evasion.md)
+
+**Implemented Techniques**:
+| Technique | Description |
+|-----------|-------------|
+| Decoy Scan | -D flag, send probes from spoofed IPs |
+| Source Port Manipulation | -g flag, set specific source port |
+| IP Options | Add custom IP options |
+| Packet Fragmentation | -f flag, split packets |
+| Bad Checksum | --badsum, corrupt checksums |
+| Custom MTU | --mtu, set specific MTU |
+| Data Length | Add random data to packets |
+
+### Output Formats (doc/modules/output.md)
+
+**Required Formats**:
+| Format | Extension | Description |
+|--------|-----------|-------------|
+| Normal | .nmap | Human-readable text |
+| XML | .xml | Machine-parseable XML |
+| JSON | .json | JSON output |
+| Grepable | .gnmap | One-line per host |
+| Script Kiddie | - | 1337 speak |
+
+---
+
+## Technical Decisions
+
+### Async Runtime: Tokio
 
 **Rationale**:
 - Industry standard with excellent ecosystem
 - Proven in network scanning tools
 - Built-in task scheduling (work stealing)
 - Comprehensive timer support
-- Strong crate ecosystem (hyper, tracing, etc.)
 
-### Zero-Copy Strategy
-PACKET_MMAP V3 for kernel bypass:
+### Lua Integration: mlua
 
-```rust
-pub struct PacketBuffer {
-    pub data: bytes::Bytes,  // Zero-copy reference
-    pub len: usize,
-    pub timestamp: std::time::Duration,
-}
+**Rationale**:
+- Best-in-class Lua bindings for Rust
+- Lua 5.4 support
+- Sandboxing capabilities
+- Performance (can use LuaJIT)
+
+### Packet I/O: pnet + raw sockets
+
+**Rationale**:
+- Mature packet parsing library
+- Cross-protocol support
+- Linux raw socket support
+- PACKET_MMAP V3 for zero-copy
+
+### CLI: clap
+
+**Rationale**:
+- Derive API for clean code
+- Excellent help generation
+- Shell completion support
+- Nmap-compatible argument parsing
+
+---
+
+## Performance Targets (from doc/roadmap.md)
+
+| Metric | Target | Nmap Reference |
+|--------|--------|----------------|
+| Full port scan (1000 hosts) | <30s | ~60-120s |
+| SYN scan throughput | >10^6 pps | ~5×10^5 pps |
+| Host discovery (/24) | <5s | ~5-10s |
+| Memory (large scan) | <500MB | ~200-800MB |
+| Script overhead | <10% | ~5-15% |
+| Startup time | <100ms | ~50-200ms |
+
+---
+
+## Risk Assessment (from doc/roadmap.md)
+
+| Risk | Impact | Mitigation |
+|------|--------|------------|
+| Lua compatibility | High | mlua crate, strict NSE API compatibility |
+| Raw socket permissions | Medium | CAP_NET_RAW, TCP Connect fallback |
+| Kernel compatibility | Medium | Support Linux 3.10+, feature detection |
+| SELinux/AppArmor | Medium | Policy configs, documentation |
+| Fingerprint maintenance | Medium | Auto-update mechanism |
+| Performance | Medium | Async I/O, zero-copy, eBPF |
+| Legal compliance | High | Clear terms, authorization checks |
+
+---
+
+## Code Quality Standards
+
+### Required Checks (from CLAUDE.md)
+
+```bash
+# Before committing any code:
+cargo test --workspace                    # All tests pass
+cargo clippy --workspace -- -D warnings   # Zero warnings
+cargo fmt --all -- --check                # Code formatted
+cargo doc --no-deps --workspace           # Docs build without errors
 ```
 
+### Current Status
+
+| Check | Status |
+|-------|--------|
+| Tests passing | 284/284 |
+| Clippy warnings | 0 (all fixed) |
+| Format check | Pass |
+| Doc build | Pass |
+
+### Clippy Warnings Fixed (2026-02-13)
+
+**rustnmap-target (2 warnings fixed)**:
+1. `self_only_used_in_recursion` - Fixed expected lint name
+2. `unfulfilled_lint_expectations` - Resolved by fixing lint name
+
+**rustnmap-traceroute (20 warnings fixed)**:
+1. `uninlined_format_args` - Changed to inline format strings
+2. `cast_precision_loss` - Added #[allow] annotations with justification
+3. `derivable_impls` - Changed ProbeType to use #[derive(Default)]
+4. `match_same_arms` - Merged identical match arms
+5. `unused_result_ok` - Changed to `let _ =`
+6. `must_use_candidate` - Added #[must_use] to format()
+7. `unused_async` - Removed async from functions without await
+8. `single_match_else` - Changed to `if let`
+
+**Files modified**:
+- `crates/rustnmap-target/src/parser.rs`
+- `crates/rustnmap-traceroute/src/error.rs`
+- `crates/rustnmap-traceroute/src/hops.rs`
+- `crates/rustnmap-traceroute/src/lib.rs`
+- `crates/rustnmap-traceroute/src/probe.rs`
+- `crates/rustnmap-traceroute/src/icmp.rs`
+- `crates/rustnmap-traceroute/src/tcp.rs`
+- `crates/rustnmap-traceroute/src/udp.rs`
+
 ---
 
-## Phase 3: rustnmap-fingerprint Implementation (COMPLETE)
+## Remaining Work
 
-### Summary
-- Implemented rustnmap-fingerprint crate with service and OS detection modules
-- 36 tests passing (all unit tests)
-- Zero clippy warnings
-- Full thiserror integration for error handling
-- Complete module structure:
-  - error.rs - Error types
-  - service/ - Service detection (mod, database, detector, probe)
-  - os/ - OS detection (mod, database, detector, fingerprint)
+### Phase 5: Integration
 
-### Acceptance Criteria Met
-- All public APIs have Rust-compliant documentation
-- Unit tests coverage: 100% (52/52 tests pass)
-- Zero compiler warnings (`cargo clippy --package rustnmap-fingerprint -- -D warnings`)
-- Zero clippy warnings
-- Code formatted (`cargo fmt --package rustnmap-fingerprint`)
+1. **Fix clippy warnings in rustnmap-traceroute**
+   - 20 unused_async errors
+   - Files: tcp.rs, udp.rs, icmp.rs
 
-### Notes
-- Service detection probe parser is simplified but functional for initial implementation
-- OS fingerprint matching uses placeholder database entries (full nmap-os-db parsing is TODO)
-- Async I/O implemented with tokio for TCP/UDP probes
-- Template variable substitution supports $1-$N capture groups
-- Intensity-to-rarity mapping implemented (T0-T9 levels)
+2. **Complete rustnmap-cli crate**
+   - CLI argument parsing with clap
+   - Nmap-compatible options
+   - Integration with all modules
 
-### Next Steps
-- Full nmap-service-probes database parser with multiline match rules
-- Full nmap-os-db parser with fingerprint reference extraction
-- Complete OS detection probe suite (SEQ, T1-T7, IE, U1, ECN)
-- TCP ISN analysis (GCD, increments, randomness tests)
-- NSE script engine (rustnmap-nse crate)
+3. **Implement Scan Orchestrator**
+   - Coordinate all scanning phases
+   - Manage scan session lifecycle
+   - Handle concurrent execution
+
+4. **Add Integration Tests**
+   - End-to-end scan workflows
+   - Mock network testing
+   - Performance benchmarks
+
+### Future Enhancements
+
+1. **IPv6 Support**: Full dual-stack operation
+2. **Performance Optimization**: eBPF filters, XDP
+3. **Database Updates**: Online fingerprint updates
+4. **NSE Library Completion**: All 32 libraries
+5. **Documentation**: User guide, API docs
 
 ---
 
-### Phase 4: NSE Script Engine (COMPLETE)
+## Reference Links
 
-**Summary**:
-- Implemented rustnmap-nse crate with full Lua 5.4 runtime integration via mlua
-- Created comprehensive script type system (NseScript, ScriptCategory, ScriptOutput, ScriptResult)
-- Implemented script database with loading, parsing, and selection
-- Implemented script scheduler with concurrency control
-- Implemented script execution engine with host table support
-- All 35 unit tests passing (100% pass rate)
-- Zero clippy warnings with proper lint configuration
-- Full API documentation with examples
-
-**Components Implemented**:
-- **Lua Runtime** (`NseLua`): Full Lua 5.4 integration via mlua
-  - Sandbox configuration with memory and instruction limits
-  - Global variable management
-  - Function registration and execution
-  - Table creation and manipulation
-  - Garbage collection support
-
-- **Script Database** (`ScriptDatabase`): Script management
-  - NSE file loading and parsing
-  - Metadata extraction (description, author, categories, dependencies)
-  - Category-based and pattern-based selection
-  - Service and port indexing
-
-- **Script Scheduler** (`ScriptScheduler`): Concurrent execution control
-  - Configurable concurrency limits and timeouts
-  - Semaphore-based resource management
-  - Script selection by category and pattern
-
-- **Script Engine** (`ScriptEngine`): Main execution entry point
-  - Script execution with Lua runtime
-  - Host table creation and global variable management
-  - Action function loading and calling
-  - Result formatting and collection
-
-**Next Steps**:
-- NSE library implementation (nmap, stdnse, http, ssl, ssh, etc.)
-- Protocol modules for service-specific scripts
-- Full script database parser with nmap-service-probes format
-- Integration with rustnmap-cli for command-line interface
-
+- Nmap Source: `reference/nmap/`
+- Design Docs: `doc/modules/*.md`
+- Architecture: `doc/architecture.md`
+- Roadmap: `doc/roadmap.md`

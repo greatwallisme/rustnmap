@@ -26,11 +26,13 @@ pub struct Fragmenter {
 
 impl Fragmenter {
     /// Creates a new fragmenter with the given configuration.
+    #[must_use]
     pub fn new(config: FragmentConfig) -> Self {
         Self { config }
     }
 
     /// Creates a fragmenter with default 8-byte fragmentation.
+    #[must_use]
     pub fn default_mode() -> Self {
         Self {
             config: FragmentConfig {
@@ -63,6 +65,10 @@ impl Fragmenter {
     /// let fragments = fragmenter.fragment(&packet, 1500).unwrap();
     /// assert!(fragments.len() > 1);  // Should be fragmented
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if packet slicing fails.
     pub fn fragment(&self, packet: &[u8], mtu: u16) -> Result<Vec<Vec<u8>>> {
         if !self.config.enabled {
             return Ok(vec![packet.to_vec()]);
@@ -89,13 +95,8 @@ impl Fragmenter {
 
             let is_last = offset + current_fragment_size >= data_size;
 
-            let fragment = self.build_fragment(
-                packet,
-                offset,
-                current_fragment_size,
-                fragment_id,
-                is_last,
-            )?;
+            let fragment =
+                self.build_fragment(packet, offset, current_fragment_size, fragment_id, is_last);
 
             fragments.push(fragment);
             offset += current_fragment_size;
@@ -123,6 +124,10 @@ impl Fragmenter {
     }
 
     /// Generates a unique fragment identifier.
+    #[allow(
+        clippy::unused_self,
+        reason = "Self is used for API consistency with other Fragmenter methods"
+    )]
     fn generate_fragment_id(&self) -> u16 {
         // In real implementation, this would be random or incrementing
         // For deterministic behavior in tests, use fixed value
@@ -130,6 +135,10 @@ impl Fragmenter {
     }
 
     /// Builds a single fragment packet.
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "IP header fields are bounded by protocol spec"
+    )]
     fn build_fragment(
         &self,
         original_packet: &[u8],
@@ -137,7 +146,7 @@ impl Fragmenter {
         fragment_data_size: usize,
         fragment_id: u16,
         is_last: bool,
-    ) -> Result<Vec<u8>> {
+    ) -> Vec<u8> {
         // IP header starts at beginning of packet
         let mut ip_header = original_packet[..IP_HEADER_SIZE].to_vec();
 
@@ -145,7 +154,7 @@ impl Fragmenter {
         // bit 0: reserved (must be 0)
         // bit 1: Don't Fragment (DF)
         // bit 2: More Fragments (MF)
-        let mf_flag = if is_last { 0 } else { 1 };
+        let mf_flag = u16::from(!is_last);
 
         // Fragment offset is in 8-byte units
         let fragment_offset = (data_offset / 8) as u16;
@@ -183,16 +192,24 @@ impl Fragmenter {
         let mut fragment = ip_header;
         fragment.extend_from_slice(&original_packet[slice_start..slice_end]);
 
-        Ok(fragment)
+        fragment
     }
 
     /// Calculates IP header checksum.
+    #[allow(
+        clippy::unused_self,
+        reason = "Self is used for API consistency with other Fragmenter methods"
+    )]
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "IP checksum is guaranteed to fit in u16 by design"
+    )]
     fn calculate_ip_checksum(&self, header: &[u8]) -> u16 {
         let mut sum: u32 = 0;
 
         for chunk in header.chunks(2) {
             if chunk.len() == 2 {
-                let word = u16::from_be_bytes([chunk[0], chunk[1]]) as u32;
+                let word = u32::from(u16::from_be_bytes([chunk[0], chunk[1]]));
                 sum += word;
             }
         }
@@ -201,10 +218,11 @@ impl Fragmenter {
             sum = (sum & 0xFFFF) + (sum >> 16);
         }
 
-        !sum as u16
+        (!sum) as u16
     }
 
     /// Returns the configuration used by this fragmenter.
+    #[must_use]
     pub fn config(&self) -> &FragmentConfig {
         &self.config
     }
@@ -322,11 +340,11 @@ mod tests {
 
         // Valid IP header for checksum test
         let mut header = vec![
-            0x45, 0x00, 0x00, 0x1C,  // Version, IHL, TOS, Total Length
-            0x12, 0x34, 0x00, 0x00,  // ID, Flags, Fragment Offset
-            0x40, 0x06, 0x00, 0x00,  // TTL, Protocol, Checksum
-            0x00, 0x00, 0x00, 0x00,  // Source Address
-            0x00, 0x00, 0x00, 0x00,  // Dest Address
+            0x45, 0x00, 0x00, 0x1C, // Version, IHL, TOS, Total Length
+            0x12, 0x34, 0x00, 0x00, // ID, Flags, Fragment Offset
+            0x40, 0x06, 0x00, 0x00, // TTL, Protocol, Checksum
+            0x00, 0x00, 0x00, 0x00, // Source Address
+            0x00, 0x00, 0x00, 0x00, // Dest Address
         ];
 
         let checksum = fragmenter.calculate_ip_checksum(&header);

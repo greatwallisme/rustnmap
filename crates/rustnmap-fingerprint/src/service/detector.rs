@@ -10,11 +10,11 @@ use tokio::io::AsyncWriteExt;
 use tokio::time::timeout;
 use tracing::{debug, info, trace};
 
-use crate::{FingerprintError, Result};
 use super::{
     database::ProbeDatabase,
-    probe::{MatchResult, Protocol, ProbeDefinition},
+    probe::{MatchResult, ProbeDefinition, Protocol},
 };
+use crate::{FingerprintError, Result};
 
 /// Service version information detected from a port.
 ///
@@ -126,11 +126,7 @@ impl ServiceDetector {
     }
 
     /// Detect service on a specific port.
-    pub async fn detect_service(
-        &self,
-        target: &SocketAddr,
-        port: u16,
-    ) -> Result<Vec<ServiceInfo>> {
+    pub async fn detect_service(&self, target: &SocketAddr, port: u16) -> Result<Vec<ServiceInfo>> {
         info!("Starting service detection on {}:{}", target.ip(), port);
 
         // Get applicable probes for this port at configured intensity
@@ -186,10 +182,7 @@ impl ServiceDetector {
         probes.retain(|p| p.rarity <= max_rarity);
 
         // Sort by rarity (lower = try first) and then by name
-        probes.sort_by(|a, b| {
-            a.rarity.cmp(&b.rarity)
-                .then_with(|| a.name.cmp(&b.name))
-        });
+        probes.sort_by(|a, b| a.rarity.cmp(&b.rarity).then_with(|| a.name.cmp(&b.name)));
 
         probes
     }
@@ -220,12 +213,8 @@ impl ServiceDetector {
         let payload = &probe.payload;
 
         match probe.protocol {
-            Protocol::Tcp => {
-                self.send_tcp_probe(target, port, payload).await
-            }
-            Protocol::Udp => {
-                self.send_udp_probe(target, port, payload).await
-            }
+            Protocol::Tcp => self.send_tcp_probe(target, port, payload).await,
+            Protocol::Udp => self.send_udp_probe(target, port, payload).await,
         }
     }
 
@@ -242,8 +231,9 @@ impl ServiceDetector {
         // Connect and send
         let stream = timeout(
             self.default_timeout,
-            TcpStream::connect((target.ip(), port))
-        ).await
+            TcpStream::connect((target.ip(), port)),
+        )
+        .await
         .map_err(|_| FingerprintError::Timeout {
             address: target.ip().to_string(),
             port,
@@ -251,7 +241,9 @@ impl ServiceDetector {
 
         // Send payload
         let mut stream = stream?;
-        stream.write_all(payload).await
+        stream
+            .write_all(payload)
+            .await
             .map_err(|e: std::io::Error| FingerprintError::Network {
                 operation: "write probe".to_string(),
                 reason: e.to_string(),
@@ -259,16 +251,15 @@ impl ServiceDetector {
 
         // Read response
         let mut buffer = vec![0u8; 4096];
-        let n = match timeout(
-            self.default_timeout,
-            stream.read(&mut buffer)
-        ).await {
+        let n = match timeout(self.default_timeout, stream.read(&mut buffer)).await {
             Ok(Ok(n)) => n,
             Ok(Err(_)) => 0,
-            Err(_) => return Err(FingerprintError::Timeout {
-                address: target.ip().to_string(),
-                port,
-            }),
+            Err(_) => {
+                return Err(FingerprintError::Timeout {
+                    address: target.ip().to_string(),
+                    port,
+                })
+            }
         };
 
         if n > 0 {
@@ -288,14 +279,17 @@ impl ServiceDetector {
     ) -> Result<Option<Vec<u8>>> {
         use tokio::net::UdpSocket;
 
-        let socket = UdpSocket::bind("0.0.0.0:0").await
+        let socket = UdpSocket::bind("0.0.0.0:0")
+            .await
             .map_err(|e| FingerprintError::Network {
                 operation: "bind UDP socket".to_string(),
                 reason: e.to_string(),
             })?;
 
         // Send probe
-        socket.send_to(payload, *target).await
+        socket
+            .send_to(payload, *target)
+            .await
             .map_err(|e| FingerprintError::Network {
                 operation: "send UDP probe".to_string(),
                 reason: e.to_string(),
@@ -303,10 +297,7 @@ impl ServiceDetector {
 
         // Try to receive response
         let mut buffer = vec![0u8; 4096];
-        let result = timeout(
-            self.default_timeout,
-            socket.recv_from(&mut buffer)
-        ).await;
+        let result = timeout(self.default_timeout, socket.recv_from(&mut buffer)).await;
 
         match result {
             Ok(Ok((n, _))) if n > 0 => {
@@ -318,11 +309,7 @@ impl ServiceDetector {
     }
 
     /// Match response against probe rules.
-    fn match_response(
-        &self,
-        probe: &ProbeDefinition,
-        response: &[u8],
-    ) -> Result<Vec<MatchResult>> {
+    fn match_response(&self, probe: &ProbeDefinition, response: &[u8]) -> Result<Vec<MatchResult>> {
         let response_str = String::from_utf8_lossy(response);
         let mut results = Vec::new();
 
@@ -330,7 +317,10 @@ impl ServiceDetector {
             let regex = rule.compile_regex()?;
             if let Some(captures) = self.try_match(&regex, &response_str) {
                 let match_result = rule.apply(&captures);
-                debug!("Match rule '{}' with confidence {}", rule.service, match_result.confidence);
+                debug!(
+                    "Match rule '{}' with confidence {}",
+                    rule.service, match_result.confidence
+                );
                 results.push(match_result);
             }
         }

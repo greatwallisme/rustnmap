@@ -23,6 +23,6 @@ pub mod probe;
 
 pub use database::ProbeDatabase;
 pub use detector::{ServiceDetector, ServiceInfo};
-pub use probe::{ProbeDefinition, MatchRule, MatchTemplate};
+pub use probe::{MatchRule, MatchTemplate, ProbeDefinition};
 
 // Rust guideline compliant (2026-02-12)

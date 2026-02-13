@@ -18,10 +18,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// Scripts can belong to multiple categories, which determine when
 /// they are executed and what permissions they require.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize,
-)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[non_exhaustive]
 pub enum ScriptCategory {
     /// Authentication cracking scripts.
@@ -193,9 +190,7 @@ impl NseScript {
         if categories.is_empty() {
             return true;
         }
-        self.categories
-            .iter()
-            .any(|c| categories.contains(c))
+        self.categories.iter().any(|c| categories.contains(c))
     }
 
     /// Check if the script matches a name pattern.
@@ -214,24 +209,21 @@ impl NseScript {
     #[must_use]
     pub fn has_hostrule(&self) -> bool {
         self.source.contains("hostrule")
-            && (self.source.contains("hostrule =")
-                || self.source.contains("function hostrule"))
+            && (self.source.contains("hostrule =") || self.source.contains("function hostrule"))
     }
 
     /// Check if the script has a portrule.
     #[must_use]
     pub fn has_portrule(&self) -> bool {
         self.source.contains("portrule")
-            && (self.source.contains("portrule =")
-                || self.source.contains("function portrule"))
+            && (self.source.contains("portrule =") || self.source.contains("function portrule"))
     }
 
     /// Check if the script has an action function.
     #[must_use]
     pub fn has_action(&self) -> bool {
         self.source.contains("action")
-            && (self.source.contains("action =")
-                || self.source.contains("function action"))
+            && (self.source.contains("action =") || self.source.contains("function action"))
     }
 }
 
@@ -249,8 +241,7 @@ fn match_pattern(text: &str, pattern: &str) -> bool {
             star_idx = Some(pi);
             match_idx = ti;
             pi += 1;
-        } else if pi < pat_bytes.len()
-            && (pat_bytes[pi] == b'?' || pat_bytes[pi] == txt_bytes[ti])
+        } else if pi < pat_bytes.len() && (pat_bytes[pi] == b'?' || pat_bytes[pi] == txt_bytes[ti])
         {
             pi += 1;
             ti += 1;
@@ -273,8 +264,7 @@ fn match_pattern(text: &str, pattern: &str) -> bool {
 /// Script execution output format.
 ///
 /// Scripts can return structured data in various formats.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[expect(clippy::derivable_impls, reason = "Custom serialization needed for NSE output formats")]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[non_exhaustive]
 pub enum ScriptOutput {
     /// Plain text output.
@@ -289,13 +279,8 @@ pub enum ScriptOutput {
     /// JSON data.
     Json(serde_json::Value),
     /// Empty output.
+    #[default]
     Empty,
-}
-
-impl Default for ScriptOutput {
-    fn default() -> Self {
-        Self::Empty
-    }
 }
 
 impl ScriptOutput {
@@ -379,10 +364,7 @@ pub struct ScriptResult {
 impl ScriptResult {
     /// Create a new successful result.
     #[must_use]
-    pub fn success(
-        script_id: impl Into<String>,
-        target_ip: std::net::IpAddr,
-    ) -> Self {
+    pub fn success(script_id: impl Into<String>, target_ip: std::net::IpAddr) -> Self {
         Self {
             script_id: script_id.into(),
             target_ip,
@@ -473,7 +455,8 @@ mod tests {
             "test",
             PathBuf::from("/test.nse"),
             "hostrule = function(host) return true end \
-             action = function(host) return 'output' end".to_string(),
+             action = function(host) return 'output' end"
+                .to_string(),
         );
         assert!(script.has_hostrule());
         assert!(!script.has_portrule());
@@ -482,11 +465,7 @@ mod tests {
 
     #[test]
     fn test_script_matches_categories() {
-        let mut script = NseScript::new(
-            "test",
-            PathBuf::from("/test.nse"),
-            String::new(),
-        );
+        let mut script = NseScript::new("test", PathBuf::from("/test.nse"), String::new());
         script.categories = vec![ScriptCategory::Vuln, ScriptCategory::Safe];
 
         assert!(script.matches_categories(&[ScriptCategory::Vuln]));

@@ -29,7 +29,8 @@ impl IcmpTraceroute {
     /// # Errors
     ///
     /// Returns an error if probe cannot be sent or response cannot be received.
-    pub async fn send_probe(&mut self, target: Ipv4Addr, ttl: u8) -> Result<Option<ProbeResponse>> {
+    // TODO: This is a placeholder implementation. Actual sending and receiving of ICMP packets
+    pub fn send_probe(&mut self, target: Ipv4Addr, ttl: u8) -> Result<Option<ProbeResponse>> {
         let _ = (target, ttl);
         self.sequence = self.sequence.wrapping_add(1);
         Ok(None)

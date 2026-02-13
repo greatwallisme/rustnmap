@@ -154,13 +154,10 @@ impl NseLua {
     ///
     /// Returns an error if the value cannot be retrieved.
     pub fn get_global(&self, name: &str) -> Result<Value> {
-        self.lua
-            .globals()
-            .get(name)
-            .map_err(|e| Error::LuaError {
-                script: "runtime".to_string(),
-                message: format!("failed to get global '{name}': {e}"),
-            })
+        self.lua.globals().get(name).map_err(|e| Error::LuaError {
+            script: "runtime".to_string(),
+            message: format!("failed to get global '{name}': {e}"),
+        })
     }
 
     /// Register a Rust function as a global Lua function.
@@ -179,10 +176,13 @@ impl NseLua {
         A: mlua::FromLuaMulti,
         R: mlua::IntoLuaMulti,
     {
-        let lua_func = self.lua.create_function(func).map_err(|e| Error::LuaError {
-            script: "runtime".to_string(),
-            message: format!("failed to create function '{name}': {e}"),
-        })?;
+        let lua_func = self
+            .lua
+            .create_function(func)
+            .map_err(|e| Error::LuaError {
+                script: "runtime".to_string(),
+                message: format!("failed to create function '{name}': {e}"),
+            })?;
 
         self.lua
             .globals()
@@ -212,10 +212,12 @@ impl NseLua {
         })?;
 
         for (key, value) in values {
-            table.set(*key, value.clone()).map_err(|e| Error::LuaError {
-                script: "runtime".to_string(),
-                message: format!("failed to set table key '{key}': {e}"),
-            })?;
+            table
+                .set(*key, value.clone())
+                .map_err(|e| Error::LuaError {
+                    script: "runtime".to_string(),
+                    message: format!("failed to set table key '{key}': {e}"),
+                })?;
         }
 
         self.lua
@@ -230,6 +232,10 @@ impl NseLua {
     }
 
     /// Collect garbage in the Lua state.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if garbage collection fails.
     pub fn gc_collect(&mut self) -> Result<()> {
         self.lua.gc_collect().map_err(|e| Error::LuaError {
             script: "runtime".to_string(),

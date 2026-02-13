@@ -20,12 +20,12 @@
 //! OS detection returns multiple possible matches with accuracy percentages.
 //! Higher accuracy indicates better fingerprint match.
 
-pub mod fingerprint;
 pub mod database;
 pub mod detector;
+pub mod fingerprint;
 
-pub use fingerprint::{OsFingerprint, SeqFingerprint, OpsFingerprint};
 pub use database::{FingerprintDatabase, OsMatch};
 pub use detector::OsDetector;
+pub use fingerprint::{OpsFingerprint, OsFingerprint, SeqFingerprint};
 
 // Rust guideline compliant (2026-02-12)

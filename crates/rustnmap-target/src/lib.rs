@@ -17,7 +17,7 @@
 
 #![warn(missing_docs)]
 
-use rustnmap_common::{Error, Result, Ipv4Addr};
+use rustnmap_common::{Error, Ipv4Addr, Result};
 
 pub mod parser;
 pub mod spec;
@@ -159,10 +159,12 @@ pub fn expand_target_spec(spec: &TargetSpec) -> Result<Vec<Ipv4Addr>> {
 /// Returns an error if prefix is invalid or expansion is too large.
 fn expand_cidr_v4(base: Ipv4Addr, prefix: u8) -> Result<Vec<Ipv4Addr>> {
     if prefix > 32 {
-        return Err(Error::Target(rustnmap_common::error::TargetError::InvalidCidr {
-            cidr: format!("{base}/{prefix}"),
-            reason: "prefix length must be <= 32".to_string(),
-        }));
+        return Err(Error::Target(
+            rustnmap_common::error::TargetError::InvalidCidr {
+                cidr: format!("{base}/{prefix}"),
+                reason: "prefix length must be <= 32".to_string(),
+            },
+        ));
     }
 
     // Limit expansion to prevent memory exhaustion
@@ -171,10 +173,12 @@ fn expand_cidr_v4(base: Ipv4Addr, prefix: u8) -> Result<Vec<Ipv4Addr>> {
 
     if count > 65536 {
         // Limit CIDR expansion to /64 or smaller
-        return Err(Error::Target(rustnmap_common::error::TargetError::InvalidCidr {
-            cidr: format!("{base}/{prefix}"),
-            reason: format!("CIDR expansion too large: {count} addresses"),
-        }));
+        return Err(Error::Target(
+            rustnmap_common::error::TargetError::InvalidCidr {
+                cidr: format!("{base}/{prefix}"),
+                reason: format!("CIDR expansion too large: {count} addresses"),
+            },
+        ));
     }
 
     let base_u32 = u32::from(base);
@@ -194,10 +198,9 @@ fn expand_range_v4(start: Ipv4Addr, end: Ipv4Addr) -> Result<Vec<Ipv4Addr>> {
     let end_u32 = u32::from(end);
 
     if end_u32 < start_u32 {
-        return Err(Error::Target(rustnmap_common::error::TargetError::InvalidPortRange {
-            start: 0,
-            end: 0,
-        }));
+        return Err(Error::Target(
+            rustnmap_common::error::TargetError::InvalidPortRange { start: 0, end: 0 },
+        ));
     }
 
     let count = end_u32.wrapping_sub(start_u32).saturating_add(1);

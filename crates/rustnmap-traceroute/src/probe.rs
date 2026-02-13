@@ -4,9 +4,10 @@ use rustnmap_common::Ipv4Addr;
 use std::fmt;
 
 /// Type of traceroute probe to send.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ProbeType {
     /// UDP probe (standard traceroute).
+    #[default]
     Udp,
 
     /// TCP SYN probe.
@@ -17,12 +18,6 @@ pub enum ProbeType {
 
     /// ICMP Echo probe.
     Icmp,
-}
-
-impl Default for ProbeType {
-    fn default() -> Self {
-        Self::Udp
-    }
 }
 
 impl fmt::Display for ProbeType {

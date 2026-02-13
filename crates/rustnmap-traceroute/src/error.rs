@@ -77,7 +77,7 @@ impl From<std::io::Error> for TracerouteError {
 
 impl From<std::num::TryFromIntError> for TracerouteError {
     fn from(err: std::num::TryFromIntError) -> Self {
-        Self::Other(format!("Integer conversion error: {}", err))
+        Self::Other(format!("Integer conversion error: {err}"))
     }
 }
 

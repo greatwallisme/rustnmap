@@ -48,6 +48,7 @@ pub struct ScriptScheduler {
     config: SchedulerConfig,
 
     /// Semaphore for concurrency control (reserved for future async execution).
+    // TODO: Implement async script execution using the semaphore for concurrency control
     #[allow(dead_code, reason = "will be used when async execution is implemented")]
     semaphore: Arc<Semaphore>,
 }
@@ -124,7 +125,10 @@ impl ScriptEngine {
         let config = SchedulerConfig::default();
         let scheduler = ScriptScheduler::new(Arc::clone(&db), config);
 
-        Self { database: db, scheduler }
+        Self {
+            database: db,
+            scheduler,
+        }
     }
 
     /// Create a new script engine with custom configuration.
@@ -142,7 +146,10 @@ impl ScriptEngine {
         let db = Arc::new(database);
         let scheduler = ScriptScheduler::new(Arc::clone(&db), config);
 
-        Self { database: db, scheduler }
+        Self {
+            database: db,
+            scheduler,
+        }
     }
 
     /// Get the script database.
@@ -171,7 +178,10 @@ impl ScriptEngine {
     /// # Errors
     ///
     /// Returns an error if script execution fails.
-    #[allow(clippy::needless_pass_by_value, reason = "Arc::clone is cheap and simplifies code")]
+    #[allow(
+        clippy::needless_pass_by_value,
+        reason = "Arc::clone is cheap and simplifies code"
+    )]
     pub fn execute_script(
         &self,
         script: &NseScript,
@@ -184,7 +194,7 @@ impl ScriptEngine {
         lua.load_script(&script.source, &script.id)?;
 
         // Create a simple host table with IP address
-        // Full implementation would include all host properties
+        // TODO: Full host table implementation with all Nmap host properties
         let host_table = lua.create_table()?;
 
         lua.set_global("host", mlua::Value::Table(host_table))?;
@@ -253,7 +263,11 @@ mod tests {
     fn test_script_scheduler_select_scripts() {
         let mut db = ScriptDatabase::new();
 
-        let mut script = NseScript::new("test-script", std::path::PathBuf::from("/test.nse"), String::new());
+        let mut script = NseScript::new(
+            "test-script",
+            std::path::PathBuf::from("/test.nse"),
+            String::new(),
+        );
         script.categories = vec![ScriptCategory::Vuln];
         db.register_script(&script);
 
@@ -270,7 +284,10 @@ mod tests {
         let engine = ScriptEngine::new(db);
 
         assert_eq!(engine.database().len(), 0);
-        assert_eq!(engine.scheduler().config().max_concurrent, crate::MAX_CONCURRENT_SCRIPTS);
+        assert_eq!(
+            engine.scheduler().config().max_concurrent,
+            crate::MAX_CONCURRENT_SCRIPTS
+        );
     }
 
     #[test]
@@ -284,11 +301,7 @@ end
 "#
         .to_string();
 
-        let script = NseScript::new(
-            "test-script",
-            std::path::PathBuf::from("/test.nse"),
-            source,
-        );
+        let script = NseScript::new("test-script", std::path::PathBuf::from("/test.nse"), source);
         db.register_script(&script);
 
         let engine = ScriptEngine::new(db);
@@ -315,11 +328,7 @@ end
 "#
         .to_string();
 
-        let script = NseScript::new(
-            "test-return",
-            std::path::PathBuf::from("/test.nse"),
-            source,
-        );
+        let script = NseScript::new("test-return", std::path::PathBuf::from("/test.nse"), source);
         db.register_script(&script);
 
         let engine = ScriptEngine::new(db);

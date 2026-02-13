@@ -7,14 +7,13 @@ use std::net::{IpAddr, SocketAddr};
 
 use tracing::info;
 
-use crate::Result;
 use super::{
     database::{FingerprintDatabase, OsMatch},
     fingerprint::{
-        EcnFingerprint, IpIdPattern, IsnClass, OsFingerprint,
-        SeqFingerprint, TestResult,
+        EcnFingerprint, IpIdPattern, IsnClass, OsFingerprint, SeqFingerprint, TestResult,
     },
 };
+use crate::Result;
 
 /// OS detection engine.
 ///
@@ -32,10 +31,7 @@ pub struct OsDetector {
 impl OsDetector {
     /// Create new OS detector.
     pub fn new(db: FingerprintDatabase) -> Self {
-        Self {
-            db,
-            seq_count: 6,
-        }
+        Self { db, seq_count: 6 }
     }
 
     /// Create new OS detector with a reference to the database.

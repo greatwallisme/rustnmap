@@ -288,12 +288,11 @@ mod tests {
 
     #[test]
     fn test_fingerprint_with_seq() {
-        let fp = OsFingerprint::new()
-            .with_seq(SeqFingerprint {
-                class: IsnClass::Random,
-                timestamp: false,
-                timestamp_rate: None,
-            });
+        let fp = OsFingerprint::new().with_seq(SeqFingerprint {
+            class: IsnClass::Random,
+            timestamp: false,
+            timestamp_rate: None,
+        });
 
         assert!(fp.seq.is_some());
         assert_eq!(fp.seq.as_ref().unwrap().class, IsnClass::Random);
@@ -301,8 +300,7 @@ mod tests {
 
     #[test]
     fn test_fingerprint_with_win() {
-        let fp = OsFingerprint::new()
-            .with_win("T1".to_string(), 1234);
+        let fp = OsFingerprint::new().with_win("T1".to_string(), 1234);
 
         assert_eq!(fp.win.get("T1"), Some(&1234));
     }

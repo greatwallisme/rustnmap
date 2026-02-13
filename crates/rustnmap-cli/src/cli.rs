@@ -45,7 +45,7 @@ pub async fn run_scan(args: Args) -> Result<()> {
     info!("Scan type: {:?}", args.scan_type());
     info!("Timing level: {:?}", args.timing);
 
-    // Full scan implementation will be added in subsequent commits
+    // TODO: Full scan implementation pending
     // This includes:
     // - Target parsing and expansion
     // - Host discovery

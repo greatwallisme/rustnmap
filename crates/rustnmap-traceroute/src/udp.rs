@@ -26,13 +26,15 @@ impl UdpTraceroute {
     /// # Errors
     ///
     /// Returns an error if probe cannot be sent.
-    pub async fn send_probe(&self, target: Ipv4Addr, ttl: u8) -> Result<Option<ProbeResponse>> {
+    // TODO: This is a partial implementation. Full implementation requires ICMP socket for receiving responses
+    pub fn send_probe(&self, target: Ipv4Addr, ttl: u8) -> Result<Option<ProbeResponse>> {
         // Create UDP socket
         let socket = UdpSocket::bind("0.0.0.0:0")
             .map_err(|e| crate::error::TracerouteError::Network(format!("bind failed: {e}")))?;
 
         // Set TTL using socket option
-        socket.set_ttl(u32::from(ttl))
+        socket
+            .set_ttl(u32::from(ttl))
             .map_err(|e| crate::error::TracerouteError::Network(format!("set_ttl failed: {e}")))?;
 
         // Build UDP probe payload containing TTL value
@@ -40,7 +42,8 @@ impl UdpTraceroute {
 
         // Send UDP probe
         let dest_addr = SocketAddr::V4(SocketAddrV4::new(target, self.config.dest_port));
-        socket.send_to(&payload, dest_addr)
+        socket
+            .send_to(&payload, dest_addr)
             .map_err(|e| crate::error::TracerouteError::Network(format!("send failed: {e}")))?;
 
         // Return None indicating timeout (no immediate response)

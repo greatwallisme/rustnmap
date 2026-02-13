@@ -35,23 +35,22 @@
 //! ```
 
 pub mod config;
-pub mod fragment;
 pub mod decoy;
-pub mod source;
+pub mod fragment;
 pub mod modify;
+pub mod source;
 pub mod timing;
 
 // Re-export main types for convenience
 pub use config::{
-    EvasionConfig, EvasionConfigBuilder, FragmentConfig, FragmentMode,
-    DecoyConfig, SourceConfig, PacketModConfig, IpOption,
-    TimingTemplate, TimingValues,
+    DecoyConfig, EvasionConfig, EvasionConfigBuilder, FragmentConfig, FragmentMode, IpOption,
+    PacketModConfig, SourceConfig, TimingTemplate, TimingValues,
 };
 
-pub use fragment::Fragmenter;
 pub use decoy::DecoyScheduler;
-pub use source::SourceSpoofer;
+pub use fragment::Fragmenter;
 pub use modify::PacketModifier;
+pub use source::SourceSpoofer;
 
 /// Result type for evasion operations.
 pub type Result<T> = std::result::Result<T, Error>;

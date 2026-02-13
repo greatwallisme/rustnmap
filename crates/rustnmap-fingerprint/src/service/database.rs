@@ -3,16 +3,13 @@
 //! Handles loading and parsing of nmap-service-probes database files,
 //! managing probe definitions and indexing by port and rarity.
 
-use std::{
-    collections::HashMap,
-    path::Path,
-};
+use std::{collections::HashMap, path::Path};
 
 use regex::Regex;
 use tracing::info;
 
-use crate::{FingerprintError, Result};
 use super::probe::{MatchRule, ProbeDefinition, Protocol};
+use crate::{FingerprintError, Result};
 
 /// Database of service probes for version detection.
 ///
@@ -155,17 +152,21 @@ impl ProbeDatabase {
         let name = parts[1].to_string();
 
         // Extract payload between q|...|
-        let payload_start = line.find("q|")
+        let payload_start = line
+            .find("q|")
             .ok_or_else(|| FingerprintError::ParseError {
                 line: line_num,
                 content: "Missing payload delimiter q|".to_string(),
-            })? + 2;
+            })?
+            + 2;
 
-        let payload_end = line[3..].rfind("|")
+        let payload_end = line[3..]
+            .rfind("|")
             .ok_or_else(|| FingerprintError::ParseError {
                 line: line_num,
                 content: "Missing closing pipe |".to_string(),
-            })? + 3;
+            })?
+            + 3;
 
         let payload_bytes = Self::parse_payload(&line[payload_start..=payload_end])?;
 
@@ -271,24 +272,27 @@ impl ProbeDatabase {
             let part = part.trim();
             if let Some(range_idx) = part.find('-') {
                 // Range: "80-85"
-                let start: u16 = part[..range_idx].parse()
-                    .map_err(|_| FingerprintError::ParseError {
-                        line: 0,
-                        content: format!("Invalid port range start: {part}"),
-                    })?;
-                let end: u16 = part[range_idx + 1..].parse()
-                    .map_err(|_| FingerprintError::ParseError {
-                        line: 0,
-                        content: format!("Invalid port range end: {part}"),
-                    })?;
+                let start: u16 =
+                    part[..range_idx]
+                        .parse()
+                        .map_err(|_| FingerprintError::ParseError {
+                            line: 0,
+                            content: format!("Invalid port range start: {part}"),
+                        })?;
+                let end: u16 =
+                    part[range_idx + 1..]
+                        .parse()
+                        .map_err(|_| FingerprintError::ParseError {
+                            line: 0,
+                            content: format!("Invalid port range end: {part}"),
+                        })?;
                 ports.extend(start..=end);
             } else {
                 // Single port
-                let port: u16 = part.parse()
-                    .map_err(|_| FingerprintError::ParseError {
-                        line: 0,
-                        content: format!("Invalid port: {part}"),
-                    })?;
+                let port: u16 = part.parse().map_err(|_| FingerprintError::ParseError {
+                    line: 0,
+                    content: format!("Invalid port: {part}"),
+                })?;
                 ports.push(port);
             }
         }
@@ -298,11 +302,10 @@ impl ProbeDatabase {
 
     /// Parse rarity value.
     fn parse_rarity(s: &str) -> Result<u8> {
-        let rarity: u8 = s.trim().parse()
-            .map_err(|_| FingerprintError::ParseError {
-                line: 0,
-                content: format!("Invalid rarity: {s}"),
-            })?;
+        let rarity: u8 = s.trim().parse().map_err(|_| FingerprintError::ParseError {
+            line: 0,
+            content: format!("Invalid rarity: {s}"),
+        })?;
         Ok(rarity.clamp(1, 9))
     }
 
@@ -321,11 +324,17 @@ impl ProbeDatabase {
         if probe.ports.is_empty() {
             // Universal probe - add to all ports
             for port in 1..=65535 {
-                self.port_mapping.entry(port).or_default().push(name.clone());
+                self.port_mapping
+                    .entry(port)
+                    .or_default()
+                    .push(name.clone());
             }
         } else {
             for port in &probe.ports {
-                self.port_mapping.entry(*port).or_default().push(name.clone());
+                self.port_mapping
+                    .entry(*port)
+                    .or_default()
+                    .push(name.clone());
             }
         }
 
@@ -341,9 +350,8 @@ impl ProbeDatabase {
 
     /// Get probes for a specific port.
     pub fn probes_for_port(&self, port: u16) -> Vec<&ProbeDefinition> {
-        let mut probe_names: Vec<String> = self.port_mapping.get(&port)
-            .cloned()
-            .unwrap_or_default();
+        let mut probe_names: Vec<String> =
+            self.port_mapping.get(&port).cloned().unwrap_or_default();
 
         // If no port-specific probes, return universal probes
         if probe_names.is_empty() {

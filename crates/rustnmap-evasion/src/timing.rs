@@ -94,7 +94,8 @@ impl TimingController {
     /// Returns true if this template prioritizes speed over accuracy.
     #[must_use]
     pub fn is_aggressive(&self) -> bool {
-        matches!(self.template,
+        matches!(
+            self.template,
             TimingTemplate::Aggressive | TimingTemplate::Insane
         )
     }
@@ -111,7 +112,8 @@ impl TimingController {
 
         // Scale delay based on number of probes
         let base_delay = self.values.scan_delay_ms;
-        let scaled_delay = base_delay.saturating_mul(u64::try_from(probe_count).unwrap_or(u64::MAX) / 100);
+        let scaled_delay =
+            base_delay.saturating_mul(u64::try_from(probe_count).unwrap_or(u64::MAX) / 100);
         std::time::Duration::from_millis(scaled_delay)
     }
 
@@ -322,11 +324,17 @@ mod tests {
 
     #[test]
     fn test_timing_controller_as_str() {
-        assert_eq!(TimingController::new(TimingTemplate::Paranoid).as_str(), "T0");
+        assert_eq!(
+            TimingController::new(TimingTemplate::Paranoid).as_str(),
+            "T0"
+        );
         assert_eq!(TimingController::new(TimingTemplate::Sneaky).as_str(), "T1");
         assert_eq!(TimingController::new(TimingTemplate::Polite).as_str(), "T2");
         assert_eq!(TimingController::new(TimingTemplate::Normal).as_str(), "T3");
-        assert_eq!(TimingController::new(TimingTemplate::Aggressive).as_str(), "T4");
+        assert_eq!(
+            TimingController::new(TimingTemplate::Aggressive).as_str(),
+            "T4"
+        );
         assert_eq!(TimingController::new(TimingTemplate::Insane).as_str(), "T5");
     }
 

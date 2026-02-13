@@ -10,7 +10,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 /// Overall evasion configuration combining all evasion techniques.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct EvasionConfig {
     /// IP fragmentation configuration.
     pub fragmentation: Option<FragmentConfig>,
@@ -28,25 +28,15 @@ pub struct EvasionConfig {
     pub timing: TimingConfig,
 }
 
-impl Default for EvasionConfig {
-    fn default() -> Self {
-        Self {
-            fragmentation: None,
-            decoys: None,
-            source: SourceConfig::default(),
-            packet_modification: PacketModConfig::default(),
-            timing: TimingConfig::default(),
-        }
-    }
-}
-
 impl EvasionConfig {
-    /// Creates a new builder for EvasionConfig.
+    /// Creates a new builder for `EvasionConfig`.
+    #[must_use]
     pub fn builder() -> EvasionConfigBuilder {
         EvasionConfigBuilder::new()
     }
 
     /// Returns true if any evasion technique is enabled.
+    #[must_use]
     pub fn is_enabled(&self) -> bool {
         self.fragmentation.is_some()
             || self.decoys.is_some()
@@ -59,7 +49,7 @@ impl EvasionConfig {
     }
 }
 
-/// Builder for constructing EvasionConfig.
+/// Builder for constructing `EvasionConfig`.
 #[derive(Debug, Clone)]
 pub struct EvasionConfigBuilder {
     config: EvasionConfig,
@@ -73,6 +63,7 @@ impl EvasionConfigBuilder {
     }
 
     /// Sets the fragmentation configuration.
+    #[must_use]
     pub fn fragmentation(mut self, _fragment_size: u16) -> Self {
         self.config.fragmentation = Some(FragmentConfig {
             enabled: true,
@@ -84,6 +75,7 @@ impl EvasionConfigBuilder {
     }
 
     /// Sets custom MTU fragmentation.
+    #[must_use]
     pub fn fragmentation_mtu(mut self, mtu: u16) -> Self {
         self.config.fragmentation = Some(FragmentConfig {
             enabled: true,
@@ -95,6 +87,7 @@ impl EvasionConfigBuilder {
     }
 
     /// Sets random fragmentation range.
+    #[must_use]
     pub fn fragmentation_random(mut self, min: usize, max: usize) -> Self {
         self.config.fragmentation = Some(FragmentConfig {
             enabled: true,
@@ -106,6 +99,7 @@ impl EvasionConfigBuilder {
     }
 
     /// Sets the decoy configuration.
+    #[must_use]
     pub fn decoys(mut self, decoys: Vec<IpAddr>) -> Self {
         self.config.decoys = Some(DecoyConfig {
             decoys,
@@ -116,11 +110,8 @@ impl EvasionConfigBuilder {
     }
 
     /// Sets decoys with custom real IP position.
-    pub fn decoys_with_position(
-        mut self,
-        decoys: Vec<IpAddr>,
-        real_ip_position: usize,
-    ) -> Self {
+    #[must_use]
+    pub fn decoys_with_position(mut self, decoys: Vec<IpAddr>, real_ip_position: usize) -> Self {
         self.config.decoys = Some(DecoyConfig {
             decoys,
             real_ip_position,
@@ -130,61 +121,80 @@ impl EvasionConfigBuilder {
     }
 
     /// Sets the source IP address.
+    #[must_use]
     pub fn source_ip(mut self, ip: IpAddr) -> Self {
         self.config.source.source_ip = Some(ip);
         self
     }
 
     /// Sets the source port.
+    #[must_use]
     pub fn source_port(mut self, port: u16) -> Self {
         self.config.source.source_port = Some(port);
         self
     }
 
     /// Sets the source MAC address.
+    #[must_use]
     pub fn source_mac(mut self, mac: [u8; 6]) -> Self {
         self.config.source.source_mac = Some(mac);
         self
     }
 
     /// Sets the network interface.
+    #[must_use]
     pub fn interface(mut self, iface: String) -> Self {
         self.config.source.interface = Some(iface);
         self
     }
 
     /// Enables bad checksum (for testing firewall responses).
+    #[must_use]
     pub fn bad_checksum(mut self) -> Self {
         self.config.packet_modification.bad_checksum = true;
         self
     }
 
     /// Sets data padding length.
+    #[must_use]
     pub fn data_length(mut self, length: usize) -> Self {
         self.config.packet_modification.data_length = Some(length);
         self
     }
 
     /// Sets the TTL value.
+    #[must_use]
     pub fn ttl(mut self, ttl: u8) -> Self {
         self.config.packet_modification.ttl = Some(ttl);
         self
     }
 
     /// Sets the timing template.
+    #[must_use]
     pub fn timing_template(mut self, template: TimingTemplate) -> Self {
         self.config.timing.template = template;
         self
     }
 
     /// Builds the final configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The fragment size is invalid (less than 8 or greater than 1500)
+    /// - The source port is 0
+    /// - The TTL is 0
+    /// - The decoy list is empty
+    /// - The real IP position exceeds the decoy list length
     pub fn build(self) -> super::Result<EvasionConfig> {
         if let Some(ref frag) = self.config.fragmentation {
             // Validate fragment size
             match &frag.mode {
                 FragmentMode::CustomMTU(mtu) => {
                     if *mtu < 8 || *mtu > 1500 {
-                        return Err(super::Error::InvalidFragmentSize { size: *mtu as usize });
+                        return Err(super::Error::InvalidFragmentSize {
+                            size: *mtu as usize,
+                        });
                     }
                 }
                 FragmentMode::Random { min, max } => {
@@ -262,7 +272,7 @@ pub struct DecoyConfig {
     pub decoys: Vec<IpAddr>,
 
     /// Position of real IP in decoy sequence (0-based).
-    /// If equal to decoys.len(), real IP is sent after all decoys.
+    /// If equal to `decoys.len()`, real IP is sent after all decoys.
     pub real_ip_position: usize,
 
     /// Whether to randomize the order of decoy packets.
@@ -270,7 +280,7 @@ pub struct DecoyConfig {
 }
 
 /// Source address configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SourceConfig {
     /// Spoofed source IP address.
     pub source_ip: Option<IpAddr>,
@@ -286,19 +296,8 @@ pub struct SourceConfig {
     pub interface: Option<String>,
 }
 
-impl Default for SourceConfig {
-    fn default() -> Self {
-        Self {
-            source_ip: None,
-            source_port: None,
-            source_mac: None,
-            interface: None,
-        }
-    }
-}
-
 /// Packet modification configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PacketModConfig {
     /// Send packets with bad checksums (for testing).
     pub bad_checksum: bool,
@@ -318,19 +317,6 @@ pub struct PacketModConfig {
 
     /// Set no TCP flags (for certain firewalls).
     pub no_flags: bool,
-}
-
-impl Default for PacketModConfig {
-    fn default() -> Self {
-        Self {
-            bad_checksum: false,
-            data_length: None,
-            ip_options: None,
-            ttl: None,
-            tos: None,
-            no_flags: false,
-        }
-    }
 }
 
 /// IP option type.
@@ -391,6 +377,7 @@ pub enum TimingTemplate {
 
 impl TimingTemplate {
     /// Returns the timing values for this template.
+    #[must_use]
     pub const fn config(&self) -> TimingValues {
         match self {
             TimingTemplate::Paranoid => TimingValues {
@@ -495,14 +482,15 @@ mod tests {
 
     #[test]
     fn test_evasion_config_builder_invalid_fragment_size() {
-        let result = EvasionConfig::builder()
-            .fragmentation_mtu(0)
-            .build();
+        let result = EvasionConfig::builder().fragmentation_mtu(0).build();
 
         assert!(result.is_err());
         if let Err(err) = result {
             let is_fragment_error = matches!(err, super::super::Error::InvalidFragmentSize { .. });
-            assert!(is_fragment_error, "expected InvalidFragmentSize error, got: {err}");
+            assert!(
+                is_fragment_error,
+                "expected InvalidFragmentSize error, got: {err}"
+            );
         }
     }
 
@@ -574,10 +562,16 @@ mod tests {
         let record = IpOption::RecordRoute { max_addresses: 9 };
         assert!(matches!(record, IpOption::RecordRoute { .. }));
 
-        let timestamp = IpOption::Timestamp { flags: 1, max_entries: 4 };
+        let timestamp = IpOption::Timestamp {
+            flags: 1,
+            max_entries: 4,
+        };
         assert!(matches!(timestamp, IpOption::Timestamp { .. }));
 
-        let custom = IpOption::Custom { type_code: 42, data: vec![1, 2, 3] };
+        let custom = IpOption::Custom {
+            type_code: 42,
+            data: vec![1, 2, 3],
+        };
         assert!(matches!(custom, IpOption::Custom { .. }));
     }
 
