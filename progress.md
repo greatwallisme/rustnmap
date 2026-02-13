@@ -65,9 +65,43 @@
 None - Phase 5 COMPLETE
 
 ### Next Actions
-1. Run full integration tests
-2. Verify binary functionality with real targets
-3. Update documentation
+1. **Implement privilege detection framework** - Add PrivilegeLevel enum and detect_privileges() function
+2. **Complete raw socket TODOs** - Requires sudo/CAP_NET_RAW:
+   - TCP SYN scan actual packet transmission
+   - Host discovery (TCP ping, ICMP, ARP)
+   - Traceroute implementations (ICMP, TCP, UDP)
+   - OS detection probes
+3. **Run full integration tests** with real network targets
+4. **Verify binary functionality** with real targets
+5. **Update documentation** with privilege requirements
+
+### Privilege Requirements Summary
+
+| Feature | Required Capability | Alternative |
+|---------|---------------------|-------------|
+| TCP SYN scan | CAP_NET_RAW | TCP Connect scan (-sT) |
+| UDP scan | CAP_NET_RAW | Not available |
+| ICMP ping | CAP_NET_RAW | TCP/UDP ping |
+| ARP discovery | CAP_NET_RAW | None (local only) |
+| Traceroute | CAP_NET_RAW | None |
+| OS detection | CAP_NET_RAW | None |
+| NSE raw packets | CAP_NET_RAW | Limited scripts |
+
+### Recommended Development Workflow
+
+```bash
+# 1. Build the binary
+cargo build --release
+
+# 2. Set capabilities (one-time setup)
+sudo setcap cap_net_raw,cap_net_admin+eip target/release/rustnmap
+
+# 3. Run without sudo for privileged operations
+./target/release/rustnmap -sS 192.168.1.1
+
+# 4. For development/testing with cargo
+sudo cargo test -p rustnmap-scan -- --ignored
+```
 
 ---
 

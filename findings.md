@@ -327,6 +327,202 @@ cargo doc --no-deps --workspace           # Docs build without errors
 
 ---
 
+## TODO Items Requiring Root/Sudo Privileges
+
+The following TODO items require root privileges or CAP_NET_RAW capability to implement and test:
+
+### 1. Raw Socket Packet Transmission
+
+**Location**: `crates/rustnmap-scan/src/syn_scan.rs:110`
+```rust
+// TODO: This is a simulation method. Replace with actual raw socket packet transmission
+```
+
+**What needs root**: Creating raw sockets with `socket(AF_INET, SOCK_RAW, IPPROTO_TCP)` requires CAP_NET_RAW or root.
+
+**Implementation approach**:
+- The `rustnmap-net` crate already has raw socket creation code
+- Need to integrate with `PacketEngine` trait in `rustnmap-core/src/session.rs`
+- Add privilege detection and graceful fallback to TCP Connect scan
+
+### 2. Host Discovery - TCP Ping
+
+**Location**: `crates/rustnmap-target/src/discovery.rs:65`
+```rust
+// TODO: Implement actual TCP ping
+```
+
+**What needs root**: Sending custom TCP SYN packets (not through kernel TCP stack) requires raw sockets.
+
+### 3. Host Discovery - ICMP
+
+**Location**: `crates/rustnmap-target/src/discovery.rs:87`
+```rust
+// TODO: Implement ICMP discovery
+```
+
+**What needs root**: ICMP sockets (SOCK_DGRAM with IPPROTO_ICMP) are restricted on many systems; raw ICMP requires CAP_NET_RAW.
+
+### 4. Host Discovery - ARP
+
+**Location**: `crates/rustnmap-target/src/discovery.rs:118`
+```rust
+// TODO: Implement ARP discovery
+```
+
+**What needs root**: ARP packets are at layer 2 (ethernet frame level), requiring raw packet sockets (AF_PACKET).
+
+### 5. Traceroute Implementations
+
+**Locations**:
+- `crates/rustnmap-traceroute/src/icmp.rs:32`
+- `crates/rustnmap-traceroute/src/tcp.rs:37,61`
+- `crates/rustnmap-traceroute/src/udp.rs:29`
+
+**What needs root**: All traceroute methods require sending custom packets with specific TTL values and receiving ICMP responses.
+
+### 6. OS Detection Probes
+
+**Location**: `crates/rustnmap-fingerprint/src/os/detector.rs`
+
+Multiple TODOs for:
+- SEQ probes (ISN analysis)
+- T1-T7 TCP tests
+- ICMP echo probes
+- UDP probe to closed port
+
+**What needs root**: All OS detection requires crafting packets with specific TCP flags, options, and analyzing responses.
+
+---
+
+## Privilege Handling Strategy
+
+### Option 1: Runtime Privilege Detection (Recommended)
+
+Implement privilege detection at runtime and gracefully degrade:
+
+```rust
+pub enum PrivilegeLevel {
+    /// Full root/CAP_NET_RAW access - all features available
+    Privileged,
+    /// Unprivileged - limited to TCP Connect scans
+    Unprivileged,
+}
+
+impl ScanSession {
+    pub fn detect_privileges() -> PrivilegeLevel {
+        // Try to create a raw socket
+        match create_raw_socket() {
+            Ok(_) => PrivilegeLevel::Privileged,
+            Err(_) => PrivilegeLevel::Unprivileged,
+        }
+    }
+}
+```
+
+### Option 2: Linux Capabilities (Preferred for Production)
+
+Grant only required capabilities without full root:
+
+```bash
+# Build the binary
+cargo build --release
+
+# Set capabilities (as root)
+sudo setcap cap_net_raw,cap_net_admin+eip target/release/rustnmap
+
+# Now binary can run without sudo for raw socket operations
+./target/release/rustnmap -sS 192.168.1.1
+```
+
+### Option 3: Setuid Binary (Not Recommended)
+
+```bash
+sudo chown root:root target/release/rustnmap
+sudo chmod u+s target/release/rustnmp
+```
+
+**Security risk**: Entire binary runs as root. Not recommended.
+
+### Option 4: Capability-Aware Testing
+
+For CI/CD and testing without root:
+
+```rust
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "requires root/CAP_NET_RAW"]
+    fn test_raw_socket_scan() {
+        // Only runs when explicitly enabled
+    }
+}
+```
+
+Run with: `cargo test -- --ignored`
+
+---
+
+## Implementation Plan for Privileged Features
+
+### Phase A: Privilege Detection Framework
+1. Add `PrivilegeLevel` enum to `rustnmap-common`
+2. Implement `detect_privileges()` function
+3. Add privilege checks before raw socket operations
+4. Provide clear error messages when privileges are missing
+
+### Phase B: Capability-Based Deployment
+1. Document capability setup in deployment guide
+2. Add helper script for setting capabilities
+3. Update CLI to warn about missing privileges
+
+### Phase C: Implement Privileged Features (with sudo)
+
+For each TODO, implement and test with sudo:
+
+```bash
+# Development workflow
+sudo cargo test -p rustnmap-scan syn_scan::tests -- --nocapture
+
+# Or set capabilities on test binary
+sudo setcap cap_net_raw+eip target/debug/deps/rustnmap_scan-*
+cargo test -p rustnmap-scan
+```
+
+---
+
+## Testing Strategy
+
+### Unit Tests (No Privileges Required)
+- Packet construction logic
+- State machines
+- Protocol parsing
+
+### Integration Tests (Requires Privileges)
+- Mark with `#[ignore = "requires root"]`
+- Run in CI with privileged container or skip
+
+### Manual Testing
+```bash
+# Build with release optimizations
+cargo build --release
+
+# Set capabilities
+sudo setcap cap_net_raw,cap_net_admin+eip target/release/rustnmap
+
+# Test SYN scan (now works without sudo)
+./target/release/rustnmap -sS 127.0.0.1
+
+# Or use sudo for full root
+sudo ./target/release/rustnmap -sS 192.168.1.1
+```
+
+---
+
+## Reference Links
+
 ## Reference Links
 
 - Nmap Source: `reference/nmap/`

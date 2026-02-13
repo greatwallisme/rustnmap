@@ -173,18 +173,6 @@ All 5 phases of RustNmap implementation are now complete:
 2. Performance benchmarking
 3. Documentation updates
 4. Package for distribution
-   - Remove `async` from functions without await statements
-   - 20 errors to fix in tcp.rs, udp.rs, icmp.rs
-
-2. **Complete rustnmap-cli crate**
-   - Implement CLI argument parsing with clap
-   - Support all Nmap-compatible options
-   - Integrate with all existing crates
-
-3. **Implement Scan Orchestrator**
-   - Coordinate host discovery, port scanning, service detection
-   - Manage scan session lifecycle
-   - Handle concurrent execution
 
 ### Design Document References
 
