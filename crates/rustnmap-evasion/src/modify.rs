@@ -134,18 +134,21 @@ impl IpOptionsBuilder {
     }
 
     /// Adds a Record Route option.
+    #[must_use]
     pub fn record_route(mut self, max_addresses: u8) -> Self {
         self.options.push(crate::config::IpOption::RecordRoute { max_addresses });
         self
     }
 
     /// Adds a Timestamp option.
+    #[must_use]
     pub fn timestamp(mut self, flags: u8, max_entries: u8) -> Self {
         self.options.push(crate::config::IpOption::Timestamp { flags, max_entries });
         self
     }
 
     /// Adds a Loose Source Route option.
+    #[must_use]
     pub fn loose_source_route(mut self, addresses: Vec<std::net::IpAddr>) -> Self {
         self.options
             .push(crate::config::IpOption::LooseSourceRoute { addresses });
@@ -153,6 +156,7 @@ impl IpOptionsBuilder {
     }
 
     /// Adds a Strict Source Route option.
+    #[must_use]
     pub fn strict_source_route(mut self, addresses: Vec<std::net::IpAddr>) -> Self {
         self.options
             .push(crate::config::IpOption::StrictSourceRoute { addresses });
@@ -188,13 +192,17 @@ pub fn calculate_checksum(data: &[u8]) -> u16 {
         sum = (sum & 0xFFFF) + (sum >> 16);
     }
 
-    u16::from_be(u16::from(!sum).to_be())
+    u16::from_be((!u16::try_from(sum).unwrap()).to_be())
 }
 
 /// Generates a random padding sequence of the specified length.
 ///
 /// In production, this would use a cryptographically secure RNG.
 /// For deterministic testing, uses a simple pattern.
+///
+/// # Panics
+///
+/// Panics if the system time is earlier than `UNIX_EPOCH`.
 #[must_use]
 pub fn generate_padding(length: usize) -> Vec<u8> {
     if length == 0 {
@@ -205,7 +213,8 @@ pub fn generate_padding(length: usize) -> Vec<u8> {
     let seed = u64::try_from(SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap()
-        .as_nanos());
+        .as_nanos())
+        .unwrap_or(123456789); // 如果转换失败，使用默认种子
 
     // Simple LCG for deterministic pseudo-randomness
     let mut state = seed;

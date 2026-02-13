@@ -255,7 +255,7 @@ mod tests {
 
         let mut script = NseScript::new("test-script", std::path::PathBuf::from("/test.nse"), String::new());
         script.categories = vec![ScriptCategory::Vuln];
-        db.register_script(script);
+        db.register_script(&script);
 
         let scheduler = ScriptScheduler::new(Arc::new(db), SchedulerConfig::default());
         let selected = scheduler.select_scripts(&[ScriptCategory::Vuln]);
@@ -289,7 +289,7 @@ end
             std::path::PathBuf::from("/test.nse"),
             source,
         );
-        db.register_script(script);
+        db.register_script(&script);
 
         let engine = ScriptEngine::new(db);
         let result = engine.execute_script(
@@ -320,7 +320,7 @@ end
             std::path::PathBuf::from("/test.nse"),
             source,
         );
-        db.register_script(script);
+        db.register_script(&script);
 
         let engine = ScriptEngine::new(db);
         let result = engine.execute_script(
