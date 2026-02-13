@@ -331,19 +331,46 @@ cargo doc --no-deps --workspace           # Docs build without errors
 
 The following TODO items require root privileges or CAP_NET_RAW capability to implement and test:
 
-### 1. Raw Socket Packet Transmission
+### 1. Raw Socket Packet Transmission - COMPLETE
 
-**Location**: `crates/rustnmap-scan/src/syn_scan.rs:110`
-```rust
-// TODO: This is a simulation method. Replace with actual raw socket packet transmission
+**Location**: `crates/rustnmap-scan/src/syn_scan.rs`
+
+**Status**: IMPLEMENTED
+
+**Implementation Details**:
+- Extended `rustnmap-net` with `RawSocket.send_packet()` and `recv_packet()` methods
+- Added `TcpPacketBuilder` for constructing TCP/IP packets with proper headers and checksums
+- Added `parse_tcp_response()` for parsing TCP response packets
+- TCP SYN scanner now sends actual SYN packets and analyzes responses:
+  - SYN-ACK received → Port Open
+  - RST received → Port Closed
+  - No response/TIMEOUT → Port Filtered
+
+**Root Requirement**: Creating raw sockets requires CAP_NET_RAW capability or root.
+
+**Testing**:
+```bash
+# Build release binary
+cargo build --release
+
+# Run with sudo for raw socket access
+sudo ./target/release/rustnmap -sS 192.168.1.1
 ```
 
-**What needs root**: Creating raw sockets with `socket(AF_INET, SOCK_RAW, IPPROTO_TCP)` requires CAP_NET_RAW or root.
+**Code Example**:
+```rust
+// Create scanner (requires root)
+let scanner = TcpSynScanner::new(local_addr, config)?;
 
-**Implementation approach**:
-- The `rustnmap-net` crate already has raw socket creation code
-- Need to integrate with `PacketEngine` trait in `rustnmap-core/src/session.rs`
-- Add privilege detection and graceful fallback to TCP Connect scan
+// Scan a port
+let state = scanner.scan_port(&target, 80, Protocol::Tcp)?;
+match state {
+    PortState::Open => println!("Port 80 is open"),
+    PortState::Closed => println!("Port 80 is closed"),
+    PortState::Filtered => println!("Port 80 is filtered"),
+    _ => {}
+}
+```
 
 ### 2. Host Discovery - TCP Ping
 

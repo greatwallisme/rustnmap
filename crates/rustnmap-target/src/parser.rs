@@ -243,7 +243,7 @@ impl TargetParser {
 
     /// Expands a target specification into individual targets.
     #[expect(
-        clippy::self_only_used_in_recursion,
+        clippy::only_used_in_recursion,
         reason = "Required for recursive expansion"
     )]
     fn expand_spec(&self, spec: &TargetSpec) -> crate::Result<Vec<Target>> {

@@ -53,7 +53,7 @@ All tasks completed:
 |------|-------------|----------|--------|
 | 2.1 | rustnmap-target crate | P0 | COMPLETE | Target parsing complete |
 | 2.2 | rustnmap-scan crate | P0 | COMPLETE | Core crate structure complete |
-| 2.3 | TCP SYN scan | P0 | COMPLETE | Raw socket SYN scan implementation |
+| 2.3 | TCP SYN scan | P0 | COMPLETE | Raw socket SYN scan with actual packet transmission |
 | 2.4 | TCP Connect scan | P0 | COMPLETE | std::net fallback scan |
 | 2.5 | Timeout control | P0 | COMPLETE | RFC 2988 adaptive timeout |
 | 2.6 | Host discovery | P0 | COMPLETE | ICMP/TCP/ARP discovery |

@@ -1243,6 +1243,7 @@ dependencies = [
 name = "rustnmap-net"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "pnet",
  "rustnmap-common",
  "socket2",

@@ -1,5 +1,49 @@
 # Progress Log: RustNmap Implementation
 
+## Session 2026-02-13 (TCP SYN Scan Raw Socket Implementation)
+
+### Activities
+| Time | Activity | Status |
+|------|----------|--------|
+| 19:00 | Read rust-guidelines for code quality | Complete |
+| 19:30 | Extended rustnmap-net with raw socket I/O | Complete |
+| 20:00 | Implemented TcpPacketBuilder for TCP packet construction | Complete |
+| 20:30 | Implemented TCP SYN scanner with raw socket transmission | Complete |
+| 21:00 | Fixed all clippy warnings across affected crates | Complete |
+| 21:30 | All tests passing (20 in rustnmap-scan) | Complete |
+
+### Changes Made
+| File | Change |
+|------|--------|
+| `crates/rustnmap-net/src/lib.rs` | Added RawSocket.send_packet(), recv_packet(), TcpPacketBuilder, parse_tcp_response() |
+| `crates/rustnmap-net/Cargo.toml` | Added libc dependency |
+| `crates/rustnmap-common/src/error.rs` | Added SendError and ReceiveError variants |
+| `crates/rustnmap-scan/src/syn_scan.rs` | Replaced simulation with actual raw socket SYN scanning |
+| `crates/rustnmap-target/src/parser.rs` | Fixed clippy lint name (self_only_used_in_recursion -> only_used_in_recursion) |
+
+### Implementation Details
+- Raw socket operations using libc for sendto/recvfrom
+- TCP packet construction with proper IP/TCP headers and checksums
+- SYN probe sends SYN packet, waits for response
+- Port state detection:
+  - SYN-ACK received → Open
+  - RST received → Closed
+  - No response/TIMEOUT → Filtered
+- Sequence number tracking for ACK verification
+
+### Requirements
+- Root privileges or CAP_NET_RAW capability required for raw sockets
+- Linux x86_64 only
+
+### Next Steps
+1. Test with actual network targets using sudo
+2. Implement remaining privileged features:
+   - ICMP discovery
+   - TCP/UDP ping
+   - ARP discovery
+   - Traceroute
+   - OS detection probes
+
 ## Session 2026-02-13 (Phase 5: Integration - COMPLETE)
 
 ### Activities

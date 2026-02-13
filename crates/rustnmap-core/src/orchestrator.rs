@@ -12,6 +12,8 @@ use std::sync::Arc;
 
 use rustnmap_output::models::PortState;
 use rustnmap_output::models::{HostResult, HostStatus, PortResult, ScanResult, ScanStatistics};
+use rustnmap_scan::scanner::{PortScanner, ScanConfig as ScannerConfig};
+use rustnmap_scan::syn_scan::TcpSynScanner;
 use rustnmap_target::Target;
 use tokio::sync::RwLock;
 use tracing::{debug, info, instrument};
@@ -457,22 +459,139 @@ impl ScanOrchestrator {
     }
 
     /// Scans a single port on a target.
-    #[allow(
-        clippy::unused_async,
-        reason = "Will be async when integrated with rustnmap-scan"
-    )]
-    async fn scan_port(
-        &self,
-        #[allow(unused_variables)] _target: &Target,
-        port: u16,
-    ) -> Result<PortResult> {
-        // Port scanning implementation will be integrated with rustnmap-scan crate
-        // Returns initial state; actual scanning logic to be added in future iteration
+    async fn scan_port(&self, target: &Target, port: u16) -> Result<PortResult> {
+        use rustnmap_common::Ipv4Addr;
+
+        // Create scanner configuration from session config
+        let scanner_config = ScannerConfig {
+            min_rtt: std::time::Duration::from_millis(50),
+            max_rtt: std::time::Duration::from_secs(10),
+            initial_rtt: self.session.config.scan_delay,
+            max_retries: 2,
+            host_timeout: self
+                .session
+                .config
+                .host_timeout
+                .as_millis()
+                .try_into()
+                .unwrap_or(30000),
+            scan_delay: self.session.config.scan_delay,
+        };
+
+        // Get local address for the scanner
+        let local_addr = std::net::Ipv4Addr::UNSPECIFIED;
+
+        // Try to create TCP SYN scanner (requires root)
+        match TcpSynScanner::new(local_addr, scanner_config) {
+            Ok(scanner) => {
+                // Get target IP address
+                let target_ip = match target.ip {
+                    std::net::IpAddr::V4(addr) => addr,
+                    std::net::IpAddr::V6(_) => {
+                        // IPv6 not supported by current scanner
+                        return Ok(PortResult {
+                            number: port,
+                            protocol: rustnmap_output::models::Protocol::Tcp,
+                            state: PortState::Filtered,
+                            state_reason: "ipv6-not-supported".to_string(),
+                            state_ttl: None,
+                            service: None,
+                            scripts: Vec::new(),
+                        });
+                    }
+                };
+
+                // Convert to rustnmap_common types
+                let common_target = rustnmap_target::Target {
+                    ip: rustnmap_common::IpAddr::V4(Ipv4Addr::new(
+                        target_ip.octets()[0],
+                        target_ip.octets()[1],
+                        target_ip.octets()[2],
+                        target_ip.octets()[3],
+                    )),
+                    hostname: target.hostname.clone(),
+                    ports: Some(vec![port]),
+                    ipv6_scope: None,
+                };
+
+                // Perform the scan
+                match scanner.scan_port(&common_target, port, rustnmap_common::Protocol::Tcp) {
+                    Ok(state) => {
+                        let (port_state, reason) = match state {
+                            rustnmap_common::PortState::Open => {
+                                (PortState::Open, "syn-ack".to_string())
+                            }
+                            rustnmap_common::PortState::Closed => {
+                                (PortState::Closed, "rst".to_string())
+                            }
+                            rustnmap_common::PortState::Filtered => {
+                                (PortState::Filtered, "no-response".to_string())
+                            }
+                            _ => (PortState::Filtered, "unknown".to_string()),
+                        };
+
+                        Ok(PortResult {
+                            number: port,
+                            protocol: rustnmap_output::models::Protocol::Tcp,
+                            state: port_state,
+                            state_reason: reason,
+                            state_ttl: None,
+                            service: None,
+                            scripts: Vec::new(),
+                        })
+                    }
+                    Err(_) => Ok(PortResult {
+                        number: port,
+                        protocol: rustnmap_output::models::Protocol::Tcp,
+                        state: PortState::Filtered,
+                        state_reason: "scan-error".to_string(),
+                        state_ttl: None,
+                        service: None,
+                        scripts: Vec::new(),
+                    }),
+                }
+            }
+            Err(_) => {
+                // Raw socket creation failed (not root), use TCP Connect scan fallback
+                self.scan_port_connect(target, port).await
+            }
+        }
+    }
+
+    /// Scans a single port using TCP Connect (fallback when not root).
+    async fn scan_port_connect(&self, target: &Target, port: u16) -> Result<PortResult> {
+        use tokio::net::TcpSocket;
+        use tokio::time::timeout;
+
+        let addr = std::net::SocketAddr::new(target.ip, port);
+        let timeout_duration = self.session.config.scan_delay;
+
+        // Try to connect
+        let result: std::io::Result<()> = async {
+            let socket = TcpSocket::new_v4()?;
+            timeout(timeout_duration, socket.connect(addr))
+                .await
+                .map_err(|_e| std::io::Error::new(std::io::ErrorKind::TimedOut, "connection timeout"))?
+                .map(|_| ())
+        }
+        .await;
+
+        let (state, reason) = match result {
+            Ok(()) => (PortState::Open, "syn-ack".to_string()),
+            Err(e) if e.kind() == std::io::ErrorKind::ConnectionRefused => {
+                (PortState::Closed, "conn-refused".to_string())
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {
+                (PortState::Filtered, "timeout".to_string())
+            }
+            Err(_) => (PortState::Filtered, "error".to_string()),
+        };
+
         Ok(PortResult {
             number: port,
             protocol: rustnmap_output::models::Protocol::Tcp,
-            state: PortState::Filtered,
-            state_reason: "no-response".to_string(),
+            state,
+            state_reason: reason,
             state_ttl: None,
             service: None,
             scripts: Vec::new(),

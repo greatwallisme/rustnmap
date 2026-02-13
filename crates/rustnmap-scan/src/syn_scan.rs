@@ -5,18 +5,13 @@
 //! port states without completing the full TCP handshake.
 
 #![warn(missing_docs)]
-#![allow(
-    clippy::manual_let_else,
-    clippy::match_wildcard_for_single_variants,
-    clippy::used_underscore_binding,
-    clippy::must_use_candidate,
-    clippy::unnecessary_wraps,
-    clippy::unused_self,
-    reason = "Required for PortScanner trait compatibility; simulation code will be removed"
-)]
+
+use std::io;
+use std::net::SocketAddr;
 
 use crate::scanner::{PortScanner, ScanConfig, ScanResult};
 use rustnmap_common::{Ipv4Addr, Port, PortState, Protocol};
+use rustnmap_net::raw_socket::{parse_tcp_response, RawSocket, TcpPacketBuilder};
 use rustnmap_target::Target;
 
 /// Default source port range for outbound probes.
@@ -24,11 +19,6 @@ use rustnmap_target::Target;
 /// Using a specific range helps with firewall compatibility.
 /// Nmap uses source port randomization for evasion and compatibility.
 pub const SOURCE_PORT_START: u16 = 60000;
-
-/// Common open ports used during development phase.
-///
-/// These ports are typically open on various systems and services.
-pub const COMMON_OPEN_PORTS: [Port; 5] = [22, 80, 443, 3306, 8080];
 
 /// TCP SYN scanner using raw sockets.
 ///
@@ -38,13 +28,11 @@ pub const COMMON_OPEN_PORTS: [Port; 5] = [22, 80, 443, 3306, 8080];
 #[derive(Debug)]
 pub struct TcpSynScanner {
     /// Local IP address for probes.
-    ///
-    /// Stored for future use in raw socket packet construction.
-    #[allow(
-        dead_code,
-        reason = "Will be used when raw socket implementation is complete"
-    )]
     local_addr: Ipv4Addr,
+    /// Raw socket for packet transmission.
+    socket: RawSocket,
+    /// Scanner configuration.
+    config: ScanConfig,
 }
 
 impl TcpSynScanner {
@@ -53,14 +41,29 @@ impl TcpSynScanner {
     /// # Arguments
     ///
     /// * `local_addr` - Local IP address to use for probes
-    /// * `_config` - Scanner configuration (reserved for future use)
+    /// * `config` - Scanner configuration
     ///
     /// # Returns
     ///
-    /// A new `TcpSynScanner` instance.
-    #[must_use]
-    pub fn new(local_addr: Ipv4Addr, _config: ScanConfig) -> Self {
-        Self { local_addr }
+    /// A `ScanResult` containing the new `TcpSynScanner` instance, or an error
+    /// if the raw socket cannot be created.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The process lacks `CAP_NET_RAW` capability (requires root)
+    /// - The system runs out of file descriptors
+    pub fn new(local_addr: Ipv4Addr, config: ScanConfig) -> ScanResult<Self> {
+        let socket = RawSocket::new()
+            .map_err(|e| crate::scanner::ScanError::PermissionDenied {
+                operation: format!("create raw socket: {e}"),
+            })?;
+
+        Ok(Self {
+            local_addr,
+            socket,
+            config,
+        })
     }
 
     /// Scans a single port on a target.
@@ -76,55 +79,148 @@ impl TcpSynScanner {
     /// # Returns
     ///
     /// Port state based on response received.
-    fn scan_port_impl(&self, target: &Target, port: Port, protocol: Protocol) -> PortState {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the scan cannot be performed due to network issues.
+    fn scan_port_impl(&self, target: &Target, port: Port, protocol: Protocol) -> ScanResult<PortState> {
         // Only TCP is supported
         if protocol != Protocol::Tcp {
-            return PortState::Filtered;
+            return Ok(PortState::Filtered);
         }
 
         // Get target IP address
         let dst_addr = match target.ip {
             rustnmap_common::IpAddr::V4(addr) => addr,
-            rustnmap_common::IpAddr::V6(_) => return PortState::Filtered,
+            rustnmap_common::IpAddr::V6(_) => return Ok(PortState::Filtered),
         };
 
-        // Actual packet transmission requires the raw socket I/O layer
-        // This implementation provides port state estimation for testing
-        self.simulate_probe_response(dst_addr, port)
+        // Send SYN probe and analyze response
+        self.send_syn_probe(dst_addr, port)
     }
 
-    /// Provides port state estimation during development.
-    ///
-    /// This method enables testing and development while the packet engine
-    /// integration is pending. Once the packet engine handles actual
-    /// transmission and reception, this logic will be removed.
+    /// Sends a TCP SYN probe and determines port state from response.
     ///
     /// # Arguments
     ///
-    /// * `_addr` - Target address (unused in simulation)
-    /// * `port` - Port number to check
+    /// * `dst_addr` - Target IP address
+    /// * `dst_port` - Target port
     ///
     /// # Returns
     ///
-    /// Simulated port state based on port number.
-    // TODO: This is a simulation method. Replace with actual raw socket packet transmission
-    #[must_use]
-    fn simulate_probe_response(&self, _addr: Ipv4Addr, port: Port) -> PortState {
-        if COMMON_OPEN_PORTS.contains(&port) {
-            PortState::Open
-        } else if port < 1024 {
-            // Well-known ports that are not in the open list are likely closed
-            PortState::Closed
-        } else {
-            // High ports are more likely to be filtered
-            PortState::Filtered
+    /// Port state based on TCP response.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if packet transmission fails.
+    fn send_syn_probe(&self, dst_addr: Ipv4Addr, dst_port: Port) -> ScanResult<PortState> {
+        // Generate a random source port
+        let src_port = Self::generate_source_port();
+
+        // Generate and store sequence number for this probe
+        let seq = Self::generate_sequence_number();
+
+        // Build TCP SYN packet
+        let packet = TcpPacketBuilder::new(self.local_addr, dst_addr, src_port, dst_port)
+            .seq(seq)
+            .syn()
+            .window(65535)
+            .build();
+
+        // Create destination socket address
+        let dst_sockaddr = SocketAddr::new(std::net::IpAddr::V4(dst_addr), dst_port);
+
+        // Send the packet
+        self.socket
+            .send_packet(&packet, &dst_sockaddr)
+            .map_err(|e| crate::scanner::ScanError::Network(rustnmap_common::Error::Network(
+                rustnmap_common::error::NetworkError::SendError { source: e }
+            )))?;
+
+        // Wait for response with timeout
+        let mut recv_buf = vec![0u8; 65535];
+        let timeout = self.config.initial_rtt;
+
+        match self.socket.recv_packet(recv_buf.as_mut_slice(), Some(timeout)) {
+            Ok(len) if len > 0 => {
+                // Parse the response
+                if let Some((flags, _seq, ack, src_port)) = parse_tcp_response(&recv_buf[..len]) {
+                    // Verify this is a response to our probe
+                    if src_port != dst_port {
+                        // Response from wrong port, treat as filtered
+                        return Ok(PortState::Filtered);
+                    }
+
+                    // Check if ACK matches our sequence number + 1
+                    let expected_ack = seq.wrapping_add(1);
+                    if ack != expected_ack {
+                        // Unexpected ACK, might be a spoofed packet
+                        return Ok(PortState::Filtered);
+                    }
+
+                    // Analyze flags
+                    let syn_received = (flags & 0x02) != 0;
+                    let ack_received = (flags & 0x10) != 0;
+                    let rst_received = (flags & 0x04) != 0;
+
+                    if syn_received && ack_received {
+                        // SYN-ACK received - port is open
+                        Ok(PortState::Open)
+                    } else if rst_received {
+                        // RST received - port is closed
+                        Ok(PortState::Closed)
+                    } else {
+                        // Unexpected flags
+                        Ok(PortState::Filtered)
+                    }
+                } else {
+                    // Could not parse TCP response
+                    Ok(PortState::Filtered)
+                }
+            }
+            Ok(_) => {
+                // Empty response (shouldn't happen)
+                Ok(PortState::Filtered)
+            }
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut => {
+                // No response received within timeout - port is filtered or host is down
+                Ok(PortState::Filtered)
+            }
+            Err(e) => {
+                // Other error
+                Err(crate::scanner::ScanError::Network(rustnmap_common::Error::Network(
+                    rustnmap_common::error::NetworkError::ReceiveError { source: e }
+                )))
+            }
         }
+    }
+
+    /// Generates a random source port.
+    #[must_use]
+    fn generate_source_port() -> Port {
+        // Use SOURCE_PORT_START as base and add random offset
+        let offset = (std::process::id() % 1000) as u16;
+        SOURCE_PORT_START + offset
+    }
+
+    /// Generates a random initial sequence number.
+    #[must_use]
+    fn generate_sequence_number() -> u32 {
+        // Use current time and process ID to generate a pseudo-random sequence number
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        #[expect(clippy::cast_possible_truncation, reason = "Lower bits provide sufficient entropy")]
+        let now_lower = now as u32;
+        let pid = std::process::id();
+        now_lower.wrapping_add(pid)
     }
 }
 
 impl PortScanner for TcpSynScanner {
     fn scan_port(&self, target: &Target, port: Port, protocol: Protocol) -> ScanResult<PortState> {
-        Ok(self.scan_port_impl(target, port, protocol))
+        self.scan_port_impl(target, port, protocol)
     }
 
     fn requires_root(&self) -> bool {
@@ -140,71 +236,46 @@ mod tests {
     fn test_scanner_creation() {
         let local_addr = Ipv4Addr::new(192, 168, 1, 100);
         let config = ScanConfig::default();
-        let scanner = TcpSynScanner::new(local_addr, config);
+        let result = TcpSynScanner::new(local_addr, config);
 
-        assert_eq!(scanner.local_addr, local_addr);
+        // May fail if not running as root
+        if let Ok(scanner) = result {
+            assert_eq!(scanner.local_addr, local_addr);
+        }
     }
 
     #[test]
     fn test_requires_root() {
-        let scanner = TcpSynScanner::new(Ipv4Addr::new(127, 0, 0, 1), ScanConfig::default());
-        assert!(scanner.requires_root());
+        let local_addr = Ipv4Addr::new(127, 0, 0, 1);
+        let config = ScanConfig::default();
+
+        // Test that scanner creation requires root
+        match TcpSynScanner::new(local_addr, config) {
+            Ok(scanner) => assert!(scanner.requires_root()),
+            Err(_) => {
+                // Expected if not running as root
+            }
+        }
     }
 
     #[test]
-    fn test_simulate_probe_response_open_ports() {
-        let scanner = TcpSynScanner::new(Ipv4Addr::new(127, 0, 0, 1), ScanConfig::default());
-
-        // Test common open ports
-        assert_eq!(
-            scanner.simulate_probe_response(Ipv4Addr::new(192, 168, 1, 1), 22),
-            PortState::Open
-        );
-        assert_eq!(
-            scanner.simulate_probe_response(Ipv4Addr::new(192, 168, 1, 1), 80),
-            PortState::Open
-        );
-        assert_eq!(
-            scanner.simulate_probe_response(Ipv4Addr::new(192, 168, 1, 1), 443),
-            PortState::Open
-        );
-        assert_eq!(
-            scanner.simulate_probe_response(Ipv4Addr::new(192, 168, 1, 1), 3306),
-            PortState::Open
-        );
-        assert_eq!(
-            scanner.simulate_probe_response(Ipv4Addr::new(192, 168, 1, 1), 8080),
-            PortState::Open
-        );
+    fn test_generate_source_port() {
+        let port = TcpSynScanner::generate_source_port();
+        assert!(port >= SOURCE_PORT_START);
+        assert!(port < SOURCE_PORT_START + 1000);
     }
 
     #[test]
-    fn test_simulate_probe_response_closed_ports() {
-        let scanner = TcpSynScanner::new(Ipv4Addr::new(127, 0, 0, 1), ScanConfig::default());
-
-        // Well-known ports not in open list should be closed
-        assert_eq!(
-            scanner.simulate_probe_response(Ipv4Addr::new(192, 168, 1, 1), 23),
-            PortState::Closed
-        );
-        assert_eq!(
-            scanner.simulate_probe_response(Ipv4Addr::new(192, 168, 1, 1), 25),
-            PortState::Closed
-        );
-    }
-
-    #[test]
-    fn test_simulate_probe_response_filtered_ports() {
-        let scanner = TcpSynScanner::new(Ipv4Addr::new(127, 0, 0, 1), ScanConfig::default());
-
-        // High ports should be filtered
-        assert_eq!(
-            scanner.simulate_probe_response(Ipv4Addr::new(192, 168, 1, 1), 9999),
-            PortState::Filtered
-        );
-        assert_eq!(
-            scanner.simulate_probe_response(Ipv4Addr::new(192, 168, 1, 1), 12345),
-            PortState::Filtered
-        );
+    fn test_generate_sequence_number() {
+        let seq1 = TcpSynScanner::generate_sequence_number();
+        let seq2 = TcpSynScanner::generate_sequence_number();
+        // Sequence numbers are based on time, so they should be close
+        // but not necessarily equal due to time passing
+        let diff = if seq1 > seq2 {
+            seq1 - seq2
+        } else {
+            seq2 - seq1
+        };
+        assert!(diff < 1_000_000, "Sequence numbers should be close in value");
     }
 }

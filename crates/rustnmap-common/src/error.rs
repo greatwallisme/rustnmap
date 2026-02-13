@@ -117,8 +117,20 @@ pub enum NetworkError {
         source: std::io::Error,
     },
 
+    /// Packet send error.
+    SendError {
+        /// The underlying OS error.
+        source: std::io::Error,
+    },
+
     /// Packet receive failed.
     ReceiveFailed {
+        /// The underlying OS error.
+        source: std::io::Error,
+    },
+
+    /// Packet receive error.
+    ReceiveError {
         /// The underlying OS error.
         source: std::io::Error,
     },
@@ -138,7 +150,10 @@ impl fmt::Display for NetworkError {
             Self::SendFailed { attempted, .. } => {
                 write!(f, "failed to send {attempted} bytes")
             }
-            Self::ReceiveFailed { .. } => write!(f, "failed to receive packet"),
+            Self::SendError { .. } => write!(f, "failed to send packet"),
+            Self::ReceiveFailed { .. } | Self::ReceiveError { .. } => {
+                write!(f, "failed to receive packet")
+            }
         }
     }
 }
@@ -150,7 +165,9 @@ impl std::error::Error for NetworkError {
             | Self::BindFailed { source, .. }
             | Self::SocketOptionFailed { source, .. }
             | Self::SendFailed { source, .. }
-            | Self::ReceiveFailed { source } => Some(source),
+            | Self::SendError { source }
+            | Self::ReceiveFailed { source }
+            | Self::ReceiveError { source } => Some(source),
             Self::InvalidInterface { .. } => None,
         }
     }
