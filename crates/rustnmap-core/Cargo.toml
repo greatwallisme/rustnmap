@@ -41,6 +41,7 @@ futures-util = "0.3"
 [dev-dependencies]
 proptest = { workspace = true }
 tokio-test = "0.4"
+libc = "0.2"
 
 [lints]
 workspace = true

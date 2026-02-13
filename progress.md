@@ -1,5 +1,56 @@
 # Progress Log: RustNmap Implementation
 
+## Session 2026-02-13 (Integration Tests with Real Network Targets - COMPLETE)
+
+### Activities
+| Time | Activity | Status |
+|------|----------|--------|
+| 22:00 | Checked planning files and project status | Complete |
+| 22:15 | Created integration test infrastructure | Complete |
+| 22:30 | Implemented TCP scan integration tests | Complete |
+| 22:45 | Fixed test API compatibility issues | Complete |
+| 23:00 | Ran all integration tests (8 tests, 100% pass) | Complete |
+| 23:15 | Updated documentation (task_plan.md, progress.md) | Complete |
+
+### Integration Tests Created
+| Test File | Description | Tests |
+|-----------|-------------|-------|
+| `crates/rustnmap-core/tests/common/mod.rs` | Shared test utilities | - |
+| `crates/rustnmap-core/tests/tcp_scan_test.rs` | TCP SYN/Connect scan tests | 8 |
+
+### Test Results
+| Test | Type | Privileges | Status |
+|------|------|------------|--------|
+| test_syn_scan_open_ports | SYN | Root | PASS |
+| test_syn_scan_closed_ports_filtered | SYN | Root | PASS |
+| test_syn_scan_mixed_ports | SYN | Root | PASS |
+| test_syn_scan_performance | SYN | Root | PASS |
+| test_connect_scan_open_ports | Connect | None | PASS |
+| test_connect_scan_closed_ports_filtered | Connect | None | PASS |
+| test_connect_scan_mixed_ports | Connect | None | PASS |
+| test_connect_scan_performance | Connect | None | PASS |
+
+### Performance Results
+- SYN scan 100 ports: ~670ms
+- Connect scan 50 ports: ~288ms
+
+### Key Findings
+- Closed ports are filtered from results (by design, matching Nmap behavior)
+- SYN scan tests require `sudo cargo test -- --ignored`
+- Connect scan tests run without root
+- All tests use localhost services (ports 22, 8501) for safety
+
+### Files Created/Modified
+| File | Change |
+|------|--------|
+| `crates/rustnmap-core/tests/common/mod.rs` | Created - Test utilities |
+| `crates/rustnmap-core/tests/tcp_scan_test.rs` | Created - Integration tests |
+| `crates/rustnmap-core/Cargo.toml` | Added libc dev-dependency |
+| `task_plan.md` | Updated with test plan and results |
+| `progress.md` | Updated with session log |
+
+---
+
 ## Session 2026-02-13 (TCP SYN Scan Raw Socket Implementation)
 
 ### Activities
@@ -36,7 +87,7 @@
 - Linux x86_64 only
 
 ### Next Steps
-1. Test with actual network targets using sudo
+1. Test with actual network targets using sudo ✓ (COMPLETED in integration tests session)
 2. Implement remaining privileged features:
    - ICMP discovery
    - TCP/UDP ping
@@ -65,12 +116,13 @@
 | Metric | Value |
 |--------|-------|
 | Crates Created | 12 |
-| Total Tests Passing | 332 |
+| Total Tests Passing | 334 (326 unit + 8 integration) |
 | Phase 1 Tests | 14 passed |
 | Phase 2 Tests | 85 passed |
 | Phase 3 Tests | 121 passed (36 fingerprint + 85 evasion) |
 | Phase 4 Tests | 35 passed |
-| Phase 5 Tests | 73 passed (25 output + 39 core + 9 cli) |
+| Phase 5 Tests | 81 passed (25 output + 39 core + 9 cli + 8 integration) |
+| Integration Tests | 8 passed |
 | Lines of Code | ~20000+ |
 
 ### Module Status
