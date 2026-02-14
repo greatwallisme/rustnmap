@@ -7,7 +7,7 @@
 //! becomes the next phase's input, allowing for efficient and modular scanning.
 
 use std::collections::HashMap;
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 
 use rustnmap_common::ScanConfig as ScannerConfig;
@@ -17,7 +17,7 @@ use rustnmap_scan::scanner::PortScanner;
 use rustnmap_scan::syn_scan::TcpSynScanner;
 use rustnmap_target::Target;
 use tokio::sync::RwLock;
-use tracing::{debug, info, instrument};
+use tracing::{debug, info, instrument, warn};
 
 use crate::error::Result;
 use crate::scheduler::{ScheduledTask, TaskPriority, TaskScheduler};
@@ -612,24 +612,67 @@ impl ScanOrchestrator {
     }
 
     /// Runs the service detection phase.
-    #[allow(
-        clippy::unused_self,
-        clippy::unnecessary_wraps,
-        reason = "Service detection implementation pending integration with rustnmap-fingerprint"
-    )]
+    #[allow(clippy::unnecessary_wraps)]
     fn run_service_detection(&self, host_results: &mut [HostResult]) -> Result<()> {
         info!("Starting service detection phase");
+
+        // Check if service database is available
+        let Some(service_db) = self.session.fingerprint_db.service_db() else {
+            warn!("Service probe database not loaded, skipping service detection");
+            return Ok(());
+        };
+        let service_db = service_db.clone();
+
+        let detector = rustnmap_fingerprint::ServiceDetector::new(service_db)
+            .with_timeout(std::time::Duration::from_secs(5));
 
         for host_result in host_results.iter_mut() {
             for port_result in &mut host_result.ports {
                 if port_result.state == PortState::Open {
-                    // Service detection will be integrated with rustnmap-fingerprint service module
-                    // Current implementation logs open ports for future enhancement
-                    debug!(
-                        ip = %host_result.ip,
-                        port = port_result.number,
-                        "Service detection scheduled for open port"
-                    );
+                    let target_addr = SocketAddr::new(host_result.ip, port_result.number);
+
+                    // Create a runtime for synchronous execution within async context
+                    let Ok(rt) = tokio::runtime::Handle::try_current() else {
+                        warn!("No tokio runtime available for service detection");
+                        continue;
+                    };
+
+                    // Run detection for this port
+                    let detection_future = detector.detect_service(&target_addr, port_result.number);
+                    match rt.block_on(detection_future) {
+                        Ok(services) => {
+                            if let Some(service_info) = services.first() {
+                                debug!(
+                                    ip = %host_result.ip,
+                                    port = port_result.number,
+                                    service = %service_info.name,
+                                    "Service detected"
+                                );
+
+                                // Convert fingerprint ServiceInfo to output ServiceInfo
+                                port_result.service = Some(rustnmap_output::models::ServiceInfo {
+                                    name: service_info.name.clone(),
+                                    product: service_info.product.clone(),
+                                    version: service_info.version.clone(),
+                                    extrainfo: service_info.info.clone(),
+                                    hostname: service_info.hostname.clone(),
+                                    ostype: service_info.os_type.clone(),
+                                    devicetype: service_info.device_type.clone(),
+                                    method: "probed".to_string(),
+                                    confidence: service_info.confidence,
+                                    cpe: service_info.cpe.clone().map(|c| vec![c]).unwrap_or_default(),
+                                });
+                            }
+                        }
+                        Err(e) => {
+                            debug!(
+                                ip = %host_result.ip,
+                                port = port_result.number,
+                                error = %e,
+                                "Service detection failed"
+                            );
+                        }
+                    }
                 }
             }
         }
@@ -639,17 +682,86 @@ impl ScanOrchestrator {
     }
 
     /// Runs the OS detection phase.
-    #[allow(
-        clippy::unused_self,
-        clippy::unnecessary_wraps,
-        reason = "OS detection implementation pending integration with rustnmap-fingerprint"
-    )]
+    #[allow(clippy::unnecessary_wraps, clippy::map_unwrap_or)]
     fn run_os_detection(&self, host_results: &mut [HostResult]) -> Result<()> {
         info!("Starting OS detection phase");
 
+        // Check if OS database is available
+        let Some(os_db) = self.session.fingerprint_db.os_db() else {
+            warn!("OS fingerprint database not loaded, skipping OS detection");
+            return Ok(());
+        };
+        let os_db = os_db.clone();
+
+        // Get local address for OS detection probes
+        let local_addr = std::net::Ipv4Addr::UNSPECIFIED;
+        let detector = rustnmap_fingerprint::OsDetector::new(os_db, local_addr)
+            .with_timeout(std::time::Duration::from_secs(5));
+
         for host_result in host_results.iter_mut() {
-            // OS detection implementation pending
-            debug!(ip = %host_result.ip, "OS detection pending");
+            // OS detection only works with IPv4
+            let IpAddr::V4(target_ip) = host_result.ip else {
+                debug!(ip = %host_result.ip, "OS detection skipped for IPv6 target");
+                continue;
+            };
+
+            // Use first open port for OS detection, or default to port 80
+            let open_port = host_result
+                .ports
+                .iter()
+                .find(|p| p.state == PortState::Open)
+                .map(|p| p.number)
+                .unwrap_or(80);
+
+            let target_addr = SocketAddr::new(IpAddr::V4(target_ip), open_port);
+
+            // Create a runtime for synchronous execution within async context
+            let Ok(rt) = tokio::runtime::Handle::try_current() else {
+                warn!("No tokio runtime available for OS detection");
+                continue;
+            };
+
+            // Run OS detection
+            let detection_future = detector.detect_os(&target_addr);
+            match rt.block_on(detection_future) {
+                Ok(matches) => {
+                    debug!(
+                        ip = %host_result.ip,
+                        matches_count = matches.len(),
+                        "OS detection completed"
+                    );
+
+                    // Convert fingerprint OsMatch to output OsMatch
+                    host_result.os_matches = matches
+                        .into_iter()
+                        .map(|m| rustnmap_output::models::OsMatch {
+                            name: m.name,
+                            accuracy: m.accuracy,
+                            os_family: match m.family {
+                                rustnmap_fingerprint::os::database::OsFamily::Linux => Some("Linux".to_string()),
+                                rustnmap_fingerprint::os::database::OsFamily::Windows => Some("Windows".to_string()),
+                                rustnmap_fingerprint::os::database::OsFamily::MacOS => Some("MacOS".to_string()),
+                                rustnmap_fingerprint::os::database::OsFamily::BSD => Some("BSD".to_string()),
+                                rustnmap_fingerprint::os::database::OsFamily::Solaris => Some("Solaris".to_string()),
+                                rustnmap_fingerprint::os::database::OsFamily::IOS => Some("iOS".to_string()),
+                                rustnmap_fingerprint::os::database::OsFamily::Android => Some("Android".to_string()),
+                                rustnmap_fingerprint::os::database::OsFamily::Other(s) => Some(s),
+                            },
+                            os_generation: m.generation,
+                            vendor: m.vendor,
+                            device_type: m.device_type,
+                            cpe: m.cpe.map(|c| vec![c]).unwrap_or_default(),
+                        })
+                        .collect();
+                }
+                Err(e) => {
+                    debug!(
+                        ip = %host_result.ip,
+                        error = %e,
+                        "OS detection failed"
+                    );
+                }
+            }
         }
 
         info!("OS detection phase completed");
@@ -657,23 +769,181 @@ impl ScanOrchestrator {
     }
 
     /// Runs NSE scripts on discovered services.
-    #[allow(
-        clippy::unused_self,
-        clippy::unnecessary_wraps,
-        reason = "NSE script execution pending integration with rustnmap-nse"
-    )]
+    #[allow(clippy::unnecessary_wraps, clippy::too_many_lines, clippy::map_unwrap_or)]
     fn run_nse_scripts(&self, host_results: &mut [HostResult]) -> Result<()> {
         info!("Starting NSE script execution phase");
+
+        // Check if NSE scripts are enabled and scripts are available
+        if self.session.nse_registry.is_empty() {
+            debug!("No NSE scripts registered, skipping NSE execution");
+            return Ok(());
+        }
+
+        // Create script engine - get the database from registry
+        // Since ScriptDatabase doesn't implement Clone, we need to create engine differently
+        let engine = self.session.nse_registry.create_engine();
+
+        // Get script categories to run
+        let categories: Vec<rustnmap_nse::ScriptCategory> = if self.session.config.nse_categories.is_empty() {
+            // Default to 'default' category if none specified
+            vec![rustnmap_nse::ScriptCategory::Default]
+        } else {
+            self.session
+                .config
+                .nse_categories
+                .iter()
+                .filter_map(|c| match c.as_str() {
+                    "auth" => Some(rustnmap_nse::ScriptCategory::Auth),
+                    "broadcast" => Some(rustnmap_nse::ScriptCategory::Broadcast),
+                    "brute" => Some(rustnmap_nse::ScriptCategory::Brute),
+                    "default" => Some(rustnmap_nse::ScriptCategory::Default),
+                    "discovery" => Some(rustnmap_nse::ScriptCategory::Discovery),
+                    "dos" => Some(rustnmap_nse::ScriptCategory::Dos),
+                    "exploit" => Some(rustnmap_nse::ScriptCategory::Exploit),
+                    "external" => Some(rustnmap_nse::ScriptCategory::External),
+                    "fuzzer" => Some(rustnmap_nse::ScriptCategory::Fuzzer),
+                    "intrusive" => Some(rustnmap_nse::ScriptCategory::Intrusive),
+                    "malware" => Some(rustnmap_nse::ScriptCategory::Malware),
+                    "safe" => Some(rustnmap_nse::ScriptCategory::Safe),
+                    "version" => Some(rustnmap_nse::ScriptCategory::Version),
+                    "vuln" => Some(rustnmap_nse::ScriptCategory::Vuln),
+                    _ => {
+                        warn!("Unknown script category: {}", c);
+                        None
+                    }
+                })
+                .collect()
+        };
+
+        // Select scripts by category
+        let scripts: Vec<&rustnmap_nse::NseScript> = engine.scheduler().select_scripts(&categories);
+
+        if scripts.is_empty() {
+            debug!("No scripts match the specified categories");
+            return Ok(());
+        }
+
+        debug!("Selected {} scripts for execution", scripts.len());
+
+        // Check if we're in a tokio runtime context
+        if tokio::runtime::Handle::try_current().is_err() {
+            warn!("No tokio runtime available for NSE execution");
+            return Ok(());
+        }
 
         for host_result in host_results.iter_mut() {
             for port_result in &mut host_result.ports {
                 if port_result.state == PortState::Open {
-                    // NSE script execution implementation pending
-                    debug!(
-                        ip = %host_result.ip,
-                        port = port_result.number,
-                        "NSE script execution pending"
-                    );
+                    let protocol = match port_result.protocol {
+                        rustnmap_output::models::Protocol::Tcp => "tcp",
+                        rustnmap_output::models::Protocol::Udp => "udp",
+                        rustnmap_output::models::Protocol::Sctp => "sctp",
+                    };
+
+                    let service_name = port_result
+                        .service
+                        .as_ref()
+                        .map(|s| s.name.as_str())
+                        .unwrap_or("");
+
+                    // Execute scripts for this port
+                    for script in &scripts {
+                        // Check if portrule matches
+                        match engine.evaluate_portrule(
+                            script,
+                            host_result.ip,
+                            port_result.number,
+                            protocol,
+                            "open",
+                            Some(service_name),
+                        ) {
+                            Ok(true) => {
+                                // Portrule matched, execute the script
+                                match engine.execute_port_script(
+                                    script,
+                                    host_result.ip,
+                                    port_result.number,
+                                    protocol,
+                                    "open",
+                                    Some(service_name),
+                                ) {
+                                    Ok(result) => {
+                                        if result.is_success() && !result.output.is_empty() {
+                                            debug!(
+                                                ip = %host_result.ip,
+                                                port = port_result.number,
+                                                script = %result.script_id,
+                                                "NSE script executed successfully"
+                                            );
+
+                                            port_result.scripts.push(rustnmap_output::models::ScriptResult {
+                                                id: result.script_id,
+                                                output: result.output.to_display(),
+                                                elements: Vec::new(),
+                                            });
+                                        }
+                                    }
+                                    Err(e) => {
+                                        debug!(
+                                            ip = %host_result.ip,
+                                            port = port_result.number,
+                                            script = %script.id,
+                                            error = %e,
+                                            "NSE script execution failed"
+                                        );
+                                    }
+                                }
+                            }
+                            Ok(false) => {
+                                // Portrule didn't match, skip
+                            }
+                            Err(e) => {
+                                debug!(
+                                    ip = %host_result.ip,
+                                    port = port_result.number,
+                                    script = %script.id,
+                                    error = %e,
+                                    "NSE portrule evaluation failed"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Also execute host scripts against the host
+            for script in &scripts {
+                match engine.evaluate_hostrule(script, host_result.ip) {
+                    Ok(true) => {
+                        match engine.execute_script(script, host_result.ip) {
+                            Ok(result) => {
+                                if result.is_success() && !result.output.is_empty() {
+                                    host_result.scripts.push(rustnmap_output::models::ScriptResult {
+                                        id: result.script_id,
+                                        output: result.output.to_display(),
+                                        elements: Vec::new(),
+                                    });
+                                }
+                            }
+                            Err(e) => {
+                                debug!(
+                                    ip = %host_result.ip,
+                                    script = %script.id,
+                                    error = %e,
+                                    "Host script execution failed"
+                                );
+                            }
+                        }
+                    }
+                    Ok(false) => {}
+                    Err(e) => {
+                        debug!(
+                            ip = %host_result.ip,
+                            script = %script.id,
+                            error = %e,
+                            "Hostrule evaluation failed"
+                        );
+                    }
                 }
             }
         }
@@ -683,17 +953,107 @@ impl ScanOrchestrator {
     }
 
     /// Runs traceroute to discovered hosts.
-    #[allow(
-        clippy::unused_self,
-        clippy::unnecessary_wraps,
-        reason = "Traceroute implementation pending integration with rustnmap-traceroute"
-    )]
+    #[allow(clippy::unnecessary_wraps, clippy::unused_self)]
     fn run_traceroute(&self, host_results: &mut [HostResult]) -> Result<()> {
         info!("Starting traceroute phase");
 
+        // Create traceroute configuration
+        let config = rustnmap_traceroute::TracerouteConfig::new()
+            .with_max_hops(30)
+            .with_probes_per_hop(3)
+            .with_probe_timeout(std::time::Duration::from_secs(1));
+
+        // Get local address for traceroute
+        let local_addr = rustnmap_common::Ipv4Addr::UNSPECIFIED;
+
+        // Create traceroute instance
+        let Ok(tracer) = rustnmap_traceroute::Traceroute::new(config, local_addr) else {
+            warn!("Failed to create traceroute instance");
+            return Ok(());
+        };
+
+        // Create a runtime for synchronous execution within async context
+        let Ok(rt) = tokio::runtime::Handle::try_current() else {
+            warn!("No tokio runtime available for traceroute");
+            return Ok(());
+        };
+
         for host_result in host_results.iter_mut() {
-            // Traceroute implementation pending
-            debug!(ip = %host_result.ip, "Traceroute pending");
+            // Traceroute only works with IPv4
+            let IpAddr::V4(addr) = host_result.ip else {
+                debug!(ip = %host_result.ip, "Traceroute skipped for IPv6 target");
+                continue;
+            };
+
+            // Convert std::net::Ipv4Addr to rustnmap_common::Ipv4Addr
+            let target_ip = rustnmap_common::Ipv4Addr::new(
+                addr.octets()[0],
+                addr.octets()[1],
+                addr.octets()[2],
+                addr.octets()[3],
+            );
+
+            // Run traceroute
+            let trace_future = tracer.trace(target_ip);
+            match rt.block_on(trace_future) {
+                Ok(result) => {
+                    debug!(
+                        ip = %host_result.ip,
+                        hops = result.hop_count(),
+                        completed = result.completed(),
+                        "Traceroute completed"
+                    );
+
+                    // Convert traceroute hops to output format
+                    let hops: Vec<rustnmap_output::models::TracerouteHop> = result
+                        .hops()
+                        .iter()
+                        .filter_map(|hop| {
+                            hop.ip().map(|ip| {
+                                // Convert rustnmap_common::Ipv4Addr to std::net::IpAddr
+                                let std_ip = IpAddr::V4(std::net::Ipv4Addr::new(
+                                    ip.octets()[0],
+                                    ip.octets()[1],
+                                    ip.octets()[2],
+                                    ip.octets()[3],
+                                ));
+                                rustnmap_output::models::TracerouteHop {
+                                    ttl: hop.ttl(),
+                                    ip: std_ip,
+                                    hostname: hop.hostname().map(String::from),
+                                    rtt: hop.avg_rtt(),
+                                }
+                            })
+                        })
+                        .collect();
+
+                    if !hops.is_empty() {
+                        // Use the protocol from traceroute config, default to UDP
+                        let protocol = match tracer.config().probe_type() {
+                            rustnmap_traceroute::ProbeType::TcpSyn | rustnmap_traceroute::ProbeType::TcpAck => {
+                                rustnmap_output::models::Protocol::Tcp
+                            }
+                            rustnmap_traceroute::ProbeType::Udp => rustnmap_output::models::Protocol::Udp,
+                            rustnmap_traceroute::ProbeType::Icmp => {
+                                // ICMP is not in Protocol enum, use UDP as fallback
+                                rustnmap_output::models::Protocol::Udp
+                            }
+                        };
+                        host_result.traceroute = Some(rustnmap_output::models::TracerouteResult {
+                            protocol,
+                            port: tracer.config().dest_port(),
+                            hops,
+                        });
+                    }
+                }
+                Err(e) => {
+                    debug!(
+                        ip = %host_result.ip,
+                        error = %e,
+                        "Traceroute failed"
+                    );
+                }
+            }
         }
 
         info!("Traceroute phase completed");

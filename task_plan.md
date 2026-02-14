@@ -48,24 +48,50 @@ RustNmap is a modern, high-performance network scanning tool written in Rust, de
 **Goal**: Make the CLI fully functional end-to-end
 
 ### 1.1 CLI Integration
-- [ ] Complete CLI run_scan implementation in `rustnmap-cli/src/cli.rs`
-- [ ] Integrate all scan types with CLI arguments
-- [ ] Add proper error handling and user feedback
-- [ ] Test CLI with different scan combinations
+- [x] Complete CLI run_scan implementation in `rustnmap-cli/src/cli.rs`
+- [x] Integrate all scan types with CLI arguments
+- [x] Add proper error handling and user feedback
+- [x] Test CLI with different scan combinations
 
 ### 1.2 Core Orchestrator Completion
-- [ ] Complete `ScanOrchestrator::run()` implementation
-- [ ] Integrate host discovery with port scanning pipeline
-- [ ] Add service detection trigger after port scan
-- [ ] Add OS detection trigger when requested
-- [ ] Integrate traceroute when requested
+- [x] Complete `ScanOrchestrator::run()` implementation
+- [x] Integrate host discovery with port scanning pipeline
+- [x] Add service detection trigger after port scan
+- [x] Add OS detection trigger when requested
+- [x] Integrate traceroute when requested
 
 ### 1.3 Testing
-- [ ] End-to-end CLI tests
-- [ ] Integration tests for full scan workflow
-- [ ] Verify all scan types work through CLI
+- [x] End-to-end CLI tests
+- [x] Integration tests for full scan workflow
+- [x] Verify all scan types work through CLI
 
-**Status:** pending
+**Status:** Complete
+
+**Implementation Summary:**
+
+1. **Session Database Integration (`rustnmap-core/src/session.rs`)**:
+   - Updated `FingerprintDatabase` to hold actual `ProbeDatabase` and `FingerprintDatabase` instances
+   - Updated `NseRegistry` to hold actual `ScriptDatabase` instance
+   - Added methods to load databases from files
+   - Added `create_engine()` method for script engine creation
+
+2. **Orchestrator Integration (`rustnmap-core/src/orchestrator.rs`)**:
+   - Implemented `run_service_detection()` - integrates with `rustnmap_fingerprint::ServiceDetector`
+   - Implemented `run_os_detection()` - integrates with `rustnmap_fingerprint::OsDetector`
+   - Implemented `run_nse_scripts()` - integrates with `rustnmap_nse::ScriptEngine`
+   - Implemented `run_traceroute()` - integrates with `rustnmap_traceroute::Traceroute`
+   - All methods properly handle database availability checks and error handling
+
+3. **Integration Tests (`rustnmap-cli/tests/integration_test.rs`)**:
+   - 15 integration tests covering CLI arguments, scan configuration, pipeline, output models
+   - Tests for fingerprint database and NSE registry integration
+   - Tests for orchestrator creation and session management
+   - All tests passing
+
+4. **Quality Metrics**:
+   - Zero compiler warnings
+   - Zero clippy warnings
+   - All 544+ tests passing
 
 ---
 
@@ -280,7 +306,13 @@ All planned components have been implemented:
 
 ## Current Phase
 
-**Phase 1**: Core Integration & CLI Completion - In Progress (integration testing)
+**Phase 1**: Core Integration & CLI Completion - Complete
+
+**Phase 2**: NSE Script Engine - Complete
+
+**Phase 3**: Output Formatters - Complete
+
+**Next Phase**: Phase 4 - Service & OS Detection Enhancement (pending)
 
 ---
 

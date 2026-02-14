@@ -489,12 +489,18 @@ impl fmt::Debug for ScanSession {
 }
 
 /// Fingerprint database handle.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct FingerprintDatabase {
-    /// Service probe database loaded.
-    service_db_loaded: bool,
-    /// OS fingerprint database loaded.
-    os_db_loaded: bool,
+    /// Service probe database.
+    service_db: Option<rustnmap_fingerprint::ProbeDatabase>,
+    /// OS fingerprint database.
+    os_db: Option<rustnmap_fingerprint::FingerprintDatabase>,
+}
+
+impl Default for FingerprintDatabase {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl FingerprintDatabase {
@@ -502,72 +508,164 @@ impl FingerprintDatabase {
     #[must_use]
     pub const fn new() -> Self {
         Self {
-            service_db_loaded: false,
-            os_db_loaded: false,
+            service_db: None,
+            os_db: None,
         }
     }
 
     /// Creates a test fingerprint database with simulated loaded state.
     #[must_use]
-    pub const fn test_instance() -> Self {
+    pub fn test_instance() -> Self {
         Self {
-            service_db_loaded: true,
-            os_db_loaded: true,
+            service_db: Some(rustnmap_fingerprint::ProbeDatabase::empty()),
+            os_db: Some(rustnmap_fingerprint::FingerprintDatabase::empty()),
         }
     }
 
     /// Returns true if the service database is loaded.
     #[must_use]
-    pub const fn is_service_db_loaded(&self) -> bool {
-        self.service_db_loaded
+    pub fn is_service_db_loaded(&self) -> bool {
+        self.service_db.is_some()
     }
 
     /// Returns true if the OS database is loaded.
     #[must_use]
-    pub const fn is_os_db_loaded(&self) -> bool {
-        self.os_db_loaded
+    pub fn is_os_db_loaded(&self) -> bool {
+        self.os_db.is_some()
+    }
+
+    /// Returns a reference to the service probe database.
+    #[must_use]
+    pub const fn service_db(&self) -> Option<&rustnmap_fingerprint::ProbeDatabase> {
+        self.service_db.as_ref()
+    }
+
+    /// Returns a reference to the OS fingerprint database.
+    #[must_use]
+    pub const fn os_db(&self) -> Option<&rustnmap_fingerprint::FingerprintDatabase> {
+        self.os_db.as_ref()
+    }
+
+    /// Sets the service probe database.
+    pub fn set_service_db(&mut self, db: rustnmap_fingerprint::ProbeDatabase) {
+        self.service_db = Some(db);
+    }
+
+    /// Sets the OS fingerprint database.
+    pub fn set_os_db(&mut self, db: rustnmap_fingerprint::FingerprintDatabase) {
+        self.os_db = Some(db);
+    }
+
+    /// Loads service probe database from file.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database file cannot be loaded.
+    pub async fn load_service_db(&mut self, path: impl AsRef<std::path::Path>) -> crate::error::Result<()> {
+        match rustnmap_fingerprint::ProbeDatabase::load_from_nmap_db(path).await {
+            Ok(db) => {
+                self.service_db = Some(db);
+                Ok(())
+            }
+            Err(e) => Err(crate::error::CoreError::fingerprint(format!("Failed to load service DB: {e}"))),
+        }
+    }
+
+    /// Loads OS fingerprint database from file.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database file cannot be loaded.
+    pub async fn load_os_db(&mut self, path: impl AsRef<std::path::Path>) -> crate::error::Result<()> {
+        match rustnmap_fingerprint::FingerprintDatabase::load_from_nmap_db(path).await {
+            Ok(db) => {
+                self.os_db = Some(db);
+                Ok(())
+            }
+            Err(e) => Err(crate::error::CoreError::fingerprint(format!("Failed to load OS DB: {e}"))),
+        }
     }
 }
 
 /// NSE script registry.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct NseRegistry {
-    /// Scripts registered.
-    scripts: Vec<String>,
+    /// Script database.
+    script_db: rustnmap_nse::ScriptDatabase,
+}
+
+impl Default for NseRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl NseRegistry {
     /// Creates a new empty script registry.
     #[must_use]
-    pub const fn new() -> Self {
+    pub fn new() -> Self {
         Self {
-            scripts: Vec::new(),
+            script_db: rustnmap_nse::ScriptDatabase::new(),
         }
     }
 
     /// Creates an empty registry for testing.
     #[must_use]
-    pub const fn empty() -> Self {
-        Self {
-            scripts: Vec::new(),
-        }
+    pub fn empty() -> Self {
+        Self::new()
     }
 
     /// Adds a script to the registry.
-    pub fn add_script(&mut self, script: String) {
-        self.scripts.push(script);
+    pub fn add_script(&mut self, script: &rustnmap_nse::NseScript) {
+        self.script_db.register_script(script);
     }
 
     /// Returns the number of scripts.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.scripts.len()
+        self.script_db.len()
     }
 
     /// Returns true if the registry is empty.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.scripts.is_empty()
+        self.script_db.is_empty()
+    }
+
+    /// Returns a reference to the script database.
+    #[must_use]
+    pub const fn script_db(&self) -> &rustnmap_nse::ScriptDatabase {
+        &self.script_db
+    }
+
+    /// Creates a script engine from the registry's database.
+    #[must_use]
+    pub fn create_engine(&self) -> rustnmap_nse::ScriptEngine {
+        // Since ScriptDatabase doesn't implement Clone, we create a new empty database
+        // and re-register all scripts. This is a workaround until Clone is implemented.
+        let mut new_db = rustnmap_nse::ScriptDatabase::new();
+
+        // Get all scripts from the current database and re-register them
+        for script in self.script_db.all_scripts() {
+            new_db.register_script(script);
+        }
+
+        rustnmap_nse::ScriptEngine::new(new_db)
+    }
+
+    /// Loads scripts from a directory.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the directory cannot be read.
+    pub fn load_from_directory(&mut self, path: impl AsRef<std::path::Path>) -> crate::error::Result<()> {
+        match rustnmap_nse::ScriptDatabase::from_directory(path.as_ref()) {
+            Ok(db) => {
+                self.script_db = db;
+                Ok(())
+            }
+            Err(e) => Err(crate::error::CoreError::nse(format!("Failed to load scripts: {e}"))),
+        }
     }
 }
 
@@ -836,9 +934,11 @@ mod tests {
 
     #[test]
     fn test_nse_registry() {
+        use rustnmap_nse::NseScript;
         let mut registry = NseRegistry::new();
         assert!(registry.is_empty());
-        registry.add_script("test.nse".to_string());
+        let script = NseScript::new("test-script", std::path::PathBuf::from("/test.nse"), String::new());
+        registry.add_script(&script);
         assert_eq!(registry.len(), 1);
         assert!(!registry.is_empty());
     }
