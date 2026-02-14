@@ -258,6 +258,69 @@ impl ScriptEngine {
         Ok(host_table)
     }
 
+    /// Create a full Nmap port table with all properties.
+    ///
+    /// # Arguments
+    ///
+    /// * `lua` - Lua state
+    /// * `port_number` - Port number
+    /// * `protocol` - Protocol (tcp/udp/sctp)
+    /// * `state` - Port state (open/closed/filtered/etc)
+    /// * `service` - Service name (optional)
+    ///
+    /// # Returns
+    ///
+    /// The port table.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if port table creation fails.
+    fn create_port_table(
+        lua: &mut crate::lua::NseLua,
+        port_number: u16,
+        protocol: &str,
+        state: &str,
+        service: Option<&str>,
+        version: Option<&str>,
+    ) -> Result<mlua::Table> {
+        let port_table = lua.create_table()?;
+
+        // port.number - Port number
+        port_table.set("number", port_number)?;
+
+        // port.protocol - Protocol (tcp/udp/sctp)
+        port_table.set("protocol", protocol)?;
+
+        // port.state - Port state
+        port_table.set("state", state)?;
+
+        // port.service - Service name
+        port_table.set("service", service.unwrap_or(""))?;
+
+        // port.version - Version info table
+        let version_table = lua.create_table()?;
+        if let Some(ver) = version {
+            version_table.set("version", ver)?;
+        }
+        version_table.set("name", service.unwrap_or(""))?;
+        version_table.set("product", "")?;
+        version_table.set("extrainfo", "")?;
+        version_table.set("hostname", "")?;
+        version_table.set("ostype", "")?;
+        version_table.set("devicetype", "")?;
+        version_table.set("service_tunnel", "none")?;
+        version_table.set("cpe", lua.create_table()?)?;
+        port_table.set("version", version_table)?;
+
+        // port.reason - Why port is in this state
+        port_table.set("reason", "syn-ack")?;
+
+        // port.reason_ttl - TTL of response
+        port_table.set("reason_ttl", mlua::Value::Nil)?;
+
+        Ok(port_table)
+    }
+
     /// Execute a single script synchronously.
     ///
     /// # Arguments
@@ -272,10 +335,6 @@ impl ScriptEngine {
     /// # Errors
     ///
     /// Returns an error if script execution fails.
-    #[allow(
-        clippy::needless_pass_by_value,
-        reason = "Arc::clone is cheap and simplifies code"
-    )]
     pub fn execute_script(
         &self,
         script: &NseScript,
@@ -452,6 +511,174 @@ impl ScriptEngine {
         }
 
         handles
+    }
+
+    /// Execute a port script against a specific port.
+    ///
+    /// # Arguments
+    ///
+    /// * `script` - Script to execute
+    /// * `target_ip` - Target IP address
+    /// * `port` - Target port number
+    /// * `protocol` - Protocol (tcp/udp)
+    /// * `port_state` - Port state
+    /// * `service` - Service name (optional)
+    ///
+    /// # Returns
+    ///
+    /// The script execution result.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if script execution fails.
+    pub fn execute_port_script(
+        &self,
+        script: &NseScript,
+        target_ip: std::net::IpAddr,
+        port: u16,
+        protocol: &str,
+        port_state: &str,
+        service: Option<&str>,
+    ) -> Result<ScriptResult> {
+        let start = std::time::Instant::now();
+        let mut lua = NseLua::new_default()?;
+
+        // Load the script
+        lua.load_script(&script.source, &script.id)?;
+
+        // Create host table
+        let host_table = Self::create_host_table(&mut lua, target_ip)?;
+        lua.set_global("host", mlua::Value::Table(host_table))?;
+
+        // Create port table
+        let port_table = Self::create_port_table(
+            &mut lua, port, protocol, port_state, service, None)?;
+        lua.set_global("port", mlua::Value::Table(port_table))?;
+
+        // Execute the action function if it exists
+        let output = if script.has_action() {
+            // Load and call the action function with host and port
+            let func = lua.load_function("return action(host, port)", "action_wrapper")?;
+
+            // Call the function and get the result
+            let result: mlua::MultiValue = lua.call_function(&func, ())?;
+
+            // Convert result to string output
+            let output_parts: Vec<String> = result
+                .iter()
+                .filter_map(|v| match v {
+                    mlua::Value::String(s) => s.to_str().ok().map(|s| s.to_string()),
+                    mlua::Value::Integer(n) => Some(n.to_string()),
+                    mlua::Value::Number(n) => Some(n.to_string()),
+                    mlua::Value::Boolean(b) => Some(b.to_string()),
+                    _ => None,
+                })
+                .collect();
+
+            ScriptOutput::Plain(output_parts.join(" "))
+        } else {
+            ScriptOutput::Empty
+        };
+
+        Ok(ScriptResult {
+            script_id: script.id.clone(),
+            target_ip,
+            port: Some(port),
+            protocol: Some(protocol.to_string()),
+            status: ExecutionStatus::Success,
+            output,
+            duration: start.elapsed(),
+            debug_log: vec![],
+        })
+    }
+
+    /// Evaluate a script's hostrule against a target.
+    ///
+    /// # Arguments
+    ///
+    /// * `script` - Script to evaluate
+    /// * `target_ip` - Target IP address
+    ///
+    /// # Returns
+    ///
+    /// `true` if the hostrule matches, `false` otherwise.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if rule evaluation fails.
+    pub fn evaluate_hostrule(&self, script: &NseScript, target_ip: std::net::IpAddr) -> Result<bool> {
+        if !script.has_hostrule() {
+            // No hostrule means it doesn't match (port scripts need portrule)
+            return Ok(false);
+        }
+
+        let mut lua = NseLua::new_default()?;
+
+        // Load the script
+        lua.load_script(&script.source, &script.id)?;
+
+        // Create host table
+        let host_table = Self::create_host_table(&mut lua, target_ip)?;
+        lua.set_global("host", mlua::Value::Table(host_table.clone()))?;
+
+        // Evaluate the hostrule
+        let rule_func = lua.load_function("return hostrule(host)", "hostrule_wrapper")?;
+        let result: bool = lua.call_function(&rule_func, ())?;
+
+        Ok(result)
+    }
+
+    /// Evaluate a script's portrule against a target port.
+    ///
+    /// # Arguments
+    ///
+    /// * `script` - Script to evaluate
+    /// * `target_ip` - Target IP address
+    /// * `port` - Target port number
+    /// * `protocol` - Protocol (tcp/udp)
+    /// * `port_state` - Port state
+    /// * `service` - Service name (optional)
+    ///
+    /// # Returns
+    ///
+    /// `true` if the portrule matches, `false` otherwise.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if rule evaluation fails.
+    pub fn evaluate_portrule(
+        &self,
+        script: &NseScript,
+        target_ip: std::net::IpAddr,
+        port: u16,
+        protocol: &str,
+        port_state: &str,
+        service: Option<&str>,
+    ) -> Result<bool> {
+        if !script.has_portrule() {
+            // No portrule means it doesn't match
+            return Ok(false);
+        }
+
+        let mut lua = NseLua::new_default()?;
+
+        // Load the script
+        lua.load_script(&script.source, &script.id)?;
+
+        // Create host table
+        let host_table = Self::create_host_table(&mut lua, target_ip)?;
+        lua.set_global("host", mlua::Value::Table(host_table.clone()))?;
+
+        // Create port table
+        let port_table = Self::create_port_table(
+            &mut lua, port, protocol, port_state, service, None)?;
+        lua.set_global("port", mlua::Value::Table(port_table.clone()))?;
+
+        // Evaluate the portrule
+        let rule_func = lua.load_function("return portrule(host, port)", "portrule_wrapper")?;
+        let result: bool = lua.call_function(&rule_func, ())?;
+
+        Ok(result)
     }
 }
 

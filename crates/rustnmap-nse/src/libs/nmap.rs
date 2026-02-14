@@ -238,10 +238,136 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     })?;
     nmap_table.set("version_intensity", version_intensity_fn)?;
 
+    // Register clock() function - returns seconds since epoch with microsecond precision
+    let clock_fn = lua.create_function(|_, ()| {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default();
+        // Use as_secs_f64 for proper precision
+        Ok(now.as_secs_f64())
+    })?;
+    nmap_table.set("clock", clock_fn)?;
+
+    // Register address_family() function - returns "inet" for IPv4 or "inet6" for IPv6
+    let address_family_fn = lua.create_function(|_, host: mlua::Table| {
+        let ip_str: String = host.get("ip")?;
+        if ip_str.contains(':') {
+            Ok("inet6")
+        } else {
+            Ok("inet")
+        }
+    })?;
+    nmap_table.set("address_family", address_family_fn)?;
+
+    // Register log_write(level, message) function
+    let log_write_fn = lua.create_function(|_, (level, message): (String, String)| {
+        log_write_impl(&level, &message);
+        Ok(())
+    })?;
+    nmap_table.set("log_write", log_write_fn)?;
+
+    // Register new_socket() function - creates a new NSE socket
+    let new_socket_fn = lua.create_function(|lua, ()| {
+        let socket = NseSocket::new();
+        Ok(mlua::Value::UserData(lua.create_userdata(socket)?))
+    })?;
+    nmap_table.set("new_socket", new_socket_fn)?;
+
     // Set the nmap table as a global
     lua.globals().set("nmap", nmap_table)?;
 
     Ok(())
+}
+
+/// Log write implementation.
+fn log_write_impl(level: &str, message: &str) {
+    match level {
+        "stdout" => println!("{message}"),
+        "stderr" => eprintln!("{message}"),
+        _ => {
+            // Log to appropriate channel based on level
+            tracing::debug!("[{level}] {message}");
+        }
+    }
+}
+
+/// NSE Socket implementation for nmap.new_socket().
+#[derive(Debug)]
+pub struct NseSocket {
+    /// Internal socket state
+    state: SocketState,
+}
+
+#[derive(Debug)]
+#[expect(dead_code, reason = "Listening state reserved for future use")]
+enum SocketState {
+    /// Socket is not connected
+    Disconnected,
+    /// Socket is connected to a remote host
+    Connected {
+        /// Remote address
+        addr: std::net::SocketAddr,
+        /// Protocol
+        proto: String,
+    },
+    /// Socket is listening
+    Listening,
+}
+
+impl NseSocket {
+    /// Create a new unconnected socket.
+    fn new() -> Self {
+        Self {
+            state: SocketState::Disconnected,
+        }
+    }
+}
+
+impl mlua::UserData for NseSocket {
+    fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
+        methods.add_method_mut("connect", |_, this, (host, port): (String, u16)| {
+            let addr = format!("{host}:{port}");
+            match addr.parse::<std::net::SocketAddr>() {
+                Ok(socket_addr) => {
+                    match std::net::TcpStream::connect_timeout(
+                        &socket_addr,
+                        std::time::Duration::from_secs(30),
+                    ) {
+                        Ok(_stream) => {
+                            this.state = SocketState::Connected {
+                                addr: socket_addr,
+                                proto: "tcp".to_string(),
+                            };
+                            Ok(true)
+                        }
+                        Err(e) => Err(mlua::Error::RuntimeError(format!("Connect failed: {e}"))),
+                    }
+                }
+                Err(e) => Err(mlua::Error::RuntimeError(format!("Invalid address: {e}"))),
+            }
+        });
+
+        methods.add_method_mut("close", |_, this, ()| {
+            this.state = SocketState::Disconnected;
+            Ok(true)
+        });
+
+        methods.add_method("is_connected", |_, this, ()| {
+            Ok(matches!(this.state, SocketState::Connected { .. }))
+        });
+
+        methods.add_method("get_info", |lua, this, ()| {
+            let table = lua.create_table()?;
+            if let SocketState::Connected { addr, proto } = &this.state {
+                table.set("addr", addr.to_string())?;
+                table.set("proto", proto.clone())?;
+            } else {
+                table.set("addr", mlua::Value::Nil)?;
+                table.set("proto", mlua::Value::Nil)?;
+            }
+            Ok(table)
+        });
+    }
 }
 
 /// Update the scan type in the global configuration.

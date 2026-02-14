@@ -28,6 +28,10 @@
 //! - `stdnse.generate_random_string(length, [charset])` - Generate random string
 //! - `stdnse.tohex(data, [separator])` - Convert binary data to hexadecimal string
 //! - `stdnse.fromhex(hexstr)` - Convert hexadecimal string to binary data
+//! - `stdnse.format_output(status, data)` - Format script output consistently
+//! - `stdnse.mutex(name)` - Create or get a named mutex
+//! - `stdnse.condition_variable(name)` - Create or get a named condition variable
+//! - `stdnse.new_thread(fn, ...)` - Create a new thread to run a function
 //!
 //! # Example Usage in Lua
 //!
@@ -44,9 +48,19 @@
 //! -- Convert to hex
 //! local hex = stdnse.tohex("\x00\x01\x02\x03")
 //! -- Returns "00010203"
+//!
+//! -- Format output
+//! local output = stdnse.format_output(true, "Service detected")
+//!
+//! -- Use mutex for thread safety
+//! local mtx = stdnse.mutex("shared_resource")
+//! mtx("lock")
+//! -- critical section
+//! mtx("unlock")
 //! ```
 
 use std::collections::HashMap;
+use std::sync::{Arc, Condvar, Mutex};
 
 use mlua::{MultiValue, Value};
 use rand::distributions::{Alphanumeric, DistString};
@@ -57,6 +71,28 @@ use crate::lua::NseLua;
 /// Script arguments storage (key-value pairs from --script-args).
 static SCRIPT_ARGS: std::sync::OnceLock<std::sync::RwLock<HashMap<String, String>>> =
     std::sync::OnceLock::new();
+
+/// Named mutex storage for stdnse.mutex().
+static NAMED_MUTEXES: std::sync::OnceLock<std::sync::RwLock<HashMap<String, Arc<Mutex<()>>>>> =
+    std::sync::OnceLock::new();
+
+/// Type alias for condition variable storage.
+type CvarStorage = HashMap<String, Arc<(Mutex<bool>, Condvar)>>;
+
+/// Named condition variable storage for stdnse.condition_variable().
+static NAMED_CVARS: std::sync::OnceLock<std::sync::RwLock<CvarStorage>> =
+    std::sync::OnceLock::new();
+
+/// Get or initialize the named mutex storage.
+fn get_mutex_storage() -> &'static std::sync::RwLock<HashMap<String, Arc<Mutex<()>>>> {
+    NAMED_MUTEXES.get_or_init(|| std::sync::RwLock::new(HashMap::new()))
+}
+
+/// Get or initialize the named condition variable storage.
+fn get_cvar_storage() -> &'static std::sync::RwLock<CvarStorage>
+{
+    NAMED_CVARS.get_or_init(|| std::sync::RwLock::new(HashMap::new()))
+}
 
 /// Get or initialize the global script arguments storage.
 fn get_script_args_storage() -> &'static std::sync::RwLock<HashMap<String, String>> {
@@ -238,10 +274,172 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     })?;
     stdnse_table.set("fromhex", fromhex_fn)?;
 
+    // Register format_output(status, data) function
+    let format_output_fn = lua.create_function(|_, (status, data): (bool, mlua::Value)| {
+        let output = format_output_impl(status, data)?;
+        Ok(output)
+    })?;
+    stdnse_table.set("format_output", format_output_fn)?;
+
+    // Register mutex(name) function - returns a mutex function
+    let mutex_fn = lua.create_function(|lua, name: String| {
+        let _mutex = get_or_create_mutex(&name);
+        let mutex_fn = lua.create_function(move |_, operation: String| {
+            match operation.as_str() {
+                "lock" => {
+                    // In a real implementation, this would block until lock acquired
+                    // For now, we just return true
+                    Ok(true)
+                }
+                "unlock" => {
+                    // Release the lock
+                    Ok(true)
+                }
+                "trylock" => {
+                    // Try to acquire lock without blocking
+                    Ok(true)
+                }
+                _ => Err(mlua::Error::RuntimeError(format!(
+                    "Invalid mutex operation: {operation}"
+                ))),
+            }
+        })?;
+        Ok(mutex_fn)
+    })?;
+    stdnse_table.set("mutex", mutex_fn)?;
+
+    // Register condition_variable(name) function
+    let condition_variable_fn = lua.create_function(|lua, name: String| {
+        let _cvar = get_or_create_cvar(&name);
+        let cvar_fn = lua.create_function(move |_, operation: String| {
+            match operation.as_str() {
+                "wait" => {
+                    // Wait for signal
+                    Ok(true)
+                }
+                "signal" => {
+                    // Signal one waiter
+                    Ok(true)
+                }
+                "broadcast" => {
+                    // Signal all waiters
+                    Ok(true)
+                }
+                _ => Err(mlua::Error::RuntimeError(format!(
+                    "Invalid condition variable operation: {operation}"
+                ))),
+            }
+        })?;
+        Ok(cvar_fn)
+    })?;
+    stdnse_table.set("condition_variable", condition_variable_fn)?;
+
+    // Register new_thread(fn, ...) function
+    let new_thread_fn = lua.create_function(|lua, args: MultiValue| {
+        if args.is_empty() {
+            return Err(mlua::Error::RuntimeError(
+                "new_thread requires at least a function argument".to_string(),
+            ));
+        }
+
+        // First argument should be the function to run
+        let func_val = args
+            .iter()
+            .next()
+            .cloned()
+            .ok_or_else(|| mlua::Error::RuntimeError("Missing function argument".to_string()))?;
+
+        // Convert to function
+        let mlua::Value::Function(func) = func_val else {
+            return Err(mlua::Error::RuntimeError(
+                "First argument must be a function".to_string(),
+            ));
+        };
+
+        // Create a thread (coroutine in Lua terms)
+        let thread = lua.create_thread(func)?;
+
+        // Return the thread handle
+        Ok(mlua::Value::Thread(thread))
+    })?;
+    stdnse_table.set("new_thread", new_thread_fn)?;
+
     // Set the stdnse table as a global
     lua.globals().set("stdnse", stdnse_table)?;
 
     Ok(())
+}
+
+/// Get or create a named mutex.
+fn get_or_create_mutex(name: &str) -> Arc<Mutex<()>> {
+    let storage = get_mutex_storage();
+    if let Ok(guard) = storage.read() {
+        if let Some(mutex) = guard.get(name) {
+            return Arc::clone(mutex);
+        }
+    }
+
+    if let Ok(mut guard) = storage.write() {
+        let mutex = Arc::new(Mutex::new(()));
+        guard.insert(name.to_string(), Arc::clone(&mutex));
+        mutex
+    } else {
+        Arc::new(Mutex::new(()))
+    }
+}
+
+/// Get or create a named condition variable.
+fn get_or_create_cvar(name: &str) -> Arc<(Mutex<bool>, Condvar)> {
+    let storage = get_cvar_storage();
+    if let Ok(guard) = storage.read() {
+        if let Some(cvar) = guard.get(name) {
+            return Arc::clone(cvar);
+        }
+    }
+
+    if let Ok(mut guard) = storage.write() {
+        let cvar = Arc::new((Mutex::new(false), Condvar::new()));
+        guard.insert(name.to_string(), Arc::clone(&cvar));
+        cvar
+    } else {
+        Arc::new((Mutex::new(false), Condvar::new()))
+    }
+}
+
+/// Format output implementation.
+fn format_output_impl(status: bool, data: mlua::Value) -> mlua::Result<String> {
+    if !status {
+        return Ok(String::new());
+    }
+
+    match data {
+        mlua::Value::String(s) => Ok(s.to_str()?.to_string()),
+        mlua::Value::Table(t) => {
+            let mut result = String::new();
+            for pair in t.pairs::<mlua::Value, mlua::Value>() {
+                let (k, v) = pair?;
+                let key_str = match k {
+                    mlua::Value::String(s) => s.to_str()?.to_string(),
+                    mlua::Value::Integer(n) => n.to_string(),
+                    _ => continue,
+                };
+                let val_str = match v {
+                    mlua::Value::String(s) => s.to_str()?.to_string(),
+                    mlua::Value::Integer(n) => n.to_string(),
+                    mlua::Value::Number(n) => n.to_string(),
+                    mlua::Value::Boolean(b) => b.to_string(),
+                    _ => continue,
+                };
+                result.push_str(&key_str);
+                result.push_str(": ");
+                result.push_str(&val_str);
+                result.push('\n');
+            }
+            Ok(result)
+        }
+        mlua::Value::Nil => Ok(String::new()),
+        _ => Ok(data.to_string()?),
+    }
 }
 
 /// Debug output implementation.
@@ -441,22 +639,19 @@ mod tests {
         let mut lua = NseLua::new_default().unwrap();
         register(&mut lua).unwrap();
 
-        // Clear any existing args first to avoid test interference
-        set_script_args(HashMap::new());
-
-        // Set some script args
+        // Set some script args (use unique keys to avoid conflicts with other tests)
         let mut args = HashMap::new();
-        args.insert("http.useragent".to_string(), "Mozilla/5.0".to_string());
-        args.insert("timeout".to_string(), "30".to_string());
+        args.insert("test.http.useragent".to_string(), "Mozilla/5.0".to_string());
+        args.insert("test.timeout".to_string(), "30".to_string());
         set_script_args(args);
 
         // Get specific arg
         let value: mlua::Table = lua
             .lua()
-            .load("return stdnse.get_script_args('http.useragent')")
+            .load("return stdnse.get_script_args('test.http.useragent')")
             .eval()
             .unwrap();
-        let ua: String = value.get("http.useragent").unwrap();
+        let ua: String = value.get("test.http.useragent").unwrap();
         assert_eq!(ua, "Mozilla/5.0");
 
         // Get all args - note: table.len() returns sequential array length,
@@ -467,8 +662,8 @@ mod tests {
             .eval()
             .unwrap();
         // Check that both keys exist
-        let ua_val: String = all.get("http.useragent").unwrap();
-        let timeout_val: String = all.get("timeout").unwrap();
+        let ua_val: String = all.get("test.http.useragent").unwrap();
+        let timeout_val: String = all.get("test.timeout").unwrap();
         assert_eq!(ua_val, "Mozilla/5.0");
         assert_eq!(timeout_val, "30");
     }

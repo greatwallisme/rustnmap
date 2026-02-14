@@ -142,6 +142,9 @@ impl ScriptDatabase {
             script.required_version = Some(Self::clean_string_literal(&v));
         }
 
+        // Extract function sources
+        script.extract_functions();
+
         Ok(script)
     }
 
@@ -366,6 +369,138 @@ impl ScriptDatabase {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.scripts.is_empty()
+    }
+
+    /// Resolve script dependencies and return scripts in dependency order.
+    ///
+    /// Uses topological sort to ensure dependencies are loaded before dependent scripts.
+    /// Detects circular dependencies and returns an error if found.
+    ///
+    /// # Arguments
+    ///
+    /// * `script_ids` - IDs of scripts to resolve dependencies for
+    ///
+    /// # Returns
+    ///
+    /// Ordered list of script IDs including dependencies.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a dependency is missing or circular.
+    pub fn resolve_dependencies(&self, script_ids: &[String]) -> Result<Vec<String>> {
+        let mut resolved = Vec::new();
+        let mut visited = std::collections::HashSet::new();
+        let mut temp_mark = std::collections::HashSet::new();
+
+        for id in script_ids {
+            self.visit_dependency(id, &mut visited, &mut temp_mark, &mut resolved)?;
+        }
+
+        Ok(resolved)
+    }
+
+    /// Visit a script during dependency resolution (DFS with cycle detection).
+    fn visit_dependency(
+        &self,
+        id: &str,
+        visited: &mut std::collections::HashSet<String>,
+        temp_mark: &mut std::collections::HashSet<String>,
+        resolved: &mut Vec<String>,
+    ) -> Result<()> {
+        if temp_mark.contains(id) {
+            return Err(Error::CircularDependency(id.to_string()));
+        }
+
+        if visited.contains(id) {
+            return Ok(());
+        }
+
+        temp_mark.insert(id.to_string());
+
+        // Get dependencies for this script
+        if let Some(script) = self.scripts.get(id) {
+            for dep in &script.dependencies {
+                self.visit_dependency(dep, visited, temp_mark, resolved)?;
+            }
+        } else {
+            return Err(Error::MissingDependency(id.to_string(), "unknown".to_string()));
+        }
+
+        temp_mark.remove(id);
+        visited.insert(id.to_string());
+        resolved.push(id.to_string());
+
+        Ok(())
+    }
+
+    /// Get scripts that should run against a specific port based on portrule.
+    ///
+    /// # Arguments
+    ///
+    /// * `port` - Port number
+    /// * `protocol` - Protocol (tcp/udp)
+    /// * `state` - Port state
+    /// * `service` - Service name (optional)
+    ///
+    /// # Returns
+    ///
+    /// Vector of scripts that have matching portrules.
+    #[must_use]
+    pub fn scripts_for_port(
+        &self,
+        port: u16,
+        _protocol: &str,
+        _state: &str,
+        service: Option<&str>,
+    ) -> Vec<&NseScript> {
+        self.scripts
+            .values()
+            .filter(|s| s.has_portrule())
+            .filter(|s| {
+                // Basic port matching - in a full implementation,
+                // this would evaluate the actual portrule function
+                if let Some(service_name) = service {
+                    // Check if script ID or dependencies suggest it matches this service
+                    let id_lower = s.id.to_lowercase();
+                    let service_lower = service_name.to_lowercase();
+                    id_lower.contains(&service_lower)
+                        || Self::port_matches_common_service(port, &id_lower)
+                } else {
+                    Self::port_matches_common_service(port, &s.id.to_lowercase())
+                }
+            })
+            .collect()
+    }
+
+    /// Check if a port matches common service patterns based on script ID.
+    fn port_matches_common_service(port: u16, script_id: &str) -> bool {
+        let service_ports: std::collections::HashMap<&str, &[u16]> = [
+            ("http", &[80u16, 443, 8080, 8443, 8888][..]),
+            ("ssh", &[22u16][..]),
+            ("ftp", &[21u16, 990][..]),
+            ("smtp", &[25u16, 465, 587][..]),
+            ("dns", &[53u16, 853][..]),
+            ("pop3", &[110u16, 995][..]),
+            ("imap", &[143u16, 993][..]),
+            ("telnet", &[23u16][..]),
+            ("mysql", &[3306u16][..]),
+            ("pgsql", &[5432u16][..]),
+            ("rdp", &[3389u16][..]),
+            ("vnc", &[5900u16, 5901, 5902][..]),
+            ("ldap", &[389u16, 636][..]),
+            ("smb", &[445u16, 139][..]),
+            ("snmp", &[161u16][..]),
+        ]
+        .into_iter()
+        .collect();
+
+        for (service, ports) in service_ports {
+            if script_id.contains(service) && ports.contains(&port) {
+                return true;
+            }
+        }
+
+        false
     }
 }
 

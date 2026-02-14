@@ -164,6 +164,15 @@ pub struct NseScript {
 
     /// Script arguments (default values).
     pub arguments: HashMap<String, String>,
+
+    /// Hostrule function source code (if present).
+    pub hostrule_source: Option<String>,
+
+    /// Portrule function source code (if present).
+    pub portrule_source: Option<String>,
+
+    /// Action function source code.
+    pub action_source: Option<String>,
 }
 
 impl NseScript {
@@ -181,6 +190,9 @@ impl NseScript {
             file_path,
             source,
             arguments: HashMap::new(),
+            hostrule_source: None,
+            portrule_source: None,
+            action_source: None,
         }
     }
 
@@ -208,22 +220,110 @@ impl NseScript {
     /// Check if the script has a hostrule.
     #[must_use]
     pub fn has_hostrule(&self) -> bool {
-        self.source.contains("hostrule")
-            && (self.source.contains("hostrule =") || self.source.contains("function hostrule"))
+        self.hostrule_source.is_some()
+            || (self.source.contains("hostrule")
+                && (self.source.contains("hostrule =") || self.source.contains("function hostrule")))
     }
 
     /// Check if the script has a portrule.
     #[must_use]
     pub fn has_portrule(&self) -> bool {
-        self.source.contains("portrule")
-            && (self.source.contains("portrule =") || self.source.contains("function portrule"))
+        self.portrule_source.is_some()
+            || (self.source.contains("portrule")
+                && (self.source.contains("portrule =") || self.source.contains("function portrule")))
     }
 
     /// Check if the script has an action function.
     #[must_use]
     pub fn has_action(&self) -> bool {
-        self.source.contains("action")
-            && (self.source.contains("action =") || self.source.contains("function action"))
+        self.action_source.is_some()
+            || (self.source.contains("action")
+                && (self.source.contains("action =") || self.source.contains("function action")))
+    }
+
+    /// Extract rule and action function source code from script.
+    ///
+    /// This should be called after parsing to populate the function sources.
+    pub fn extract_functions(&mut self) {
+        self.hostrule_source = Self::extract_function(&self.source, "hostrule");
+        self.portrule_source = Self::extract_function(&self.source, "portrule");
+        self.action_source = Self::extract_function(&self.source, "action");
+    }
+
+    /// Extract a function definition from Lua source.
+    fn extract_function(source: &str, name: &str) -> Option<String> {
+        // Try to find function definition: "name = function(...)" or "function name(...)"
+        let patterns = [
+            format!("{name} = function"),
+            format!("function {name}"),
+        ];
+
+        for pattern in &patterns {
+            if let Some(start_pos) = source.find(pattern) {
+                // Find the complete function body
+                let func_start = start_pos;
+                let rest = &source[func_start..];
+
+                // Count braces to find function end
+                let mut brace_count = 0;
+                let mut in_string = false;
+                let mut string_char = '\0';
+                let found_first_brace = false;
+
+                for (i, c) in rest.char_indices() {
+                    if in_string {
+                        if c == string_char {
+                            in_string = false;
+                        } else if c == '\\' {
+                            // Skip escaped character
+                        }
+                    } else if c == '"' || c == '\'' || c == '[' {
+                        in_string = true;
+                        string_char = c;
+                        if c == '[' {
+                            // Handle long strings [[...]]
+                            if rest[i..].starts_with("[[") {
+                                // Find closing ]]
+                                if rest[i + 2..].contains("]]") {
+                                    // Skip to after ]]
+                                }
+                            }
+                        }
+                    } else if c == '{' || c == '(' {
+                        // Lua tables or function calls - not relevant for function body
+                    } else if c == '}' {
+                        if found_first_brace {
+                            brace_count -= 1;
+                            if brace_count == 0 {
+                                // Found end of function
+                                return Some(rest[..=i].to_string());
+                            }
+                        }
+                    } else if c == 'e' && rest[i..].starts_with("end")
+                        && !found_first_brace
+                    {
+                        // Check if this is a standalone "end"
+                        let after_end = i + 3;
+                        if after_end <= rest.len() {
+                            let after = &rest[after_end..];
+                            if after.starts_with('\n')
+                                || after.starts_with('\r')
+                                || after.starts_with(' ')
+                                || after.starts_with('\t')
+                                || after.is_empty()
+                            {
+                                return Some(rest[..after_end].trim().to_string());
+                            }
+                        }
+                    }
+                }
+
+                // If we couldn't find a proper end, return what we have
+                return Some(rest.to_string());
+            }
+        }
+
+        None
     }
 }
 
