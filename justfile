@@ -3,7 +3,7 @@ init:
     #!/usr/bin/env bash
     set -euo pipefail
 
-    PROFILE_DIR="$HOME/Private/claude_profile/.claude"
+    PROFILE_DIR="$HOME/project/claude_profile/.claude"
     PROJECT_DIR="$(pwd)/.claude"
 
     echo "======================================"

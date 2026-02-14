@@ -286,15 +286,12 @@ mod tests {
 
     #[test]
     fn test_requires_root() {
-        let local_addr = Ipv4Addr::new(127, 0, 0, 1);
+        let local_addr = Ipv4Addr::LOCALHOST;
         let config = ScanConfig::default();
 
         // Test that scanner creation requires root
-        match UdpScanner::new(local_addr, config) {
-            Ok(scanner) => assert!(scanner.requires_root()),
-            Err(_) => {
-                // Expected if not running as root
-            }
+        if let Ok(scanner) = UdpScanner::new(local_addr, config) { assert!(scanner.requires_root()) } else {
+            // Expected if not running as root
         }
     }
 

@@ -426,7 +426,7 @@ author = "Test Author"
         let input = r#"{"vuln", "invalidcat"}"#;
         let result = ScriptDatabase::parse_categories(input);
 
-        assert!(result.is_err());
+        result.unwrap_err();
     }
 
     #[test]

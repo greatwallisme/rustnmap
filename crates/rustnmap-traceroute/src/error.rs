@@ -90,18 +90,18 @@ mod tests {
         let err = TracerouteError::InvalidConfig {
             reason: "test".to_string(),
         };
-        assert_eq!(format!("{}", err), "Invalid configuration: test");
+        assert_eq!(format!("{err}"), "Invalid configuration: test");
     }
 
     #[test]
     fn test_timeout_error() {
         let err = TracerouteError::Timeout;
-        assert_eq!(format!("{}", err), "Probe timed out");
+        assert_eq!(format!("{err}"), "Probe timed out");
     }
 
     #[test]
     fn test_permission_denied_error() {
         let err = TracerouteError::PermissionDenied;
-        assert!(format!("{}", err).contains("Permission denied"));
+        assert!(format!("{err}").contains("Permission denied"));
     }
 }

@@ -441,7 +441,7 @@ mod tests {
     fn test_register_comm_library() {
         let mut lua = NseLua::new_default().unwrap();
         let result = register(&mut lua);
-        assert!(result.is_ok());
+        result.unwrap();
 
         // Check that comm table exists
         let comm: mlua::Table = lua.lua().globals().get("comm").unwrap();

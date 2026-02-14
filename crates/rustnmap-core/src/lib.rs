@@ -100,6 +100,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::assertions_on_constants, reason = "compile-time constant sanity check")]
     fn test_constants_are_positive() {
         assert!(MAX_CONCURRENT_HOSTS > 0);
         assert!(MAX_CONCURRENT_PORTS > 0);

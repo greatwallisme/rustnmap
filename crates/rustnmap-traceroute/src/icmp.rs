@@ -263,7 +263,7 @@ mod tests {
     #[test]
     fn test_icmp_traceroute_new() {
         let config = TracerouteConfig::new();
-        let local_addr = Ipv4Addr::new(127, 0, 0, 1);
+        let local_addr = Ipv4Addr::LOCALHOST;
 
         // May fail if not running as root
         let result = IcmpTraceroute::new(config, local_addr);
@@ -276,7 +276,7 @@ mod tests {
     #[test]
     fn test_sequence_increment() {
         let config = TracerouteConfig::new();
-        let local_addr = Ipv4Addr::new(127, 0, 0, 1);
+        let local_addr = Ipv4Addr::LOCALHOST;
 
         // May fail if not running as root
         if let Ok(mut traceroute) = IcmpTraceroute::new(config, local_addr) {

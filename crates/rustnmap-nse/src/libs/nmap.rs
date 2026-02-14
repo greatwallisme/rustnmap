@@ -357,7 +357,7 @@ mod tests {
     fn test_register_nmap_library() {
         let mut lua = NseLua::new_default().unwrap();
         let result = register(&mut lua);
-        assert!(result.is_ok());
+        result.unwrap();
 
         // Check that nmap table exists
         let nmap: Table = lua.lua().globals().get("nmap").unwrap();

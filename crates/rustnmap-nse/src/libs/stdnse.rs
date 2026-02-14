@@ -268,7 +268,7 @@ mod tests {
     fn test_register_stdnse_library() {
         let mut lua = NseLua::new_default().unwrap();
         let result = register(&mut lua);
-        assert!(result.is_ok());
+        result.unwrap();
 
         // Check that stdnse table exists
         let stdnse: mlua::Table = lua.lua().globals().get("stdnse").unwrap();
@@ -289,7 +289,7 @@ mod tests {
             .unwrap();
 
         assert!(seconds > 0);
-        assert!(microseconds >= 0 && microseconds < 1_000_000);
+        assert!((0..1_000_000).contains(&microseconds));
     }
 
     #[test]
@@ -319,7 +319,7 @@ mod tests {
             .eval()
             .unwrap();
         assert_eq!(s1.len(), 10);
-        assert!(s1.chars().all(|c| c.is_alphanumeric()));
+        assert!(s1.chars().all(char::is_alphanumeric));
 
         // Test with custom charset
         let s2: String = lua
@@ -407,12 +407,12 @@ mod tests {
         let original = "Hello, World!";
         let hex: String = lua
             .lua()
-            .load(&format!("return stdnse.tohex('{original}')"))
+            .load(format!("return stdnse.tohex('{original}')"))
             .eval()
             .unwrap();
         let decoded: Vec<u8> = lua
             .lua()
-            .load(&format!("return stdnse.fromhex('{hex}')"))
+            .load(format!("return stdnse.fromhex('{hex}')"))
             .eval()
             .unwrap();
         assert_eq!(String::from_utf8(decoded).unwrap(), original);

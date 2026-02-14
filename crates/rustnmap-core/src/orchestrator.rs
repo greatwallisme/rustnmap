@@ -847,9 +847,11 @@ mod tests {
 
     #[test]
     fn test_scan_pipeline_from_config() {
-        let mut config = ScanConfig::default();
-        config.service_detection = true;
-        config.os_detection = true;
+        let config = ScanConfig {
+            service_detection: true,
+            os_detection: true,
+            ..ScanConfig::default()
+        };
 
         let pipeline = ScanPipeline::from_config(&config);
         assert!(pipeline.is_enabled(ScanPhase::ServiceDetection));

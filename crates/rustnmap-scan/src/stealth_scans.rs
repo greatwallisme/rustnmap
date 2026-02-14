@@ -1015,14 +1015,11 @@ mod tests {
 
     #[test]
     fn test_fin_scanner_requires_root() {
-        let local_addr = Ipv4Addr::new(127, 0, 0, 1);
+        let local_addr = Ipv4Addr::LOCALHOST;
         let config = ScanConfig::default();
 
-        match TcpFinScanner::new(local_addr, config) {
-            Ok(scanner) => assert!(scanner.requires_root()),
-            Err(_) => {
-                // Expected if not running as root
-            }
+        if let Ok(scanner) = TcpFinScanner::new(local_addr, config) { assert!(scanner.requires_root()) } else {
+            // Expected if not running as root
         }
     }
 
@@ -1039,14 +1036,11 @@ mod tests {
 
     #[test]
     fn test_null_scanner_requires_root() {
-        let local_addr = Ipv4Addr::new(127, 0, 0, 1);
+        let local_addr = Ipv4Addr::LOCALHOST;
         let config = ScanConfig::default();
 
-        match TcpNullScanner::new(local_addr, config) {
-            Ok(scanner) => assert!(scanner.requires_root()),
-            Err(_) => {
-                // Expected if not running as root
-            }
+        if let Ok(scanner) = TcpNullScanner::new(local_addr, config) { assert!(scanner.requires_root()) } else {
+            // Expected if not running as root
         }
     }
 
@@ -1063,14 +1057,11 @@ mod tests {
 
     #[test]
     fn test_xmas_scanner_requires_root() {
-        let local_addr = Ipv4Addr::new(127, 0, 0, 1);
+        let local_addr = Ipv4Addr::LOCALHOST;
         let config = ScanConfig::default();
 
-        match TcpXmasScanner::new(local_addr, config) {
-            Ok(scanner) => assert!(scanner.requires_root()),
-            Err(_) => {
-                // Expected if not running as root
-            }
+        if let Ok(scanner) = TcpXmasScanner::new(local_addr, config) { assert!(scanner.requires_root()) } else {
+            // Expected if not running as root
         }
     }
 
@@ -1087,14 +1078,11 @@ mod tests {
 
     #[test]
     fn test_ack_scanner_requires_root() {
-        let local_addr = Ipv4Addr::new(127, 0, 0, 1);
+        let local_addr = Ipv4Addr::LOCALHOST;
         let config = ScanConfig::default();
 
-        match TcpAckScanner::new(local_addr, config) {
-            Ok(scanner) => assert!(scanner.requires_root()),
-            Err(_) => {
-                // Expected if not running as root
-            }
+        if let Ok(scanner) = TcpAckScanner::new(local_addr, config) { assert!(scanner.requires_root()) } else {
+            // Expected if not running as root
         }
     }
 
@@ -1111,14 +1099,11 @@ mod tests {
 
     #[test]
     fn test_maimon_scanner_requires_root() {
-        let local_addr = Ipv4Addr::new(127, 0, 0, 1);
+        let local_addr = Ipv4Addr::LOCALHOST;
         let config = ScanConfig::default();
 
-        match TcpMaimonScanner::new(local_addr, config) {
-            Ok(scanner) => assert!(scanner.requires_root()),
-            Err(_) => {
-                // Expected if not running as root
-            }
+        if let Ok(scanner) = TcpMaimonScanner::new(local_addr, config) { assert!(scanner.requires_root()) } else {
+            // Expected if not running as root
         }
     }
 
@@ -1133,11 +1118,7 @@ mod tests {
     fn test_generate_sequence_number() {
         let seq1 = TcpFinScanner::generate_sequence_number();
         let seq2 = TcpFinScanner::generate_sequence_number();
-        let diff = if seq1 > seq2 {
-            seq1 - seq2
-        } else {
-            seq2 - seq1
-        };
+        let diff = seq1.abs_diff(seq2);
         assert!(
             diff < 1_000_000,
             "Sequence numbers should be close in value"

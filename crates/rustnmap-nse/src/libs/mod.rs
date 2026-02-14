@@ -59,7 +59,7 @@ mod tests {
     fn test_register_all() {
         let mut lua = NseLua::new_default().unwrap();
         let result = register_all(&mut lua);
-        assert!(result.is_ok());
+        result.unwrap();
 
         // Verify nmap library is registered
         let nmap: mlua::Value = lua.lua().globals().get("nmap").unwrap();

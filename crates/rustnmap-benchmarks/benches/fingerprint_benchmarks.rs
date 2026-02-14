@@ -26,6 +26,7 @@ fn bench_os_probe_generation(c: &mut Criterion) {
     // T1-T7 probes are the standard Nmap OS detection probes
     group.throughput(Throughput::Elements(7));
     group.bench_function("generate_t1_t7_probes", |b| {
+        #[allow(clippy::vec_init_then_push)]
         b.iter(|| {
             let mut packets = Vec::with_capacity(7);
 
@@ -250,7 +251,7 @@ Match ftp m|^220 ([\w\s]+)| p/$1/
 
     group.bench_function("parse_small_database", |b| {
         b.iter(|| {
-            let db = ProbeDatabase::parse(&black_box(sample_db)).unwrap();
+            let db = ProbeDatabase::parse(black_box(sample_db)).unwrap();
             black_box(db);
         });
     });

@@ -390,7 +390,7 @@ mod tests {
     fn test_register_shortport_library() {
         let mut lua = NseLua::new_default().unwrap();
         let result = register(&mut lua);
-        assert!(result.is_ok());
+        result.unwrap();
 
         // Check that shortport table exists
         let shortport: Table = lua.lua().globals().get("shortport").unwrap();

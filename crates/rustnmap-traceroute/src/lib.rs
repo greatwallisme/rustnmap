@@ -540,25 +540,25 @@ mod tests {
     #[test]
     fn test_traceroute_new() {
         let config = TracerouteConfig::new();
-        let local_addr = Ipv4Addr::new(127, 0, 0, 1);
+        let local_addr = Ipv4Addr::LOCALHOST;
         let tracer = Traceroute::new(config, local_addr);
-        assert!(tracer.is_ok());
+        tracer.unwrap();
     }
 
     #[test]
     fn test_traceroute_invalid_max_hops() {
         let config = TracerouteConfig::new().with_max_hops(0);
-        let local_addr = Ipv4Addr::new(127, 0, 0, 1);
+        let local_addr = Ipv4Addr::LOCALHOST;
         let tracer = Traceroute::new(config, local_addr);
-        assert!(tracer.is_err());
+        tracer.unwrap_err();
     }
 
     #[test]
     fn test_traceroute_invalid_probes_per_hop() {
         let config = TracerouteConfig::new().with_probes_per_hop(0);
-        let local_addr = Ipv4Addr::new(127, 0, 0, 1);
+        let local_addr = Ipv4Addr::LOCALHOST;
         let tracer = Traceroute::new(config, local_addr);
-        assert!(tracer.is_err());
+        tracer.unwrap_err();
     }
 
     #[test]
@@ -601,6 +601,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::float_cmp, reason = "comparing exact f32 values set in test")]
     fn test_hop_info_loss() {
         let hop = HopInfo::new(1, Some(Ipv4Addr::new(192, 168, 1, 1)), None, vec![], 0.5);
         assert_eq!(hop.loss(), 0.5);

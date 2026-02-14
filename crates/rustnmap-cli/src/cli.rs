@@ -846,12 +846,10 @@ mod tests {
         let ports = match result {
             Ok(PortSpec::List(p)) => p,
             Ok(_) => {
-                assert!(false, "Expected PortSpec::List");
-                return;
+                panic!("Expected PortSpec::List");
             }
             Err(_) => {
-                assert!(false, "Parse failed");
-                return;
+                panic!("Parse failed");
             }
         };
         assert_eq!(ports, vec![80]);
@@ -864,12 +862,10 @@ mod tests {
         let ports = match result {
             Ok(PortSpec::List(p)) => p,
             Ok(_) => {
-                assert!(false, "Expected PortSpec::List");
-                return;
+                panic!("Expected PortSpec::List");
             }
             Err(_) => {
-                assert!(false, "Parse failed");
-                return;
+                panic!("Parse failed");
             }
         };
         assert_eq!(ports, vec![22, 80, 443]);
@@ -882,12 +878,10 @@ mod tests {
         let (start, end) = match result {
             Ok(PortSpec::Range { start, end }) => (start, end),
             Ok(_) => {
-                assert!(false, "Expected PortSpec::Range");
-                return;
+                panic!("Expected PortSpec::Range");
             }
             Err(_) => {
-                assert!(false, "Parse failed");
-                return;
+                panic!("Parse failed");
             }
         };
         assert_eq!(start, 1);

@@ -537,11 +537,11 @@ end
     fn test_script_engine_execute_with_return() {
         let mut db = ScriptDatabase::new();
 
-        let source = r#"
+        let source = r"
 action = function(host)
     return 42
 end
-"#
+"
         .to_string();
 
         let script = NseScript::new("test-return", std::path::PathBuf::from("/test.nse"), source);

@@ -134,11 +134,13 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::assertions_on_constants, reason = "compile-time constant sanity check")]
     fn test_memory_limit_positive() {
         assert!(MAX_MEMORY_BYTES > 0, "Memory limit must be positive");
     }
 
     #[test]
+    #[allow(clippy::assertions_on_constants, reason = "compile-time constant sanity check")]
     fn test_concurrent_limit_positive() {
         assert!(
             MAX_CONCURRENT_SCRIPTS > 0,

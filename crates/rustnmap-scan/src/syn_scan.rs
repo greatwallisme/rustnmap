@@ -264,15 +264,12 @@ mod tests {
 
     #[test]
     fn test_requires_root() {
-        let local_addr = Ipv4Addr::new(127, 0, 0, 1);
+        let local_addr = Ipv4Addr::LOCALHOST;
         let config = ScanConfig::default();
 
         // Test that scanner creation requires root
-        match TcpSynScanner::new(local_addr, config) {
-            Ok(scanner) => assert!(scanner.requires_root()),
-            Err(_) => {
-                // Expected if not running as root
-            }
+        if let Ok(scanner) = TcpSynScanner::new(local_addr, config) { assert!(scanner.requires_root()) } else {
+            // Expected if not running as root
         }
     }
 
@@ -289,11 +286,7 @@ mod tests {
         let seq2 = TcpSynScanner::generate_sequence_number();
         // Sequence numbers are based on time, so they should be close
         // but not necessarily equal due to time passing
-        let diff = if seq1 > seq2 {
-            seq1 - seq2
-        } else {
-            seq2 - seq1
-        };
+        let diff = seq1.abs_diff(seq2);
         assert!(
             diff < 1_000_000,
             "Sequence numbers should be close in value"

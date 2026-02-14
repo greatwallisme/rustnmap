@@ -497,13 +497,13 @@ mod tests {
     #[test]
     fn test_evasion_config_builder_invalid_port() {
         let result = EvasionConfig::builder().source_port(0).build();
-        assert!(result.is_err());
+        result.unwrap_err();
     }
 
     #[test]
     fn test_evasion_config_builder_invalid_ttl() {
         let result = EvasionConfig::builder().ttl(0).build();
-        assert!(result.is_err());
+        result.unwrap_err();
     }
 
     #[test]
@@ -512,7 +512,7 @@ mod tests {
             .decoys_with_position(vec![], 0)
             .build();
 
-        assert!(result.is_err());
+        result.unwrap_err();
     }
 
     #[test]

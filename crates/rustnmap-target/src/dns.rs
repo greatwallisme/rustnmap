@@ -122,14 +122,14 @@ mod tests {
     async fn test_resolve_invalid_hostname() {
         let resolver = DnsResolver::new().unwrap();
         let result = resolver.resolve("this-should-not-exist.invalid-tld").await;
-        assert!(result.is_err());
+        result.unwrap_err();
     }
 
     #[tokio::test]
     async fn test_reverse_lookup_localhost() {
         let resolver = DnsResolver::new().unwrap();
         let hostname = resolver
-            .reverse_lookup(IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1)))
+            .reverse_lookup(IpAddr::V4(std::net::Ipv4Addr::LOCALHOST))
             .await
             .unwrap();
 

@@ -324,7 +324,7 @@ mod tests {
     #[test]
     fn test_nse_lua_new_default() {
         let nse_lua = NseLua::new_default();
-        assert!(nse_lua.is_ok());
+        nse_lua.unwrap();
     }
 
     #[test]
@@ -332,7 +332,7 @@ mod tests {
         let mut nse_lua = NseLua::new_default().unwrap();
 
         let result = nse_lua.load_script("return 42", "test");
-        assert!(result.is_ok());
+        result.unwrap();
     }
 
     #[test]
@@ -340,7 +340,7 @@ mod tests {
         let mut nse_lua = NseLua::new_default().unwrap();
 
         let result = nse_lua.set_global("test_var", Value::Integer(123));
-        assert!(result.is_ok());
+        result.unwrap();
 
         let value: Value = nse_lua.lua.globals().get("test_var").unwrap();
         assert!(matches!(value, Value::Integer(123)));
@@ -351,7 +351,7 @@ mod tests {
         let mut nse_lua = NseLua::new_default().unwrap();
 
         let result = nse_lua.register_function("add", |_: &Lua, (a, b): (i32, i32)| Ok(a + b));
-        assert!(result.is_ok());
+        result.unwrap();
 
         let func: mlua::Function = nse_lua.lua.globals().get("add").unwrap();
         let result: i32 = func.call((5, 3)).unwrap();
@@ -366,7 +366,7 @@ mod tests {
             "test_table",
             &[("key1", Value::Integer(1)), ("key2", Value::Integer(2))],
         );
-        assert!(result.is_ok());
+        result.unwrap();
 
         let table: mlua::Table = nse_lua.lua.globals().get("test_table").unwrap();
         let val1: Value = table.get("key1").unwrap();

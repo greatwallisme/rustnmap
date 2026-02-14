@@ -28,7 +28,7 @@ use rustnmap_output::models::PortState;
 
 /// Tests TCP SYN scan against open ports on localhost.
 ///
-/// This test requires root/CAP_NET_RAW privileges.
+/// This test requires `root/CAP_NET_RAW` privileges.
 #[tokio::test]
 #[ignore = "requires root/CAP_NET_RAW privileges"]
 async fn test_syn_scan_open_ports() {
@@ -67,7 +67,7 @@ async fn test_syn_scan_open_ports() {
 
 /// Tests TCP SYN scan filters out closed ports from results.
 ///
-/// This test requires root/CAP_NET_RAW privileges.
+/// This test requires `root/CAP_NET_RAW` privileges.
 /// Note: Closed ports are filtered from results by design (like Nmap).
 #[tokio::test]
 #[ignore = "requires root/CAP_NET_RAW privileges"]
@@ -90,7 +90,7 @@ async fn test_syn_scan_closed_ports_filtered() {
     if let Some(host) = result.hosts.first() {
         for port in &closed_ports {
             let port_found = host.ports.iter().any(|p| p.number == *port);
-            assert!(!port_found, "Closed port {} should not be in results", port);
+            assert!(!port_found, "Closed port {port} should not be in results");
         }
     }
 
@@ -144,7 +144,7 @@ async fn test_connect_scan_closed_ports_filtered() {
     if let Some(host) = result.hosts.first() {
         for port in &closed_ports {
             let port_found = host.ports.iter().any(|p| p.number == *port);
-            assert!(!port_found, "Closed port {} should not be in results", port);
+            assert!(!port_found, "Closed port {port} should not be in results");
         }
     }
 
@@ -156,7 +156,7 @@ async fn test_connect_scan_closed_ports_filtered() {
 
 /// Tests TCP SYN scan with mixed open and closed ports.
 ///
-/// This test requires root/CAP_NET_RAW privileges.
+/// This test requires `root/CAP_NET_RAW` privileges.
 /// Note: Only open ports appear in results; closed ports are filtered.
 #[tokio::test]
 #[ignore = "requires root/CAP_NET_RAW privileges"]
@@ -189,7 +189,7 @@ async fn test_syn_scan_mixed_ports() {
     if let Some(host) = result.hosts.first() {
         for port in &closed_ports {
             let port_found = host.ports.iter().any(|p| p.number == *port);
-            assert!(!port_found, "Closed port {} should not be in results", port);
+            assert!(!port_found, "Closed port {port} should not be in results");
         }
     }
 
@@ -228,7 +228,7 @@ async fn test_connect_scan_mixed_ports() {
     if let Some(host) = result.hosts.first() {
         for port in &closed_ports {
             let port_found = host.ports.iter().any(|p| p.number == *port);
-            assert!(!port_found, "Closed port {} should not be in results", port);
+            assert!(!port_found, "Closed port {port} should not be in results");
         }
     }
 
@@ -241,7 +241,7 @@ async fn test_connect_scan_mixed_ports() {
 
 /// Benchmarks TCP SYN scan performance.
 ///
-/// This test requires root/CAP_NET_RAW privileges.
+/// This test requires `root/CAP_NET_RAW` privileges.
 #[tokio::test]
 #[ignore = "requires root/CAP_NET_RAW privileges"]
 async fn test_syn_scan_performance() {
@@ -261,14 +261,13 @@ async fn test_syn_scan_performance() {
         .expect("Scan should complete successfully");
     let duration = start.elapsed();
 
-    println!("Scanned 100 ports in {:?}", duration);
+    println!("Scanned 100 ports in {duration:?}");
     println!("Found {} hosts with results", result.hosts.len());
 
     // Performance assertion: should complete within 10 seconds
     assert!(
         duration.as_secs() < 10,
-        "Scan took too long: {:?}",
-        duration
+        "Scan took too long: {duration:?}"
     );
 }
 
@@ -287,13 +286,12 @@ async fn test_connect_scan_performance() {
         .expect("Scan should complete successfully");
     let duration = start.elapsed();
 
-    println!("Scanned 50 ports in {:?}", duration);
+    println!("Scanned 50 ports in {duration:?}");
     println!("Found {} hosts with results", result.hosts.len());
 
     // Performance assertion: should complete within 30 seconds (connect scan is slower)
     assert!(
         duration.as_secs() < 30,
-        "Scan took too long: {:?}",
-        duration
+        "Scan took too long: {duration:?}"
     );
 }

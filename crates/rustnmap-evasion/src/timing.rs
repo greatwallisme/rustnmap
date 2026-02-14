@@ -396,9 +396,9 @@ mod tests {
 
     #[test]
     fn test_timing_parse_template_invalid() {
-        assert!(TimingController::parse_template("T6").is_err());
-        assert!(TimingController::parse_template("INVALID").is_err());
-        assert!(TimingController::parse_template("").is_err());
+        TimingController::parse_template("T6").unwrap_err();
+        TimingController::parse_template("INVALID").unwrap_err();
+        TimingController::parse_template("").unwrap_err();
     }
 
     #[test]

@@ -10,7 +10,7 @@ use rustnmap_traceroute::{
 };
 use std::time::Duration;
 
-/// Tests that TracerouteConfig can be created and modified correctly.
+/// Tests that `TracerouteConfig` can be created and modified correctly.
 #[test]
 fn test_traceroute_config_creation() {
     let config = TracerouteConfig::new()
@@ -32,27 +32,27 @@ fn test_traceroute_config_creation() {
 /// Tests that Traceroute can be created with different configurations.
 #[test]
 fn test_traceroute_creation() {
-    let local_addr = Ipv4Addr::new(127, 0, 0, 1);
+    let local_addr = Ipv4Addr::LOCALHOST;
 
     // Test UDP traceroute creation
     let udp_config = TracerouteConfig::new().with_probe_type(ProbeType::Udp);
     let tracer = Traceroute::new(udp_config, local_addr);
-    assert!(tracer.is_ok());
+    tracer.unwrap();
 
     // Test TCP SYN traceroute creation
     let tcp_syn_config = TracerouteConfig::new().with_probe_type(ProbeType::TcpSyn);
     let tracer = Traceroute::new(tcp_syn_config, local_addr);
-    assert!(tracer.is_ok());
+    tracer.unwrap();
 
     // Test TCP ACK traceroute creation
     let tcp_ack_config = TracerouteConfig::new().with_probe_type(ProbeType::TcpAck);
     let tracer = Traceroute::new(tcp_ack_config, local_addr);
-    assert!(tracer.is_ok());
+    tracer.unwrap();
 
     // Test ICMP traceroute creation
     let icmp_config = TracerouteConfig::new().with_probe_type(ProbeType::Icmp);
     let tracer = Traceroute::new(icmp_config, local_addr);
-    assert!(tracer.is_ok());
+    tracer.unwrap();
 }
 
 /// Tests that default configuration values are correct.
@@ -72,24 +72,24 @@ fn test_default_config_values() {
 /// Tests that invalid configurations are rejected.
 #[test]
 fn test_invalid_config_rejection() {
-    let local_addr = Ipv4Addr::new(127, 0, 0, 1);
+    let local_addr = Ipv4Addr::LOCALHOST;
 
     // Test max_hops = 0 is rejected
     let config = TracerouteConfig::new().with_max_hops(0);
     let result = Traceroute::new(config, local_addr);
-    assert!(result.is_err());
+    result.unwrap_err();
 
     // Test probes_per_hop = 0 is rejected
     let config = TracerouteConfig::new().with_probes_per_hop(0);
     let result = Traceroute::new(config, local_addr);
-    assert!(result.is_err());
+    result.unwrap_err();
 }
 
 /// Tests UDP traceroute creation (requires root).
 #[test]
 fn test_udp_traceroute_creation() {
     let config = TracerouteConfig::new();
-    let local_addr = Ipv4Addr::new(127, 0, 0, 1);
+    let local_addr = Ipv4Addr::LOCALHOST;
 
     // This may fail if not running as root
     let result = UdpTraceroute::new(config, local_addr);
@@ -101,7 +101,7 @@ fn test_udp_traceroute_creation() {
 #[test]
 fn test_tcp_syn_traceroute_creation() {
     let config = TracerouteConfig::new();
-    let local_addr = Ipv4Addr::new(127, 0, 0, 1);
+    let local_addr = Ipv4Addr::LOCALHOST;
 
     // This may fail if not running as root
     let result = TcpSynTraceroute::new(config, local_addr);
@@ -112,7 +112,7 @@ fn test_tcp_syn_traceroute_creation() {
 #[test]
 fn test_tcp_ack_traceroute_creation() {
     let config = TracerouteConfig::new();
-    let local_addr = Ipv4Addr::new(127, 0, 0, 1);
+    let local_addr = Ipv4Addr::LOCALHOST;
 
     // This may fail if not running as root
     let result = TcpAckTraceroute::new(config, local_addr);
@@ -123,7 +123,7 @@ fn test_tcp_ack_traceroute_creation() {
 #[test]
 fn test_icmp_traceroute_creation() {
     let config = TracerouteConfig::new();
-    let local_addr = Ipv4Addr::new(127, 0, 0, 1);
+    let local_addr = Ipv4Addr::LOCALHOST;
 
     // This may fail if not running as root
     let result = IcmpTraceroute::new(config, local_addr);
@@ -133,8 +133,9 @@ fn test_icmp_traceroute_creation() {
     }
 }
 
-/// Tests HopInfo creation and accessors.
+/// Tests `HopInfo` creation and accessors.
 #[test]
+#[allow(clippy::float_cmp, reason = "comparing exact f32 values set in test")]
 fn test_hop_info_creation() {
     let ip = Ipv4Addr::new(192, 168, 1, 1);
     let rtts = vec![
@@ -169,8 +170,9 @@ fn test_hop_info_creation() {
     assert_eq!(max, Duration::from_millis(12));
 }
 
-/// Tests HopInfo with no response.
+/// Tests `HopInfo` with no response.
 #[test]
+#[allow(clippy::float_cmp, reason = "comparing exact f32 values set in test")]
 fn test_hop_info_no_response() {
     let hop = HopInfo::new(3, None, None, vec![], 1.0);
 
@@ -181,7 +183,7 @@ fn test_hop_info_no_response() {
     assert!(hop.avg_rtt().is_none());
 }
 
-/// Tests ProbeResponse creation for different response types.
+/// Tests `ProbeResponse` creation for different response types.
 #[test]
 fn test_probe_response_types() {
     let ip = Ipv4Addr::new(192, 168, 1, 1);
@@ -208,7 +210,7 @@ fn test_probe_response_types() {
     assert!(unreachable.is_destination());
 }
 
-/// Tests ProbeType display formatting.
+/// Tests `ProbeType` display formatting.
 #[test]
 fn test_probe_type_display() {
     assert_eq!(format!("{}", ProbeType::Udp), "UDP");
@@ -217,11 +219,11 @@ fn test_probe_type_display() {
     assert_eq!(format!("{}", ProbeType::Icmp), "ICMP");
 }
 
-/// Tests TracerouteResult formatting by checking the Display implementation.
+/// Tests `TracerouteResult` formatting by checking the Display implementation.
 #[tokio::test]
 async fn test_traceroute_result_formatting() {
-    let local_addr = Ipv4Addr::new(127, 0, 0, 1);
-    let target = Ipv4Addr::new(127, 0, 0, 1);
+    let local_addr = Ipv4Addr::LOCALHOST;
+    let target = Ipv4Addr::LOCALHOST;
 
     let config = TracerouteConfig::new()
         .with_max_hops(1)
@@ -232,7 +234,7 @@ async fn test_traceroute_result_formatting() {
     if let Ok(tracer) = Traceroute::new(config, local_addr) {
         let result = tracer.trace(target).await;
         if let Ok(result) = result {
-            let formatted = format!("{}", result);
+            let formatted = format!("{result}");
             assert!(formatted.contains("traceroute to"));
             // The result should have either hop info or timeout markers
             assert!(!formatted.is_empty());
@@ -243,8 +245,8 @@ async fn test_traceroute_result_formatting() {
 /// Tests that all probe types can be used with Traceroute.
 #[tokio::test]
 async fn test_traceroute_with_all_probe_types() {
-    let local_addr = Ipv4Addr::new(127, 0, 0, 1);
-    let target = Ipv4Addr::new(127, 0, 0, 1);
+    let local_addr = Ipv4Addr::LOCALHOST;
+    let target = Ipv4Addr::LOCALHOST;
 
     // Test with UDP
     let udp_config = TracerouteConfig::new()
@@ -273,6 +275,7 @@ async fn test_traceroute_with_all_probe_types() {
 
 /// Tests that packet loss is calculated correctly.
 #[test]
+#[allow(clippy::float_cmp, reason = "comparing exact f32 values set in test")]
 fn test_packet_loss_calculation() {
     // No loss
     let hop = HopInfo::new(

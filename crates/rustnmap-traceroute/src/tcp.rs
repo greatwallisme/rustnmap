@@ -459,7 +459,7 @@ mod tests {
     #[test]
     fn test_tcp_syn_traceroute_new() {
         let config = TracerouteConfig::new();
-        let local_addr = Ipv4Addr::new(127, 0, 0, 1);
+        let local_addr = Ipv4Addr::LOCALHOST;
 
         // May fail if not running as root
         let result = TcpSynTraceroute::new(config, local_addr);
@@ -469,7 +469,7 @@ mod tests {
     #[test]
     fn test_tcp_ack_traceroute_new() {
         let config = TracerouteConfig::new();
-        let local_addr = Ipv4Addr::new(127, 0, 0, 1);
+        let local_addr = Ipv4Addr::LOCALHOST;
 
         // May fail if not running as root
         let result = TcpAckTraceroute::new(config, local_addr);
@@ -479,7 +479,7 @@ mod tests {
     #[test]
     fn test_generate_source_port() {
         let config = TracerouteConfig::new();
-        let local_addr = Ipv4Addr::new(127, 0, 0, 1);
+        let local_addr = Ipv4Addr::LOCALHOST;
 
         // May fail if not running as root
         if let Ok(traceroute) = TcpSynTraceroute::new(config, local_addr) {
@@ -492,7 +492,7 @@ mod tests {
     #[test]
     fn test_source_port_configured_syn() {
         let config = TracerouteConfig::new().with_source_port(12345);
-        let local_addr = Ipv4Addr::new(127, 0, 0, 1);
+        let local_addr = Ipv4Addr::LOCALHOST;
 
         // May fail if not running as root
         if let Ok(traceroute) = TcpSynTraceroute::new(config, local_addr) {
@@ -504,7 +504,7 @@ mod tests {
     #[test]
     fn test_source_port_configured_ack() {
         let config = TracerouteConfig::new().with_source_port(12345);
-        let local_addr = Ipv4Addr::new(127, 0, 0, 1);
+        let local_addr = Ipv4Addr::LOCALHOST;
 
         // May fail if not running as root
         if let Ok(traceroute) = TcpAckTraceroute::new(config, local_addr) {

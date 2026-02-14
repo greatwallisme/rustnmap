@@ -288,6 +288,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::float_cmp, reason = "comparing exact f32 values set in test")]
     fn test_hop_info_loss() {
         let hop = HopInfo::new(1, Some(Ipv4Addr::new(192, 168, 1, 1)), None, vec![], 0.5);
         assert_eq!(hop.loss(), 0.5);
@@ -309,7 +310,7 @@ mod tests {
             vec![Duration::from_millis(10)],
             0.0,
         );
-        let display = format!("{}", hop);
+        let display = format!("{hop}");
         assert!(display.contains("TTL: 1"));
         assert!(display.contains("192.168.1.1"));
         assert!(display.contains("router.local"));

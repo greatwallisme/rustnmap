@@ -333,7 +333,7 @@ mod tests {
             Ipv4Addr::new(10, 0, 0, 1),
             65000,
             443,
-            0xDEADBEEF,
+            0xDEAD_BEEF,
         );
 
         // Check IP version and IHL
@@ -367,7 +367,7 @@ mod tests {
             probe[tcp_offset + 6],
             probe[tcp_offset + 7],
         ]);
-        assert_eq!(seq, 0xDEADBEEF);
+        assert_eq!(seq, 0xDEAD_BEEF);
 
         // Check SYN flag is set
         assert!(probe[tcp_offset + 13] & 0x02 != 0);
@@ -402,7 +402,7 @@ mod tests {
                 assert_eq!(ack, 2000);
                 assert_eq!(window, 1024);
             }
-            _ => assert!(false, "Response should be SynAck"),
+            _ => panic!("Response should be SynAck"),
         }
     }
 
@@ -422,7 +422,7 @@ mod tests {
             TcpProbeResponse::Rst { seq } => {
                 assert_eq!(seq, 5000);
             }
-            _ => assert!(false, "Response should be Rst"),
+            _ => panic!("Response should be Rst"),
         }
     }
 

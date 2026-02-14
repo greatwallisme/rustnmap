@@ -502,8 +502,8 @@ mod tests {
 
     #[test]
     fn test_port_range_invalid() {
-        assert!(PortRange::new(443, 80).is_err());
-        assert!(PortRange::new(0, 80).is_err());
+        PortRange::new(443, 80).unwrap_err();
+        PortRange::new(0, 80).unwrap_err();
     }
 
     #[test]

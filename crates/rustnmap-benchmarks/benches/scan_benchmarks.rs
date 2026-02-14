@@ -84,7 +84,7 @@ fn bench_tcp_connect_scan_overhead(c: &mut Criterion) {
         b.iter(|| {
             // UDP protocol should be filtered by TCP scanner
             let result = scanner.scan_port(&target, 80, Protocol::Udp);
-            black_box(result);
+            let _ = black_box(result);
         });
     });
 
@@ -245,12 +245,10 @@ fn bench_parallel_scan_throughput(c: &mut Criterion) {
     // Simulate processing port states
     group.throughput(Throughput::Elements(1000));
     group.bench_function("process_1000_port_states", |b| {
-        let states = vec![
-            PortState::Open,
+        let states = [PortState::Open,
             PortState::Closed,
             PortState::Filtered,
-            PortState::OpenOrFiltered,
-        ];
+            PortState::OpenOrFiltered];
         b.iter(|| {
             for i in 0..1000 {
                 let state = states[i % states.len()];

@@ -103,7 +103,7 @@ mod tests {
     #[test]
     fn test_evasion_config_builder_default() {
         let config = EvasionConfig::builder().build().unwrap();
-        assert!(!config.fragmentation.is_some());
+        assert!(config.fragmentation.is_none());
         assert!(config.decoys.is_none());
         assert!(config.source.source_ip.is_none());
     }

@@ -38,7 +38,7 @@ fn udp_scan_config() -> ScanConfig {
 
 /// Tests UDP scanner creation.
 ///
-/// This test requires root/CAP_NET_RAW privileges.
+/// This test requires `root/CAP_NET_RAW` privileges.
 #[test]
 #[ignore = "requires root/CAP_NET_RAW privileges"]
 fn test_udp_scanner_creation() {
@@ -48,7 +48,7 @@ fn test_udp_scanner_creation() {
         return;
     }
 
-    let local_addr = Ipv4Addr::new(127, 0, 0, 1);
+    let local_addr = Ipv4Addr::LOCALHOST;
     let config = udp_scan_config();
 
     let scanner = UdpScanner::new(local_addr, config);
@@ -70,7 +70,7 @@ fn test_udp_scanner_requires_root_without_privileges() {
         return;
     }
 
-    let local_addr = Ipv4Addr::new(127, 0, 0, 1);
+    let local_addr = Ipv4Addr::LOCALHOST;
     let config = udp_scan_config();
 
     let result = UdpScanner::new(local_addr, config);
@@ -82,7 +82,7 @@ fn test_udp_scanner_requires_root_without_privileges() {
 
 /// Tests UDP scan against a port (likely Open|Filtered since UDP is stateless).
 ///
-/// This test requires root/CAP_NET_RAW privileges.
+/// This test requires `root/CAP_NET_RAW` privileges.
 /// Note: UDP scanning is inherently ambiguous - no response means Open|Filtered.
 #[test]
 #[ignore = "requires root/CAP_NET_RAW privileges"]
@@ -93,7 +93,7 @@ fn test_udp_scan_port() {
         return;
     }
 
-    let local_addr = Ipv4Addr::new(127, 0, 0, 1);
+    let local_addr = Ipv4Addr::LOCALHOST;
     let config = udp_scan_config();
 
     let scanner = match UdpScanner::new(local_addr, config) {
@@ -104,7 +104,7 @@ fn test_udp_scan_port() {
     };
 
     // Use localhost as target
-    let target = Target::from(Ipv4Addr::new(127, 0, 0, 1));
+    let target = Target::from(Ipv4Addr::LOCALHOST);
 
     // Scan a high port that's likely closed (will get ICMP Port Unreachable)
     // or filtered (no response)
@@ -136,7 +136,7 @@ fn test_udp_scan_port() {
 
 /// Tests UDP scan with wrong protocol returns Filtered.
 ///
-/// This test requires root/CAP_NET_RAW privileges.
+/// This test requires `root/CAP_NET_RAW` privileges.
 #[test]
 #[ignore = "requires root/CAP_NET_RAW privileges"]
 fn test_udp_scan_wrong_protocol() {
@@ -146,7 +146,7 @@ fn test_udp_scan_wrong_protocol() {
         return;
     }
 
-    let local_addr = Ipv4Addr::new(127, 0, 0, 1);
+    let local_addr = Ipv4Addr::LOCALHOST;
     let config = udp_scan_config();
 
     let scanner = match UdpScanner::new(local_addr, config) {
@@ -156,7 +156,7 @@ fn test_udp_scan_wrong_protocol() {
         }
     };
 
-    let target = Target::from(Ipv4Addr::new(127, 0, 0, 1));
+    let target = Target::from(Ipv4Addr::LOCALHOST);
     let port: Port = 80;
 
     // Scan with TCP protocol (wrong for UDP scanner)
@@ -171,7 +171,7 @@ fn test_udp_scan_wrong_protocol() {
 
 /// Tests UDP scan with IPv6 target returns Filtered.
 ///
-/// This test requires root/CAP_NET_RAW privileges.
+/// This test requires `root/CAP_NET_RAW` privileges.
 #[test]
 #[ignore = "requires root/CAP_NET_RAW privileges"]
 fn test_udp_scan_ipv6_target() {
@@ -181,7 +181,7 @@ fn test_udp_scan_ipv6_target() {
         return;
     }
 
-    let local_addr = Ipv4Addr::new(127, 0, 0, 1);
+    let local_addr = Ipv4Addr::LOCALHOST;
     let config = udp_scan_config();
 
     let scanner = match UdpScanner::new(local_addr, config) {
@@ -192,7 +192,7 @@ fn test_udp_scan_ipv6_target() {
     };
 
     // Create IPv6 target
-    let target = Target::from(std::net::Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1));
+    let target = Target::from(std::net::Ipv6Addr::LOCALHOST);
     let port: Port = 53;
 
     let result = scanner.scan_port(&target, port, Protocol::Udp);
@@ -219,7 +219,7 @@ fn test_udp_scan_source_port_range() {
 
 /// Benchmarks UDP scan performance.
 ///
-/// This test requires root/CAP_NET_RAW privileges.
+/// This test requires `root/CAP_NET_RAW` privileges.
 #[test]
 #[ignore = "requires root/CAP_NET_RAW privileges"]
 fn test_udp_scan_performance() {
@@ -229,7 +229,7 @@ fn test_udp_scan_performance() {
         return;
     }
 
-    let local_addr = Ipv4Addr::new(127, 0, 0, 1);
+    let local_addr = Ipv4Addr::LOCALHOST;
     let config = ScanConfig {
         initial_rtt: std::time::Duration::from_millis(100),
         max_retries: 0,
@@ -243,7 +243,7 @@ fn test_udp_scan_performance() {
         }
     };
 
-    let target = Target::from(Ipv4Addr::new(127, 0, 0, 1));
+    let target = Target::from(Ipv4Addr::LOCALHOST);
     let ports: Vec<Port> = (60000..60100).collect();
 
     let start = std::time::Instant::now();
@@ -254,13 +254,12 @@ fn test_udp_scan_performance() {
     }
 
     let duration = start.elapsed();
-    println!("Scanned 100 UDP ports in {:?}", duration);
+    println!("Scanned 100 UDP ports in {duration:?}");
 
     // Performance assertion: should complete within reasonable time
     // Note: UDP scans with timeout are slower due to waiting for responses
     assert!(
         duration.as_secs() < 60,
-        "UDP scan took too long: {:?}",
-        duration
+        "UDP scan took too long: {duration:?}"
     );
 }

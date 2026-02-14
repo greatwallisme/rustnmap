@@ -28,11 +28,13 @@ use rustnmap_target::{
     TcpAckPing, TcpSynPing,
 };
 
-/// Detects if the current process has root/CAP_NET_RAW privileges.
+/// Detects if the current process has `root/CAP_NET_RAW` privileges.
 fn has_raw_socket_privileges() -> bool {
+    // SAFETY: Creating a raw socket to test privileges; fd is checked before use
     match unsafe { libc::socket(libc::AF_INET, libc::SOCK_RAW, libc::IPPROTO_RAW) } {
         -1 => false,
         fd => {
+            // SAFETY: fd is valid (not -1) and was just created by socket()
             unsafe { libc::close(fd) };
             true
         }
@@ -50,7 +52,7 @@ fn discovery_config() -> ScanConfig {
 
 /// Tests TCP SYN ping discovery against localhost.
 ///
-/// This test requires root/CAP_NET_RAW privileges.
+/// This test requires `root/CAP_NET_RAW` privileges.
 #[test]
 #[ignore = "requires root/CAP_NET_RAW privileges"]
 fn test_tcp_syn_ping_localhost() {
@@ -59,7 +61,7 @@ fn test_tcp_syn_ping_localhost() {
         return;
     }
 
-    let local_addr = Ipv4Addr::new(127, 0, 0, 1);
+    let local_addr = Ipv4Addr::LOCALHOST;
     let config = discovery_config();
 
     let ping = TcpSynPing::new(
@@ -70,7 +72,7 @@ fn test_tcp_syn_ping_localhost() {
     )
     .expect("Failed to create TCP SYN ping");
 
-    let target = Target::from(Ipv4Addr::new(127, 0, 0, 1));
+    let target = Target::from(Ipv4Addr::LOCALHOST);
     let result = ping.discover(&target).expect("Discovery failed");
 
     assert_eq!(result, HostState::Up, "Localhost should be up");
@@ -78,7 +80,7 @@ fn test_tcp_syn_ping_localhost() {
 
 /// Tests TCP ACK ping discovery against localhost.
 ///
-/// This test requires root/CAP_NET_RAW privileges.
+/// This test requires `root/CAP_NET_RAW` privileges.
 #[test]
 #[ignore = "requires root/CAP_NET_RAW privileges"]
 fn test_tcp_ack_ping_localhost() {
@@ -87,7 +89,7 @@ fn test_tcp_ack_ping_localhost() {
         return;
     }
 
-    let local_addr = Ipv4Addr::new(127, 0, 0, 1);
+    let local_addr = Ipv4Addr::LOCALHOST;
     let config = discovery_config();
 
     let ping = TcpAckPing::new(
@@ -98,7 +100,7 @@ fn test_tcp_ack_ping_localhost() {
     )
     .expect("Failed to create TCP ACK ping");
 
-    let target = Target::from(Ipv4Addr::new(127, 0, 0, 1));
+    let target = Target::from(Ipv4Addr::LOCALHOST);
     let result = ping.discover(&target).expect("Discovery failed");
 
     assert_eq!(result, HostState::Up, "Localhost should be up");
@@ -106,7 +108,7 @@ fn test_tcp_ack_ping_localhost() {
 
 /// Tests ICMP echo ping discovery against localhost.
 ///
-/// This test requires root/CAP_NET_RAW privileges.
+/// This test requires `root/CAP_NET_RAW` privileges.
 #[test]
 #[ignore = "requires root/CAP_NET_RAW privileges"]
 fn test_icmp_ping_localhost() {
@@ -115,13 +117,13 @@ fn test_icmp_ping_localhost() {
         return;
     }
 
-    let local_addr = Ipv4Addr::new(127, 0, 0, 1);
+    let local_addr = Ipv4Addr::LOCALHOST;
     let config = discovery_config();
 
     let ping = IcmpPing::new(local_addr, config.initial_rtt, config.max_retries)
         .expect("Failed to create ICMP ping");
 
-    let target = Target::from(Ipv4Addr::new(127, 0, 0, 1));
+    let target = Target::from(Ipv4Addr::LOCALHOST);
     let result = ping.discover(&target).expect("Discovery failed");
 
     assert_eq!(result, HostState::Up, "Localhost should be up");
@@ -129,7 +131,7 @@ fn test_icmp_ping_localhost() {
 
 /// Tests ICMP timestamp ping discovery against localhost.
 ///
-/// This test requires root/CAP_NET_RAW privileges.
+/// This test requires `root/CAP_NET_RAW` privileges.
 #[test]
 #[ignore = "requires root/CAP_NET_RAW privileges"]
 fn test_icmp_timestamp_ping_localhost() {
@@ -138,13 +140,13 @@ fn test_icmp_timestamp_ping_localhost() {
         return;
     }
 
-    let local_addr = Ipv4Addr::new(127, 0, 0, 1);
+    let local_addr = Ipv4Addr::LOCALHOST;
     let config = discovery_config();
 
     let ping = IcmpTimestampPing::new(local_addr, config.initial_rtt, config.max_retries)
         .expect("Failed to create ICMP timestamp ping");
 
-    let target = Target::from(Ipv4Addr::new(127, 0, 0, 1));
+    let target = Target::from(Ipv4Addr::LOCALHOST);
     let result = ping.discover(&target).expect("Discovery failed");
 
     assert_eq!(result, HostState::Up, "Localhost should be up");
@@ -152,7 +154,7 @@ fn test_icmp_timestamp_ping_localhost() {
 
 /// Tests ARP ping discovery against localhost.
 ///
-/// This test requires root/CAP_NET_RAW privileges.
+/// This test requires `root/CAP_NET_RAW` privileges.
 #[test]
 #[ignore = "requires root/CAP_NET_RAW privileges"]
 fn test_arp_ping_localhost() {
@@ -162,22 +164,22 @@ fn test_arp_ping_localhost() {
     }
 
     let src_mac = rustnmap_common::MacAddr::new([0x00, 0x11, 0x22, 0x33, 0x44, 0x55]);
-    let src_ip = Ipv4Addr::new(127, 0, 0, 1);
+    let src_ip = Ipv4Addr::LOCALHOST;
     let config = discovery_config();
 
     let ping = ArpPing::new(src_mac, src_ip, config.initial_rtt, config.max_retries)
         .expect("Failed to create ARP ping");
 
-    let target = Target::from(Ipv4Addr::new(127, 0, 0, 1));
+    let target = Target::from(Ipv4Addr::LOCALHOST);
 
     // ARP only works for local network, localhost may not respond to ARP
     // so we just verify the method doesn't panic
     let _result = ping.discover(&target);
 }
 
-/// Tests HostDiscovery engine with TCP ping.
+/// Tests `HostDiscovery` engine with TCP ping.
 ///
-/// This test requires root/CAP_NET_RAW privileges.
+/// This test requires `root/CAP_NET_RAW` privileges.
 #[test]
 #[ignore = "requires root/CAP_NET_RAW privileges"]
 fn test_host_discovery_tcp_ping() {
@@ -189,7 +191,7 @@ fn test_host_discovery_tcp_ping() {
     let config = discovery_config();
     let discovery = HostDiscovery::new(config);
 
-    let target = Target::from(Ipv4Addr::new(127, 0, 0, 1));
+    let target = Target::from(Ipv4Addr::LOCALHOST);
     let result = discovery
         .discover_tcp_ping(&target)
         .expect("Discovery failed");
@@ -197,9 +199,9 @@ fn test_host_discovery_tcp_ping() {
     assert_eq!(result, HostState::Up, "Localhost should be up");
 }
 
-/// Tests HostDiscovery engine with ICMP.
+/// Tests `HostDiscovery` engine with ICMP.
 ///
-/// This test requires root/CAP_NET_RAW privileges.
+/// This test requires `root/CAP_NET_RAW` privileges.
 #[test]
 #[ignore = "requires root/CAP_NET_RAW privileges"]
 fn test_host_discovery_icmp() {
@@ -211,7 +213,7 @@ fn test_host_discovery_icmp() {
     let config = discovery_config();
     let discovery = HostDiscovery::new(config);
 
-    let target = Target::from(Ipv4Addr::new(127, 0, 0, 1));
+    let target = Target::from(Ipv4Addr::LOCALHOST);
     let result = discovery.discover_icmp(&target).expect("Discovery failed");
 
     assert_eq!(result, HostState::Up, "Localhost should be up");
@@ -226,7 +228,7 @@ fn test_discovery_requires_root_without_privileges() {
         return;
     }
 
-    let local_addr = Ipv4Addr::new(127, 0, 0, 1);
+    let local_addr = Ipv4Addr::LOCALHOST;
     let timeout = Duration::from_secs(1);
 
     // TCP SYN ping should fail without root
@@ -276,14 +278,14 @@ fn test_discovery_ipv6_returns_unknown() {
         return;
     }
 
-    let local_addr = Ipv4Addr::new(127, 0, 0, 1);
+    let local_addr = Ipv4Addr::LOCALHOST;
     let timeout = Duration::from_secs(1);
 
     let ping =
         TcpSynPing::new(local_addr, vec![80], timeout, 1).expect("Failed to create TCP SYN ping");
 
     // Create IPv6 target
-    let target = Target::from(std::net::Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1));
+    let target = Target::from(std::net::Ipv6Addr::LOCALHOST);
     let result = ping.discover(&target).expect("Discovery failed");
 
     assert_eq!(
@@ -293,7 +295,7 @@ fn test_discovery_ipv6_returns_unknown() {
     );
 }
 
-/// Tests HostState equality and variants.
+/// Tests `HostState` equality and variants.
 #[test]
 fn test_host_state_variants() {
     assert_eq!(HostState::Up, HostState::Up);

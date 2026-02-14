@@ -150,7 +150,7 @@ end
         b.iter(|| {
             let result =
                 engine.execute_script(engine.database().get("simple-script").unwrap(), target_ip);
-            black_box(result);
+            let _ = black_box(result);
         });
     });
 
@@ -176,7 +176,7 @@ end
         b.iter(|| {
             let result =
                 engine.execute_script(engine.database().get("math-script").unwrap(), target_ip);
-            black_box(result);
+            let _ = black_box(result);
         });
     });
 
@@ -202,7 +202,7 @@ end
         b.iter(|| {
             let result =
                 engine.execute_script(engine.database().get("string-script").unwrap(), target_ip);
-            black_box(result);
+            let _ = black_box(result);
         });
     });
 

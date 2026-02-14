@@ -489,6 +489,6 @@ mod tests {
     fn test_parse_empty() {
         let parser = TargetParser::new();
         let result = parser.parse("");
-        assert!(result.is_err());
+        result.unwrap_err();
     }
 }

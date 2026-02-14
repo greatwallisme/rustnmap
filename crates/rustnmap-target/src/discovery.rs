@@ -908,11 +908,8 @@ mod tests {
         let timeout = Duration::from_secs(1);
 
         // This will fail without root, but we can verify the error type
-        match TcpSynPing::new(local_addr, vec![], timeout, 2) {
-            Ok(ping) => assert!(ping.requires_root()),
-            Err(_) => {
-                // Expected if not running as root
-            }
+        if let Ok(ping) = TcpSynPing::new(local_addr, vec![], timeout, 2) { assert!(ping.requires_root()) } else {
+            // Expected if not running as root
         }
     }
 
@@ -921,11 +918,8 @@ mod tests {
         let local_addr = Ipv4Addr::new(192, 168, 1, 100);
         let timeout = Duration::from_secs(1);
 
-        match TcpAckPing::new(local_addr, vec![], timeout, 2) {
-            Ok(ping) => assert!(ping.requires_root()),
-            Err(_) => {
-                // Expected if not running as root
-            }
+        if let Ok(ping) = TcpAckPing::new(local_addr, vec![], timeout, 2) { assert!(ping.requires_root()) } else {
+            // Expected if not running as root
         }
     }
 
@@ -934,11 +928,8 @@ mod tests {
         let local_addr = Ipv4Addr::new(192, 168, 1, 100);
         let timeout = Duration::from_secs(1);
 
-        match IcmpPing::new(local_addr, timeout, 2) {
-            Ok(ping) => assert!(ping.requires_root()),
-            Err(_) => {
-                // Expected if not running as root
-            }
+        if let Ok(ping) = IcmpPing::new(local_addr, timeout, 2) { assert!(ping.requires_root()) } else {
+            // Expected if not running as root
         }
     }
 
@@ -947,11 +938,8 @@ mod tests {
         let local_addr = Ipv4Addr::new(192, 168, 1, 100);
         let timeout = Duration::from_secs(1);
 
-        match IcmpTimestampPing::new(local_addr, timeout, 2) {
-            Ok(ping) => assert!(ping.requires_root()),
-            Err(_) => {
-                // Expected if not running as root
-            }
+        if let Ok(ping) = IcmpTimestampPing::new(local_addr, timeout, 2) { assert!(ping.requires_root()) } else {
+            // Expected if not running as root
         }
     }
 
@@ -961,11 +949,8 @@ mod tests {
         let src_ip = Ipv4Addr::new(192, 168, 1, 100);
         let timeout = Duration::from_secs(1);
 
-        match ArpPing::new(src_mac, src_ip, timeout, 2) {
-            Ok(ping) => assert!(ping.requires_root()),
-            Err(_) => {
-                // Expected if not running as root
-            }
+        if let Ok(ping) = ArpPing::new(src_mac, src_ip, timeout, 2) { assert!(ping.requires_root()) } else {
+            // Expected if not running as root
         }
     }
 
@@ -975,12 +960,9 @@ mod tests {
         let src_ip = Ipv4Addr::new(192, 168, 1, 100);
         let timeout = Duration::from_secs(1);
 
-        let arp_ping = match ArpPing::new(src_mac, src_ip, timeout, 2) {
-            Ok(ping) => ping,
-            Err(_) => {
-                // Skip test if not root
-                return;
-            }
+        let Ok(arp_ping) = ArpPing::new(src_mac, src_ip, timeout, 2) else {
+            // Skip test if not root
+            return;
         };
 
         // Same subnet
@@ -1003,7 +985,7 @@ mod tests {
 
         // IPv6
         let target_v6 = Target {
-            ip: rustnmap_common::IpAddr::V6(rustnmap_common::Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1)),
+            ip: rustnmap_common::IpAddr::V6(rustnmap_common::Ipv6Addr::LOCALHOST),
             hostname: None,
             ports: None,
             ipv6_scope: None,
@@ -1014,13 +996,13 @@ mod tests {
     #[test]
     #[ignore = "Requires root privileges"]
     fn test_tcp_syn_ping_discover_localhost() {
-        let local_addr = Ipv4Addr::new(127, 0, 0, 1);
+        let local_addr = Ipv4Addr::LOCALHOST;
         let timeout = Duration::from_secs(1);
 
         let ping = TcpSynPing::new(local_addr, vec![], timeout, 1).unwrap();
 
         let target = Target {
-            ip: rustnmap_common::IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+            ip: rustnmap_common::IpAddr::V4(Ipv4Addr::LOCALHOST),
             hostname: None,
             ports: None,
             ipv6_scope: None,
@@ -1033,13 +1015,13 @@ mod tests {
     #[test]
     #[ignore = "Requires root privileges"]
     fn test_icmp_ping_discover_localhost() {
-        let local_addr = Ipv4Addr::new(127, 0, 0, 1);
+        let local_addr = Ipv4Addr::LOCALHOST;
         let timeout = Duration::from_secs(1);
 
         let ping = IcmpPing::new(local_addr, timeout, 1).unwrap();
 
         let target = Target {
-            ip: rustnmap_common::IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+            ip: rustnmap_common::IpAddr::V4(Ipv4Addr::LOCALHOST),
             hostname: None,
             ports: None,
             ipv6_scope: None,

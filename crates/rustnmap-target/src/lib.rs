@@ -432,7 +432,7 @@ mod tests {
         let base = Ipv4Addr::new(10, 0, 0, 0);
         // /8 would expand to 16M addresses - too large
         let result = expand_cidr_v4(base, 8);
-        assert!(result.is_err());
+        result.unwrap_err();
     }
 
     #[test]
@@ -506,6 +506,6 @@ mod tests {
         let base = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0);
         // /129 is invalid
         let result = expand_cidr_v6(base, 129);
-        assert!(result.is_err());
+        result.unwrap_err();
     }
 }

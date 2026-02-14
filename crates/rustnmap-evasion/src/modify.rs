@@ -258,7 +258,6 @@ pub fn generate_padding(length: usize) -> Vec<u8> {
 mod tests {
     use super::*;
     // Import proptest macros for use within proptest! blocks
-    use proptest::prop_assert;
     use proptest::prop_assert_eq;
 
     #[test]
@@ -330,10 +329,10 @@ mod tests {
         let modifier = PacketModifier::new(config);
         let packet = vec![0u8; 40];
 
-        let modified = modifier.apply(packet).unwrap();
+        let result = modifier.apply(packet).unwrap();
 
         // Should have modified checksum byte
-        assert!(modified.len() >= 12);
+        assert!(result.len() >= 12);
     }
 
     #[test]
@@ -349,10 +348,10 @@ mod tests {
         let modifier = PacketModifier::new(config);
         let packet = vec![1, 2, 3];
 
-        let modified = modifier.apply(packet).unwrap();
+        let result = modifier.apply(packet).unwrap();
 
-        assert_eq!(modified.len(), 13);
-        assert_eq!(modified[0..3], [1, 2, 3]);
+        assert_eq!(result.len(), 13);
+        assert_eq!(result[0..3], [1, 2, 3]);
     }
 
     #[test]
@@ -368,7 +367,8 @@ mod tests {
         let data = [0x45u8, 0x00, 0x00]; // Odd number of bytes
         let checksum = calculate_checksum(&data);
         // Should handle odd length
-        assert!(checksum != 0 || checksum == 0); // Just verify it doesn't panic
+        // Just verify calculate_checksum doesn't panic with odd-length data
+        let _ = checksum;
     }
 
     #[test]
@@ -443,9 +443,6 @@ mod tests {
         #[test]
         fn test_checksum_property(data in proptest::collection::vec(0u8..=u8::MAX, 0..1000)) {
             let checksum = calculate_checksum(&data);
-
-            // Checksum should always be a valid u16 (invariant)
-            prop_assert!(checksum <= u16::MAX);
 
             // Checksum should be deterministic - same input yields same output
             let checksum2 = calculate_checksum(&data);

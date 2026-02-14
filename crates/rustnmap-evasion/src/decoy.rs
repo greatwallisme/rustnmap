@@ -187,7 +187,7 @@ mod tests {
         let real_ip = "192.0.2.100".parse().unwrap();
 
         let scheduler = DecoyScheduler::new(config, real_ip);
-        assert!(scheduler.is_ok());
+        scheduler.unwrap();
     }
 
     #[test]
@@ -200,7 +200,7 @@ mod tests {
         let real_ip = "192.0.2.100".parse().unwrap();
 
         let result = DecoyScheduler::new(config, real_ip);
-        assert!(result.is_err());
+        result.unwrap_err();
     }
 
     #[test]
@@ -213,7 +213,7 @@ mod tests {
         let real_ip = "192.0.2.100".parse().unwrap();
 
         let result = DecoyScheduler::new(config, real_ip);
-        assert!(result.is_err());
+        result.unwrap_err();
     }
 
     #[test]
@@ -322,7 +322,7 @@ mod tests {
         let real_ip = "192.0.2.100".parse().unwrap();
 
         let scheduler = DecoyScheduler::new(config, real_ip).unwrap();
-        assert_eq!(scheduler.config().random_order, true);
+        assert!(scheduler.config().random_order);
     }
 
     proptest::proptest! {

@@ -257,7 +257,7 @@ mod tests {
     #[test]
     fn test_udp_traceroute_new() {
         let config = TracerouteConfig::new();
-        let local_addr = Ipv4Addr::new(127, 0, 0, 1);
+        let local_addr = Ipv4Addr::LOCALHOST;
 
         // May fail if not running as root
         let result = UdpTraceroute::new(config, local_addr);
@@ -270,7 +270,7 @@ mod tests {
     #[test]
     fn test_udp_traceroute_with_base_port() {
         let config = TracerouteConfig::new();
-        let local_addr = Ipv4Addr::new(127, 0, 0, 1);
+        let local_addr = Ipv4Addr::LOCALHOST;
 
         // May fail if not running as root
         let result = UdpTraceroute::new(config, local_addr);
@@ -293,7 +293,7 @@ mod tests {
     #[test]
     fn test_generate_source_port() {
         let config = TracerouteConfig::new();
-        let local_addr = Ipv4Addr::new(127, 0, 0, 1);
+        let local_addr = Ipv4Addr::LOCALHOST;
 
         // May fail if not running as root
         if let Ok(traceroute) = UdpTraceroute::new(config, local_addr) {
@@ -306,7 +306,7 @@ mod tests {
     #[test]
     fn test_source_port_configured() {
         let config = TracerouteConfig::new().with_source_port(12345);
-        let local_addr = Ipv4Addr::new(127, 0, 0, 1);
+        let local_addr = Ipv4Addr::LOCALHOST;
 
         // May fail if not running as root
         if let Ok(traceroute) = UdpTraceroute::new(config, local_addr) {
