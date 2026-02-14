@@ -12,6 +12,7 @@
 )]
 
 pub mod connect_scan;
+pub mod ftp_bounce_scan;
 pub mod ip_protocol_scan;
 pub mod probe;
 pub mod scanner;
@@ -22,6 +23,7 @@ pub mod udp_scan;
 
 // Re-exports
 pub use connect_scan::TcpConnectScanner;
+pub use ftp_bounce_scan::FtpBounceScanner;
 pub use ip_protocol_scan::IpProtocolScanner;
 pub use scanner::{PortScanner, ScanResult, TimingTemplate};
 pub use stealth_scans::{
