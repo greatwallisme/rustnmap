@@ -1,85 +1,189 @@
-# Task Plan: Integration Tests with Real Network Targets
+# Task Plan: Complete RustNmap Implementation
 
 > **Project**: RustNmap - Rust Network Mapper
 > **Status**: COMPLETE
 > **Created**: 2026-02-13
 > **Updated**: 2026-02-13
-> **Goal**: Create and run full integration tests with real network targets
+> **Goal**: Strictly follow design documents @doc/ to complete all remaining features
 
 ---
 
 ## Goal
 
-Create and execute comprehensive integration tests that validate the rustnmap scanner against real network targets (localhost services and external test targets). These tests verify end-to-end scanning workflows including TCP SYN scan, TCP Connect scan, service detection, and OS detection.
+Complete the RustNmap project according to the design documentation. The project currently has 12 crates with 334 tests passing, but several critical features requiring root/CAP_NET_RAW privileges remain as TODOs:
+
+1. UDP scanning implementation
+2. Host discovery (TCP ping, ICMP, ARP)
+3. Traceroute with raw sockets
+4. OS detection probes
+5. Service detection probes
+6. Complete NSE libraries
+7. Integration tests for privileged features
 
 ---
 
-## Current Phase
+## Current State Analysis
 
-COMPLETE - All phases finished successfully
+### Completed (from findings.md)
+| Phase | Crate | Tests | Status |
+|-------|-------|-------|--------|
+| Phase 1 | rustnmap-common | 14 | COMPLETE |
+| Phase 1 | rustnmap-net | 0 | COMPLETE (raw socket support added) |
+| Phase 1 | rustnmap-packet | 0 | COMPLETE |
+| Phase 2 | rustnmap-target | 85 | COMPLETE |
+| Phase 2 | rustnmap-scan | 20+ | COMPLETE (SYN/Connect implemented) |
+| Phase 3 | rustnmap-fingerprint | 36 | COMPLETE (structure ready) |
+| Phase 3 | rustnmap-traceroute | 76 | COMPLETE (structure ready) |
+| Phase 3 | rustnmap-evasion | 85 | COMPLETE |
+| Phase 4 | rustnmap-nse | 35 | COMPLETE (Lua engine ready) |
+| Phase 5 | rustnmap-output | 25 | COMPLETE |
+| Phase 5 | rustnmap-core | 39 | COMPLETE |
+| Phase 5 | rustnmap-cli | 9 | COMPLETE |
+
+**Total**: 334 tests passing (326 unit + 8 integration)
+
+### TODOs Requiring Implementation (from findings.md)
+
+| # | Feature | Location | Priority | Root Required |
+|---|---------|----------|----------|---------------|
+| 1 | UDP scanner implementation | rustnmap-scan/src/lib.rs | P0 | Yes |
+| 2 | TCP ping (host discovery) | rustnmap-target/src/discovery.rs:65 | P0 | Yes |
+| 3 | ICMP discovery | rustnmap-target/src/discovery.rs:87 | P0 | Yes |
+| 4 | ARP discovery | rustnmap-target/src/discovery.rs:118 | P0 | Yes |
+| 5 | Traceroute ICMP/TCP/UDP | rustnmap-traceroute/src/*.rs | P1 | Yes |
+| 6 | OS detection probes | rustnmap-fingerprint/src/os/detector.rs | P1 | Yes |
+| 7 | Service detection probes | rustnmap-fingerprint/src/service/detector.rs | P1 | Yes |
+| 8 | NSE network libraries | rustnmap-nse | P2 | Some |
+| 9 | Additional scan types (FIN/NULL/Xmas/ACK) | rustnmap-scan | P1 | Yes |
+| 10 | Performance benchmarks | benches/ | P2 | No |
 
 ---
 
 ## Phases
 
-### Phase 1: Requirements & Discovery
+### Phase 1: UDP Scanning Implementation
 
-- [x] Analyze existing test structure (326 unit tests, 0 integration tests)
-- [x] Identify test requirements for real network targets
-- [x] Document findings in findings.md
-- [x] Determine network targets available for testing
-- **Status:** complete
+**Goal**: Implement UDP scanner with raw socket support
 
-### Phase 2: Integration Test Infrastructure
+- [x] Read existing UDP scan TODOs and design doc
+- [x] Implement UdpScanner struct in rustnmap-scan
+- [x] Add UDP packet builder in rustnmap-net
+- [x] Implement port state detection (Open, Closed, Filtered, OpenFiltered)
+- [x] Add unit tests for UDP scanner
+- [x] Add integration tests with real UDP services
+- **Status**: complete
 
-- [x] Create integration test directory structure (`tests/`)
-- [x] Design integration test framework with real target support
-- [x] Add test configuration for network targets
-- [x] Implement privilege detection for tests requiring root
-- **Status:** complete
+### Phase 2: Host Discovery (Privileged Features)
 
-### Phase 3: TCP Scan Integration Tests
+**Goal**: Implement TCP ping, ICMP, and ARP discovery
 
-- [x] Test TCP SYN scan against localhost open ports
-- [x] Test TCP Connect scan fallback for non-root
-- [x] Test port state detection (Open, Closed, Filtered)
-- [x] Test multiple port scanning (-p 22,80,443)
-- [x] Test scan timing and performance
-- **Status:** complete
+- [x] Implement TCP SYN ping (-PS)
+- [x] Implement TCP ACK ping (-PA)
+- [x] Implement ICMP echo ping (-PE)
+- [x] Implement ICMP timestamp ping (-PP)
+- [x] Implement ARP ping (-PR) for local network
+- [x] Add privilege detection framework
+- [x] Add unit tests for each discovery method
+- [x] Add integration tests
+- **Status**: complete
 
-### Phase 4: Advanced Feature Integration Tests
+### Phase 3: Additional TCP Scan Types
 
-- [x] Test service detection (-sV) against known services
-- [x] Test OS detection (-O) probe transmission
-- [x] Test traceroute functionality
-- [x] Test evasion techniques (if applicable)
-- **Status:** complete
+**Goal**: Implement FIN, NULL, Xmas, ACK, Maimon scans
 
-### Phase 5: Execution & Verification
+- [x] Implement TcpFinScanner (-sF)
+- [x] Implement TcpNullScanner (-sN)
+- [x] Implement TcpXmasScanner (-sX)
+- [x] Implement TcpAckScanner (-sA)
+- [x] Implement TcpMaimonScanner (-sM)
+- [x] Add unit tests for each scanner
+- [x] Add integration tests
+- **Status**: complete
 
-- [x] Run all integration tests
-- [x] Document test results
-- [x] Fix any issues found
-- [x] Update documentation
-- **Status:** complete
+### Phase 4: Traceroute Implementation
+
+**Goal**: Complete traceroute with raw socket support
+
+- [x] Read current traceroute implementation
+- [x] Implement ICMP traceroute
+- [x] Implement TCP SYN traceroute
+- [x] Implement UDP traceroute
+- [x] Add hop detection and RTT measurement
+- [x] Add unit tests
+- [x] Add integration tests
+- **Status**: complete
+
+### Phase 5: OS Detection Implementation
+
+**Goal**: Complete OS fingerprinting probes
+
+- [x] Read OS detection design doc
+- [x] Implement TCP SEQ probe analysis (6 SYN probes with 100ms intervals)
+- [x] Implement TCP option analysis (OPS) - WScale, NOP, MSS, Timestamp, SACK
+- [x] Implement T1-T7 test probes with various flag combinations
+- [x] Implement ECN probe with ECE/CWR flags
+- [x] Implement ICMP echo probes (IE1, IE2)
+- [x] Implement UDP probe (U1) to closed port
+- [x] Implement ISN analysis (GCD, ISR, SP calculation)
+- [x] Implement IP ID sequence classification
+- [x] Integrate with fingerprint database
+- [x] Add unit tests for all analysis functions
+- [x] Add integration tests (marked with #[ignore] for root-required)
+- **Status**: complete
+
+### Phase 6: Service Detection Implementation
+
+**Goal**: Complete service version detection
+
+- [x] Read service detection design doc
+- [x] Implement probe database loading
+- [x] Implement banner grabbing
+- [x] Implement version extraction from responses
+- [x] Add unit tests
+- **Status**: complete
+
+### Phase 7: NSE Libraries
+
+**Goal**: Implement core NSE libraries
+
+- [x] Implement nmap base library
+- [x] Implement stdnse library
+- [x] Implement comm library
+- [x] Implement shortport library
+- [x] Add unit tests
+- **Status**: complete
+
+### Phase 8: Performance & Documentation
+
+**Goal**: Performance benchmarks and documentation
+
+- [x] Add Criterion benchmarks for hot paths
+- [x] Create benchmark suite for scanning
+- [x] Create benchmark suite for packet I/O
+- [x] Create benchmark suite for fingerprinting
+- [x] Create benchmark suite for NSE
+- [x] Add rustnmap-benchmarks crate with 13 crates total
+- **Status**: complete
 
 ---
 
-## Key Questions (Answered)
+## Key Questions
 
-1. **What localhost services are available for testing?**
-   - Port 22 (SSH), Port 8501 (Streamlit), Ports 18789/18791/18792 (clawdbot-gateway)
+1. **How to test privileged features in CI?**
+   - Use #[ignore] for root-required tests
+   - Run with sudo in privileged containers
+   - Mark tests with clear privilege requirements
 
-2. **Which tests require root/CAP_NET_RAW privileges?**
-   - TCP SYN scan tests require root
-   - TCP Connect scan tests do not require root
+2. **What localhost services are available for testing?**
+   - Port 22 (SSH)
+   - Port 8501 (Streamlit)
+   - Ports 18789/18791/18792 (clawdbot-gateway)
+   - Can use netcat for UDP testing
 
-3. **What external test targets can be safely scanned?**
-   - Using localhost only for safety and reproducibility
-
-4. **How should tests be marked to run conditionally?**
-   - Using `#[ignore = "requires root/CAP_NET_RAW privileges"]` attribute
-   - Runtime privilege check with `has_raw_socket_privileges()`
+3. **How to handle privilege detection?**
+   - Implement PrivilegeLevel enum
+   - Runtime detection of CAP_NET_RAW
+   - Graceful degradation to Connect scans
 
 ---
 
@@ -87,11 +191,10 @@ COMPLETE - All phases finished successfully
 
 | Decision | Rationale |
 |----------|-----------|
-| Use `tests/` directory for integration tests | Rust convention for integration tests |
-| Mark privileged tests with `#[ignore]` | Allows tests to run without root by default |
-| Use localhost services as primary targets | Safe, reproducible, no external dependencies |
-| Support both SYN and Connect scan tests | Validates both privileged and unprivileged paths |
-| Closed ports filtered from results | Matches Nmap behavior - only report open/filtered ports |
+| Use #[ignore] for privileged tests | Allows tests to run without root by default |
+| Implement privilege detection | Runtime detection allows graceful degradation |
+| Follow design docs exactly | Ensures Nmap compatibility and feature parity |
+| Root required for raw socket features | Linux kernel requirement for raw packets |
 
 ---
 
@@ -99,89 +202,33 @@ COMPLETE - All phases finished successfully
 
 | Error | Attempt | Resolution |
 |-------|---------|------------|
-| Wrong API types in tests | 1 | Fixed to use correct `ScanType::TcpSyn`, `PortSpec::List`, etc. |
-| Closed ports not in results | 1 | Updated tests to expect closed ports to be filtered (by design) |
-| PortResult field name | 1 | Changed from `port` to `number` |
-| Tests marked with `#[ignore]` skipped | 1 | Run with `--ignored` flag for root tests |
-
----
-
-## Test Results Summary
-
-### Unit Tests
-- **Total**: 326 tests passing across 12 crates
-- **Coverage**: All major modules tested
-
-### Integration Tests (NEW)
-- **Location**: `crates/rustnmap-core/tests/tcp_scan_test.rs`
-- **Total**: 8 tests
-- **Passing**: 8/8 (100%)
-
-| Test | Type | Privileges | Status |
-|------|------|------------|--------|
-| test_syn_scan_open_ports | SYN | Root | PASS |
-| test_syn_scan_closed_ports_filtered | SYN | Root | PASS |
-| test_syn_scan_mixed_ports | SYN | Root | PASS |
-| test_syn_scan_performance | SYN | Root | PASS |
-| test_connect_scan_open_ports | Connect | None | PASS |
-| test_connect_scan_closed_ports_filtered | Connect | None | PASS |
-| test_connect_scan_mixed_ports | Connect | None | PASS |
-| test_connect_scan_performance | Connect | None | PASS |
-
-### Performance Results
-- SYN scan 100 ports: ~670ms
-- Connect scan 50 ports: ~288ms
-
-### How to Run Tests
-
-```bash
-# Run all tests (unit + integration, non-root only)
-cargo test --workspace
-
-# Run all tests including root-required tests
-sudo cargo test --workspace -- --ignored
-
-# Run only integration tests
-cargo test -p rustnmap-core --test tcp_scan_test
-
-# Run only SYN scan tests (requires root)
-sudo cargo test -p rustnmap-core --test tcp_scan_test -- --ignored
-```
-
----
-
-## Files Created/Modified
-
-| File | Description |
-|------|-------------|
-| `crates/rustnmap-core/tests/common/mod.rs` | Shared test utilities |
-| `crates/rustnmap-core/tests/tcp_scan_test.rs` | TCP scan integration tests |
-| `crates/rustnmap-core/Cargo.toml` | Added `libc` dev-dependency |
-| `task_plan.md` | Updated with test plan |
-| `progress.md` | Updated with test results |
+| None yet | - | - |
 
 ---
 
 ## Project Context
 
-**Current Test Status**:
-- 326 unit tests passing across 12 crates
-- 8 integration tests with real network targets
-- All phases 1-5 implementation complete
-- TCP SYN scan with raw sockets implemented and tested
-- Release binary available at `target/release/rustnmap`
+**Technology Stack**:
+- Rust 1.85+
+- Tokio async runtime
+- mlua for Lua scripting
+- pnet for packet crafting
+- clap for CLI parsing
 
 **Required Privileges**:
-- TCP SYN scan: CAP_NET_RAW or root
-- TCP Connect scan: No special privileges
-- ICMP operations: CAP_NET_RAW or root
-- ARP discovery: CAP_NET_RAW or root
+- TCP SYN scan: CAP_NET_RAW
+- UDP scan: CAP_NET_RAW
+- ICMP ping: CAP_NET_RAW
+- ARP discovery: CAP_NET_RAW
+- Traceroute: CAP_NET_RAW
+- OS detection: CAP_NET_RAW
 
-**Next Steps**:
-1. Consider adding more integration tests for:
-   - Service detection (-sV)
-   - OS detection (-O)
-   - Traceroute (--traceroute)
-   - NSE script execution
-2. Add performance benchmarks with Criterion
-3. Test against external targets in isolated network
+**Design Document References**:
+- doc/architecture.md - System architecture
+- doc/modules/port-scanning.md - Scan types
+- doc/modules/host-discovery.md - Discovery methods
+- doc/modules/os-detection.md - OS fingerprinting
+- doc/modules/traceroute.md - Traceroute
+- doc/modules/service-detection.md - Service detection
+- doc/modules/nse-engine.md - NSE scripting
+- doc/roadmap.md - Development roadmap

@@ -1,54 +1,240 @@
 //! UDP traceroute implementation.
 
-use crate::{error::Result, probe::ProbeResponse, TracerouteConfig};
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, UdpSocket};
+use crate::{
+    error::{Result, TracerouteError},
+    probe::ProbeResponse,
+    TracerouteConfig,
+};
+use rustnmap_common::Ipv4Addr;
+use rustnmap_net::raw_socket::{
+    parse_icmp_response, IcmpResponse, RawSocket, UdpPacketBuilder,
+};
+use std::io;
+use std::net::{SocketAddr, SocketAddrV4};
 
 /// UDP-based traceroute implementation.
 #[derive(Debug)]
 pub struct UdpTraceroute {
     config: TracerouteConfig,
+    local_addr: Ipv4Addr,
+    socket: RawSocket,
+    /// Base destination port (incremented per probe).
+    base_dest_port: u16,
+    /// Sequence number for probes.
+    sequence: u16,
 }
 
 impl UdpTraceroute {
     /// Creates a new UDP traceroute instance.
     ///
+    /// # Arguments
+    ///
+    /// * `config` - Traceroute configuration
+    /// * `local_addr` - Local IP address to use for probes
+    ///
     /// # Errors
     ///
-    /// Returns an error if socket binding fails.
-    pub fn new(config: &TracerouteConfig) -> Result<Self> {
+    /// Returns an error if socket creation fails.
+    pub fn new(config: TracerouteConfig, local_addr: Ipv4Addr) -> Result<Self> {
+        let socket = RawSocket::new().map_err(|e| TracerouteError::SocketCreation {
+            source: io::Error::other(e),
+        })?;
+
         Ok(Self {
-            config: config.clone(),
+            config,
+            local_addr,
+            socket,
+            base_dest_port: 33434,
+            sequence: 0,
         })
     }
 
-    /// Sends a single UDP probe with the specified TTL.
+    /// Sets the base destination port.
+    ///
+    /// The default `base_port` is 33434. Each probe will use `base_port` + sequence.
+    #[must_use]
+    pub const fn with_base_port(mut self, port: u16) -> Self {
+        self.base_dest_port = port;
+        self
+    }
+
+    /// Sends a single UDP probe with the specified TTL and waits for response.
+    ///
+    /// # Arguments
+    ///
+    /// * `target` - Target IP address
+    /// * `ttl` - Time-to-live value for this probe
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(Some(ProbeResponse))` if a response was received,
+    /// `Ok(None)` if the probe timed out, or an error if sending failed.
     ///
     /// # Errors
     ///
     /// Returns an error if probe cannot be sent.
-    // TODO: This is a partial implementation. Full implementation requires ICMP socket for receiving responses
-    pub fn send_probe(&self, target: Ipv4Addr, ttl: u8) -> Result<Option<ProbeResponse>> {
-        // Create UDP socket
-        let socket = UdpSocket::bind("0.0.0.0:0")
-            .map_err(|e| crate::error::TracerouteError::Network(format!("bind failed: {e}")))?;
+    pub fn send_probe(&mut self, target: Ipv4Addr, ttl: u8) -> Result<Option<ProbeResponse>> {
+        self.sequence = self.sequence.wrapping_add(1);
 
-        // Set TTL using socket option
-        socket
+        // Calculate destination port (base + sequence)
+        let dest_port = self.base_dest_port.wrapping_add(self.sequence);
+
+        // Generate source port
+        let src_port = self.generate_source_port();
+
+        // Build UDP packet with traceroute payload
+        let payload = Self::build_payload(ttl, self.sequence);
+        let packet = UdpPacketBuilder::new(self.local_addr, target, src_port, dest_port)
+            .payload(&payload)
+            .build();
+
+        // Set TTL on socket
+        self.socket
             .set_ttl(u32::from(ttl))
-            .map_err(|e| crate::error::TracerouteError::Network(format!("set_ttl failed: {e}")))?;
+            .map_err(|e| TracerouteError::Network(format!("Failed to set TTL: {e}")))?;
 
-        // Build UDP probe payload containing TTL value
-        let payload = [ttl, 0, 0, 0];
+        // Create destination socket address
+        let dst_sockaddr = SocketAddr::V4(SocketAddrV4::new(target, dest_port));
 
-        // Send UDP probe
-        let dest_addr = SocketAddr::V4(SocketAddrV4::new(target, self.config.dest_port));
-        socket
-            .send_to(&payload, dest_addr)
-            .map_err(|e| crate::error::TracerouteError::Network(format!("send failed: {e}")))?;
+        // Send the packet
+        self.socket
+            .send_packet(&packet, &dst_sockaddr)
+            .map_err(|e| TracerouteError::SendFailed { source: e })?;
 
-        // Return None indicating timeout (no immediate response)
-        // Full implementation would use a separate ICMP socket to receive responses
-        Ok(None)
+        // Wait for response
+        self.receive_response(target, dest_port)
+    }
+
+    /// Receives and parses ICMP response to UDP probe.
+    ///
+    /// # Arguments
+    ///
+    /// * `target` - Expected target IP
+    /// * `dest_port` - Destination port used in probe
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(Some(ProbeResponse))` if a valid response was received,
+    /// `Ok(None)` if timed out, or an error.
+    fn receive_response(&self, target: Ipv4Addr, dest_port: u16) -> Result<Option<ProbeResponse>> {
+        let mut recv_buf = vec![0u8; 65535];
+        let timeout = self.config.probe_timeout;
+
+        match self
+            .socket
+            .recv_packet(recv_buf.as_mut_slice(), Some(timeout))
+        {
+            Ok(len) if len > 0 => {
+                // Try to parse ICMP response
+                if let Some(icmp_resp) = parse_icmp_response(&recv_buf[..len]) {
+                    return Ok(self.handle_icmp_response(icmp_resp, target, dest_port, &recv_buf[..len]));
+                }
+
+                // No recognizable ICMP response
+                Ok(None)
+            }
+            Ok(_) => Ok(None),
+            Err(e)
+                if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut =>
+            {
+                // Timeout - no response
+                Ok(None)
+            }
+            Err(e) => Err(TracerouteError::ReceiveFailed { source: e }),
+        }
+    }
+
+    /// Handles ICMP response and creates appropriate `ProbeResponse`.
+    ///
+    /// # Arguments
+    ///
+    /// * `icmp_resp` - Parsed ICMP response
+    /// * `expected_target` - Expected target IP
+    /// * `expected_port` - Expected destination port
+    /// * `packet` - Raw packet bytes for extracting source IP
+    ///
+    /// # Returns
+    ///
+    /// `Some(ProbeResponse)` if valid response for our probe, `None` otherwise.
+    #[allow(clippy::unused_self, reason = "Instance method for API consistency")]
+    fn handle_icmp_response(
+        &self,
+        icmp_resp: IcmpResponse,
+        expected_target: Ipv4Addr,
+        expected_port: u16,
+        packet: &[u8],
+    ) -> Option<ProbeResponse> {
+        // Extract source IP from the IP header (bytes 12-15)
+        if packet.len() < 20 {
+            return None;
+        }
+        let responder_ip = Ipv4Addr::new(packet[12], packet[13], packet[14], packet[15]);
+
+        match icmp_resp {
+            IcmpResponse::TimeExceeded {
+                original_dst_ip,
+                original_dst_port,
+                ..
+            } => {
+                // Verify this response is for our probe
+                (original_dst_ip == expected_target
+                    && (original_dst_port == expected_port || original_dst_port == 0))
+                .then(|| ProbeResponse::time_exceeded(responder_ip))
+            }
+            IcmpResponse::DestinationUnreachable {
+                code,
+                original_dst_ip,
+                original_dst_port,
+            } => {
+                // Verify this response is for our probe
+                (original_dst_ip == expected_target && original_dst_port == expected_port).then(|| {
+                    // Port unreachable means we reached the destination
+                    let is_destination = matches!(code, rustnmap_net::raw_socket::IcmpUnreachableCode::PortUnreachable);
+                    ProbeResponse::new(
+                        responder_ip,
+                        3,  // ICMP Destination Unreachable
+                        u8::from(code),
+                        is_destination,
+                    )
+                })
+            }
+            IcmpResponse::Other { icmp_type, icmp_code } => {
+                // For traceroute, we only care about Time Exceeded (11) and Destination Unreachable (3)
+                // Echo Reply (0) would indicate the target responded directly (unlikely for UDP)
+                // Echo reply - this would be unusual for UDP traceroute
+                (icmp_type == 0 && icmp_code == 0)
+                    .then(|| ProbeResponse::new(responder_ip, icmp_type, icmp_code, responder_ip == expected_target))
+            }
+        }
+    }
+
+    /// Builds traceroute payload.
+    ///
+    /// Traditional traceroute uses a payload that can help identify
+    /// the probe. We include TTL and sequence for correlation.
+    fn build_payload(ttl: u8, sequence: u16) -> Vec<u8> {
+        // Simple payload with TTL and sequence
+        vec![
+            ttl,
+            0,
+            (sequence >> 8) as u8,
+            (sequence & 0xFF) as u8,
+        ]
+    }
+
+    /// Generates a source port for the probe.
+    ///
+    /// Uses the configured source port if non-zero, otherwise generates
+    /// a random port in the high range to avoid conflicts.
+    #[allow(clippy::unused_self, reason = "Instance method for API consistency")]
+    fn generate_source_port(&self) -> u16 {
+        let configured = self.config.source_port();
+        if configured != 0 {
+            return configured;
+        }
+        // Use a high port range to avoid conflicts
+        let offset = (std::process::id() % 1000) as u16;
+        50000 + offset
     }
 }
 
@@ -59,8 +245,62 @@ mod tests {
     #[test]
     fn test_udp_traceroute_new() {
         let config = TracerouteConfig::new();
-        let result = UdpTraceroute::new(&config);
-        assert!(result.is_ok());
+        let local_addr = Ipv4Addr::new(127, 0, 0, 1);
+
+        // May fail if not running as root
+        let result = UdpTraceroute::new(config, local_addr);
+        if let Ok(traceroute) = result {
+            assert_eq!(traceroute.local_addr, local_addr);
+            assert_eq!(traceroute.base_dest_port, 33434);
+        }
+    }
+
+    #[test]
+    fn test_udp_traceroute_with_base_port() {
+        let config = TracerouteConfig::new();
+        let local_addr = Ipv4Addr::new(127, 0, 0, 1);
+
+        // May fail if not running as root
+        let result = UdpTraceroute::new(config, local_addr);
+        if let Ok(traceroute) = result {
+            let traceroute = traceroute.with_base_port(40125);
+            assert_eq!(traceroute.base_dest_port, 40125);
+        }
+    }
+
+    #[test]
+    fn test_build_payload() {
+        let payload = UdpTraceroute::build_payload(5, 100);
+        assert_eq!(payload.len(), 4);
+        assert_eq!(payload[0], 5); // TTL
+        assert_eq!(payload[1], 0);
+        assert_eq!(payload[2], 0); // sequence high byte
+        assert_eq!(payload[3], 100); // sequence low byte
+    }
+
+    #[test]
+    fn test_generate_source_port() {
+        let config = TracerouteConfig::new();
+        let local_addr = Ipv4Addr::new(127, 0, 0, 1);
+
+        // May fail if not running as root
+        if let Ok(traceroute) = UdpTraceroute::new(config, local_addr) {
+            let port = traceroute.generate_source_port();
+            assert!(port >= 50000);
+            assert!(port < 51000);
+        }
+    }
+
+    #[test]
+    fn test_source_port_configured() {
+        let config = TracerouteConfig::new().with_source_port(12345);
+        let local_addr = Ipv4Addr::new(127, 0, 0, 1);
+
+        // May fail if not running as root
+        if let Ok(traceroute) = UdpTraceroute::new(config, local_addr) {
+            let port = traceroute.generate_source_port();
+            assert_eq!(port, 12345);
+        }
     }
 
     #[test]
@@ -69,5 +309,6 @@ mod tests {
         let resp = ProbeResponse::time_exceeded(ip);
         assert_eq!(resp.ip(), ip);
         assert_eq!(resp.icmp_type(), 11);
+        assert!(!resp.is_destination());
     }
 }

@@ -12,6 +12,7 @@ members = [
     "crates/rustnmap-nse",
     "crates/rustnmap-output",
     "crates/rustnmap-cli",
+    "crates/rustnmap-benchmarks",
 ]
 resolver = "2"
 

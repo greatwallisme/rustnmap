@@ -9,7 +9,8 @@
 use std::io;
 use std::net::SocketAddr;
 
-use crate::scanner::{PortScanner, ScanConfig, ScanResult};
+use crate::scanner::{PortScanner, ScanResult};
+use rustnmap_common::ScanConfig;
 use rustnmap_common::{Ipv4Addr, Port, PortState, Protocol};
 use rustnmap_net::raw_socket::{parse_tcp_response, RawSocket, TcpPacketBuilder};
 use rustnmap_target::Target;
@@ -54,8 +55,8 @@ impl TcpSynScanner {
     /// - The process lacks `CAP_NET_RAW` capability (requires root)
     /// - The system runs out of file descriptors
     pub fn new(local_addr: Ipv4Addr, config: ScanConfig) -> ScanResult<Self> {
-        let socket = RawSocket::new()
-            .map_err(|e| crate::scanner::ScanError::PermissionDenied {
+        let socket =
+            RawSocket::new().map_err(|e| rustnmap_common::ScanError::PermissionDenied {
                 operation: format!("create raw socket: {e}"),
             })?;
 
@@ -83,7 +84,12 @@ impl TcpSynScanner {
     /// # Errors
     ///
     /// Returns an error if the scan cannot be performed due to network issues.
-    fn scan_port_impl(&self, target: &Target, port: Port, protocol: Protocol) -> ScanResult<PortState> {
+    fn scan_port_impl(
+        &self,
+        target: &Target,
+        port: Port,
+        protocol: Protocol,
+    ) -> ScanResult<PortState> {
         // Only TCP is supported
         if protocol != Protocol::Tcp {
             return Ok(PortState::Filtered);
@@ -133,15 +139,20 @@ impl TcpSynScanner {
         // Send the packet
         self.socket
             .send_packet(&packet, &dst_sockaddr)
-            .map_err(|e| crate::scanner::ScanError::Network(rustnmap_common::Error::Network(
-                rustnmap_common::error::NetworkError::SendError { source: e }
-            )))?;
+            .map_err(|e| {
+                rustnmap_common::ScanError::Network(rustnmap_common::Error::Network(
+                    rustnmap_common::error::NetworkError::SendError { source: e },
+                ))
+            })?;
 
         // Wait for response with timeout
         let mut recv_buf = vec![0u8; 65535];
         let timeout = self.config.initial_rtt;
 
-        match self.socket.recv_packet(recv_buf.as_mut_slice(), Some(timeout)) {
+        match self
+            .socket
+            .recv_packet(recv_buf.as_mut_slice(), Some(timeout))
+        {
             Ok(len) if len > 0 => {
                 // Parse the response
                 if let Some((flags, _seq, ack, src_port)) = parse_tcp_response(&recv_buf[..len]) {
@@ -182,15 +193,19 @@ impl TcpSynScanner {
                 // Empty response (shouldn't happen)
                 Ok(PortState::Filtered)
             }
-            Err(e) if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut => {
+            Err(e)
+                if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut =>
+            {
                 // No response received within timeout - port is filtered or host is down
                 Ok(PortState::Filtered)
             }
             Err(e) => {
                 // Other error
-                Err(crate::scanner::ScanError::Network(rustnmap_common::Error::Network(
-                    rustnmap_common::error::NetworkError::ReceiveError { source: e }
-                )))
+                Err(rustnmap_common::ScanError::Network(
+                    rustnmap_common::Error::Network(
+                        rustnmap_common::error::NetworkError::ReceiveError { source: e },
+                    ),
+                ))
             }
         }
     }
@@ -211,7 +226,10 @@ impl TcpSynScanner {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        #[expect(clippy::cast_possible_truncation, reason = "Lower bits provide sufficient entropy")]
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "Lower bits provide sufficient entropy"
+        )]
         let now_lower = now as u32;
         let pid = std::process::id();
         now_lower.wrapping_add(pid)
@@ -276,6 +294,9 @@ mod tests {
         } else {
             seq2 - seq1
         };
-        assert!(diff < 1_000_000, "Sequence numbers should be close in value");
+        assert!(
+            diff < 1_000_000,
+            "Sequence numbers should be close in value"
+        );
     }
 }

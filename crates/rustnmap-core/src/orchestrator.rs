@@ -10,9 +10,10 @@ use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::Arc;
 
+use rustnmap_common::ScanConfig as ScannerConfig;
 use rustnmap_output::models::PortState;
 use rustnmap_output::models::{HostResult, HostStatus, PortResult, ScanResult, ScanStatistics};
-use rustnmap_scan::scanner::{PortScanner, ScanConfig as ScannerConfig};
+use rustnmap_scan::scanner::PortScanner;
 use rustnmap_scan::syn_scan::TcpSynScanner;
 use rustnmap_target::Target;
 use tokio::sync::RwLock;
@@ -571,7 +572,9 @@ impl ScanOrchestrator {
             let socket = TcpSocket::new_v4()?;
             timeout(timeout_duration, socket.connect(addr))
                 .await
-                .map_err(|_e| std::io::Error::new(std::io::ErrorKind::TimedOut, "connection timeout"))?
+                .map_err(|_e| {
+                    std::io::Error::new(std::io::ErrorKind::TimedOut, "connection timeout")
+                })?
                 .map(|_| ())
         }
         .await;

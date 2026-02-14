@@ -1,5 +1,85 @@
 # Progress Log: RustNmap Implementation
 
+## Session 2026-02-13 (Phase 1: UDP Scanning - COMPLETE)
+
+### Activities
+| Time | Activity | Status |
+|------|----------|--------|
+| 00:40 | Implemented UdpScanner in rustnmap-scan | Complete |
+| 00:45 | Added UDP packet builder to rustnmap-net | Complete |
+| 00:50 | Added ICMP response parser for port state detection | Complete |
+| 00:55 | Created unit tests for UDP scanner | Complete |
+| 01:00 | Created integration tests for UDP scanning | Complete |
+| 01:05 | Verified all tests pass (346 tests) | Complete |
+| 01:10 | Verified zero clippy warnings | Complete |
+
+### Implementation Summary
+
+**Files Created/Modified**:
+| File | Description |
+|------|-------------|
+| `crates/rustnmap-scan/src/udp_scan.rs` | UDP scanner implementation with raw sockets |
+| `crates/rustnmap-net/src/lib.rs` | UDP packet builder, ICMP parser, response types |
+| `crates/rustnmap-core/tests/udp_scan_test.rs` | Integration tests for UDP scanning |
+
+**Port State Detection Logic**:
+- **OPEN**: UDP response received from target port
+- **CLOSED**: ICMP Port Unreachable received (code 3)
+- **FILTERED**: ICMP Admin Prohibited (code 13) or other ICMP errors
+- **OPEN|FILTERED**: No response (timeout - ambiguous state)
+
+**Test Results**:
+- All 346 tests passing (338 unit + 8 integration)
+- Zero clippy warnings
+- UDP scanner correctly requires root privileges
+
+---
+
+## Session 2026-02-13 (Planning Phase - COMPLETE)
+
+### Activities
+| Time | Activity | Status |
+|------|----------|--------|
+| 00:00 | Checked for unsynced context from previous session | Complete |
+| 00:05 | Read existing task_plan.md, findings.md, progress.md | Complete |
+| 00:15 | Read design documents (architecture, port-scanning, host-discovery, os-detection, traceroute) | Complete |
+| 00:30 | Analyzed current project state | Complete |
+| 00:35 | Created comprehensive task plan for completing project | Complete |
+
+### Key Findings
+
+**Current Project State**:
+- 12 crates created and functional
+- 346 tests passing (338 unit + 8 integration)
+- TCP SYN scan and UDP scan with raw sockets implemented
+- Integration tests passing for TCP and UDP scans
+
+**Remaining Work (from design docs @doc/)**:
+
+| Priority | Feature | Design Doc Reference |
+|----------|---------|---------------------|
+| P0 | TCP ping (-PS) | doc/modules/host-discovery.md |
+| P0 | ICMP discovery (-PE/-PP/-PM) | doc/modules/host-discovery.md |
+| P0 | ARP discovery (-PR) | doc/modules/host-discovery.md |
+| P1 | FIN/NULL/Xmas/ACK/Maimon scans | doc/modules/port-scanning.md |
+| P1 | Traceroute (ICMP/TCP/UDP) | doc/modules/traceroute.md |
+| P1 | OS detection probes | doc/modules/os-detection.md |
+| P1 | Service detection probes | doc/modules/service-detection.md |
+| P2 | NSE libraries | doc/modules/nse-engine.md |
+| P2 | Performance benchmarks | doc/roadmap.md |
+
+### Files Created/Modified
+| File | Change |
+|------|--------|
+| task_plan.md | Updated with comprehensive implementation plan |
+
+### Next Actions
+1. Start Phase 2: Host Discovery (TCP ping, ICMP, ARP)
+2. Implement TCP SYN ping (-PS)
+3. Implement ICMP echo ping (-PE)
+
+---
+
 ## Session 2026-02-13 (Integration Tests with Real Network Targets - COMPLETE)
 
 ### Activities
@@ -40,247 +120,58 @@
 - Connect scan tests run without root
 - All tests use localhost services (ports 22, 8501) for safety
 
-### Files Created/Modified
-| File | Change |
-|------|--------|
-| `crates/rustnmap-core/tests/common/mod.rs` | Created - Test utilities |
-| `crates/rustnmap-core/tests/tcp_scan_test.rs` | Created - Integration tests |
-| `crates/rustnmap-core/Cargo.toml` | Added libc dev-dependency |
-| `task_plan.md` | Updated with test plan and results |
-| `progress.md` | Updated with session log |
-
----
-
-## Session 2026-02-13 (TCP SYN Scan Raw Socket Implementation)
-
-### Activities
-| Time | Activity | Status |
-|------|----------|--------|
-| 19:00 | Read rust-guidelines for code quality | Complete |
-| 19:30 | Extended rustnmap-net with raw socket I/O | Complete |
-| 20:00 | Implemented TcpPacketBuilder for TCP packet construction | Complete |
-| 20:30 | Implemented TCP SYN scanner with raw socket transmission | Complete |
-| 21:00 | Fixed all clippy warnings across affected crates | Complete |
-| 21:30 | All tests passing (20 in rustnmap-scan) | Complete |
-
-### Changes Made
-| File | Change |
-|------|--------|
-| `crates/rustnmap-net/src/lib.rs` | Added RawSocket.send_packet(), recv_packet(), TcpPacketBuilder, parse_tcp_response() |
-| `crates/rustnmap-net/Cargo.toml` | Added libc dependency |
-| `crates/rustnmap-common/src/error.rs` | Added SendError and ReceiveError variants |
-| `crates/rustnmap-scan/src/syn_scan.rs` | Replaced simulation with actual raw socket SYN scanning |
-| `crates/rustnmap-target/src/parser.rs` | Fixed clippy lint name (self_only_used_in_recursion -> only_used_in_recursion) |
-
-### Implementation Details
-- Raw socket operations using libc for sendto/recvfrom
-- TCP packet construction with proper IP/TCP headers and checksums
-- SYN probe sends SYN packet, waits for response
-- Port state detection:
-  - SYN-ACK received → Open
-  - RST received → Closed
-  - No response/TIMEOUT → Filtered
-- Sequence number tracking for ACK verification
-
-### Requirements
-- Root privileges or CAP_NET_RAW capability required for raw sockets
-- Linux x86_64 only
-
-### Next Steps
-1. Test with actual network targets using sudo ✓ (COMPLETED in integration tests session)
-2. Implement remaining privileged features:
-   - ICMP discovery
-   - TCP/UDP ping
-   - ARP discovery
-   - Traceroute
-   - OS detection probes
-
-## Session 2026-02-13 (Phase 5: Integration - COMPLETE)
-
-### Activities
-| Time | Activity | Status |
-|------|----------|--------|
-| 10:00 | Reviewed design documents | Complete |
-| 10:30 | Checked current codebase status | Complete |
-| 11:00 | Updated task_plan.md with current status | Complete |
-| 11:30 | Created comprehensive findings.md | Complete |
-| 14:00 | Implemented rustnmap-core crate | Complete |
-| 15:30 | Fixed all compilation errors | Complete |
-| 16:00 | All 39 rustnmap-core tests passing | Complete |
-| 16:30 | Implemented rustnmap-cli crate | Complete |
-| 17:00 | Fixed all clippy warnings in rustnmap-cli | Complete |
-| 17:30 | All 9 rustnmap-cli tests passing | Complete |
-| 18:00 | Release binary build successful | Complete |
-
-### Current Statistics
-| Metric | Value |
-|--------|-------|
-| Crates Created | 12 |
-| Total Tests Passing | 334 (326 unit + 8 integration) |
-| Phase 1 Tests | 14 passed |
-| Phase 2 Tests | 85 passed |
-| Phase 3 Tests | 121 passed (36 fingerprint + 85 evasion) |
-| Phase 4 Tests | 35 passed |
-| Phase 5 Tests | 81 passed (25 output + 39 core + 9 cli + 8 integration) |
-| Integration Tests | 8 passed |
-| Lines of Code | ~20000+ |
-
-### Module Status
-
-| Crate | Tests | Status | Notes |
-|-------|-------|--------|-------|
-| rustnmap-common | 14 | COMPLETE | Core types and utilities |
-| rustnmap-net | 0 | COMPLETE | Network primitives |
-| rustnmap-packet | 0 | COMPLETE | Packet engine |
-| rustnmap-target | 85 | COMPLETE | Target parsing |
-| rustnmap-scan | 0 | COMPLETE | Port scanning |
-| rustnmap-fingerprint | 36 | COMPLETE | Service/OS detection |
-| rustnmap-traceroute | 76 | COMPLETE | Route tracing |
-| rustnmap-evasion | 85 | COMPLETE | Firewall bypass |
-| rustnmap-nse | 35 | COMPLETE | Lua script engine |
-| rustnmap-output | 25 | COMPLETE | Output formatters |
-| rustnmap-core | 39 | COMPLETE | Scan orchestrator |
-| rustnmap-cli | 9 | COMPLETE | CLI with clap |
-
-### rustnmap-cli Features Implemented
-- Full Nmap-compatible argument parsing with clap derive API
-- Target parsing (IP, CIDR, ranges, hostnames)
-- Input file support (-iL)
-- All scan types: SYN, Connect, UDP, FIN, NULL, XMAS, Maimon
-- Port specification: -p, --top-ports, -F, -p-
-- Service detection (-sV) and OS detection (-O) flags
-- Timing templates (-T0 to -T5)
-- All output formats: Normal, XML, JSON, Grepable, Script Kiddie (-oA)
-- Firewall evasion options: decoys, spoof IP, fragment MTU, source port
-- NSE script support (--script)
-- Traceroute support (--traceroute)
-- Verbosity and debug levels (-v, -d)
-- Comprehensive test coverage
-
-### Blockers
-None - Phase 5 COMPLETE
-
-### Next Actions
-1. **Implement privilege detection framework** - Add PrivilegeLevel enum and detect_privileges() function
-2. **Complete raw socket TODOs** - Requires sudo/CAP_NET_RAW:
-   - TCP SYN scan actual packet transmission
-   - Host discovery (TCP ping, ICMP, ARP)
-   - Traceroute implementations (ICMP, TCP, UDP)
-   - OS detection probes
-3. **Run full integration tests** with real network targets
-4. **Verify binary functionality** with real targets
-5. **Update documentation** with privilege requirements
-
-### Privilege Requirements Summary
-
-| Feature | Required Capability | Alternative |
-|---------|---------------------|-------------|
-| TCP SYN scan | CAP_NET_RAW | TCP Connect scan (-sT) |
-| UDP scan | CAP_NET_RAW | Not available |
-| ICMP ping | CAP_NET_RAW | TCP/UDP ping |
-| ARP discovery | CAP_NET_RAW | None (local only) |
-| Traceroute | CAP_NET_RAW | None |
-| OS detection | CAP_NET_RAW | None |
-| NSE raw packets | CAP_NET_RAW | Limited scripts |
-
-### Recommended Development Workflow
-
-```bash
-# 1. Build the binary
-cargo build --release
-
-# 2. Set capabilities (one-time setup)
-sudo setcap cap_net_raw,cap_net_admin+eip target/release/rustnmap
-
-# 3. Run without sudo for privileged operations
-./target/release/rustnmap -sS 192.168.1.1
-
-# 4. For development/testing with cargo
-sudo cargo test -p rustnmap-scan -- --ignored
-```
-
----
-
-## Session 2026-02-13 (Phase 5: Integration - rustnmap-core Complete)
-
-### Activities
-| Time | Activity | Status |
-|------|----------|--------|
-| 10:00 | Reviewed design documents | Complete |
-| 10:30 | Checked current codebase status | Complete |
-| 11:00 | Updated task_plan.md with current status | Complete |
-| 11:30 | Created comprehensive findings.md | Complete |
-| 14:00 | Implemented rustnmap-core crate | Complete |
-| 15:30 | Fixed all compilation errors | Complete |
-| 16:00 | All 39 tests passing | Complete |
-
-### Current Statistics
-| Metric | Value |
-|--------|-------|
-| Crates Created | 12 |
-| Total Tests Passing | 323 |
-| Phase 1 Tests | 14 passed |
-| Phase 2 Tests | 85 passed |
-| Phase 3 Tests | 121 passed (36 fingerprint + 85 evasion) |
-| Phase 4 Tests | 35 passed |
-| Phase 5 Tests | 64 passed (25 output + 39 core) |
-| Lines of Code | ~18000+ |
-
-### Module Status
-
-| Crate | Tests | Status | Notes |
-|-------|-------|--------|-------|
-| rustnmap-common | 14 | COMPLETE | Core types and utilities |
-| rustnmap-net | 0 | COMPLETE | Network primitives |
-| rustnmap-packet | 0 | COMPLETE | Packet engine |
-| rustnmap-target | 85 | COMPLETE | Target parsing |
-| rustnmap-scan | 0 | COMPLETE | Port scanning |
-| rustnmap-fingerprint | 36 | COMPLETE | Service/OS detection |
-| rustnmap-traceroute | 76 | COMPLETE | Route tracing |
-| rustnmap-evasion | 85 | COMPLETE | Firewall bypass |
-| rustnmap-nse | 35 | COMPLETE | Lua script engine |
-| rustnmap-output | 25 | COMPLETE | Output formatters |
-| rustnmap-core | 39 | COMPLETE | Scan orchestrator |
-| rustnmap-cli | 0 | IN PROGRESS | CLI entry point |
-
-### Blockers
-
-1. **rustnmap-cli incomplete** - Needs full implementation
-
-### Next Actions
-
-1. Complete rustnmap-cli implementation
-2. Integrate rustnmap-core with rustnmap-cli
-3. Add integration tests
-
----
-
-## Session 2026-02-12 (Phase 5.1: Output Crate Complete)
-
-### Activities
-| Time | Activity | Status |
-|------|----------|--------|
-| 14:00 | Implemented rustnmap-output crate | Complete |
-| 16:00 | Fixed XML API usage with Attribute::new() | Complete |
-| 16:45 | All 25/25 unit tests passing | Complete |
-| 17:15 | Fixed rustnmap-output warnings and test failure | Complete |
-
-### Notes
-- rustnmap-output: All output formatters implemented (Normal, XML, JSON, Grepable, Script Kiddie)
-- **Fixed all issues in rustnmap-output**:
-  - Removed duplicate/unused `version` variable declaration
-  - Fixed test assertion for grepable format ("80//tcp" not "80/tcp")
-  - Fixed needless question mark in XML formatter
-  - Removed unfulfilled lint expectations
-  - Applied cargo fmt for code style compliance
-- All 25/25 unit tests passing (100%)
-- Zero clippy warnings from our code
-- Full API documentation with examples
-- OutputManager for coordinating multiple output destinations
-
 ---
 
 ## Historical Progress
+
+### Phase 5 Complete (2026-02-13) - OS Detection Implementation
+
+**Activities**:
+| Time | Activity | Status |
+|------|----------|--------|
+| 19:10 | Read OS detection design doc and existing code | Complete |
+| 19:20 | Implemented TCP options parsing in rustnmap-net | Complete |
+| 19:30 | Updated OsFingerprint types with all test fields | Complete |
+| 19:45 | Implemented SEQ probe generation (6 SYN probes) | Complete |
+| 20:00 | Implemented ISN analysis (GCD, ISR, SP calculation) | Complete |
+| 20:15 | Implemented T1-T7 TCP test probes | Complete |
+| 20:30 | Implemented ECN probe with ECE/CWR flags | Complete |
+| 20:45 | Implemented IE (ICMP Echo) probes | Complete |
+| 21:00 | Implemented U1 (UDP) probe to closed port | Complete |
+| 21:15 | Implemented IP ID sequence classification | Complete |
+| 21:30 | Added comprehensive unit tests | Complete |
+| 21:45 | Added integration tests with #[ignore] for root | Complete |
+| 22:00 | Verified all tests pass (50 tests in fingerprint crate) | Complete |
+
+**Files Created/Modified**:
+| File | Description |
+|------|-------------|
+| `crates/rustnmap-net/src/lib.rs` | Added TcpOptions, TcpResponse, parse_tcp_options, parse_tcp_response_full |
+| `crates/rustnmap-fingerprint/src/os/fingerprint.rs` | Added SeqFingerprint fields (gcd, isr, sp, ti, ci, ii, ss), UdpTestResult, IcmpTestResult |
+| `crates/rustnmap-fingerprint/src/os/detector.rs` | Full OsDetector implementation with all probe types |
+| `crates/rustnmap-fingerprint/src/os/mod.rs` | Updated exports |
+| `crates/rustnmap-fingerprint/src/lib.rs` | Updated exports and doc tests |
+| `crates/rustnmap-fingerprint/Cargo.toml` | Added rustnmap-net and rustnmap-common dependencies |
+| `crates/rustnmap-fingerprint/tests/os_detection_test.rs` | Integration tests |
+
+**Test Results**:
+- 41 unit tests passing in rustnmap-fingerprint
+- 6 integration tests passing (1 ignored for root)
+- 2 doc tests passing
+- Zero clippy warnings
+
+**OS Detection Tests Implemented**:
+- SEQ probes: 6 SYN probes with 100ms intervals for ISN analysis
+- OPS analysis: WScale, NOP, MSS=1460, Timestamp, SACK permitted
+- T1-T7 tests: Various TCP flag combinations to open/closed ports
+- ECN test: SYN with ECE and CWR flags
+- IE tests: 2 ICMP echo requests with different payloads
+- U1 test: UDP probe to closed port, analyze ICMP unreachable
+
+### Phase 5 Complete (2026-02-13) - Core and CLI
+- rustnmap-core: 39 tests passing
+- rustnmap-cli: 9 tests passing
+- Integration tests: 8 tests passing
 
 ### Phase 4 Complete (2026-02-12)
 - NSE script engine with Lua 5.4 runtime

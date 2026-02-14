@@ -89,15 +89,15 @@ async fn test_syn_scan_closed_ports_filtered() {
     // Verify closed ports are NOT in results (filtered by design)
     if let Some(host) = result.hosts.first() {
         for port in &closed_ports {
-            let port_found = host
-                .ports
-                .iter()
-                .any(|p| p.number == *port);
+            let port_found = host.ports.iter().any(|p| p.number == *port);
             assert!(!port_found, "Closed port {} should not be in results", port);
         }
     }
 
-    println!("SYN scan correctly filtered {} closed ports from results", closed_ports.len());
+    println!(
+        "SYN scan correctly filtered {} closed ports from results",
+        closed_ports.len()
+    );
 }
 
 /// Tests TCP Connect scan against open ports.
@@ -143,15 +143,15 @@ async fn test_connect_scan_closed_ports_filtered() {
     // Verify closed ports are NOT in results (filtered by design)
     if let Some(host) = result.hosts.first() {
         for port in &closed_ports {
-            let port_found = host
-                .ports
-                .iter()
-                .any(|p| p.number == *port);
+            let port_found = host.ports.iter().any(|p| p.number == *port);
             assert!(!port_found, "Closed port {} should not be in results", port);
         }
     }
 
-    println!("Connect scan correctly filtered {} closed ports from results", closed_ports.len());
+    println!(
+        "Connect scan correctly filtered {} closed ports from results",
+        closed_ports.len()
+    );
 }
 
 /// Tests TCP SYN scan with mixed open and closed ports.

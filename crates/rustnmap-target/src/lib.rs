@@ -19,10 +19,15 @@
 
 use rustnmap_common::{Error, Ipv4Addr, Result};
 
+pub mod discovery;
 pub mod parser;
 pub mod spec;
 
 // Re-exports
+pub use discovery::{
+    ArpPing, HostDiscovery, HostDiscoveryMethod, HostState, IcmpPing, IcmpTimestampPing,
+    TcpAckPing, TcpSynPing,
+};
 pub use parser::TargetParser;
 pub use spec::{Target, TargetGroup, TargetSpec};
 

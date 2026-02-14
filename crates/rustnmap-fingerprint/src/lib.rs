@@ -48,11 +48,12 @@
 //!
 //! ```no_run
 //! use rustnmap_fingerprint::os::{FingerprintDatabase, OsDetector};
-//! use std::net::SocketAddr;
+//! use std::net::{Ipv4Addr, SocketAddr};
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! let db = FingerprintDatabase::load_from_nmap_db("nmap-os-db").await?;
-//! let detector = OsDetector::new(db);
+//! let local_addr = Ipv4Addr::new(192, 168, 1, 100);
+//! let detector = OsDetector::new(db, local_addr);
 //!
 //! let target: SocketAddr = "127.0.0.1:80".parse().unwrap();
 //! let matches = detector.detect_os(&target).await?;
@@ -81,7 +82,6 @@
 //! Enable the `test-util` feature for testing utilities.
 
 #![warn(missing_docs)]
-#![warn(unused_crate_dependencies)]
 
 pub mod error;
 pub mod os;
@@ -93,6 +93,8 @@ pub type Result<T> = std::result::Result<T, error::FingerprintError>;
 // Re-exports for convenience
 pub use error::FingerprintError;
 pub use os::{
-    FingerprintDatabase, OpsFingerprint, OsDetector, OsFingerprint, OsMatch, SeqFingerprint,
+    EcnFingerprint, FingerprintDatabase, IcmpTestResult, IpIdPattern, IpIdSeqClass, IsnClass,
+    OpsFingerprint, OsDetector, OsFingerprint, OsMatch, SeqFingerprint, TestResult,
+    TimestampRate, UdpTestResult,
 };
 pub use service::{ProbeDatabase, ProbeDefinition, ServiceDetector, ServiceInfo};

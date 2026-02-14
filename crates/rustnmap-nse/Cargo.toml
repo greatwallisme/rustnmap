@@ -39,6 +39,7 @@ tracing = { workspace = true }
 # Utilities
 bytes = { workspace = true }
 regex = { workspace = true }
+rand = "0.8"
 
 [dev-dependencies]
 proptest = { workspace = true }

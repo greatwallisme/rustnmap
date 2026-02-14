@@ -29,6 +29,12 @@ pub struct OsFingerprint {
 
     /// Individual test results (T1-T7, U1, IE).
     pub tests: HashMap<String, TestResult>,
+
+    /// U1 (UDP) test result.
+    pub u1: Option<UdpTestResult>,
+
+    /// IE (ICMP Echo) test results.
+    pub ie: Option<IcmpTestResult>,
 }
 
 /// TCP ISN (Initial Sequence Number) fingerprint.
@@ -42,6 +48,30 @@ pub struct SeqFingerprint {
 
     /// Timestamp increment rate (if timestamps enabled).
     pub timestamp_rate: Option<TimestampRate>,
+
+    /// GCD (Greatest Common Divisor) of ISN differences.
+    pub gcd: u32,
+
+    /// ISR (ISN Rate) - rate of ISN generation.
+    pub isr: u8,
+
+    /// SP (Sequence Predictability) - difficulty of predicting sequence numbers.
+    pub sp: u8,
+
+    /// TI (IP ID sequence) - IP ID generation class.
+    pub ti: IpIdSeqClass,
+
+    /// CI (IP ID sequence for continuous probes).
+    pub ci: IpIdSeqClass,
+
+    /// II (IP ID sequence for ICMP probes).
+    pub ii: IpIdSeqClass,
+
+    /// SS (Shared IP ID sequence flag).
+    pub ss: u8,
+
+    /// Timestamp counter values from SEQ probes.
+    pub timestamps: Vec<u32>,
 }
 
 /// ISN generation algorithm classification.
@@ -178,6 +208,86 @@ pub struct TestResult {
 
     /// Timestamp option present.
     pub timestamp: bool,
+
+    /// Response received (R flag in Nmap fingerprint).
+    pub responded: bool,
+
+    /// Don't Fragment bit set.
+    pub df: bool,
+
+    /// Time To Live.
+    pub ttl: Option<u8>,
+
+    /// IP ID value.
+    pub ip_id: Option<u16>,
+}
+
+/// U1 (UDP) test result.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct UdpTestResult {
+    /// Response received (R flag).
+    pub responded: bool,
+
+    /// Don't Fragment bit set in response.
+    pub df: bool,
+
+    /// Time To Live.
+    pub ttl: Option<u8>,
+
+    /// IP ID value.
+    pub ip_id: Option<u16>,
+
+    /// Total length of response IP packet.
+    pub ip_len: Option<u16>,
+
+    /// Length of unused data in ICMP response.
+    pub unused: Option<u8>,
+
+    /// ICMP unreachable code received.
+    pub icmp_code: Option<u8>,
+}
+
+/// IE (ICMP Echo) test result.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct IcmpTestResult {
+    /// Response to first ICMP echo (R flag).
+    pub responded1: bool,
+
+    /// Response to second ICMP echo (R flag).
+    pub responded2: bool,
+
+    /// Don't Fragment bit in first response.
+    pub df1: bool,
+
+    /// Don't Fragment bit in second response.
+    pub df2: bool,
+
+    /// Time To Live in first response.
+    pub ttl1: Option<u8>,
+
+    /// Time To Live in second response.
+    pub ttl2: Option<u8>,
+
+    /// IP ID sequence class.
+    pub ipll: Option<u16>,
+
+    /// IP ID value in first response.
+    pub ip_id1: Option<u16>,
+
+    /// IP ID value in second response.
+    pub ip_id2: Option<u16>,
+
+    /// Type of Service in first response.
+    pub tos1: Option<u8>,
+
+    /// Type of Service in second response.
+    pub tos2: Option<u8>,
+
+    /// Data bytes returned in first response.
+    pub data1: Option<u16>,
+
+    /// Data bytes returned in second response.
+    pub data2: Option<u16>,
 }
 
 impl OsFingerprint {
@@ -190,6 +300,8 @@ impl OsFingerprint {
             win: HashMap::new(),
             ecn: None,
             tests: HashMap::new(),
+            u1: None,
+            ie: None,
         }
     }
 
@@ -226,6 +338,18 @@ impl OsFingerprint {
     /// Add test result.
     pub fn with_test(mut self, result: TestResult) -> Self {
         self.tests.insert(result.name.clone(), result);
+        self
+    }
+
+    /// Set U1 (UDP) test result.
+    pub fn with_u1(mut self, u1: UdpTestResult) -> Self {
+        self.u1 = Some(u1);
+        self
+    }
+
+    /// Set IE (ICMP Echo) test result.
+    pub fn with_ie(mut self, ie: IcmpTestResult) -> Self {
+        self.ie = Some(ie);
         self
     }
 }
@@ -274,6 +398,172 @@ impl EcnFingerprint {
     }
 }
 
+impl SeqFingerprint {
+    /// Create a new SEQ fingerprint with unknown class.
+    pub fn new() -> Self {
+        Self {
+            class: IsnClass::Unknown,
+            timestamp: false,
+            timestamp_rate: None,
+            gcd: 0,
+            isr: 0,
+            sp: 0,
+            ti: IpIdSeqClass::Unknown,
+            ci: IpIdSeqClass::Unknown,
+            ii: IpIdSeqClass::Unknown,
+            ss: 0,
+            timestamps: Vec::new(),
+        }
+    }
+}
+
+impl Default for SeqFingerprint {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl TestResult {
+    /// Create a new test result with the given name.
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            flags: 0,
+            window: None,
+            mss: None,
+            wscale: None,
+            sack: false,
+            timestamp: false,
+            responded: false,
+            df: false,
+            ttl: None,
+            ip_id: None,
+        }
+    }
+
+    /// Set the response flags.
+    pub fn with_flags(mut self, flags: u8) -> Self {
+        self.flags = flags;
+        self.responded = true;
+        self
+    }
+
+    /// Set the window size.
+    pub fn with_window(mut self, window: u16) -> Self {
+        self.window = Some(window);
+        self
+    }
+
+    /// Set TCP options.
+    pub fn with_options(mut self, options: &OpsFingerprint) -> Self {
+        self.mss = options.mss;
+        self.wscale = options.wscale;
+        self.sack = options.sack;
+        self.timestamp = options.timestamp;
+        self
+    }
+
+    /// Set IP header fields.
+    pub fn with_ip_fields(mut self, df: bool, ttl: u8, ip_id: u16) -> Self {
+        self.df = df;
+        self.ttl = Some(ttl);
+        self.ip_id = Some(ip_id);
+        self
+    }
+}
+
+impl Default for TestResult {
+    fn default() -> Self {
+        Self::new("T1")
+    }
+}
+
+impl UdpTestResult {
+    /// Create a new empty U1 test result.
+    pub fn new() -> Self {
+        Self {
+            responded: false,
+            df: false,
+            ttl: None,
+            ip_id: None,
+            ip_len: None,
+            unused: None,
+            icmp_code: None,
+        }
+    }
+
+    /// Mark as responded with ICMP unreachable.
+    pub fn with_icmp_response(mut self, code: u8) -> Self {
+        self.responded = true;
+        self.icmp_code = Some(code);
+        self
+    }
+
+    /// Set IP header fields.
+    pub fn with_ip_fields(mut self, df: bool, ttl: u8, ip_id: u16, ip_len: u16) -> Self {
+        self.df = df;
+        self.ttl = Some(ttl);
+        self.ip_id = Some(ip_id);
+        self.ip_len = Some(ip_len);
+        self
+    }
+}
+
+impl Default for UdpTestResult {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl IcmpTestResult {
+    /// Create a new empty IE test result.
+    pub fn new() -> Self {
+        Self {
+            responded1: false,
+            responded2: false,
+            df1: false,
+            df2: false,
+            ttl1: None,
+            ttl2: None,
+            ipll: None,
+            ip_id1: None,
+            ip_id2: None,
+            tos1: None,
+            tos2: None,
+            data1: None,
+            data2: None,
+        }
+    }
+
+    /// Set first response fields.
+    pub fn with_response1(mut self, df: bool, ttl: u8, ip_id: u16, tos: u8, data: u16) -> Self {
+        self.responded1 = true;
+        self.df1 = df;
+        self.ttl1 = Some(ttl);
+        self.ip_id1 = Some(ip_id);
+        self.tos1 = Some(tos);
+        self.data1 = Some(data);
+        self
+    }
+
+    /// Set second response fields.
+    pub fn with_response2(mut self, df: bool, ttl: u8, ip_id: u16, tos: u8, data: u16) -> Self {
+        self.responded2 = true;
+        self.df2 = df;
+        self.ttl2 = Some(ttl);
+        self.ip_id2 = Some(ip_id);
+        self.tos2 = Some(tos);
+        self.data2 = Some(data);
+        self
+    }
+}
+
+impl Default for IcmpTestResult {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -292,6 +582,14 @@ mod tests {
             class: IsnClass::Random,
             timestamp: false,
             timestamp_rate: None,
+            gcd: 1,
+            isr: 0,
+            sp: 0,
+            ti: IpIdSeqClass::Random,
+            ci: IpIdSeqClass::Random,
+            ii: IpIdSeqClass::Random,
+            ss: 0,
+            timestamps: Vec::new(),
         });
 
         assert!(fp.seq.is_some());

@@ -129,15 +129,45 @@ impl ServiceDetector {
     pub async fn detect_service(&self, target: &SocketAddr, port: u16) -> Result<Vec<ServiceInfo>> {
         info!("Starting service detection on {}:{}", target.ip(), port);
 
+        // First try banner grabbing (null probe) for services that send banners immediately
+        let mut results = Vec::new();
+
+        match self.grab_banner(target, port).await {
+            Ok(Some(banner)) => {
+                trace!("Got banner: {} bytes", banner.len());
+
+                // Try to match banner against all probe rules (treat as GenericLines response)
+                let probes = self.select_probes(port);
+                for probe in &probes {
+                    let matches = self.match_response(probe, &banner)?;
+                    for match_result in matches {
+                        results.push(ServiceInfo::from_match(match_result));
+                    }
+                }
+
+                // If we got confident results from banner, return early
+                if results.iter().any(|r| r.confidence >= 8) {
+                    return Ok(results);
+                }
+            }
+            Ok(None) => {
+                debug!("No banner received from {}:{}", target.ip(), port);
+            }
+            Err(e) => {
+                debug!("Banner grab failed: {}", e);
+            }
+        }
+
         // Get applicable probes for this port at configured intensity
         let probes = self.select_probes(port);
 
         if probes.is_empty() {
             debug!("No probes available for port {}", port);
-            return Ok(vec![ServiceInfo::new("unknown")]);
+            if results.is_empty() {
+                return Ok(vec![ServiceInfo::new("unknown")]);
+            }
+            return Ok(results);
         }
-
-        let mut results = Vec::new();
 
         // Execute probes in order
         for probe in &probes {
@@ -169,6 +199,55 @@ impl ServiceDetector {
         }
 
         Ok(results)
+    }
+
+    /// Grab banner from a TCP port without sending any data.
+    ///
+    /// Some services (SSH, FTP, SMTP) send a banner immediately upon connection.
+    /// This method connects and reads the initial response without sending anything.
+    pub async fn grab_banner(
+        &self,
+        target: &SocketAddr,
+        port: u16,
+    ) -> Result<Option<Vec<u8>>> {
+        use tokio::io::AsyncReadExt;
+        use tokio::net::TcpStream;
+
+        trace!("Grabbing banner from {}:{}", target.ip(), port);
+
+        // Connect to target
+        let stream = timeout(
+            self.default_timeout,
+            TcpStream::connect((target.ip(), port)),
+        )
+        .await
+        .map_err(|_| FingerprintError::Timeout {
+            address: target.ip().to_string(),
+            port,
+        })?;
+
+        let mut stream = stream?;
+
+        // Read banner without sending anything
+        let mut buffer = vec![0u8; 4096];
+        let n = match timeout(self.default_timeout, stream.read(&mut buffer)).await {
+            Ok(Ok(n)) => n,
+            Ok(Err(_)) => 0,
+            Err(_) => {
+                return Err(FingerprintError::Timeout {
+                    address: target.ip().to_string(),
+                    port,
+                });
+            }
+        };
+
+        if n > 0 {
+            buffer.truncate(n);
+            trace!("Banner grabbed: {} bytes", n);
+            Ok(Some(buffer))
+        } else {
+            Ok(None)
+        }
     }
 
     /// Select probes for a port based on intensity level.

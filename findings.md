@@ -13,18 +13,60 @@
 | Phase | Crate | Tests | Description |
 |-------|-------|-------|-------------|
 | Phase 1 | rustnmap-common | 14 | Core types, errors, utilities |
-| Phase 1 | rustnmap-net | 0 | Raw socket abstractions |
+| Phase 1 | rustnmap-net | 0 | Raw socket abstractions (raw socket support added) |
 | Phase 1 | rustnmap-packet | 0 | PACKET_MMAP V3 engine |
-| Phase 2 | rustnmap-target | 85 | Target parsing, host discovery |
-| Phase 2 | rustnmap-scan | 0 | Port scanning implementations |
-| Phase 3 | rustnmap-fingerprint | 36 | Service/OS detection |
-| Phase 3 | rustnmap-traceroute | 76 | Network route tracing |
+| Phase 2 | rustnmap-target | 85 | Target parsing, host discovery (structure ready) |
+| Phase 2 | rustnmap-scan | 20+ | Port scanning (TCP SYN/Connect implemented) |
+| Phase 3 | rustnmap-fingerprint | 36 | Service/OS detection (structure ready) |
+| Phase 3 | rustnmap-traceroute | 76 | Network route tracing (structure ready) |
 | Phase 3 | rustnmap-evasion | 85 | Firewall/IDS evasion |
-| Phase 4 | rustnmap-nse | 35 | Lua 5.4 script engine |
+| Phase 4 | rustnmap-nse | 35 | Lua 5.4 script engine (core ready) |
 | Phase 5 | rustnmap-output | 25 | Output formatters |
-| Phase 5 | rustnmap-cli | 0 | CLI entry point (IN PROGRESS) |
+| Phase 5 | rustnmap-core | 39 | Scan orchestrator |
+| Phase 5 | rustnmap-cli | 9 | CLI entry point |
 
-**Total**: 284 tests passing across 11 crates
+**Total**: 334 tests passing across 12 crates (326 unit + 8 integration)
+
+---
+
+## Remaining Work Per Design Documents (@doc/)
+
+Based on strict review of design documents, the following features remain to be implemented:
+
+### High Priority (P0) - Core Functionality
+
+| Feature | Design Doc | Status | Implementation Location |
+|---------|------------|--------|------------------------|
+| UDP scanning (-sU) | port-scanning.md | TODO | rustnmap-scan/src/lib.rs |
+| TCP SYN ping (-PS) | host-discovery.md | TODO | rustnmap-target/src/discovery.rs:65 |
+| ICMP echo ping (-PE) | host-discovery.md | TODO | rustnmap-target/src/discovery.rs:87 |
+| ICMP timestamp ping (-PP) | host-discovery.md | TODO | rustnmap-target/src/discovery.rs:87 |
+| ARP ping (-PR) | host-discovery.md | TODO | rustnmap-target/src/discovery.rs:118 |
+
+### Medium Priority (P1) - Complete Scan Types
+
+| Feature | Design Doc | Status | Implementation Location |
+|---------|------------|--------|------------------------|
+| TCP FIN scan (-sF) | port-scanning.md | TODO | rustnmap-scan |
+| TCP NULL scan (-sN) | port-scanning.md | TODO | rustnmap-scan |
+| TCP Xmas scan (-sX) | port-scanning.md | TODO | rustnmap-scan |
+| TCP ACK scan (-sA) | port-scanning.md | TODO | rustnmap-scan |
+| TCP Maimon scan (-sM) | port-scanning.md | TODO | rustnmap-scan |
+| ICMP traceroute | traceroute.md | TODO | rustnmap-traceroute/src/icmp.rs:32 |
+| TCP traceroute | traceroute.md | TODO | rustnmap-traceroute/src/tcp.rs:37,61 |
+| UDP traceroute | traceroute.md | TODO | rustnmap-traceroute/src/udp.rs:29 |
+| OS detection probes | os-detection.md | TODO | rustnmap-fingerprint/src/os/detector.rs |
+| Service detection probes | service-detection.md | TODO | rustnmap-fingerprint/src/service/detector.rs |
+
+### Lower Priority (P2) - Advanced Features
+
+| Feature | Design Doc | Status | Implementation Location |
+|---------|------------|--------|------------------------|
+| NSE nmap library | nse-engine.md | TODO | rustnmap-nse |
+| NSE stdnse library | nse-engine.md | TODO | rustnmap-nse |
+| NSE comm library | nse-engine.md | TODO | rustnmap-nse |
+| NSE shortport library | nse-engine.md | TODO | rustnmap-nse |
+| Performance benchmarks | roadmap.md | TODO | benches/ |
 
 ---
 
@@ -59,23 +101,23 @@ Application Binary
 
 ---
 
-## Implementation Details by Module
+## Implementation Details by Module (from Design Docs)
 
 ### Port Scanning (doc/modules/port-scanning.md)
 
 **Scan Types Required**:
-| Type | Nmap Flag | Implementation |
-|------|-----------|----------------|
-| TCP SYN | -sS | TcpSynScanner |
-| TCP Connect | -sT | TcpConnectScanner |
-| TCP FIN | -sF | TcpFinScanner |
-| TCP NULL | -sN | TcpNullScanner |
-| TCP Xmas | -sX | TcpXmasScanner |
-| TCP ACK | -sA | TcpAckScanner |
-| TCP Window | -sW | TcpWindowScanner |
-| TCP Maimon | -sM | TcpMaimonScanner |
-| UDP | -sU | UdpScanner |
-| IP Protocol | -sO | IpProtocolScanner |
+| Type | Nmap Flag | Implementation | Status |
+|------|-----------|----------------|--------|
+| TCP SYN | -sS | TcpSynScanner | IMPLEMENTED |
+| TCP Connect | -sT | TcpConnectScanner | IMPLEMENTED |
+| TCP FIN | -sF | TcpFinScanner | TODO |
+| TCP NULL | -sN | TcpNullScanner | TODO |
+| TCP Xmas | -sX | TcpXmasScanner | TODO |
+| TCP ACK | -sA | TcpAckScanner | TODO |
+| TCP Window | -sW | TcpWindowScanner | TODO |
+| TCP Maimon | -sM | TcpMaimonScanner | TODO |
+| UDP | -sU | UdpScanner | TODO |
+| IP Protocol | -sO | IpProtocolScanner | TODO |
 
 **Port State Machine** (10 states):
 1. Unknown - Initial state
@@ -89,25 +131,19 @@ Application Binary
 9. FilteredClosed - Cannot determine
 10. FilteredUnfiltered - Previous state filtered
 
-**Ultra Scan Architecture**:
-- UltraProbe: Probe specification with retry tracking
-- CongestionControl: RFC2581 TCP congestion control
-- TimeoutTracker: RFC 2988 adaptive timeout
-- RateMeter: Packet rate monitoring
-
 ### Host Discovery (doc/modules/host-discovery.md)
 
 **Discovery Methods**:
-| Method | Nmap Flag | Description |
-|--------|-----------|-------------|
-| ARP Ping | -PR | Local network only |
-| ICMP Echo | -PE | Standard ping |
-| ICMP Timestamp | -PP | Alternative ICMP |
-| ICMP Address Mask | -PM | Rarely used |
-| TCP SYN Ping | -PS | TCP SYN to specified ports |
-| TCP ACK Ping | -PA | TCP ACK to specified ports |
-| UDP Ping | -PU | UDP to specified ports |
-| IP Protocol Ping | -PO | IP protocol scan |
+| Method | Nmap Flag | Description | Status |
+|--------|-----------|-------------|--------|
+| ARP Ping | -PR | Local network only | TODO |
+| ICMP Echo | -PE | Standard ping | TODO |
+| ICMP Timestamp | -PP | Alternative ICMP | TODO |
+| ICMP Address Mask | -PM | Rarely used | TODO |
+| TCP SYN Ping | -PS | TCP SYN to specified ports | TODO |
+| TCP ACK Ping | -PA | TCP ACK to specified ports | TODO |
+| UDP Ping | -PU | UDP to specified ports | TODO |
+| IP Protocol Ping | -PO | IP protocol scan | TODO |
 
 ### Service Detection (doc/modules/service-detection.md)
 
@@ -116,69 +152,55 @@ Application Binary
 - MatchRule: pattern (regex), service, product, version, info, hostname, ostype, devicetype, cpe
 - Intensity levels (0-9) control probe selection
 
-**Version Extraction**:
-- Template variable substitution ($1-$N for capture groups)
-- CPE (Common Platform Enumeration) generation
-- Confidence scoring (0-10)
+**Status**: Structure ready, actual probe transmission TODO
 
 ### NSE Script Engine (doc/modules/nse-engine.md)
 
 **Core Components**:
-1. **Lua Runtime**: mlua with Lua 5.4
-2. **Script Database**: Loading, parsing, selection
-3. **Script Scheduler**: Concurrent execution with limits
-4. **Script Engine**: Main execution entry point
+1. **Lua Runtime**: mlua with Lua 5.4 - IMPLEMENTED
+2. **Script Database**: Loading, parsing, selection - IMPLEMENTED
+3. **Script Scheduler**: Concurrent execution with limits - IMPLEMENTED
+4. **Script Engine**: Main execution entry point - IMPLEMENTED
+5. **NSE Libraries**: 32 libraries to implement - TODO
 
-**NSE Libraries to Implement** (32 total):
-- Core: nmap, stdnse, comm, shortport
-- Protocol: http, ssh, ssl, snmp, smb, ftp, smtp, ldap, mysql, pgsql, msrpc, dns, dhcp, vnc, rdp, mongodb
-- Utility: brute, creds, datafiles, target, unpwdb, stringaux, tab, json, base64, bit, openssl, packet
-
-**Script Execution Flow**:
-1. Script Loading & Parsing
-2. Rule Evaluation (hostrule/portrule)
-3. Lua Environment Preparation
-4. Action Execution
-5. Result Collection
+**Status**: Core engine ready, libraries TODO
 
 ### OS Detection (doc/modules/os-detection.md)
 
 **TCP/IP Fingerprinting**:
-- SEQ probes: TCP ISN analysis (GCD, increments, randomness)
-- T1-T7 probes: Various TCP flag combinations
-- IE probes: ICMP echo analysis
-- U1 probe: UDP port unreachable analysis
-- ECN probe: Explicit Congestion Notification
+- SEQ probes: TCP ISN analysis (GCD, increments, randomness) - TODO
+- T1-T7 probes: Various TCP flag combinations - TODO
+- IE probes: ICMP echo analysis - TODO
+- U1 probe: UDP port unreachable analysis - TODO
+- ECN probe: Explicit Congestion Notification - TODO
 
-**Fingerprint Matching**:
-- nmap-os-db format parsing
-- Test-by-test comparison
-- Score-based classification
-- Fuzzy matching for unknown systems
+**Status**: Structure ready, probe transmission TODO
+
+### Traceroute (doc/modules/traceroute.md)
+
+**Supported Methods**:
+| Method | Protocol | Default Port | Status |
+|--------|----------|--------------|--------|
+| UDP | UDP | 40125 | TODO |
+| TCP SYN | TCP | 80 | TODO |
+| ICMP Echo | ICMP | N/A | TODO |
+| ICMP DCE | ICMP | N/A | TODO |
+| IP Protocol | IP | 0 | TODO |
+
+**Status**: Structure ready, probe transmission TODO
 
 ### Evasion Techniques (doc/modules/evasion.md)
 
 **Implemented Techniques**:
-| Technique | Description |
-|-----------|-------------|
-| Decoy Scan | -D flag, send probes from spoofed IPs |
-| Source Port Manipulation | -g flag, set specific source port |
-| IP Options | Add custom IP options |
-| Packet Fragmentation | -f flag, split packets |
-| Bad Checksum | --badsum, corrupt checksums |
-| Custom MTU | --mtu, set specific MTU |
-| Data Length | Add random data to packets |
-
-### Output Formats (doc/modules/output.md)
-
-**Required Formats**:
-| Format | Extension | Description |
-|--------|-----------|-------------|
-| Normal | .nmap | Human-readable text |
-| XML | .xml | Machine-parseable XML |
-| JSON | .json | JSON output |
-| Grepable | .gnmap | One-line per host |
-| Script Kiddie | - | 1337 speak |
+| Technique | Description | Status |
+|-----------|-------------|--------|
+| Decoy Scan | -D flag, send probes from spoofed IPs | Structure ready |
+| Source Port Manipulation | -g flag, set specific source port | Structure ready |
+| IP Options | Add custom IP options | Structure ready |
+| Packet Fragmentation | -f flag, split packets | Structure ready |
+| Bad Checksum | --badsum, corrupt checksums | Structure ready |
+| Custom MTU | --mtu, set specific MTU | Structure ready |
+| Data Length | Add random data to packets | Structure ready |
 
 ---
 
@@ -231,20 +253,6 @@ Application Binary
 
 ---
 
-## Risk Assessment (from doc/roadmap.md)
-
-| Risk | Impact | Mitigation |
-|------|--------|------------|
-| Lua compatibility | High | mlua crate, strict NSE API compatibility |
-| Raw socket permissions | Medium | CAP_NET_RAW, TCP Connect fallback |
-| Kernel compatibility | Medium | Support Linux 3.10+, feature detection |
-| SELinux/AppArmor | Medium | Policy configs, documentation |
-| Fingerprint maintenance | Medium | Auto-update mechanism |
-| Performance | Medium | Async I/O, zero-copy, eBPF |
-| Legal compliance | High | Clear terms, authorization checks |
-
----
-
 ## Code Quality Standards
 
 ### Required Checks (from CLAUDE.md)
@@ -261,168 +269,14 @@ cargo doc --no-deps --workspace           # Docs build without errors
 
 | Check | Status |
 |-------|--------|
-| Tests passing | 284/284 |
+| Tests passing | 334/334 |
 | Clippy warnings | 0 (all fixed) |
 | Format check | Pass |
 | Doc build | Pass |
 
-### Clippy Warnings Fixed (2026-02-13)
-
-**rustnmap-target (2 warnings fixed)**:
-1. `self_only_used_in_recursion` - Fixed expected lint name
-2. `unfulfilled_lint_expectations` - Resolved by fixing lint name
-
-**rustnmap-traceroute (20 warnings fixed)**:
-1. `uninlined_format_args` - Changed to inline format strings
-2. `cast_precision_loss` - Added #[allow] annotations with justification
-3. `derivable_impls` - Changed ProbeType to use #[derive(Default)]
-4. `match_same_arms` - Merged identical match arms
-5. `unused_result_ok` - Changed to `let _ =`
-6. `must_use_candidate` - Added #[must_use] to format()
-7. `unused_async` - Removed async from functions without await
-8. `single_match_else` - Changed to `if let`
-
-**Files modified**:
-- `crates/rustnmap-target/src/parser.rs`
-- `crates/rustnmap-traceroute/src/error.rs`
-- `crates/rustnmap-traceroute/src/hops.rs`
-- `crates/rustnmap-traceroute/src/lib.rs`
-- `crates/rustnmap-traceroute/src/probe.rs`
-- `crates/rustnmap-traceroute/src/icmp.rs`
-- `crates/rustnmap-traceroute/src/tcp.rs`
-- `crates/rustnmap-traceroute/src/udp.rs`
-
 ---
 
-## Remaining Work
-
-### Phase 5: Integration
-
-1. **Fix clippy warnings in rustnmap-traceroute**
-   - 20 unused_async errors
-   - Files: tcp.rs, udp.rs, icmp.rs
-
-2. **Complete rustnmap-cli crate**
-   - CLI argument parsing with clap
-   - Nmap-compatible options
-   - Integration with all modules
-
-3. **Implement Scan Orchestrator**
-   - Coordinate all scanning phases
-   - Manage scan session lifecycle
-   - Handle concurrent execution
-
-4. **Add Integration Tests**
-   - End-to-end scan workflows
-   - Mock network testing
-   - Performance benchmarks
-
-### Future Enhancements
-
-1. **IPv6 Support**: Full dual-stack operation
-2. **Performance Optimization**: eBPF filters, XDP
-3. **Database Updates**: Online fingerprint updates
-4. **NSE Library Completion**: All 32 libraries
-5. **Documentation**: User guide, API docs
-
----
-
-## TODO Items Requiring Root/Sudo Privileges
-
-The following TODO items require root privileges or CAP_NET_RAW capability to implement and test:
-
-### 1. Raw Socket Packet Transmission - COMPLETE
-
-**Location**: `crates/rustnmap-scan/src/syn_scan.rs`
-
-**Status**: IMPLEMENTED
-
-**Implementation Details**:
-- Extended `rustnmap-net` with `RawSocket.send_packet()` and `recv_packet()` methods
-- Added `TcpPacketBuilder` for constructing TCP/IP packets with proper headers and checksums
-- Added `parse_tcp_response()` for parsing TCP response packets
-- TCP SYN scanner now sends actual SYN packets and analyzes responses:
-  - SYN-ACK received → Port Open
-  - RST received → Port Closed
-  - No response/TIMEOUT → Port Filtered
-
-**Root Requirement**: Creating raw sockets requires CAP_NET_RAW capability or root.
-
-**Testing**:
-```bash
-# Build release binary
-cargo build --release
-
-# Run with sudo for raw socket access
-sudo ./target/release/rustnmap -sS 192.168.1.1
-```
-
-**Code Example**:
-```rust
-// Create scanner (requires root)
-let scanner = TcpSynScanner::new(local_addr, config)?;
-
-// Scan a port
-let state = scanner.scan_port(&target, 80, Protocol::Tcp)?;
-match state {
-    PortState::Open => println!("Port 80 is open"),
-    PortState::Closed => println!("Port 80 is closed"),
-    PortState::Filtered => println!("Port 80 is filtered"),
-    _ => {}
-}
-```
-
-### 2. Host Discovery - TCP Ping
-
-**Location**: `crates/rustnmap-target/src/discovery.rs:65`
-```rust
-// TODO: Implement actual TCP ping
-```
-
-**What needs root**: Sending custom TCP SYN packets (not through kernel TCP stack) requires raw sockets.
-
-### 3. Host Discovery - ICMP
-
-**Location**: `crates/rustnmap-target/src/discovery.rs:87`
-```rust
-// TODO: Implement ICMP discovery
-```
-
-**What needs root**: ICMP sockets (SOCK_DGRAM with IPPROTO_ICMP) are restricted on many systems; raw ICMP requires CAP_NET_RAW.
-
-### 4. Host Discovery - ARP
-
-**Location**: `crates/rustnmap-target/src/discovery.rs:118`
-```rust
-// TODO: Implement ARP discovery
-```
-
-**What needs root**: ARP packets are at layer 2 (ethernet frame level), requiring raw packet sockets (AF_PACKET).
-
-### 5. Traceroute Implementations
-
-**Locations**:
-- `crates/rustnmap-traceroute/src/icmp.rs:32`
-- `crates/rustnmap-traceroute/src/tcp.rs:37,61`
-- `crates/rustnmap-traceroute/src/udp.rs:29`
-
-**What needs root**: All traceroute methods require sending custom packets with specific TTL values and receiving ICMP responses.
-
-### 6. OS Detection Probes
-
-**Location**: `crates/rustnmap-fingerprint/src/os/detector.rs`
-
-Multiple TODOs for:
-- SEQ probes (ISN analysis)
-- T1-T7 TCP tests
-- ICMP echo probes
-- UDP probe to closed port
-
-**What needs root**: All OS detection requires crafting packets with specific TCP flags, options, and analyzing responses.
-
----
-
-## Privilege Handling Strategy
+## Privilege Handling Strategy (from findings.md)
 
 ### Option 1: Runtime Privilege Detection (Recommended)
 
@@ -462,93 +316,7 @@ sudo setcap cap_net_raw,cap_net_admin+eip target/release/rustnmap
 ./target/release/rustnmap -sS 192.168.1.1
 ```
 
-### Option 3: Setuid Binary (Not Recommended)
-
-```bash
-sudo chown root:root target/release/rustnmap
-sudo chmod u+s target/release/rustnmp
-```
-
-**Security risk**: Entire binary runs as root. Not recommended.
-
-### Option 4: Capability-Aware Testing
-
-For CI/CD and testing without root:
-
-```rust
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    #[ignore = "requires root/CAP_NET_RAW"]
-    fn test_raw_socket_scan() {
-        // Only runs when explicitly enabled
-    }
-}
-```
-
-Run with: `cargo test -- --ignored`
-
 ---
-
-## Implementation Plan for Privileged Features
-
-### Phase A: Privilege Detection Framework
-1. Add `PrivilegeLevel` enum to `rustnmap-common`
-2. Implement `detect_privileges()` function
-3. Add privilege checks before raw socket operations
-4. Provide clear error messages when privileges are missing
-
-### Phase B: Capability-Based Deployment
-1. Document capability setup in deployment guide
-2. Add helper script for setting capabilities
-3. Update CLI to warn about missing privileges
-
-### Phase C: Implement Privileged Features (with sudo)
-
-For each TODO, implement and test with sudo:
-
-```bash
-# Development workflow
-sudo cargo test -p rustnmap-scan syn_scan::tests -- --nocapture
-
-# Or set capabilities on test binary
-sudo setcap cap_net_raw+eip target/debug/deps/rustnmap_scan-*
-cargo test -p rustnmap-scan
-```
-
----
-
-## Testing Strategy
-
-### Unit Tests (No Privileges Required)
-- Packet construction logic
-- State machines
-- Protocol parsing
-
-### Integration Tests (Requires Privileges)
-- Mark with `#[ignore = "requires root"]`
-- Run in CI with privileged container or skip
-
-### Manual Testing
-```bash
-# Build with release optimizations
-cargo build --release
-
-# Set capabilities
-sudo setcap cap_net_raw,cap_net_admin+eip target/release/rustnmap
-
-# Test SYN scan (now works without sudo)
-./target/release/rustnmap -sS 127.0.0.1
-
-# Or use sudo for full root
-sudo ./target/release/rustnmap -sS 192.168.1.1
-```
-
----
-
-## Reference Links
 
 ## Reference Links
 
@@ -556,3 +324,5 @@ sudo ./target/release/rustnmap -sS 192.168.1.1
 - Design Docs: `doc/modules/*.md`
 - Architecture: `doc/architecture.md`
 - Roadmap: `doc/roadmap.md`
+- Task Plan: `task_plan.md`
+- Progress: `progress.md`

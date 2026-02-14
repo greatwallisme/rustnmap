@@ -86,6 +86,16 @@ pub enum Error {
     /// Serialization error.
     #[error("serialization error: {0}")]
     SerializationError(#[from] serde_json::Error),
+
+    /// Lua library error.
+    #[error("lua error: {0}")]
+    LuaLibError(String),
+}
+
+impl From<mlua::Error> for Error {
+    fn from(err: mlua::Error) -> Self {
+        Self::LuaLibError(err.to_string())
+    }
 }
 
 impl Error {

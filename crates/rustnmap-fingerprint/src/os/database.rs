@@ -308,11 +308,27 @@ mod tests {
             class: IsnClass::Random,
             timestamp: false,
             timestamp_rate: None,
+            gcd: 1,
+            isr: 0,
+            sp: 0,
+            ti: crate::os::fingerprint::IpIdSeqClass::Random,
+            ci: crate::os::fingerprint::IpIdSeqClass::Random,
+            ii: crate::os::fingerprint::IpIdSeqClass::Random,
+            ss: 0,
+            timestamps: Vec::new(),
         };
         let seq2 = SeqFingerprint {
             class: IsnClass::Incremental { increment: 1 },
             timestamp: false,
             timestamp_rate: None,
+            gcd: 1,
+            isr: 0,
+            sp: 0,
+            ti: crate::os::fingerprint::IpIdSeqClass::Incremental,
+            ci: crate::os::fingerprint::IpIdSeqClass::Incremental,
+            ii: crate::os::fingerprint::IpIdSeqClass::Incremental,
+            ss: 0,
+            timestamps: Vec::new(),
         };
 
         // Different classes = 10.0 diff

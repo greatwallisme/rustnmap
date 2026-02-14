@@ -14,10 +14,12 @@ categories = ["network-programming", "parser-implementations"]
 
 [dependencies]
 rustnmap-common = { path = "../rustnmap-common" }
+rustnmap-net = { path = "../rustnmap-net" }
 tokio = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
+libc = "0.2"
 
 [lints]
 workspace = true

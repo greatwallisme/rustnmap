@@ -5,6 +5,9 @@
 
 use std::fmt;
 
+// Re-export ScanError from scan module for backward compatibility
+pub use crate::scan::ScanError;
+
 /// Result type alias for `RustNmap` operations.
 pub type Result<T> = std::result::Result<T, Error>;
 

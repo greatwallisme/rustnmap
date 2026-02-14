@@ -13,8 +13,8 @@
     reason = "Required for PortScanner trait compatibility"
 )]
 
-use crate::scanner::{PortScanner, ScanConfig, ScanResult};
-use rustnmap_common::{Port, PortState, Protocol};
+use crate::scanner::{PortScanner, ScanResult};
+use rustnmap_common::{Port, PortState, Protocol, ScanConfig};
 use rustnmap_target::Target;
 use std::net::SocketAddr;
 use std::time::Duration;

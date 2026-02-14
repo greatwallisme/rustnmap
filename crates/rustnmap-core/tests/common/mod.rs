@@ -24,8 +24,8 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener};
 use std::sync::Arc;
 
 use rustnmap_core::session::{PortSpec, ScanType};
-use rustnmap_core::{ScanConfig, ScanOrchestrator, ScanSession};
 use rustnmap_core::Result;
+use rustnmap_core::{ScanConfig, ScanOrchestrator, ScanSession};
 use rustnmap_output::models::{PortState, ScanResult};
 use rustnmap_scan::scanner::TimingTemplate;
 use rustnmap_target::{Target, TargetGroup};
@@ -109,10 +109,9 @@ pub fn assert_port_state(result: &ScanResult, expected_port: u16, expected_state
         .first()
         .expect("Expected at least one host in results");
 
-    let port_found = host
-        .ports
-        .iter()
-        .find(|p| p.number == expected_port && p.protocol == rustnmap_output::models::Protocol::Tcp);
+    let port_found = host.ports.iter().find(|p| {
+        p.number == expected_port && p.protocol == rustnmap_output::models::Protocol::Tcp
+    });
 
     match port_found {
         Some(port) => {

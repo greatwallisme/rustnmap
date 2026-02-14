@@ -8,7 +8,7 @@ use std::{collections::HashMap, path::Path};
 use regex::Regex;
 use tracing::info;
 
-use super::probe::{MatchRule, ProbeDefinition, Protocol};
+use super::probe::{MatchRule, MatchTemplate, ProbeDefinition, Protocol};
 use crate::{FingerprintError, Result};
 
 /// Database of service probes for version detection.
@@ -37,6 +37,18 @@ pub struct ServiceProbe {
 
     /// Compiled regex for each match rule.
     pub match_regexes: Vec<Regex>,
+}
+
+/// Version info fields parsed from match rule.
+#[derive(Debug, Default)]
+struct VersionInfo {
+    product: Option<MatchTemplate>,
+    version: Option<MatchTemplate>,
+    info: Option<MatchTemplate>,
+    hostname: Option<MatchTemplate>,
+    os_type: Option<MatchTemplate>,
+    device_type: Option<MatchTemplate>,
+    cpe: Option<MatchTemplate>,
 }
 
 impl ProbeDatabase {
@@ -96,6 +108,11 @@ impl ProbeDatabase {
                     let rule = Self::parse_match_rule(rest, line_num)?;
                     probe.matches.push(rule);
                 }
+            } else if line.starts_with("softmatch ") {
+                if let Some(ref mut probe) = current_probe {
+                    let rule = Self::parse_match_rule(line, line_num)?;
+                    probe.matches.push(rule);
+                }
             } else if let Some(rest) = line.strip_prefix("Probe ") {
                 // Save previous probe if exists
                 if let Some(probe) = current_probe {
@@ -129,6 +146,7 @@ impl ProbeDatabase {
     /// Parse probe directive line.
     fn parse_probe_directive(line: &str, line_num: usize) -> Result<ProbeDefinition> {
         // Format: "Probe TCP Name q|payload|" or "Probe UDP Name q|payload|"
+        // The delimiter can be any character, not just |
         let parts: Vec<&str> = line.split_whitespace().collect();
 
         if parts.len() < 3 {
@@ -151,24 +169,52 @@ impl ProbeDatabase {
 
         let name = parts[1].to_string();
 
-        // Extract payload between q|...|
-        let payload_start = line
-            .find("q|")
-            .ok_or_else(|| FingerprintError::ParseError {
-                line: line_num,
-                content: "Missing payload delimiter q|".to_string(),
-            })?
-            + 2;
+        // Find the 'q' followed by a delimiter
+        let q_pos = line.find('q').ok_or_else(|| FingerprintError::ParseError {
+            line: line_num,
+            content: "Missing payload marker 'q'".to_string(),
+        })?;
 
-        let payload_end = line[3..]
-            .rfind("|")
-            .ok_or_else(|| FingerprintError::ParseError {
+        let after_q = &line[q_pos + 1..];
+        if after_q.is_empty() {
+            return Err(FingerprintError::ParseError {
                 line: line_num,
-                content: "Missing closing pipe |".to_string(),
-            })?
-            + 3;
+                content: "Missing payload delimiter after 'q'".to_string(),
+            });
+        }
 
-        let payload_bytes = Self::parse_payload(&line[payload_start..=payload_end])?;
+        // Get the delimiter (first character after 'q')
+        let delimiter = after_q.chars().next().unwrap();
+        let after_delimiter = &after_q[1..];
+
+        // Find the closing delimiter
+        let mut payload_end = 0;
+        let mut escaped = false;
+
+        for (i, ch) in after_delimiter.char_indices() {
+            if escaped {
+                escaped = false;
+                continue;
+            }
+            if ch == '\\' {
+                escaped = true;
+                continue;
+            }
+            if ch == delimiter {
+                payload_end = i;
+                break;
+            }
+        }
+
+        if payload_end == 0 && !after_delimiter.contains(delimiter) {
+            return Err(FingerprintError::ParseError {
+                line: line_num,
+                content: format!("Unclosed payload delimiter '{}'", delimiter),
+            });
+        }
+
+        let payload_str = &after_delimiter[..payload_end];
+        let payload_bytes = Self::parse_payload(payload_str)?;
 
         Ok(ProbeDefinition {
             name,
@@ -220,47 +266,272 @@ impl ProbeDatabase {
     }
 
     /// Parse match rule directive.
-    fn parse_match_rule(line: &str, _line_num: usize) -> Result<MatchRule> {
-        // TODO: Implement full nmap match rule parser with:
-        // - Version templates ($1, $2, etc.)
-        // - Soft match detection
-        // - Multiple match patterns per rule
-        // - Service-specific overrides
-        // Currently handles basic: m/regex/ p/service/...
-        let mut rule = MatchRule {
-            pattern: ".*".to_string(),
-            service: "unknown".to_string(),
-            product_template: None,
-            version_template: None,
-            info_template: None,
-            hostname_template: None,
-            os_type_template: None,
-            device_type_template: None,
-            cpe_template: None,
-            soft: false,
+    ///
+    /// Format: match <service> m<pattern>[opts] [versioninfo]
+    ///         softmatch <service> m<pattern>[opts]
+    ///
+    /// Version info fields:
+    ///   p/<product>/     - Product name
+    ///   v/<version>/     - Version number
+    ///   i/<info>/        - Additional info
+    ///   h/<hostname>/    - Hostname
+    ///   o/<ostype>/      - OS type
+    ///   d/<devicetype>/  - Device type
+    ///   cpe:/<cpe>/      - CPE identifier
+    fn parse_match_rule(line: &str, line_num: usize) -> Result<MatchRule> {
+        let is_soft = line.starts_with("softmatch");
+        let content = if is_soft {
+            line.strip_prefix("softmatch ").unwrap_or(line)
+        } else {
+            line.strip_prefix("match ").unwrap_or(line)
         };
 
-        // Extract regex from m/pattern/
-        if let Some(start) = line.find("m/") {
-            if let Some(end) = line[start + 2..].find('/') {
-                rule.pattern = line[start + 2..start + 2 + end].to_string();
+        // Parse service name (first word)
+        let mut parts = content.split_whitespace();
+        let service = parts
+            .next()
+            .ok_or_else(|| FingerprintError::ParseError {
+                line: line_num,
+                content: "Missing service name in match rule".to_string(),
+            })?
+            .to_string();
+
+        // Find the pattern directive starting with 'm'
+        let pattern_start = content
+            .find(" m")
+            .ok_or_else(|| FingerprintError::ParseError {
+                line: line_num,
+                content: "Missing pattern directive in match rule".to_string(),
+            })?;
+
+        let after_service = &content[pattern_start + 1..];
+
+        // Extract pattern using m<delimiter><regex><delimiter>[flags]
+        let (pattern, flags, remainder) = Self::extract_pattern(after_service, line_num)?;
+
+        // Build the regex with flags
+        let full_pattern = Self::build_regex_pattern(&pattern, &flags);
+
+        // Parse version info fields from remainder
+        let version_info = Self::parse_version_info(remainder)?;
+
+        Ok(MatchRule {
+            pattern: full_pattern,
+            service,
+            product_template: version_info.product,
+            version_template: version_info.version,
+            info_template: version_info.info,
+            hostname_template: version_info.hostname,
+            os_type_template: version_info.os_type,
+            device_type_template: version_info.device_type,
+            cpe_template: version_info.cpe,
+            soft: is_soft,
+        })
+    }
+
+    /// Extract pattern from m<delimiter><regex><delimiter>[flags] format.
+    fn extract_pattern(s: &str, line_num: usize) -> Result<(String, String, &str)> {
+        // Find 'm' followed by a delimiter
+        let m_pos = s.find('m').ok_or_else(|| FingerprintError::ParseError {
+            line: line_num,
+            content: "Missing pattern marker 'm'".to_string(),
+        })?;
+
+        let after_m = &s[m_pos + 1..];
+        if after_m.is_empty() {
+            return Err(FingerprintError::ParseError {
+                line: line_num,
+                content: "Empty pattern after 'm'".to_string(),
+            });
+        }
+
+        // Get the delimiter (first character after 'm')
+        let delimiter = after_m.chars().next().unwrap();
+        let after_delimiter = &after_m[1..];
+
+        // Find the closing delimiter
+        let mut pattern_end = 0;
+        let mut escaped = false;
+
+        for (i, ch) in after_delimiter.char_indices() {
+            if escaped {
+                escaped = false;
+                continue;
+            }
+            if ch == '\\' {
+                escaped = true;
+                continue;
+            }
+            if ch == delimiter {
+                pattern_end = i;
+                break;
             }
         }
 
-        // Extract service from p/service/
-        if let Some(start) = line.find("p/") {
-            let rest = &line[start + 2..];
-            if let Some(end) = rest.find('/') {
-                rule.service = rest[..end].to_string();
+        if pattern_end == 0 && !after_delimiter.contains(delimiter) {
+            return Err(FingerprintError::ParseError {
+                line: line_num,
+                content: format!("Unclosed pattern delimiter '{}'", delimiter),
+            });
+        }
+
+        let pattern = after_delimiter[..pattern_end].to_string();
+        let after_pattern = &after_delimiter[pattern_end + 1..];
+
+        // Extract flags (i, s, etc.) until whitespace or end
+        let flags: String = after_pattern
+            .chars()
+            .take_while(|c| !c.is_whitespace())
+            .collect();
+
+        // Find the remainder after flags
+        let remainder_start = flags.len().min(after_pattern.len());
+        let remainder = &after_pattern[remainder_start..];
+
+        Ok((pattern, flags, remainder))
+    }
+
+    /// Build full regex pattern with flags.
+    fn build_regex_pattern(pattern: &str, flags: &str) -> String {
+        let mut result = String::with_capacity(pattern.len() + 10);
+
+        // Start with (?flags) if we have any
+        let mut rust_flags = String::new();
+        if flags.contains('i') {
+            rust_flags.push('i');
+        }
+        if flags.contains('s') {
+            // Rust's dot matches newlines by default in some modes,
+            // but we use (?s) for single-line mode
+            rust_flags.push('s');
+        }
+
+        if !rust_flags.is_empty() {
+            result.push_str("(?");
+            result.push_str(&rust_flags);
+            result.push(')');
+        }
+
+        result.push_str(pattern);
+        result
+    }
+
+    /// Parse version info fields from remainder of match line.
+    fn parse_version_info(s: &str) -> Result<VersionInfo> {
+        let mut info = VersionInfo {
+            product: None,
+            version: None,
+            info: None,
+            hostname: None,
+            os_type: None,
+            device_type: None,
+            cpe: None,
+        };
+
+        let mut remaining = s;
+
+        while !remaining.is_empty() {
+            remaining = remaining.trim_start();
+            if remaining.is_empty() {
+                break;
+            }
+
+            // Try to extract each field type
+            if let Some((field, rest)) = Self::extract_version_field(remaining)? {
+                match field.0 {
+                    'p' => info.product = Some(MatchTemplate { value: field.1 }),
+                    'v' => info.version = Some(MatchTemplate { value: field.1 }),
+                    'i' => info.info = Some(MatchTemplate { value: field.1 }),
+                    'h' => info.hostname = Some(MatchTemplate { value: field.1 }),
+                    'o' => info.os_type = Some(MatchTemplate { value: field.1 }),
+                    'd' => info.device_type = Some(MatchTemplate { value: field.1 }),
+                    'c' => info.cpe = Some(MatchTemplate { value: field.1 }),
+                    _ => {}
+                }
+                remaining = rest;
+            } else {
+                // Could not extract a field, skip to next whitespace
+                if let Some(pos) = remaining.find(|c: char| c.is_whitespace()) {
+                    remaining = &remaining[pos..];
+                } else {
+                    break;
+                }
             }
         }
 
-        // Mark soft matches with s/
-        if line.contains("s/") {
-            rule.soft = true;
+        Ok(info)
+    }
+
+    /// Extract a single version field (p/, v/, i/, h/, o/, d/, cpe/).
+    /// Returns ((field_type, value), remaining) or None.
+    fn extract_version_field(s: &str) -> Result<Option<((char, String), &str)>> {
+        let s = s.trim_start();
+        if s.is_empty() {
+            return Ok(None);
         }
 
-        Ok(rule)
+        // Check for field prefixes
+        let (field_type, after_prefix) = if let Some(stripped) = s.strip_prefix("cpe:") {
+            // CPE field: cpe:/value/
+            ('c', stripped)
+        } else if let Some(first) = s.chars().next() {
+            if "pvihod".contains(first) && s.len() > 1 && s.as_bytes()[1] == b'/' {
+                (first, &s[2..])
+            } else {
+                return Ok(None);
+            }
+        } else {
+            return Ok(None);
+        };
+
+        // In nmap format, the delimiter is the character right after the field type
+        // For p/OpenSSH/, the delimiter is '/' and after_prefix already starts with value
+        // For cpe:/value/, after_prefix starts with '/' followed by the value
+        // So we need to handle both cases
+        let delimiter = '/';
+        let after_delimiter = if let Some(stripped) = after_prefix.strip_prefix('/') {
+            stripped
+        } else {
+            after_prefix
+        };
+
+        // Find closing delimiter
+        let mut value_end = 0;
+        let mut escaped = false;
+
+        for (i, ch) in after_delimiter.char_indices() {
+            if escaped {
+                escaped = false;
+                continue;
+            }
+            if ch == '\\' {
+                escaped = true;
+                continue;
+            }
+            if ch == delimiter {
+                value_end = i;
+                break;
+            }
+        }
+
+        // Check if we found the closing delimiter
+        // value_end will be 0 if the delimiter is at position 0 (empty value) or if not found
+        let found_delimiter = after_delimiter.chars().enumerate().any(|(i, ch)| {
+            if i == 0 && ch == delimiter {
+                return true;
+            }
+            false
+        });
+
+        if value_end == 0 && !found_delimiter {
+            // Unclosed field, treat as empty
+            return Ok(None);
+        }
+
+        let value = after_delimiter[..value_end].to_string();
+        let remaining = &after_delimiter[value_end + 1..];
+
+        Ok(Some(((field_type, value), remaining)))
     }
 
     /// Parse port list from directive.
@@ -467,23 +738,107 @@ mod tests {
 Probe TCP GenericLines q|\r\n\r\n|
 rarity 1
 Ports 1-65535
-Match ssh m|^SSH-([\d.]+) p/OpenSSH/$1/
+Match ssh m|^SSH-([\d.]+)| p/OpenSSH/ v/$1/
 
 Probe TCP HTTP q|GET / HTTP/1.0\r\n\r\n|
 rarity 3
 Ports 80,8080
-Match http m|^Server: ([\w/]+) p/$1/
+Match http m|^Server: ([\w/]+)| p/$1/
 "#;
         let db = ProbeDatabase::parse(content).unwrap();
 
         assert_eq!(db.probe_count(), 2);
         assert!(db.get_probe("GenericLines").is_some());
         assert!(db.get_probe("HTTP").is_some());
+
+        // Verify match rules were parsed correctly
+        let generic_probe = db.get_probe("GenericLines").unwrap();
+        assert_eq!(generic_probe.matches.len(), 1);
+        assert_eq!(generic_probe.matches[0].service, "ssh");
+        assert_eq!(
+            generic_probe.matches[0].product_template.as_ref().map(|t| t.value.clone()),
+            Some("OpenSSH".to_string())
+        );
+        assert_eq!(
+            generic_probe.matches[0].version_template.as_ref().map(|t| t.value.clone()),
+            Some("$1".to_string())
+        );
+
+        let http_probe = db.get_probe("HTTP").unwrap();
+        assert_eq!(http_probe.matches.len(), 1);
+        assert_eq!(http_probe.matches[0].service, "http");
+        assert_eq!(
+            http_probe.matches[0].product_template.as_ref().map(|t| t.value.clone()),
+            Some("$1".to_string())
+        );
     }
 
     #[test]
     fn test_invalid_port_range() {
         let result = ProbeDatabase::parse_ports("abc-def");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_version_info_fields() {
+        let remainder = " p/OpenSSH/ v/$1/ i/protocol 2.0/";
+        let info = ProbeDatabase::parse_version_info(remainder).unwrap();
+
+        assert!(info.product.is_some());
+        assert_eq!(info.product.as_ref().unwrap().value, "OpenSSH");
+
+        assert!(info.version.is_some());
+        assert_eq!(info.version.as_ref().unwrap().value, "$1");
+
+        assert!(info.info.is_some());
+        assert_eq!(info.info.as_ref().unwrap().value, "protocol 2.0");
+    }
+
+    #[test]
+    fn test_extract_version_field() {
+        // Test basic extraction first
+        let result = ProbeDatabase::extract_version_field("p/OpenSSH/ rest");
+        println!("Result: {:?}", result);
+        assert!(result.is_ok());
+        assert!(result.as_ref().unwrap().is_some(), "Expected Some but got None");
+
+        // Test p/ field
+        let (field, rest) = result.unwrap().unwrap();
+        assert_eq!(field.0, 'p');
+        assert_eq!(field.1, "OpenSSH");
+        assert_eq!(rest, " rest");
+
+        // Test v/ field
+        let (field, rest) = ProbeDatabase::extract_version_field("v/$1/ rest")
+            .unwrap()
+            .unwrap();
+        assert_eq!(field.0, 'v');
+        assert_eq!(field.1, "$1");
+        assert_eq!(rest, " rest");
+
+        // Test cpe:/ field
+        let (field, rest) = ProbeDatabase::extract_version_field("cpe:/a:openbsd:openssh:$1/ rest")
+            .unwrap()
+            .unwrap();
+        assert_eq!(field.0, 'c');
+        assert_eq!(field.1, "a:openbsd:openssh:$1");
+        assert_eq!(rest, " rest");
+    }
+
+    #[test]
+    fn test_extract_pattern() {
+        // Test with | delimiter
+        let (pattern, flags, remainder) =
+            ProbeDatabase::extract_pattern("m|^SSH-([\\d.]+)| p/OpenSSH/", 1).unwrap();
+        assert_eq!(pattern, "^SSH-([\\d.]+)");
+        assert_eq!(flags, "");
+        assert_eq!(remainder, " p/OpenSSH/");
+
+        // Test with / delimiter and flags
+        let (pattern, flags, remainder) =
+            ProbeDatabase::extract_pattern("m/SSH-([\\d.]+)/i p/OpenSSH/", 1).unwrap();
+        assert_eq!(pattern, "SSH-([\\d.]+)");
+        assert_eq!(flags, "i");
+        assert_eq!(remainder, " p/OpenSSH/");
     }
 }

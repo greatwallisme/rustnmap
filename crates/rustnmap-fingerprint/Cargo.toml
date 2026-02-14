@@ -28,6 +28,12 @@ thiserror = { workspace = true }
 # Logging
 tracing = { workspace = true }
 
+# Network primitives
+rustnmap-net = { path = "../rustnmap-net" }
+
+# Common types
+rustnmap-common = { path = "../rustnmap-common" }
+
 [features]
 default = []
 test-util = []

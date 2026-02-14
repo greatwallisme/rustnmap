@@ -28,12 +28,13 @@ pub use udp::UdpTraceroute;
 use rand::Rng;
 use rustnmap_common::Ipv4Addr;
 use std::time::Duration;
-use tokio::time::{sleep, timeout};
+use tokio::time::sleep;
 
 /// Main traceroute engine.
 #[derive(Debug)]
 pub struct Traceroute {
     config: TracerouteConfig,
+    local_addr: Ipv4Addr,
 }
 
 /// Traceroute configuration options.
@@ -165,15 +166,75 @@ impl TracerouteConfig {
         self.resolve_hostnames = resolve;
         self
     }
+
+    /// Returns the probe type.
+    #[must_use]
+    pub const fn probe_type(&self) -> ProbeType {
+        self.probe_type
+    }
+
+    /// Returns the destination port.
+    #[must_use]
+    pub const fn dest_port(&self) -> u16 {
+        self.dest_port
+    }
+
+    /// Returns the probe timeout.
+    #[must_use]
+    pub const fn probe_timeout(&self) -> Duration {
+        self.probe_timeout
+    }
+
+    /// Returns the number of probes per hop.
+    #[must_use]
+    pub const fn probes_per_hop(&self) -> u8 {
+        self.probes_per_hop
+    }
+
+    /// Returns the maximum number of hops.
+    #[must_use]
+    pub const fn max_hops(&self) -> u8 {
+        self.max_hops
+    }
+
+    /// Returns the initial TTL.
+    #[must_use]
+    pub const fn initial_ttl(&self) -> u8 {
+        self.initial_ttl
+    }
+
+    /// Returns whether hostname resolution is enabled.
+    #[must_use]
+    pub const fn resolve_hostnames(&self) -> bool {
+        self.resolve_hostnames
+    }
+
+    /// Returns the source port (0 for automatic).
+    #[must_use]
+    pub const fn source_port(&self) -> u16 {
+        self.source_port
+    }
+
+    /// Sets the source port (0 for automatic).
+    #[must_use]
+    pub const fn with_source_port(mut self, port: u16) -> Self {
+        self.source_port = port;
+        self
+    }
 }
 
 impl Traceroute {
     /// Creates a new traceroute instance with the given configuration.
     ///
+    /// # Arguments
+    ///
+    /// * `config` - Traceroute configuration
+    /// * `local_addr` - Local IP address to use for sending probes
+    ///
     /// # Errors
     ///
     /// Returns an error if the configuration is invalid.
-    pub fn new(config: TracerouteConfig) -> Result<Self> {
+    pub fn new(config: TracerouteConfig, local_addr: Ipv4Addr) -> Result<Self> {
         if config.max_hops == 0 {
             return Err(TracerouteError::InvalidConfig {
                 reason: "max_hops must be > 0".to_string(),
@@ -185,14 +246,22 @@ impl Traceroute {
             });
         }
 
-        Ok(Self { config })
+        Ok(Self {
+            config,
+            local_addr,
+        })
     }
 
     /// Creates a traceroute with default configuration.
+    ///
+    /// # Arguments
+    ///
+    /// * `local_addr` - Local IP address to use for sending probes
     #[must_use]
-    pub const fn with_default_config() -> Self {
+    pub const fn with_default_config(local_addr: Ipv4Addr) -> Self {
         Self {
             config: TracerouteConfig::new(),
+            local_addr,
         }
     }
 
@@ -200,6 +269,12 @@ impl Traceroute {
     #[must_use]
     pub const fn config(&self) -> &TracerouteConfig {
         &self.config
+    }
+
+    /// Returns the local address.
+    #[must_use]
+    pub const fn local_addr(&self) -> Ipv4Addr {
+        self.local_addr
     }
 
     /// Traces the route to the given target.
@@ -256,13 +331,22 @@ impl Traceroute {
         let mut probes_received = 0;
 
         for probe_num in 0..self.config.probes_per_hop {
-            let start = std::time::Instant::now();
+            let probe_start = std::time::Instant::now();
 
-            if let Ok(Some(response)) = self.send_probe(target, ttl).await {
-                let rtt = start.elapsed();
-                rtts.push(rtt);
-                last_ip = Some(response.ip());
-                probes_received += 1;
+            match self.send_probe(target, ttl).await {
+                Ok(Some(response)) => {
+                    let rtt = probe_start.elapsed();
+                    rtts.push(rtt);
+                    last_ip = Some(response.ip());
+                    probes_received += 1;
+                }
+                Ok(None) => {
+                    // Timeout - no response
+                }
+                Err(e) => {
+                    // Log error but continue with other probes
+                    tracing::debug!("Probe error at TTL {}: {}", ttl, e);
+                }
             }
 
             probes_sent += 1;
@@ -296,26 +380,52 @@ impl Traceroute {
         Ok(HopInfo::new(ttl, last_ip, last_hostname, rtts, loss))
     }
 
-    /// Sends a single probe packet.
-    // TODO: This is a placeholder implementation. Actual probe dispatch to protocol-specific implementations
+    /// Sends a single probe packet using the configured probe type.
+    ///
+    /// # Arguments
+    ///
+    /// * `target` - Target IP address
+    /// * `ttl` - Time-to-live value for this probe
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(Some(ProbeResponse))` if a response was received,
+    /// `Ok(None)` if the probe timed out, or an error if sending failed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - Raw socket cannot be created (insufficient permissions)
+    /// - Probe send/receive fails
     async fn send_probe(&self, target: Ipv4Addr, ttl: u8) -> Result<Option<ProbeResponse>> {
-        // Create probe configuration
-        let probe_config = ProbeConfig {
-            source_port: self.config.source_port,
-            dest_port: self.config.dest_port,
-            ttl,
-            payload: vec![],
-        };
+        // Use tokio::task::spawn_blocking for the blocking socket operations
+        let config = self.config.clone();
+        let local_addr = self.local_addr;
 
-        // Match on probe type and send appropriate probe
-        match self.config.probe_type {
-            ProbeType::Udp | ProbeType::TcpSyn | ProbeType::TcpAck | ProbeType::Icmp => {
-                let _ = probe_config;
-                let _ = target;
-                let _ = timeout(self.config.probe_timeout, sleep(Duration::from_secs(100))).await;
-                Ok(None)
+        tokio::task::spawn_blocking(move || {
+            match config.probe_type {
+                ProbeType::Udp => {
+                    let mut tracer = UdpTraceroute::new(config, local_addr)?;
+                    tracer.send_probe(target, ttl)
+                }
+                ProbeType::TcpSyn => {
+                    let dest_port = config.dest_port;
+                    let mut tracer = TcpSynTraceroute::new(config, local_addr)?;
+                    tracer.send_probe(target, ttl, dest_port)
+                }
+                ProbeType::TcpAck => {
+                    let dest_port = config.dest_port;
+                    let mut tracer = TcpAckTraceroute::new(config, local_addr)?;
+                    tracer.send_probe(target, ttl, dest_port)
+                }
+                ProbeType::Icmp => {
+                    let mut tracer = IcmpTraceroute::new(config, local_addr)?;
+                    tracer.send_probe(target, ttl)
+                }
             }
-        }
+        })
+        .await
+        .map_err(|e| TracerouteError::Other(format!("Task join error: {e}")))?
     }
 }
 
@@ -435,21 +545,24 @@ mod tests {
     #[test]
     fn test_traceroute_new() {
         let config = TracerouteConfig::new();
-        let tracer = Traceroute::new(config);
+        let local_addr = Ipv4Addr::new(127, 0, 0, 1);
+        let tracer = Traceroute::new(config, local_addr);
         assert!(tracer.is_ok());
     }
 
     #[test]
     fn test_traceroute_invalid_max_hops() {
         let config = TracerouteConfig::new().with_max_hops(0);
-        let tracer = Traceroute::new(config);
+        let local_addr = Ipv4Addr::new(127, 0, 0, 1);
+        let tracer = Traceroute::new(config, local_addr);
         assert!(tracer.is_err());
     }
 
     #[test]
     fn test_traceroute_invalid_probes_per_hop() {
         let config = TracerouteConfig::new().with_probes_per_hop(0);
-        let tracer = Traceroute::new(config);
+        let local_addr = Ipv4Addr::new(127, 0, 0, 1);
+        let tracer = Traceroute::new(config, local_addr);
         assert!(tracer.is_err());
     }
 
@@ -511,5 +624,21 @@ mod tests {
         assert_eq!(format!("{}", ProbeType::TcpSyn), "TCP-SYN");
         assert_eq!(format!("{}", ProbeType::TcpAck), "TCP-ACK");
         assert_eq!(format!("{}", ProbeType::Icmp), "ICMP");
+    }
+
+    #[test]
+    fn test_config_accessors() {
+        let config = TracerouteConfig::new()
+            .with_max_hops(25)
+            .with_probes_per_hop(5)
+            .with_dest_port(80)
+            .with_probe_type(ProbeType::TcpSyn)
+            .with_resolve_hostnames(true);
+
+        assert_eq!(config.max_hops(), 25);
+        assert_eq!(config.probes_per_hop(), 5);
+        assert_eq!(config.dest_port(), 80);
+        assert_eq!(config.probe_type(), ProbeType::TcpSyn);
+        assert!(config.resolve_hostnames());
     }
 }
