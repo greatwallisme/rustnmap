@@ -36,7 +36,8 @@ impl IcmpTraceroute {
     ///
     /// Returns an error if configuration is invalid or socket creation fails.
     pub fn new(config: TracerouteConfig, local_addr: Ipv4Addr) -> Result<Self> {
-        let socket = RawSocket::new().map_err(|e| TracerouteError::SocketCreation {
+        // Use IPPROTO_ICMP (1) for receiving ICMP responses
+        let socket = RawSocket::with_protocol(1).map_err(|e| TracerouteError::SocketCreation {
             source: io::Error::other(e),
         })?;
 

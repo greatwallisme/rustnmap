@@ -55,10 +55,12 @@ impl TcpSynScanner {
     /// - The process lacks `CAP_NET_RAW` capability (requires root)
     /// - The system runs out of file descriptors
     pub fn new(local_addr: Ipv4Addr, config: ScanConfig) -> ScanResult<Self> {
-        let socket =
-            RawSocket::new().map_err(|e| rustnmap_common::ScanError::PermissionDenied {
+        // Use IPPROTO_TCP (6) for receiving TCP responses
+        let socket = RawSocket::with_protocol(6).map_err(|e| {
+            rustnmap_common::ScanError::PermissionDenied {
                 operation: format!("create raw socket: {e}"),
-            })?;
+            }
+        })?;
 
         Ok(Self {
             local_addr,

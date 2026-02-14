@@ -165,6 +165,20 @@ Complete the RustNmap project according to the design documentation. The project
 - [x] Add rustnmap-benchmarks crate with 13 crates total
 - **Status**: complete
 
+### Phase 9: Root-Privileged Test Fix
+
+**Goal**: Fix ignored tests that require root/CAP_NET_RAW privileges
+
+- [x] Investigate why ignored tests fail even with root
+- [x] Fix raw socket creation bug (IPPROTO_IP → IPPROTO_RAW)
+- [x] Add RawSocket::with_protocol() for protocol-specific sockets
+- [x] Update TCP scanners to use IPPROTO_TCP (6)
+- [x] Update UDP scanners to use IPPROTO_UDP (17)
+- [x] Update ICMP scanners to use IPPROTO_ICMP (1)
+- [x] Verify UDP tests now pass with root
+- [x] Document localhost scanning limitation
+- **Status**: complete
+
 ---
 
 ## Key Questions

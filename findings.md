@@ -259,6 +259,68 @@ Application Binary
 
 ---
 
+## Raw Socket Protocol Discovery
+
+### Issue: IPPROTO_IP (0) vs IPPROTO_RAW (255)
+
+**Discovery Date**: 2026-02-13
+
+**Problem:**
+Raw socket creation was failing with "Protocol not supported" (errno 93) even when running as root with CAP_NET_RAW.
+
+**Root Cause:**
+Linux raw sockets cannot be created with `IPPROTO_IP` (0). The protocol parameter must be a valid IP protocol number or `IPPROTO_RAW` (255).
+
+**Protocol Numbers That Work:**
+| Protocol | Number | Works? | Use Case |
+|----------|--------|--------|----------|
+| IPPROTO_IP | 0 | NO | Not valid for raw socket creation |
+| IPPROTO_ICMP | 1 | YES | ICMP echo/timestamp |
+| IPPROTO_TCP | 6 | YES | TCP scans |
+| IPPROTO_UDP | 17 | YES | UDP scans |
+| IPPROTO_RAW | 255 | YES | Generic raw socket (sending) |
+
+**Solution:**
+1. Use `IPPROTO_RAW` (255) for generic raw socket creation (sending packets)
+2. Use protocol-specific numbers (1, 6, 17) for receiving responses
+3. Create `RawSocket::with_protocol()` method to allow protocol selection
+
+**Implementation:**
+```rust
+// For sending custom IP packets
+pub fn new() -> Result<Self> {
+    Self::with_protocol(255) // IPPROTO_RAW
+}
+
+// For receiving specific protocol responses
+pub fn with_protocol(protocol: u8) -> Result<Self> {
+    let socket = socket2::Socket::new(
+        Domain::IPV4,
+        Type::RAW,
+        Some(Protocol::from(i32::from(protocol)))
+    )?;
+    // ...
+}
+```
+
+### Localhost Scanning Limitation
+
+**Discovery:** Raw sockets on Linux cannot reliably receive responses when scanning localhost (127.0.0.1).
+
+**Reason:** The kernel's TCP/IP stack processes localhost packets internally and doesn't deliver responses back to raw sockets.
+
+**Impact:**
+- Tests scanning localhost with raw sockets will timeout
+- Port states show as Filtered/Down instead of Open/Closed
+- This is expected kernel behavior, not a bug
+
+**Workaround:**
+- Use real network targets for integration tests
+- Mark localhost raw socket tests with `#[ignore]`
+- Document limitation in test comments
+
+---
+
 ## Technical Decisions
 
 ### Async Runtime: Tokio

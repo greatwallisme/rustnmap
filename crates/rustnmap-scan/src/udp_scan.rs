@@ -57,10 +57,12 @@ impl UdpScanner {
     /// - The process lacks `CAP_NET_RAW` capability (requires root)
     /// - The system runs out of file descriptors
     pub fn new(local_addr: Ipv4Addr, config: ScanConfig) -> ScanResult<Self> {
-        let socket =
-            RawSocket::new().map_err(|e| rustnmap_common::ScanError::PermissionDenied {
+        // Use IPPROTO_UDP (17) for receiving UDP responses and ICMP errors
+        let socket = RawSocket::with_protocol(17).map_err(|e| {
+            rustnmap_common::ScanError::PermissionDenied {
                 operation: format!("create raw socket: {e}"),
-            })?;
+            }
+        })?;
 
         Ok(Self {
             local_addr,

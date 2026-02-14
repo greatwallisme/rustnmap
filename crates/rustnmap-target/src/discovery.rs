@@ -98,7 +98,8 @@ impl TcpSynPing {
         timeout: Duration,
         retries: u8,
     ) -> Result<Self, ScanError> {
-        let socket = RawSocket::new().map_err(|e| ScanError::PermissionDenied {
+        // Use IPPROTO_TCP (6) for receiving TCP responses
+        let socket = RawSocket::with_protocol(6).map_err(|e| ScanError::PermissionDenied {
             operation: format!("create raw socket: {e}"),
         })?;
 
@@ -270,7 +271,8 @@ impl TcpAckPing {
         timeout: Duration,
         retries: u8,
     ) -> Result<Self, ScanError> {
-        let socket = RawSocket::new().map_err(|e| ScanError::PermissionDenied {
+        // Use IPPROTO_TCP (6) for receiving TCP responses
+        let socket = RawSocket::with_protocol(6).map_err(|e| ScanError::PermissionDenied {
             operation: format!("create raw socket: {e}"),
         })?;
 
@@ -425,7 +427,8 @@ impl IcmpPing {
     ///
     /// Returns an error if the raw socket cannot be created.
     pub fn new(local_addr: Ipv4Addr, timeout: Duration, retries: u8) -> Result<Self, ScanError> {
-        let socket = RawSocket::new().map_err(|e| ScanError::PermissionDenied {
+        // Use IPPROTO_ICMP (1) for receiving ICMP responses
+        let socket = RawSocket::with_protocol(1).map_err(|e| ScanError::PermissionDenied {
             operation: format!("create raw socket: {e}"),
         })?;
 
@@ -538,7 +541,8 @@ impl IcmpTimestampPing {
     ///
     /// Returns an error if the raw socket cannot be created.
     pub fn new(local_addr: Ipv4Addr, timeout: Duration, retries: u8) -> Result<Self, ScanError> {
-        let socket = RawSocket::new().map_err(|e| ScanError::PermissionDenied {
+        // Use IPPROTO_ICMP (1) for receiving ICMP responses
+        let socket = RawSocket::with_protocol(1).map_err(|e| ScanError::PermissionDenied {
             operation: format!("create raw socket: {e}"),
         })?;
 
@@ -660,7 +664,8 @@ impl ArpPing {
         timeout: Duration,
         retries: u8,
     ) -> Result<Self, ScanError> {
-        let socket = RawSocket::new().map_err(|e| ScanError::PermissionDenied {
+        // Use IPPROTO_ICMP (1) for receiving ICMP responses
+        let socket = RawSocket::with_protocol(1).map_err(|e| ScanError::PermissionDenied {
             operation: format!("create raw socket: {e}"),
         })?;
 

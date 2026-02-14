@@ -34,7 +34,8 @@ impl UdpTraceroute {
     ///
     /// Returns an error if socket creation fails.
     pub fn new(config: TracerouteConfig, local_addr: Ipv4Addr) -> Result<Self> {
-        let socket = RawSocket::new().map_err(|e| TracerouteError::SocketCreation {
+        // Use IPPROTO_UDP (17) for receiving UDP responses
+        let socket = RawSocket::with_protocol(17).map_err(|e| TracerouteError::SocketCreation {
             source: io::Error::other(e),
         })?;
 

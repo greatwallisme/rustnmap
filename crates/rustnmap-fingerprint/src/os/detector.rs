@@ -222,7 +222,8 @@ impl OsDetector {
     async fn send_seq_probes(&self, target: Ipv4Addr) -> Result<Vec<SeqProbeResponse>> {
         use rustnmap_net::raw_socket::{parse_tcp_response_full, RawSocket, TcpPacketBuilder};
 
-        let socket = RawSocket::new().map_err(|e| crate::FingerprintError::Network {
+        // Use IPPROTO_TCP (6) for receiving TCP responses
+        let socket = RawSocket::with_protocol(6).map_err(|e| crate::FingerprintError::Network {
             operation: "create raw socket".to_string(),
             reason: e.to_string(),
         })?;
@@ -546,7 +547,8 @@ impl OsDetector {
     async fn send_ecn_probe(&self, target: Ipv4Addr) -> Result<EcnFingerprint> {
         use rustnmap_net::raw_socket::{parse_tcp_response_full, RawSocket, TcpPacketBuilder};
 
-        let socket = RawSocket::new().map_err(|e| crate::FingerprintError::Network {
+        // Use IPPROTO_TCP (6) for receiving TCP responses
+        let socket = RawSocket::with_protocol(6).map_err(|e| crate::FingerprintError::Network {
             operation: "create raw socket".to_string(),
             reason: e.to_string(),
         })?;
@@ -654,7 +656,8 @@ impl OsDetector {
     async fn send_tcp_tests(&self, target: Ipv4Addr) -> Result<Vec<TestResult>> {
         use rustnmap_net::raw_socket::{parse_tcp_response_full, RawSocket, TcpPacketBuilder};
 
-        let socket = RawSocket::new().map_err(|e| crate::FingerprintError::Network {
+        // Use IPPROTO_TCP (6) for receiving TCP responses
+        let socket = RawSocket::with_protocol(6).map_err(|e| crate::FingerprintError::Network {
             operation: "create raw socket".to_string(),
             reason: e.to_string(),
         })?;
@@ -750,7 +753,8 @@ impl OsDetector {
     async fn send_icmp_probes(&self, target: Ipv4Addr) -> Result<IcmpTestResult> {
         use rustnmap_net::raw_socket::{IcmpPacketBuilder, RawSocket};
 
-        let socket = RawSocket::new().map_err(|e| crate::FingerprintError::Network {
+        // Use IPPROTO_ICMP (1) for receiving ICMP responses
+        let socket = RawSocket::with_protocol(1).map_err(|e| crate::FingerprintError::Network {
             operation: "create raw socket".to_string(),
             reason: e.to_string(),
         })?;
@@ -843,7 +847,8 @@ impl OsDetector {
     async fn send_udp_probe(&self, target: Ipv4Addr) -> Result<UdpTestResult> {
         use rustnmap_net::raw_socket::{RawSocket, UdpPacketBuilder};
 
-        let socket = RawSocket::new().map_err(|e| crate::FingerprintError::Network {
+        // Use IPPROTO_ICMP (1) for receiving ICMP responses (Port Unreachable)
+        let socket = RawSocket::with_protocol(1).map_err(|e| crate::FingerprintError::Network {
             operation: "create raw socket".to_string(),
             reason: e.to_string(),
         })?;

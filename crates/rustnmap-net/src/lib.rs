@@ -38,7 +38,11 @@ pub mod raw_socket {
     }
 
     impl RawSocket {
-        /// Creates a new raw socket.
+        /// Creates a new raw socket using `IPPROTO_RAW` (255).
+        ///
+        /// This creates a socket that can send packets with custom IP headers.
+        /// For receiving responses, use [`Self::with_protocol`] with the
+        /// specific protocol (e.g., `IPPROTO_TCP` for TCP responses).
         ///
         /// # Errors
         ///
@@ -47,12 +51,39 @@ pub mod raw_socket {
         /// - The system runs out of file descriptors
         /// - The socket protocol is not supported
         pub fn new() -> super::Result<Self> {
+            Self::with_protocol(255)
+        }
+
+        /// Creates a raw socket for a specific IP protocol.
+        ///
+        /// # Arguments
+        ///
+        /// * `protocol` - The IP protocol number (e.g., 6 for TCP, 17 for UDP, 1 for ICMP)
+        ///
+        /// # Errors
+        ///
+        /// Returns an error if:
+        /// - The process lacks `CAP_NET_RAW` capability
+        /// - The system runs out of file descriptors
+        /// - The socket protocol is not supported
+        ///
+        /// # Examples
+        ///
+        /// ```rust,no_run
+        /// use rustnmap_net::raw_socket::RawSocket;
+        ///
+        /// // Create a TCP raw socket for receiving TCP responses
+        /// let tcp_socket = RawSocket::with_protocol(6).unwrap();
+        ///
+        /// // Create a UDP raw socket for receiving UDP responses
+        /// let udp_socket = RawSocket::with_protocol(17).unwrap();
+        /// ```
+        pub fn with_protocol(protocol: u8) -> super::Result<Self> {
             use rustnmap_common::error::NetworkError;
             use rustnmap_common::Error;
             use socket2::{Domain, Protocol, Type};
 
-            // Use IP protocol 0 for raw IP packet capture
-            let socket = socket2::Socket::new(Domain::IPV4, Type::RAW, Some(Protocol::from(0)))
+            let socket = socket2::Socket::new(Domain::IPV4, Type::RAW, Some(Protocol::from(i32::from(protocol))))
                 .map_err(|e| Error::Network(NetworkError::RawSocketCreation { source: e }))?;
 
             // Set socket options for better performance
