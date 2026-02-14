@@ -1,145 +1,81 @@
-# Findings: FTP Bounce Scan Research
+# Findings: Idle Scan (-sI) Implementation
 
 > **Project**: RustNmap - Rust Network Mapper
 > **Created**: 2026-02-14
-> **Purpose**: Research findings for FTP Bounce Scan implementation
+> **Purpose**: Research findings for Idle Scan (-sI) implementation
 
 ---
 
-## Requirements
+## Overview
 
-From the user request and design documents:
-- Implement FTP Bounce Scan (-b) as specified in `doc/modules/port-scanning.md`
-- Support scanning through FTP proxy/bounce servers
-- Detect port states (Open, Closed, Filtered) via FTP response codes
-- No root privileges required (uses standard TCP connections)
+Idle Scan is an advanced, stealthy port scanning technique that uses a third-party "zombie" host to perform the scan. The scan is completely blind - no packets are sent from the scanner's IP address to the target.
 
----
+## Idle Scan Principles
 
-## Research Findings
+### How It Works
 
-### Scanner Architecture Pattern
+1. **Probe Zombie for IP ID**: Send a SYN/ACK packet to the zombie and record the IP ID from its RST response
+2. **Spoof SYN to Target**: Send a SYN packet to the target with the zombie's IP as the source address
+3. **Probe Zombie Again**: Send another SYN/ACK to the zombie and record the new IP ID
 
-From studying existing implementations:
+### Port State Determination
 
-1. **PortScanner Trait** (`scanner.rs`):
-   ```rust
-   pub trait PortScanner {
-       fn scan_port(&self, target: &Target, port: Port, protocol: Protocol) -> ScanResult<PortState>;
-       fn requires_root(&self) -> bool;
-   }
-   ```
+| Condition | IP ID Change | Interpretation |
+|-----------|--------------|----------------|
+| Zombie IP ID increased by 2 | +2 | Target port is **Open** (SYN-ACK to zombie, zombie sent RST back) |
+| Zombie IP ID increased by 1 | +1 | Target port is **Closed** (RST to zombie, no response needed) |
+| No change or erratic | 0 or random | **Filtered** or zombie not suitable |
 
-2. **Non-Root Pattern** (from `connect_scan.rs`):
-   - Uses standard `std::net::TcpStream::connect_timeout()` instead of raw sockets
-   - `requires_root()` returns `false`
-   - Simple timeout-based connection logic
+### Why It Works
 
-3. **Module Export Pattern** (from `lib.rs`):
-   - Add `pub mod ftp_bounce_scan;`
-   - Add `pub use ftp_bounce_scan::FtpBounceScanner;`
+- **Open Port**: Target responds with SYN-ACK to zombie. Zombie, not expecting this, sends RST (IP ID +1). The scanner's probe gets RST (IP ID +1). Total: +2.
+- **Closed Port**: Target responds with RST to zombie. Zombie does nothing. Scanner's probe gets RST (IP ID +1). Total: +1.
 
-### FTP Bounce Scan Requirements (from design doc)
+## Technical Requirements
 
-From `doc/modules/port-scanning.md` line 19:
-| FTP Bounce | `-b` | User | ★★☆☆☆ | ★★★☆☆ | `FtpBounceScanner` |
+### Zombie Host Requirements
 
-Key characteristics:
-- **User privilege** (no root required)
-- Low stealth (FTP server logs activity)
-- Medium accuracy
+1. **Predictable IP ID Sequence**: The zombie must increment its IP ID sequentially (not random)
+2. **Low Traffic**: Minimal traffic from the zombie during scan to avoid IP ID interference
+3. **RST on Unexpected SYN-ACK**: Standard TCP stack behavior
 
-### FTP PORT Command Format
+### Implementation Components
 
-The FTP PORT command uses the following format:
-```
-PORT a,b,c,d,e,f
-```
+1. **Zombie Probing**: Send SYN-ACK packets to zombie to get IP ID
+2. **Packet Spoofing**: Send SYN packets with zombie's IP as source
+3. **IP ID Extraction**: Parse IP header to extract ID field from RST responses
+4. **State Determination**: Compare before/after IP IDs to determine port state
 
-Where:
-- `a,b,c,d` = 4 octets of target IP address
-- `e,f` = 2 octets of target port (port = e*256 + f)
+## Architecture Design
 
-Example for 192.168.1.1:80:
-```
-PORT 192,168,1,1,0,80
-```
-
-### FTP Response Codes for Port State Detection
-
-| Response | Code | Meaning | Port State |
-|----------|------|---------|------------|
-| 150 | Opening data connection | Transfer starting | Open |
-| 200 | Command okay | PORT accepted | (intermediate) |
-| 226 | Transfer complete | Connection succeeded | Open |
-| 425 | Can't open data connection | Connection refused | Closed |
-| 426 | Connection closed | Transfer aborted | Closed/Filtered |
-| 500/501 | Syntax error | Invalid PORT command | Error |
-| 530 | Not logged in | Auth required | Error |
-
----
-
-## Technical Decisions
-
-| Decision | Rationale |
-|----------|-----------|
-| Use standard TcpStream | FTP bounce uses normal TCP, no raw sockets needed |
-| Implement FTP command builder | Clean abstraction for PORT command construction |
-| Parse FTP responses line by line | Standard FTP protocol handling |
-| Store FTP server address in scanner | Scanner needs to know which FTP server to bounce through |
-| Use Option<String> for username/password | Support both anonymous and authenticated FTP |
-
-## FtpBounceScanner Structure Design
-
-Based on `TcpConnectScanner` pattern:
+### IdleScanner Structure
 
 ```rust
-pub struct FtpBounceScanner {
-    /// FTP server address (the bounce proxy)
-    ftp_server: SocketAddr,
-    /// Connection timeout for FTP operations
-    connect_timeout: Duration,
-    /// Optional username for FTP authentication
-    username: Option<String>,
-    /// Optional password for FTP authentication
-    password: Option<String>,
+pub struct IdleScanner {
+    /// Local IP address for probes to zombie
+    local_addr: Ipv4Addr,
+    /// Zombie host IP address (the "idle" host)
+    zombie_addr: Ipv4Addr,
+    /// Zombie probe port (port on zombie to probe)
+    zombie_port: Port,
+    /// Raw socket for packet transmission
+    socket: RawSocket,
+    /// Scanner configuration
+    config: ScanConfig,
 }
 ```
 
-## FTP Command Sequence for Bounce Scan
+### Key Methods
 
-1. **Connect** to FTP server
-2. **USER** (optional - for authenticated FTP)
-3. **PASS** (optional - for authenticated FTP)
-4. **PORT a,b,c,d,e,f** - Tell FTP server to connect to target IP:port
-5. **LIST** - Trigger data connection attempt
-6. **Parse response** - Determine port state from FTP response code
+1. `probe_zombie_ip_id() -> ScanResult<u16>`: Get current IP ID from zombie
+2. `send_spoofed_syn(target_addr, target_port)`: Send SYN with zombie as source
+3. `determine_port_state(ipid_before, ipid_after) -> PortState`: Interpret results
 
-## Port State Mapping from FTP Responses
+## Reference
 
-| FTP Response | Meaning | Port State |
-|--------------|---------|------------|
-| 150 (Opening data connection) | FTP server successfully connected to target | Open |
-| 226 (Transfer complete) | Data connection established and closed | Open |
-| 425 (Can't open data connection) | Connection refused by target | Closed |
-| 426 (Connection closed) | Connection aborted | Closed/Filtered |
-| Timeout/No response | FTP server couldn't connect | Filtered |
-
----
-
-## Issues Encountered
-
-| Issue | Resolution |
-|-------|------------|
-|       |            |
-
----
-
-## Resources
-
+- Nmap source: `reference/nmap/idle_scan.cc`
 - Design doc: `doc/modules/port-scanning.md`
-- Nmap source: `reference/nmap/bouncescan.cc`
-- FTP RFC: RFC 959
+- RFC 793: TCP protocol behavior
 
 ---
 
