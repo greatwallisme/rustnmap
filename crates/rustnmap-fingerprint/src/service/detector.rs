@@ -205,11 +205,7 @@ impl ServiceDetector {
     ///
     /// Some services (SSH, FTP, SMTP) send a banner immediately upon connection.
     /// This method connects and reads the initial response without sending anything.
-    pub async fn grab_banner(
-        &self,
-        target: &SocketAddr,
-        port: u16,
-    ) -> Result<Option<Vec<u8>>> {
+    pub async fn grab_banner(&self, target: &SocketAddr, port: u16) -> Result<Option<Vec<u8>>> {
         use tokio::io::AsyncReadExt;
         use tokio::net::TcpStream;
 

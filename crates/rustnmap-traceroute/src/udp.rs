@@ -6,9 +6,7 @@ use crate::{
     TracerouteConfig,
 };
 use rustnmap_common::Ipv4Addr;
-use rustnmap_net::raw_socket::{
-    parse_icmp_response, IcmpResponse, RawSocket, UdpPacketBuilder,
-};
+use rustnmap_net::raw_socket::{parse_icmp_response, IcmpResponse, RawSocket, UdpPacketBuilder};
 use std::io;
 use std::net::{SocketAddr, SocketAddrV4};
 
@@ -127,7 +125,12 @@ impl UdpTraceroute {
             Ok(len) if len > 0 => {
                 // Try to parse ICMP response
                 if let Some(icmp_resp) = parse_icmp_response(&recv_buf[..len]) {
-                    return Ok(self.handle_icmp_response(icmp_resp, target, dest_port, &recv_buf[..len]));
+                    return Ok(self.handle_icmp_response(
+                        icmp_resp,
+                        target,
+                        dest_port,
+                        &recv_buf[..len],
+                    ));
                 }
 
                 // No recognizable ICMP response
@@ -179,7 +182,7 @@ impl UdpTraceroute {
                 // Verify this response is for our probe
                 (original_dst_ip == expected_target
                     && (original_dst_port == expected_port || original_dst_port == 0))
-                .then(|| ProbeResponse::time_exceeded(responder_ip))
+                    .then(|| ProbeResponse::time_exceeded(responder_ip))
             }
             IcmpResponse::DestinationUnreachable {
                 code,
@@ -187,23 +190,37 @@ impl UdpTraceroute {
                 original_dst_port,
             } => {
                 // Verify this response is for our probe
-                (original_dst_ip == expected_target && original_dst_port == expected_port).then(|| {
-                    // Port unreachable means we reached the destination
-                    let is_destination = matches!(code, rustnmap_net::raw_socket::IcmpUnreachableCode::PortUnreachable);
-                    ProbeResponse::new(
-                        responder_ip,
-                        3,  // ICMP Destination Unreachable
-                        u8::from(code),
-                        is_destination,
-                    )
-                })
+                (original_dst_ip == expected_target && original_dst_port == expected_port).then(
+                    || {
+                        // Port unreachable means we reached the destination
+                        let is_destination = matches!(
+                            code,
+                            rustnmap_net::raw_socket::IcmpUnreachableCode::PortUnreachable
+                        );
+                        ProbeResponse::new(
+                            responder_ip,
+                            3, // ICMP Destination Unreachable
+                            u8::from(code),
+                            is_destination,
+                        )
+                    },
+                )
             }
-            IcmpResponse::Other { icmp_type, icmp_code } => {
+            IcmpResponse::Other {
+                icmp_type,
+                icmp_code,
+            } => {
                 // For traceroute, we only care about Time Exceeded (11) and Destination Unreachable (3)
                 // Echo Reply (0) would indicate the target responded directly (unlikely for UDP)
                 // Echo reply - this would be unusual for UDP traceroute
-                (icmp_type == 0 && icmp_code == 0)
-                    .then(|| ProbeResponse::new(responder_ip, icmp_type, icmp_code, responder_ip == expected_target))
+                (icmp_type == 0 && icmp_code == 0).then(|| {
+                    ProbeResponse::new(
+                        responder_ip,
+                        icmp_type,
+                        icmp_code,
+                        responder_ip == expected_target,
+                    )
+                })
             }
         }
     }
@@ -214,12 +231,7 @@ impl UdpTraceroute {
     /// the probe. We include TTL and sequence for correlation.
     fn build_payload(ttl: u8, sequence: u16) -> Vec<u8> {
         // Simple payload with TTL and sequence
-        vec![
-            ttl,
-            0,
-            (sequence >> 8) as u8,
-            (sequence & 0xFF) as u8,
-        ]
+        vec![ttl, 0, (sequence >> 8) as u8, (sequence & 0xFF) as u8]
     }
 
     /// Generates a source port for the probe.

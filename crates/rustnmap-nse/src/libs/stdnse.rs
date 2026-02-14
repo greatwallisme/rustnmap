@@ -207,16 +207,17 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     stdnse_table.set("generate_random_string", generate_random_string_fn)?;
 
     // Register tohex(data, [separator]) function
-    let tohex_fn = lua.create_function(|_, (data, separator): (mlua::String, Option<String>)| {
-        let bytes = data.as_bytes();
-        let sep = separator.as_deref().unwrap_or("");
-        let hex = bytes
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect::<Vec<_>>()
-            .join(sep);
-        Ok(hex)
-    })?;
+    let tohex_fn =
+        lua.create_function(|_, (data, separator): (mlua::String, Option<String>)| {
+            let bytes = data.as_bytes();
+            let sep = separator.as_deref().unwrap_or("");
+            let hex = bytes
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<Vec<_>>()
+                .join(sep);
+            Ok(hex)
+        })?;
     stdnse_table.set("tohex", tohex_fn)?;
 
     // Register fromhex(hexstr) function
@@ -457,7 +458,11 @@ mod tests {
 
         // Get all args - note: table.len() returns sequential array length,
         // but our table is a hash map with string keys
-        let all: mlua::Table = lua.lua().load("return stdnse.get_script_args()").eval().unwrap();
+        let all: mlua::Table = lua
+            .lua()
+            .load("return stdnse.get_script_args()")
+            .eval()
+            .unwrap();
         // Check that both keys exist
         let ua_val: String = all.get("http.useragent").unwrap();
         let timeout_val: String = all.get("timeout").unwrap();

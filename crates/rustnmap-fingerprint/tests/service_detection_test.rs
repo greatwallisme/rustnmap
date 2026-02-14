@@ -63,19 +63,31 @@ Match test m|^Test (\d+) (\w+)| p/Product/ v/$1/ i/$2/ h/$1.test.com/ o/Linux/ d
     let match_rule = &probe.matches[0];
     assert_eq!(match_rule.service, "test");
     assert!(match_rule.product_template.is_some());
-    assert_eq!(match_rule.product_template.as_ref().unwrap().value, "Product");
+    assert_eq!(
+        match_rule.product_template.as_ref().unwrap().value,
+        "Product"
+    );
     assert!(match_rule.version_template.is_some());
     assert_eq!(match_rule.version_template.as_ref().unwrap().value, "$1");
     assert!(match_rule.info_template.is_some());
     assert_eq!(match_rule.info_template.as_ref().unwrap().value, "$2");
     assert!(match_rule.hostname_template.is_some());
-    assert_eq!(match_rule.hostname_template.as_ref().unwrap().value, "$1.test.com");
+    assert_eq!(
+        match_rule.hostname_template.as_ref().unwrap().value,
+        "$1.test.com"
+    );
     assert!(match_rule.os_type_template.is_some());
     assert_eq!(match_rule.os_type_template.as_ref().unwrap().value, "Linux");
     assert!(match_rule.device_type_template.is_some());
-    assert_eq!(match_rule.device_type_template.as_ref().unwrap().value, "router");
+    assert_eq!(
+        match_rule.device_type_template.as_ref().unwrap().value,
+        "router"
+    );
     assert!(match_rule.cpe_template.is_some());
-    assert_eq!(match_rule.cpe_template.as_ref().unwrap().value, "a:vendor:product:$1");
+    assert_eq!(
+        match_rule.cpe_template.as_ref().unwrap().value,
+        "a:vendor:product:$1"
+    );
 }
 
 /// Test softmatch directive parsing.
@@ -130,7 +142,9 @@ fn test_service_detection_with_mock_response() {
     let response = b"SSH-2.0-OpenSSH_8.4p1\r\n";
     let response_str = String::from_utf8_lossy(response);
 
-    let regex = probe.matches[0].compile_regex().expect("Failed to compile regex");
+    let regex = probe.matches[0]
+        .compile_regex()
+        .expect("Failed to compile regex");
     let captures = regex.captures(&response_str);
 
     assert!(captures.is_some(), "Expected regex to match");
@@ -336,8 +350,7 @@ Match mixed m|^Mixed|
 fn test_service_info_creation() {
     use rustnmap_fingerprint::service::detector::ServiceInfo;
 
-    let info = ServiceInfo::new("ssh")
-        .with_confidence(8);
+    let info = ServiceInfo::new("ssh").with_confidence(8);
 
     assert_eq!(info.name, "ssh");
     assert_eq!(info.confidence, 8);

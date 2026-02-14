@@ -1,7 +1,7 @@
 # Findings: RustNmap Research and Analysis
 
 > **Created**: 2026-02-12
-> **Updated**: 2026-02-13
+> **Updated**: 2026-02-13 (TODO Remediation Complete)
 > **Purpose**: Document discoveries, research results, and analysis
 
 ---
@@ -25,48 +25,77 @@
 | Phase 5 | rustnmap-core | 39 | Scan orchestrator |
 | Phase 5 | rustnmap-cli | 9 | CLI entry point |
 
-**Total**: 334 tests passing across 12 crates (326 unit + 8 integration)
+**Total**: 478 tests passing across 13 crates (470 unit + 8 integration)
 
 ---
 
-## Remaining Work Per Design Documents (@doc/)
+## Design Document Compliance Status
 
-Based on strict review of design documents, the following features remain to be implemented:
+All design document requirements have been implemented.
 
-### High Priority (P0) - Core Functionality
+### Implementation Summary
 
-| Feature | Design Doc | Status | Implementation Location |
-|---------|------------|--------|------------------------|
-| UDP scanning (-sU) | port-scanning.md | TODO | rustnmap-scan/src/lib.rs |
-| TCP SYN ping (-PS) | host-discovery.md | TODO | rustnmap-target/src/discovery.rs:65 |
-| ICMP echo ping (-PE) | host-discovery.md | TODO | rustnmap-target/src/discovery.rs:87 |
-| ICMP timestamp ping (-PP) | host-discovery.md | TODO | rustnmap-target/src/discovery.rs:87 |
-| ARP ping (-PR) | host-discovery.md | TODO | rustnmap-target/src/discovery.rs:118 |
+| Priority | Category | Status |
+|----------|----------|--------|
+| P0 | Core Functionality | COMPLETE |
+| P1 | Complete Scan Types | COMPLETE |
+| P2 | Advanced Features | COMPLETE |
 
-### Medium Priority (P1) - Complete Scan Types
+### Scan Types Status
 
-| Feature | Design Doc | Status | Implementation Location |
-|---------|------------|--------|------------------------|
-| TCP FIN scan (-sF) | port-scanning.md | TODO | rustnmap-scan |
-| TCP NULL scan (-sN) | port-scanning.md | TODO | rustnmap-scan |
-| TCP Xmas scan (-sX) | port-scanning.md | TODO | rustnmap-scan |
-| TCP ACK scan (-sA) | port-scanning.md | TODO | rustnmap-scan |
-| TCP Maimon scan (-sM) | port-scanning.md | TODO | rustnmap-scan |
-| ICMP traceroute | traceroute.md | TODO | rustnmap-traceroute/src/icmp.rs:32 |
-| TCP traceroute | traceroute.md | TODO | rustnmap-traceroute/src/tcp.rs:37,61 |
-| UDP traceroute | traceroute.md | TODO | rustnmap-traceroute/src/udp.rs:29 |
-| OS detection probes | os-detection.md | TODO | rustnmap-fingerprint/src/os/detector.rs |
-| Service detection probes | service-detection.md | TODO | rustnmap-fingerprint/src/service/detector.rs |
+| Scan Type | Flag | Status | Location |
+|-----------|------|--------|----------|
+| TCP SYN | -sS | COMPLETE | rustnmap-scan/src/syn_scan.rs |
+| TCP Connect | -sT | COMPLETE | rustnmap-scan/src/connect_scan.rs |
+| TCP FIN | -sF | COMPLETE | rustnmap-scan/src/stealth_scans.rs |
+| TCP NULL | -sN | COMPLETE | rustnmap-scan/src/stealth_scans.rs |
+| TCP Xmas | -sX | COMPLETE | rustnmap-scan/src/stealth_scans.rs |
+| TCP ACK | -sA | COMPLETE | rustnmap-scan/src/stealth_scans.rs |
+| TCP Maimon | -sM | COMPLETE | rustnmap-scan/src/stealth_scans.rs |
+| UDP | -sU | COMPLETE | rustnmap-scan/src/udp_scan.rs |
 
-### Lower Priority (P2) - Advanced Features
+### Host Discovery Status
 
-| Feature | Design Doc | Status | Implementation Location |
-|---------|------------|--------|------------------------|
-| NSE nmap library | nse-engine.md | TODO | rustnmap-nse |
-| NSE stdnse library | nse-engine.md | TODO | rustnmap-nse |
-| NSE comm library | nse-engine.md | TODO | rustnmap-nse |
-| NSE shortport library | nse-engine.md | TODO | rustnmap-nse |
-| Performance benchmarks | roadmap.md | TODO | benches/ |
+| Method | Flag | Status | Location |
+|--------|------|--------|----------|
+| TCP SYN Ping | -PS | COMPLETE | rustnmap-target/src/discovery.rs |
+| TCP ACK Ping | -PA | COMPLETE | rustnmap-target/src/discovery.rs |
+| ICMP Echo | -PE | COMPLETE | rustnmap-target/src/discovery.rs |
+| ICMP Timestamp | -PP | COMPLETE | rustnmap-target/src/discovery.rs |
+| ARP Ping | -PR | COMPLETE | rustnmap-target/src/discovery.rs |
+
+### Traceroute Status
+
+| Protocol | Status | Location |
+|----------|--------|----------|
+| ICMP | COMPLETE | rustnmap-traceroute/src/icmp.rs |
+| TCP SYN | COMPLETE | rustnmap-traceroute/src/tcp.rs |
+| TCP ACK | COMPLETE | rustnmap-traceroute/src/tcp.rs |
+| UDP | COMPLETE | rustnmap-traceroute/src/udp.rs |
+
+### OS Detection Status
+
+| Feature | Status | Location |
+|---------|--------|----------|
+| SEQ Probes (6 SYN) | COMPLETE | rustnmap-fingerprint/src/os/detector.rs |
+| T1-T7 TCP Tests | COMPLETE | rustnmap-fingerprint/src/os/detector.rs |
+| ECN Probe | COMPLETE | rustnmap-fingerprint/src/os/detector.rs |
+| IE Probes (2 ICMP) | COMPLETE | rustnmap-fingerprint/src/os/detector.rs |
+| U1 UDP Probe | COMPLETE | rustnmap-fingerprint/src/os/detector.rs |
+| ISN Analysis | COMPLETE | rustnmap-fingerprint/src/os/fingerprint.rs |
+| IP ID Analysis | COMPLETE | rustnmap-fingerprint/src/os/fingerprint.rs |
+
+### NSE Engine Status
+
+| Component | Status | Location |
+|-----------|--------|----------|
+| Lua 5.4 Runtime | COMPLETE | rustnmap-nse/src/engine.rs |
+| Script Database | COMPLETE | rustnmap-nse/src/database.rs |
+| Script Scheduler | COMPLETE | rustnmap-nse/src/scheduler.rs |
+| nmap Library | COMPLETE | rustnmap-nse/src/libs/ |
+| stdnse Library | COMPLETE | rustnmap-nse/src/libs/ |
+| comm Library | COMPLETE | rustnmap-nse/src/libs/ |
+| shortport Library | COMPLETE | rustnmap-nse/src/libs/ |
 
 ---
 

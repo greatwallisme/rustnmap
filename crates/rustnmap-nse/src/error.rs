@@ -56,6 +56,15 @@ pub enum Error {
     #[error("invalid script category '{0}' in '{1}'")]
     InvalidCategory(String, String),
 
+    /// Script execution error.
+    #[error("script execution error in '{script_id}': {message}")]
+    ExecutionError {
+        /// Script ID where the error occurred.
+        script_id: String,
+        /// Error message.
+        message: String,
+    },
+
     /// Incompatible NSE version.
     #[error("script '{script}' requires NSE version {required}, but we have {current}")]
     IncompatibleVersion {

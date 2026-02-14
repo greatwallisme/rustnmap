@@ -59,7 +59,9 @@ const HTTP_PORTS: [u16; 15] = [
 ];
 
 /// Common HTTPS/SSL ports.
-const SSL_PORTS: [u16; 12] = [443, 465, 563, 636, 853, 990, 993, 995, 2083, 2087, 2096, 8443];
+const SSL_PORTS: [u16; 12] = [
+    443, 465, 563, 636, 853, 990, 993, 995, 2083, 2087, 2096, 8443,
+];
 
 /// Common FTP ports.
 const FTP_PORTS: [u16; 2] = [21, 990];
@@ -83,48 +85,62 @@ const IMAP_PORTS: [u16; 2] = [143, 993];
 const TELNET_PORTS: [u16; 1] = [23];
 
 /// Create a port rule function that matches by port number.
-fn create_portnumber_rule(lua: &mlua::Lua, ports: Vec<u16>, proto: Option<String>, state: Option<String>) -> mlua::Result<Function> {
+fn create_portnumber_rule(
+    lua: &mlua::Lua,
+    ports: Vec<u16>,
+    proto: Option<String>,
+    state: Option<String>,
+) -> mlua::Result<Function> {
     let ports_clone = ports.clone();
     lua.create_function(move |_, (_, port_table): (Value, Table)| {
         let port_num: u16 = port_table.get("number")?;
-        let port_proto: String = port_table.get("protocol").unwrap_or_else(|_| "tcp".to_string());
-        let port_state: String = port_table.get("state").unwrap_or_else(|_| "open".to_string());
+        let port_proto: String = port_table
+            .get("protocol")
+            .unwrap_or_else(|_| "tcp".to_string());
+        let port_state: String = port_table
+            .get("state")
+            .unwrap_or_else(|_| "open".to_string());
 
         // Check port number
         let port_matches = ports_clone.contains(&port_num);
 
         // Check protocol if specified
-        let proto_matches = proto.as_ref().map_or(true, |p| {
-            port_proto.eq_ignore_ascii_case(p)
-        });
+        let proto_matches = proto
+            .as_ref()
+            .map_or(true, |p| port_proto.eq_ignore_ascii_case(p));
 
         // Check state if specified
-        let state_matches = state.as_ref().map_or(true, |s| {
-            port_state.eq_ignore_ascii_case(s)
-        });
+        let state_matches = state
+            .as_ref()
+            .map_or(true, |s| port_state.eq_ignore_ascii_case(s));
 
         Ok(port_matches && proto_matches && state_matches)
     })
 }
 
 /// Create a port rule function that matches by service name.
-fn create_service_rule(lua: &mlua::Lua, services: Vec<String>, state: Option<String>) -> mlua::Result<Function> {
-    let services_lower: Vec<String> = services.iter()
-        .map(|s| s.to_lowercase())
-        .collect();
+fn create_service_rule(
+    lua: &mlua::Lua,
+    services: Vec<String>,
+    state: Option<String>,
+) -> mlua::Result<Function> {
+    let services_lower: Vec<String> = services.iter().map(|s| s.to_lowercase()).collect();
 
     lua.create_function(move |_, (_, port_table): (Value, Table)| {
         let port_service: String = port_table.get("service").unwrap_or_default();
-        let port_state: String = port_table.get("state").unwrap_or_else(|_| "open".to_string());
+        let port_state: String = port_table
+            .get("state")
+            .unwrap_or_else(|_| "open".to_string());
 
         // Check service name (case-insensitive)
-        let service_matches = services_lower.iter()
+        let service_matches = services_lower
+            .iter()
             .any(|s| port_service.eq_ignore_ascii_case(s));
 
         // Check state if specified
-        let state_matches = state.as_ref().map_or(true, |s| {
-            port_state.eq_ignore_ascii_case(s)
-        });
+        let state_matches = state
+            .as_ref()
+            .map_or(true, |s| port_state.eq_ignore_ascii_case(s));
 
         Ok(service_matches && state_matches)
     })
@@ -138,32 +154,35 @@ fn create_port_or_service_rule(
     proto: Option<String>,
     state: Option<String>,
 ) -> mlua::Result<Function> {
-    let services_lower: Vec<String> = services.iter()
-        .map(|s| s.to_lowercase())
-        .collect();
+    let services_lower: Vec<String> = services.iter().map(|s| s.to_lowercase()).collect();
 
     lua.create_function(move |_, (_, port_table): (Value, Table)| {
         let port_num: u16 = port_table.get("number")?;
-        let port_proto: String = port_table.get("protocol").unwrap_or_else(|_| "tcp".to_string());
-        let port_state: String = port_table.get("state").unwrap_or_else(|_| "open".to_string());
+        let port_proto: String = port_table
+            .get("protocol")
+            .unwrap_or_else(|_| "tcp".to_string());
+        let port_state: String = port_table
+            .get("state")
+            .unwrap_or_else(|_| "open".to_string());
         let port_service: String = port_table.get("service").unwrap_or_default();
 
         // Check port number
         let port_matches = ports.contains(&port_num);
 
         // Check service name (case-insensitive)
-        let service_matches = services_lower.iter()
+        let service_matches = services_lower
+            .iter()
             .any(|s| port_service.eq_ignore_ascii_case(s));
 
         // Check protocol if specified
-        let proto_matches = proto.as_ref().map_or(true, |p| {
-            port_proto.eq_ignore_ascii_case(p)
-        });
+        let proto_matches = proto
+            .as_ref()
+            .map_or(true, |p| port_proto.eq_ignore_ascii_case(p));
 
         // Check state if specified
-        let state_matches = state.as_ref().map_or(true, |s| {
-            port_state.eq_ignore_ascii_case(s)
-        });
+        let state_matches = state
+            .as_ref()
+            .map_or(true, |s| port_state.eq_ignore_ascii_case(s));
 
         Ok((port_matches || service_matches) && proto_matches && state_matches)
     })
@@ -352,7 +371,13 @@ mod tests {
     use super::*;
     use mlua::Lua;
 
-    fn create_test_port_table(lua: &Lua, number: u16, protocol: &str, state: &str, service: &str) -> mlua::Table {
+    fn create_test_port_table(
+        lua: &Lua,
+        number: u16,
+        protocol: &str,
+        state: &str,
+        service: &str,
+    ) -> mlua::Table {
         let table = lua.create_table().unwrap();
         table.set("number", number).unwrap();
         table.set("protocol", protocol).unwrap();
@@ -429,7 +454,8 @@ mod tests {
         register(&mut lua).unwrap();
 
         // Create a port rule for port 1234
-        let rule: Function = lua.lua()
+        let rule: Function = lua
+            .lua()
             .load("return shortport.portnumber(1234)")
             .eval()
             .unwrap();
@@ -451,7 +477,8 @@ mod tests {
         register(&mut lua).unwrap();
 
         // Create a port rule for UDP port 53
-        let rule: Function = lua.lua()
+        let rule: Function = lua
+            .lua()
             .load("return shortport.portnumber(53, 'udp')")
             .eval()
             .unwrap();
@@ -473,7 +500,8 @@ mod tests {
         register(&mut lua).unwrap();
 
         // Create a service rule for "http"
-        let rule: Function = lua.lua()
+        let rule: Function = lua
+            .lua()
             .load("return shortport.service('http')")
             .eval()
             .unwrap();
@@ -495,7 +523,8 @@ mod tests {
         register(&mut lua).unwrap();
 
         // Create a rule that matches port 8080 or service "http"
-        let rule: Function = lua.lua()
+        let rule: Function = lua
+            .lua()
             .load("return shortport.port_or_service(8080, 'http')")
             .eval()
             .unwrap();
@@ -522,7 +551,8 @@ mod tests {
         register(&mut lua).unwrap();
 
         // Create a rule that matches multiple ports or services
-        let rule: Function = lua.lua()
+        let rule: Function = lua
+            .lua()
             .load("return shortport.port_or_service({80, 443, 8080}, {'http', 'https'})")
             .eval()
             .unwrap();
@@ -555,7 +585,9 @@ mod tests {
         let shortport: Table = lua.lua().globals().get("shortport").unwrap();
 
         // Test all predefined rules exist
-        let rules = ["http", "ssl", "ftp", "ssh", "smtp", "dns", "pop3", "imap", "telnet"];
+        let rules = [
+            "http", "ssl", "ftp", "ssh", "smtp", "dns", "pop3", "imap", "telnet",
+        ];
         for rule_name in &rules {
             let _rule: Function = shortport.get(*rule_name).unwrap();
         }

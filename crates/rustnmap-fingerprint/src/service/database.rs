@@ -756,11 +756,17 @@ Match http m|^Server: ([\w/]+)| p/$1/
         assert_eq!(generic_probe.matches.len(), 1);
         assert_eq!(generic_probe.matches[0].service, "ssh");
         assert_eq!(
-            generic_probe.matches[0].product_template.as_ref().map(|t| t.value.clone()),
+            generic_probe.matches[0]
+                .product_template
+                .as_ref()
+                .map(|t| t.value.clone()),
             Some("OpenSSH".to_string())
         );
         assert_eq!(
-            generic_probe.matches[0].version_template.as_ref().map(|t| t.value.clone()),
+            generic_probe.matches[0]
+                .version_template
+                .as_ref()
+                .map(|t| t.value.clone()),
             Some("$1".to_string())
         );
 
@@ -768,7 +774,10 @@ Match http m|^Server: ([\w/]+)| p/$1/
         assert_eq!(http_probe.matches.len(), 1);
         assert_eq!(http_probe.matches[0].service, "http");
         assert_eq!(
-            http_probe.matches[0].product_template.as_ref().map(|t| t.value.clone()),
+            http_probe.matches[0]
+                .product_template
+                .as_ref()
+                .map(|t| t.value.clone()),
             Some("$1".to_string())
         );
     }
@@ -800,7 +809,10 @@ Match http m|^Server: ([\w/]+)| p/$1/
         let result = ProbeDatabase::extract_version_field("p/OpenSSH/ rest");
         println!("Result: {:?}", result);
         assert!(result.is_ok());
-        assert!(result.as_ref().unwrap().is_some(), "Expected Some but got None");
+        assert!(
+            result.as_ref().unwrap().is_some(),
+            "Expected Some but got None"
+        );
 
         // Test p/ field
         let (field, rest) = result.unwrap().unwrap();

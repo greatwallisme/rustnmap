@@ -246,10 +246,7 @@ impl Traceroute {
             });
         }
 
-        Ok(Self {
-            config,
-            local_addr,
-        })
+        Ok(Self { config, local_addr })
     }
 
     /// Creates a traceroute with default configuration.
@@ -402,26 +399,24 @@ impl Traceroute {
         let config = self.config.clone();
         let local_addr = self.local_addr;
 
-        tokio::task::spawn_blocking(move || {
-            match config.probe_type {
-                ProbeType::Udp => {
-                    let mut tracer = UdpTraceroute::new(config, local_addr)?;
-                    tracer.send_probe(target, ttl)
-                }
-                ProbeType::TcpSyn => {
-                    let dest_port = config.dest_port;
-                    let mut tracer = TcpSynTraceroute::new(config, local_addr)?;
-                    tracer.send_probe(target, ttl, dest_port)
-                }
-                ProbeType::TcpAck => {
-                    let dest_port = config.dest_port;
-                    let mut tracer = TcpAckTraceroute::new(config, local_addr)?;
-                    tracer.send_probe(target, ttl, dest_port)
-                }
-                ProbeType::Icmp => {
-                    let mut tracer = IcmpTraceroute::new(config, local_addr)?;
-                    tracer.send_probe(target, ttl)
-                }
+        tokio::task::spawn_blocking(move || match config.probe_type {
+            ProbeType::Udp => {
+                let mut tracer = UdpTraceroute::new(config, local_addr)?;
+                tracer.send_probe(target, ttl)
+            }
+            ProbeType::TcpSyn => {
+                let dest_port = config.dest_port;
+                let mut tracer = TcpSynTraceroute::new(config, local_addr)?;
+                tracer.send_probe(target, ttl, dest_port)
+            }
+            ProbeType::TcpAck => {
+                let dest_port = config.dest_port;
+                let mut tracer = TcpAckTraceroute::new(config, local_addr)?;
+                tracer.send_probe(target, ttl, dest_port)
+            }
+            ProbeType::Icmp => {
+                let mut tracer = IcmpTraceroute::new(config, local_addr)?;
+                tracer.send_probe(target, ttl)
             }
         })
         .await

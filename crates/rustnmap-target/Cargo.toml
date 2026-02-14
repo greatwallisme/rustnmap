@@ -16,6 +16,7 @@ categories = ["network-programming", "parser-implementations"]
 rustnmap-common = { path = "../rustnmap-common" }
 rustnmap-net = { path = "../rustnmap-net" }
 tokio = { workspace = true }
+trust-dns-resolver = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }

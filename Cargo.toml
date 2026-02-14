@@ -53,6 +53,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Utilities
 bytes = "1.9"
 
+# DNS resolution
+trust-dns-resolver = { version = "0.23", features = ["tokio-runtime"] }
+
 # Testing
 proptest = "1.5"
 criterion = { version = "0.8.2", features = ["html_reports"] }

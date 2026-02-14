@@ -4,11 +4,11 @@
 //! call overhead, and script scheduling performance.
 
 use criterion::{criterion_group, criterion_main, Criterion, Throughput};
-use rustnmap_nse::{
-    ScriptCategory, ScriptDatabase, ScriptEngine, ScriptScheduler,
-    DEFAULT_SCRIPT_TIMEOUT, MAX_CONCURRENT_SCRIPTS, MAX_MEMORY_BYTES, NSE_VERSION,
-};
 use rustnmap_nse::engine::SchedulerConfig;
+use rustnmap_nse::{
+    ScriptCategory, ScriptDatabase, ScriptEngine, ScriptScheduler, DEFAULT_SCRIPT_TIMEOUT,
+    MAX_CONCURRENT_SCRIPTS, MAX_MEMORY_BYTES, NSE_VERSION,
+};
 use std::hint::black_box;
 use std::sync::Arc;
 use std::time::Duration;
@@ -29,7 +29,10 @@ fn bench_script_database(c: &mut Criterion) {
             let mut db = ScriptDatabase::new();
             // Create a new script with unique ID for each iteration
             let unique_script = create_test_script(
-                &format!("test-script-{}", std::time::Instant::now().elapsed().as_nanos()),
+                &format!(
+                    "test-script-{}",
+                    std::time::Instant::now().elapsed().as_nanos()
+                ),
                 ScriptCategory::Default,
             );
             db.register_script(&unique_script);
@@ -88,7 +91,8 @@ fn bench_script_scheduler(c: &mut Criterion) {
         let scheduler = ScriptScheduler::new(db, config);
 
         b.iter(|| {
-            let scripts = scheduler.select_scripts(&[ScriptCategory::Default, ScriptCategory::Safe]);
+            let scripts =
+                scheduler.select_scripts(&[ScriptCategory::Default, ScriptCategory::Safe]);
             black_box(scripts);
         });
     });
@@ -144,10 +148,8 @@ end
         let target_ip = std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST);
 
         b.iter(|| {
-            let result = engine.execute_script(
-                engine.database().get("simple-script").unwrap(),
-                target_ip,
-            );
+            let result =
+                engine.execute_script(engine.database().get("simple-script").unwrap(), target_ip);
             black_box(result);
         });
     });
@@ -172,10 +174,8 @@ end
         let target_ip = std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST);
 
         b.iter(|| {
-            let result = engine.execute_script(
-                engine.database().get("math-script").unwrap(),
-                target_ip,
-            );
+            let result =
+                engine.execute_script(engine.database().get("math-script").unwrap(), target_ip);
             black_box(result);
         });
     });
@@ -200,10 +200,8 @@ end
         let target_ip = std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST);
 
         b.iter(|| {
-            let result = engine.execute_script(
-                engine.database().get("string-script").unwrap(),
-                target_ip,
-            );
+            let result =
+                engine.execute_script(engine.database().get("string-script").unwrap(), target_ip);
             black_box(result);
         });
     });
@@ -309,7 +307,8 @@ fn bench_script_batch_operations(c: &mut Criterion) {
         b.iter(|| {
             let mut db = ScriptDatabase::new();
             for i in 0..100 {
-                let script = create_test_script(&format!("batch-script-{}", i), ScriptCategory::Default);
+                let script =
+                    create_test_script(&format!("batch-script-{}", i), ScriptCategory::Default);
                 db.register_script(&script);
             }
             black_box(db);
@@ -320,7 +319,8 @@ fn bench_script_batch_operations(c: &mut Criterion) {
     group.bench_function("lookup_100_scripts", |b| {
         let mut db = ScriptDatabase::new();
         for i in 0..100 {
-            let script = create_test_script(&format!("lookup-script-{}", i), ScriptCategory::Default);
+            let script =
+                create_test_script(&format!("lookup-script-{}", i), ScriptCategory::Default);
             db.register_script(&script);
         }
 

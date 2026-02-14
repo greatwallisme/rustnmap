@@ -4,7 +4,7 @@
 //! packet I/O, and network interface management.
 
 #![warn(missing_docs)]
-#![expect(
+#![allow(
     clippy::multiple_crate_versions,
     reason = "Dependency version conflict in transitive deps"
 )]
@@ -1652,12 +1652,7 @@ pub mod raw_socket {
         }
 
         // Extract source IP from the IP header (bytes 12-15)
-        let source_ip = Ipv4Addr::new(
-            packet[12],
-            packet[13],
-            packet[14],
-            packet[15],
-        );
+        let source_ip = Ipv4Addr::new(packet[12], packet[13], packet[14], packet[15]);
 
         // Verify this is a valid Time Exceeded code (0 = TTL expired, 1 = Fragment reassembly)
         if icmp_code > 1 {

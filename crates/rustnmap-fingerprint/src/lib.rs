@@ -94,7 +94,7 @@ pub type Result<T> = std::result::Result<T, error::FingerprintError>;
 pub use error::FingerprintError;
 pub use os::{
     EcnFingerprint, FingerprintDatabase, IcmpTestResult, IpIdPattern, IpIdSeqClass, IsnClass,
-    OpsFingerprint, OsDetector, OsFingerprint, OsMatch, SeqFingerprint, TestResult,
-    TimestampRate, UdpTestResult,
+    OpsFingerprint, OsDetector, OsFingerprint, OsMatch, SeqFingerprint, TestResult, TimestampRate,
+    UdpTestResult,
 };
 pub use service::{ProbeDatabase, ProbeDefinition, ServiceDetector, ServiceInfo};

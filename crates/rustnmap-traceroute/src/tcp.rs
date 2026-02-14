@@ -128,16 +128,20 @@ impl TcpSynTraceroute {
         {
             Ok(len) if len > 0 => {
                 // First try to parse as TCP response (SYN-ACK or RST from target)
-                if let Some(response) = self.handle_tcp_response(&recv_buf[..len], target, dest_port)
+                if let Some(response) =
+                    self.handle_tcp_response(&recv_buf[..len], target, dest_port)
                 {
                     return Ok(Some(response));
                 }
 
                 // Then try ICMP response (Time Exceeded from intermediate router)
                 if let Some(icmp_resp) = parse_icmp_response(&recv_buf[..len]) {
-                    return Ok(
-                        self.handle_icmp_response(icmp_resp, target, dest_port, &recv_buf[..len]),
-                    );
+                    return Ok(self.handle_icmp_response(
+                        icmp_resp,
+                        target,
+                        dest_port,
+                        &recv_buf[..len],
+                    ));
                 }
 
                 Ok(None)
@@ -345,16 +349,20 @@ impl TcpAckTraceroute {
         {
             Ok(len) if len > 0 => {
                 // First try to parse as TCP response
-                if let Some(response) = self.handle_tcp_response(&recv_buf[..len], target, dest_port)
+                if let Some(response) =
+                    self.handle_tcp_response(&recv_buf[..len], target, dest_port)
                 {
                     return Ok(Some(response));
                 }
 
                 // Then try ICMP response
                 if let Some(icmp_resp) = parse_icmp_response(&recv_buf[..len]) {
-                    return Ok(
-                        self.handle_icmp_response(icmp_resp, target, dest_port, &recv_buf[..len]),
-                    );
+                    return Ok(self.handle_icmp_response(
+                        icmp_resp,
+                        target,
+                        dest_port,
+                        &recv_buf[..len],
+                    ));
                 }
 
                 Ok(None)
@@ -416,10 +424,8 @@ impl TcpAckTraceroute {
         match icmp_resp {
             IcmpResponse::TimeExceeded {
                 original_dst_ip, ..
-            } => {
-                (original_dst_ip == expected_target)
-                    .then(|| ProbeResponse::time_exceeded(responder_ip))
-            }
+            } => (original_dst_ip == expected_target)
+                .then(|| ProbeResponse::time_exceeded(responder_ip)),
             IcmpResponse::DestinationUnreachable { code, .. } => Some(ProbeResponse::new(
                 responder_ip,
                 3,

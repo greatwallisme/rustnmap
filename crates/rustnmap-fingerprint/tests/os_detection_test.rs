@@ -67,16 +67,20 @@ fn test_seq_analysis_incremental() {
 
     // Calculate GCD
     let diffs: Vec<u32> = isns.windows(2).map(|w| w[1].wrapping_sub(w[0])).collect();
-    let gcd = diffs.iter().copied().reduce(|a, b| {
-        let mut a = a;
-        let mut b = b;
-        while b != 0 {
-            let temp = b;
-            b = a % b;
-            a = temp;
-        }
-        a
-    }).unwrap_or(0);
+    let gcd = diffs
+        .iter()
+        .copied()
+        .reduce(|a, b| {
+            let mut a = a;
+            let mut b = b;
+            while b != 0 {
+                let temp = b;
+                b = a % b;
+                a = temp;
+            }
+            a
+        })
+        .unwrap_or(0);
 
     // All differences should be 1000000
     assert!(diffs.iter().all(|&d| d == 1000000));
@@ -88,7 +92,10 @@ fn test_seq_analysis_incremental() {
 fn test_ip_id_classification() {
     // Incremental sequence
     let ip_ids = vec![100, 101, 102, 103, 104, 105];
-    let diffs: Vec<i32> = ip_ids.windows(2).map(|w| w[1] as i32 - w[0] as i32).collect();
+    let diffs: Vec<i32> = ip_ids
+        .windows(2)
+        .map(|w| w[1] as i32 - w[0] as i32)
+        .collect();
     assert!(diffs.iter().all(|&d| d == 1 || d == -65535));
 
     // Fixed sequence
@@ -118,7 +125,7 @@ fn test_tcp_options_parsing() {
     // Build options as they would be in a real packet
     let options = vec![
         3, 3, 10, // Window Scale = 10
-        1,        // NOP
+        1,  // NOP
         2, 4, 0x05, 0xB4, // MSS = 1460
         8, 10, 0, 0, 0, 0, 0, 0, 0, 0, // Timestamp (TSval=0, TSecr=0)
         4, 2, // SACK permitted

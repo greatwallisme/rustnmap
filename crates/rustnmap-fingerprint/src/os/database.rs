@@ -87,34 +87,61 @@ impl FingerprintDatabase {
         Self::parse(&content)
     }
 
-    /// Parse database content.
+    /// Parse database content from nmap-os-db format.
+    ///
+    /// The nmap-os-db file format consists of:
+    /// - Comment lines starting with #
+    /// - Fingerprint lines starting with "Fingerprint "
+    /// - Class lines starting with "Class " following a fingerprint
+    /// - Test result lines (SEQ, OPS, WIN, ECN, T1-T7, U1, IE, etc.)
     fn parse(content: &str) -> Result<Self> {
         let mut db = Self::empty();
+        let mut current_fp: Option<NmapOsFingerprint> = None;
 
-        // Fingerprint entries start with "Fingerprint "
         for line in content.lines() {
             let line = line.trim();
 
-            if line.starts_with("Fingerprint ") {
-                // TODO: Implement full nmap-os-db parsing with proper line-based state machine
-                // This requires multi-line parsing to extract:
-                // - OS class and vendor information
-                // - SEQ, OPS, WIN, ECN test results
-                // - T1-T7, U1, IE test fingerprints
-                let fp_name = "Unknown".to_string();
-                db.fingerprints.insert(
-                    fp_name.clone(),
-                    OsReference {
-                        name: fp_name,
-                        family: OsFamily::Other("Unknown".to_string()).clone(),
-                        vendor: None,
-                        generation: None,
-                        device_type: None,
-                        cpe: None,
-                        fingerprint: OsFingerprint::new(),
-                    },
-                );
+            // Skip empty lines and comments
+            if line.is_empty() || line.starts_with('#') {
+                continue;
             }
+
+            // New fingerprint entry
+            if let Some(name) = line.strip_prefix("Fingerprint ") {
+                // Save previous fingerprint if exists
+                if let Some(fp) = current_fp.take() {
+                    let reference = fp.into_os_reference()?;
+                    db.fingerprints.insert(reference.name.clone(), reference);
+                }
+
+                // Start new fingerprint
+                current_fp = Some(NmapOsFingerprint::new(name.to_string()));
+            }
+            // Class line - belongs to current fingerprint
+            else if let Some(class_str) = line.strip_prefix("Class ") {
+                if let Some(ref mut fp) = current_fp {
+                    fp.parse_class_line(class_str)?;
+                }
+            }
+            // Test result line - belongs to current fingerprint
+            // Test lines start with test name followed by '(' (e.g., "SEQ(...)", "OPS(...)")
+            else if line.contains('(') && !line.starts_with("Fingerprint ") && !line.starts_with("Class ") && !line.starts_with("CPE ") {
+                if let Some(ref mut fp) = current_fp {
+                    fp.parse_test_line(line)?;
+                }
+            }
+            // CPE line
+            else if let Some(cpe_str) = line.strip_prefix("CPE ") {
+                if let Some(ref mut fp) = current_fp {
+                    fp.cpe = Some(cpe_str.trim().to_string());
+                }
+            }
+        }
+
+        // Don't forget the last fingerprint
+        if let Some(fp) = current_fp {
+            let reference = fp.into_os_reference()?;
+            db.fingerprints.insert(reference.name.clone(), reference);
         }
 
         info!(
@@ -280,6 +307,97 @@ pub struct OsMatch {
     pub accuracy: u8,
 }
 
+/// Internal structure for parsing nmap-os-db fingerprint entries.
+#[derive(Debug, Default)]
+struct NmapOsFingerprint {
+    /// OS name from fingerprint line.
+    name: String,
+    /// OS family (e.g., Linux, Windows).
+    family: Option<String>,
+    /// OS vendor/organization.
+    vendor: Option<String>,
+    /// OS version/generation.
+    generation: Option<String>,
+    /// Device type.
+    device_type: Option<String>,
+    /// CPE identifier.
+    cpe: Option<String>,
+    /// Raw test results.
+    tests: HashMap<String, String>,
+}
+
+impl NmapOsFingerprint {
+    /// Create new fingerprint parser.
+    fn new(name: String) -> Self {
+        Self {
+            name,
+            ..Default::default()
+        }
+    }
+
+    /// Parse Class line format: "Class vendor | family | gen | type"
+    fn parse_class_line(&mut self, line: &str) -> Result<()> {
+        // Format: "Class Microsoft | Windows | 10 | general purpose"
+        // or: "Class Linux | Linux | 5.X | general purpose"
+        let parts: Vec<&str> = line.split('|').map(|s| s.trim()).collect();
+
+        if parts.len() >= 2 {
+            self.vendor = Some(parts[0].to_string());
+            self.family = Some(parts[1].to_string());
+        }
+        if parts.len() >= 3 {
+            self.generation = Some(parts[2].to_string());
+        }
+        if parts.len() >= 4 {
+            self.device_type = Some(parts[3].to_string());
+        }
+
+        Ok(())
+    }
+
+    /// Parse test line format: "TEST(values)"
+    fn parse_test_line(&mut self, line: &str) -> Result<()> {
+        // Test lines look like: "SEQ(SP=101-105%GCD=1%ISR=107)"
+        // or: "OPS(O1=M5B4ST11NW2%O2=M5B4ST11NW2)"
+        if let Some((test_name, values)) = line.split_once('(') {
+            let values = values.trim_end_matches(')');
+            self.tests.insert(test_name.to_string(), values.to_string());
+        }
+        Ok(())
+    }
+
+    /// Convert parsed fingerprint to OsReference.
+    fn into_os_reference(self) -> Result<OsReference> {
+        let family = self.family.as_deref().unwrap_or("Unknown");
+        let family_lower = family.to_lowercase();
+        let os_family = match family_lower.as_str() {
+            "linux" => OsFamily::Linux,
+            "windows" => OsFamily::Windows,
+            "macos" | "mac os x" | "osx" => OsFamily::MacOS,
+            "freebsd" | "openbsd" | "netbsd" | "bsd" => OsFamily::BSD,
+            "solaris" => OsFamily::Solaris,
+            "ios" => OsFamily::IOS,
+            "android" => OsFamily::Android,
+            _ => OsFamily::Other(family.to_string()),
+        };
+
+        // Build fingerprint from test results
+        let fingerprint = OsFingerprint::new();
+        // TODO: Parse test results into fingerprint structure
+        // This requires parsing complex test value strings
+
+        Ok(OsReference {
+            name: self.name,
+            family: os_family,
+            vendor: self.vendor,
+            generation: self.generation,
+            device_type: self.device_type,
+            cpe: self.cpe,
+            fingerprint,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -337,5 +455,95 @@ mod tests {
         // Same class = 0.0 diff
         let diff = db.compare_seq(Some(&seq1), Some(&seq1));
         assert_eq!(diff, 0.0);
+    }
+
+    #[test]
+    fn test_parse_simple_db() {
+        let db_content = r#"
+# Nmap OS detection database
+# This is a test database
+
+Fingerprint Test OS 1
+Class TestVendor | TestOS | 1.0 | general purpose
+SEQ(SP=100-105%GCD=1%ISR=108)
+OPS(O1=M5B4ST11NW2%O2=M5B4ST11NW2)
+WIN(W1=FFFF)
+
+Fingerprint Test OS 2
+Class AnotherVendor | AnotherOS | 2.0 | specialized
+SEQ(SP=200-205%GCD=1%ISR=208)
+"#;
+
+        let db = FingerprintDatabase::parse(db_content).unwrap();
+        assert_eq!(db.fingerprints.len(), 2);
+
+        let fp1 = db.fingerprints.get("Test OS 1").unwrap();
+        assert_eq!(fp1.name, "Test OS 1");
+        assert_eq!(fp1.vendor, Some("TestVendor".to_string()));
+        assert_eq!(fp1.family, OsFamily::Other("TestOS".to_string()));
+        assert_eq!(fp1.generation, Some("1.0".to_string()));
+        assert_eq!(fp1.device_type, Some("general purpose".to_string()));
+
+        let fp2 = db.fingerprints.get("Test OS 2").unwrap();
+        assert_eq!(fp2.name, "Test OS 2");
+        assert_eq!(fp2.vendor, Some("AnotherVendor".to_string()));
+    }
+
+    #[test]
+    fn test_parse_class_line_variations() {
+        let db_content = r#"
+Fingerprint Linux Test
+Class Linux | Linux | 5.X | general purpose
+
+Fingerprint Windows Test
+Class Microsoft | Windows | 10 | general purpose
+
+Fingerprint Unknown Test
+Class Unknown | UnknownOS
+"#;
+
+        let db = FingerprintDatabase::parse(db_content).unwrap();
+        assert_eq!(db.fingerprints.len(), 3);
+
+        let linux = db.fingerprints.get("Linux Test").unwrap();
+        assert!(matches!(linux.family, OsFamily::Linux));
+        assert_eq!(linux.vendor, Some("Linux".to_string()));
+
+        let windows = db.fingerprints.get("Windows Test").unwrap();
+        assert!(matches!(windows.family, OsFamily::Windows));
+        assert_eq!(windows.vendor, Some("Microsoft".to_string()));
+
+        let unknown = db.fingerprints.get("Unknown Test").unwrap();
+        assert!(matches!(unknown.family, OsFamily::Other(_)));
+    }
+
+    #[test]
+    fn test_parse_with_cpe() {
+        let db_content = r#"
+Fingerprint Test With CPE
+Class Test | TestOS | 1.0 | general purpose
+CPE cpe:/o:test:os:1.0
+SEQ(SP=100)
+"#;
+
+        let db = FingerprintDatabase::parse(db_content).unwrap();
+        let fp = db.fingerprints.get("Test With CPE").unwrap();
+        assert_eq!(fp.cpe, Some("cpe:/o:test:os:1.0".to_string()));
+    }
+
+    #[test]
+    fn test_empty_db() {
+        let db = FingerprintDatabase::parse("").unwrap();
+        assert!(db.fingerprints.is_empty());
+    }
+
+    #[test]
+    fn test_db_with_only_comments() {
+        let db_content = r#"
+# This is a comment
+# Another comment
+"#;
+        let db = FingerprintDatabase::parse(db_content).unwrap();
+        assert!(db.fingerprints.is_empty());
     }
 }

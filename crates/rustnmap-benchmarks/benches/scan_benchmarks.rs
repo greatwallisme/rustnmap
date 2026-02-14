@@ -184,13 +184,12 @@ fn bench_target_parsing(c: &mut Criterion) {
 
     group.bench_function("expand_cidr_24", |b| {
         b.iter(|| {
-            let addrs = rustnmap_target::expand_target_spec(
-                &rustnmap_target::TargetSpec::Ipv4Cidr {
+            let addrs =
+                rustnmap_target::expand_target_spec(&rustnmap_target::TargetSpec::Ipv4Cidr {
                     base: Ipv4Addr::new(192, 168, 1, 0),
                     prefix: 24,
-                },
-            )
-            .unwrap();
+                })
+                .unwrap();
             black_box(addrs);
         });
     });
@@ -282,7 +281,9 @@ fn bench_parallel_scan_throughput(c: &mut Criterion) {
                 match state {
                     PortState::Open => open_count += 1,
                     PortState::Closed => closed_count += 1,
-                    PortState::Filtered | PortState::OpenOrFiltered | PortState::ClosedOrFiltered => {
+                    PortState::Filtered
+                    | PortState::OpenOrFiltered
+                    | PortState::ClosedOrFiltered => {
                         filtered_count += 1;
                     }
                     _ => {}

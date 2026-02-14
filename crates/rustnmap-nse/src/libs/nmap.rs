@@ -41,7 +41,6 @@
 //! end
 //! ```
 
-
 use crate::error::Result;
 use crate::lua::NseLua;
 
@@ -306,7 +305,6 @@ pub fn reset_registry() {
     // Individual Lua states manage their own registry tables.
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -391,11 +389,7 @@ mod tests {
         set_verbosity(5);
 
         // Call nmap.verbosity() from Lua
-        let result: i64 = lua
-            .lua()
-            .load("return nmap.verbosity()")
-            .eval()
-            .unwrap();
+        let result: i64 = lua.lua().load("return nmap.verbosity()").eval().unwrap();
         assert_eq!(result, 5);
     }
 
@@ -408,11 +402,7 @@ mod tests {
         set_debugging(3);
 
         // Call nmap.debugging() from Lua
-        let result: i64 = lua
-            .lua()
-            .load("return nmap.debugging()")
-            .eval()
-            .unwrap();
+        let result: i64 = lua.lua().load("return nmap.debugging()").eval().unwrap();
         assert_eq!(result, 3);
     }
 

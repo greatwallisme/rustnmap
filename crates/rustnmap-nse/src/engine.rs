@@ -47,9 +47,7 @@ pub struct ScriptScheduler {
     /// Scheduler configuration.
     config: SchedulerConfig,
 
-    /// Semaphore for concurrency control (reserved for future async execution).
-    // TODO: Implement async script execution using the semaphore for concurrency control
-    #[allow(dead_code, reason = "will be used when async execution is implemented")]
+    /// Semaphore for concurrency control during async script execution.
     semaphore: Arc<Semaphore>,
 }
 
@@ -164,6 +162,102 @@ impl ScriptEngine {
         &self.scheduler
     }
 
+    /// Create a full Nmap host table with all properties.
+    ///
+    /// # Arguments
+    ///
+    /// * `lua` - Lua state
+    /// * `target_ip` - Target IP address
+    ///
+    /// # Returns
+    ///
+    /// The host table.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if host table creation fails.
+    fn create_host_table(
+        lua: &mut crate::lua::NseLua,
+        target_ip: std::net::IpAddr,
+    ) -> Result<mlua::Table> {
+        let host_table = lua.create_table()?;
+
+        // host.ip - IP address string
+        host_table.set("ip", target_ip.to_string())?;
+
+        // host.name - Hostname (empty for now, would require DNS lookup)
+        host_table.set("name", "")?;
+
+        // host.targetname - The original target specification
+        host_table.set("targetname", target_ip.to_string())?;
+
+        // host.directly_connected - Whether target is on same subnet
+        host_table.set("directly_connected", false)?;
+
+        // host.mac_addr - MAC address if available
+        host_table.set("mac_addr", mlua::Value::Nil)?;
+
+        // host.os - OS fingerprint results (table)
+        host_table.set("os", lua.create_table()?)?;
+
+        // host.hostnames - Array of hostnames
+        let hostnames_table = lua.create_table()?;
+        host_table.set("hostnames", hostnames_table)?;
+
+        // host.traceroute - Route information
+        host_table.set("traceroute", mlua::Value::Nil)?;
+
+        // host.extraports - Extra ports info
+        let extraports_table = lua.create_table()?;
+        host_table.set("extraports", extraports_table)?;
+
+        // host.reason - Why host is considered up
+        host_table.set("reason", "user-set")?;
+
+        // host.reason_ttl - TTL of response that determined host is up
+        host_table.set("reason_ttl", mlua::Value::Nil)?;
+
+        // host.interface - Network interface used
+        host_table.set("interface", "")?;
+
+        // host.bin_ip - IP address as binary string
+        let bin_ip = match target_ip {
+            std::net::IpAddr::V4(v4) => v4.octets().to_vec(),
+            std::net::IpAddr::V6(v6) => v6.octets().to_vec(),
+        };
+        host_table.set("bin_ip", bin_ip)?;
+
+        // host.bin_ip_mask - Network mask (empty for single host)
+        host_table.set("bin_ip_mask", mlua::Value::Nil)?;
+
+        // host.options - IP options used
+        let options_table = lua.create_table()?;
+        host_table.set("options", options_table)?;
+
+        // host.id_ttl - Initial TTL guess
+        host_table.set("id_ttl", 64)?;
+
+        // host.scan_time - When host was scanned (POSIX timestamp)
+        let now: i64 = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs().try_into().unwrap_or(i64::MAX))
+            .unwrap_or(0);
+        host_table.set("scan_time", now)?;
+
+        // host.registry - Host-specific registry
+        let registry_table = lua.create_table()?;
+        host_table.set("registry", registry_table)?;
+
+        // host.times - Timing statistics
+        let times_table = lua.create_table()?;
+        times_table.set("srtt", 0)?;
+        times_table.set("rttvar", 0)?;
+        times_table.set("to", 0)?;
+        host_table.set("times", times_table)?;
+
+        Ok(host_table)
+    }
+
     /// Execute a single script synchronously.
     ///
     /// # Arguments
@@ -193,9 +287,8 @@ impl ScriptEngine {
         // Load the script
         lua.load_script(&script.source, &script.id)?;
 
-        // Create a simple host table with IP address
-        // TODO: Full host table implementation with all Nmap host properties
-        let host_table = lua.create_table()?;
+        // Create full Nmap host table with all properties
+        let host_table = Self::create_host_table(&mut lua, target_ip)?;
 
         lua.set_global("host", mlua::Value::Table(host_table))?;
 
@@ -236,6 +329,129 @@ impl ScriptEngine {
             duration: start.elapsed(),
             debug_log: vec![],
         })
+    }
+
+    /// Execute a single script asynchronously with concurrency control and timeout.
+    ///
+    /// # Arguments
+    ///
+    /// * `script` - Script to execute
+    /// * `target_ip` - Target IP address
+    ///
+    /// # Returns
+    ///
+    /// The script execution result.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if script execution fails or times out.
+    pub async fn execute_script_async(
+        &self,
+        script: &NseScript,
+        target_ip: std::net::IpAddr,
+    ) -> Result<ScriptResult> {
+        let start = std::time::Instant::now();
+
+        // Acquire semaphore permit for concurrency control
+        let _permit = self
+            .scheduler
+            .semaphore
+            .acquire()
+            .await
+            .map_err(|e| crate::error::Error::ExecutionError {
+                script_id: script.id.clone(),
+                message: format!("Failed to acquire execution permit: {e}"),
+            })?;
+
+        // Execute script with timeout
+        let timeout = self.scheduler.config.default_timeout;
+        let script_id = script.id.clone();
+        let script_source = script.source.clone();
+        let has_action = script.has_action();
+
+        let result = tokio::time::timeout(timeout, async move {
+            let mut lua = NseLua::new_default()?;
+
+            // Load the script
+            lua.load_script(&script_source, &script_id)?;
+
+            // Create full Nmap host table with all properties
+            let host_table = ScriptEngine::create_host_table(&mut lua, target_ip)?;
+            lua.set_global("host", mlua::Value::Table(host_table))?;
+
+            // Execute action function if exists
+            let output = if has_action {
+                let func = lua.load_function("return action(host)", "action_wrapper")?;
+                let result: mlua::MultiValue = lua.call_function(&func, ())?;
+
+                let output_parts: Vec<String> = result
+                    .iter()
+                    .filter_map(|v| match v {
+                        mlua::Value::String(s) => s.to_str().ok().map(|s| s.to_string()),
+                        mlua::Value::Integer(n) => Some(n.to_string()),
+                        mlua::Value::Number(n) => Some(n.to_string()),
+                        mlua::Value::Boolean(b) => Some(b.to_string()),
+                        _ => None,
+                    })
+                    .collect();
+
+                ScriptOutput::Plain(output_parts.join(" "))
+            } else {
+                ScriptOutput::Empty
+            };
+
+            Result::<ScriptOutput>::Ok(output)
+        })
+        .await;
+
+        match result {
+            Ok(Ok(output)) => Ok(ScriptResult {
+                script_id: script.id.clone(),
+                target_ip,
+                port: None,
+                protocol: None,
+                status: ExecutionStatus::Success,
+                output,
+                duration: start.elapsed(),
+                debug_log: vec![],
+            }),
+            Ok(Err(e)) => Err(e),
+            Err(_) => Ok(ScriptResult {
+                script_id: script.id.clone(),
+                target_ip,
+                port: None,
+                protocol: None,
+                status: ExecutionStatus::Timeout,
+                output: ScriptOutput::Empty,
+                duration: timeout,
+                debug_log: vec!["Script execution timed out".to_string()],
+            }),
+        }
+    }
+
+    /// Execute multiple scripts asynchronously with concurrency control.
+    ///
+    /// # Arguments
+    ///
+    /// * `scripts` - Scripts to execute
+    /// * `target_ip` - Target IP address
+    ///
+    /// # Returns
+    ///
+    /// Vector of script execution results.
+    pub async fn execute_scripts_async(
+        &self,
+        scripts: &[&NseScript],
+        target_ip: std::net::IpAddr,
+    ) -> Vec<Result<ScriptResult>> {
+        let mut handles = Vec::new();
+
+        for script in scripts {
+            let result = self.execute_script_async(script, target_ip).await;
+            handles.push(result);
+        }
+
+        handles
     }
 }
 

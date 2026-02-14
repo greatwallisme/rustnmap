@@ -342,39 +342,41 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     let comm_table = lua.create_table()?;
 
     // Register opencon(host, port, [opts]) function
-    let opencon_fn = lua.create_function(|lua, (host, port, opts): (String, u16, Option<Table>)| {
-        let options = parse_opts(opts).map_err(|e| mlua::Error::RuntimeError(e.to_string()))?;
+    let opencon_fn =
+        lua.create_function(|lua, (host, port, opts): (String, u16, Option<Table>)| {
+            let options = parse_opts(opts).map_err(|e| mlua::Error::RuntimeError(e.to_string()))?;
 
-        match opencon_impl(&host, port, options) {
-            Ok(socket) => Ok(Value::UserData(lua.create_userdata(socket)?)),
-            Err(_e) => Ok(Value::Nil),
-        }
-    })?;
+            match opencon_impl(&host, port, options) {
+                Ok(socket) => Ok(Value::UserData(lua.create_userdata(socket)?)),
+                Err(_e) => Ok(Value::Nil),
+            }
+        })?;
     comm_table.set("opencon", opencon_fn)?;
 
     // Register tryssl(host, port, [opts]) function
-    let tryssl_fn = lua.create_function(|lua, (host, port, opts): (String, u16, Option<Table>)| {
-        let mut options = parse_opts(opts).map_err(|e| mlua::Error::RuntimeError(e.to_string()))?;
-        options.ssl = true;
+    let tryssl_fn =
+        lua.create_function(|lua, (host, port, opts): (String, u16, Option<Table>)| {
+            let mut options =
+                parse_opts(opts).map_err(|e| mlua::Error::RuntimeError(e.to_string()))?;
+            options.ssl = true;
 
-        match opencon_impl(&host, port, options) {
-            Ok(socket) => Ok(Value::UserData(lua.create_userdata(socket)?)),
-            Err(_) => Ok(Value::Nil),
-        }
-    })?;
+            match opencon_impl(&host, port, options) {
+                Ok(socket) => Ok(Value::UserData(lua.create_userdata(socket)?)),
+                Err(_) => Ok(Value::Nil),
+            }
+        })?;
     comm_table.set("tryssl", tryssl_fn)?;
 
     // Register get_banner(host, port, [opts]) function
-    let get_banner_fn = lua.create_function(
-        |lua, (host, port, opts): (String, u16, Option<Table>)| {
+    let get_banner_fn =
+        lua.create_function(|lua, (host, port, opts): (String, u16, Option<Table>)| {
             let options = parse_opts(opts).map_err(|e| mlua::Error::RuntimeError(e.to_string()))?;
 
             match get_banner_impl(&host, port, options) {
                 Ok(banner) => Ok(Value::String(lua.create_string(&banner)?)),
                 Err(_) => Ok(Value::Nil),
             }
-        },
-    )?;
+        })?;
     comm_table.set("get_banner", get_banner_fn)?;
 
     // Register exchange(host, port, data, [opts]) function
@@ -405,8 +407,8 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     comm_table.set("read_response", read_response_fn)?;
 
     // Register send_request(socket, request, [opts]) function
-    let send_request_fn =
-        lua.create_function(|lua, (socket, request, opts): (mlua::AnyUserData, mlua::String, Option<Table>)| {
+    let send_request_fn = lua.create_function(
+        |lua, (socket, request, opts): (mlua::AnyUserData, mlua::String, Option<Table>)| {
             let options = parse_opts(opts).map_err(|e| mlua::Error::RuntimeError(e.to_string()))?;
 
             let mut socket_ref = socket.borrow_mut::<NseSocket>()?;
@@ -421,7 +423,8 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
                 Ok(data) => Ok(Value::String(lua.create_string(&data)?)),
                 Err(_) => Ok(Value::Nil),
             }
-        })?;
+        },
+    )?;
     comm_table.set("send_request", send_request_fn)?;
 
     // Set the comm table as a global

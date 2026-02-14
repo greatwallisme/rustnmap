@@ -183,7 +183,9 @@ impl OsDetector {
         let tcp_tests = self.send_tcp_tests(target).await?;
         for test in &tcp_tests {
             fingerprint.tests.insert(test.name.clone(), test.clone());
-            fingerprint.win.insert(test.name.clone(), test.window.unwrap_or(0));
+            fingerprint
+                .win
+                .insert(test.name.clone(), test.window.unwrap_or(0));
             fingerprint.ops.insert(
                 test.name.clone(),
                 OpsFingerprint {
@@ -234,27 +236,22 @@ impl OsDetector {
             // Build TCP SYN packet with specific options for OS detection
             // Nmap uses: WScale=10,NOP,MSS=1460,Timestamp,SACK
             let options = Self::build_tcp_options_for_seq();
-            let packet = TcpPacketBuilder::new(
-                self.local_addr,
-                target,
-                src_port,
-                self.open_port,
-            )
-            .seq(seq)
-            .syn()
-            .window(65535)
-            .options(&options)
-            .build();
+            let packet = TcpPacketBuilder::new(self.local_addr, target, src_port, self.open_port)
+                .seq(seq)
+                .syn()
+                .window(65535)
+                .options(&options)
+                .build();
 
             let dst_sockaddr = SocketAddr::new(IpAddr::V4(target), self.open_port);
 
             // Send the packet
-            socket
-                .send_packet(&packet, &dst_sockaddr)
-                .map_err(|e| crate::FingerprintError::Network {
+            socket.send_packet(&packet, &dst_sockaddr).map_err(|e| {
+                crate::FingerprintError::Network {
                     operation: "send SEQ probe".to_string(),
                     reason: e.to_string(),
-                })?;
+                }
+            })?;
 
             // Wait for response
             let mut recv_buf = vec![0u8; 65535];
@@ -334,10 +331,7 @@ impl OsDetector {
         fp.sp = Self::calculate_sp(&isns, &diffs);
 
         // Analyze timestamps
-        let timestamps: Vec<u32> = responses
-            .iter()
-            .filter_map(|r| r.timestamp)
-            .collect();
+        let timestamps: Vec<u32> = responses.iter().filter_map(|r| r.timestamp).collect();
         fp.timestamps = timestamps.clone();
 
         if !timestamps.is_empty() {
@@ -459,7 +453,10 @@ impl OsDetector {
         }
 
         // Calculate average increment per probe (assuming 100ms intervals)
-        let diffs: Vec<u32> = timestamps.windows(2).map(|w| w[1].wrapping_sub(w[0])).collect();
+        let diffs: Vec<u32> = timestamps
+            .windows(2)
+            .map(|w| w[1].wrapping_sub(w[0]))
+            .collect();
         let avg_diff = diffs.iter().map(|&d| d as u64).sum::<u64>() / diffs.len() as u64;
 
         // Typical rates:
@@ -560,17 +557,12 @@ impl OsDetector {
         // Build TCP SYN packet with ECN flags
         // Nmap sends: SYN, ECN-Echo (ECE), and CWR flags
         let options = Self::build_tcp_options_for_seq();
-        let packet = TcpPacketBuilder::new(
-            self.local_addr,
-            target,
-            src_port,
-            self.open_port,
-        )
-        .seq(seq)
-        .syn()
-        .window(65535)
-        .options(&options)
-        .build();
+        let packet = TcpPacketBuilder::new(self.local_addr, target, src_port, self.open_port)
+            .seq(seq)
+            .syn()
+            .window(65535)
+            .options(&options)
+            .build();
 
         // Modify packet to set ECN flags (ECE=0x40, CWR=0x80)
         let mut packet = packet;
@@ -585,12 +577,12 @@ impl OsDetector {
 
         let dst_sockaddr = SocketAddr::new(IpAddr::V4(target), self.open_port);
 
-        socket
-            .send_packet(&packet, &dst_sockaddr)
-            .map_err(|e| crate::FingerprintError::Network {
+        socket.send_packet(&packet, &dst_sockaddr).map_err(|e| {
+            crate::FingerprintError::Network {
                 operation: "send ECN probe".to_string(),
                 reason: e.to_string(),
-            })?;
+            }
+        })?;
 
         // Wait for response
         let mut recv_buf = vec![0u8; 65535];
@@ -614,12 +606,8 @@ impl OsDetector {
 
     /// Recalculate TCP checksum after modifying flags.
     fn recalculate_tcp_checksum(packet: &[u8], ip_header_len: usize) -> u16 {
-        let src_ip = Ipv4Addr::new(
-            packet[12], packet[13], packet[14], packet[15],
-        );
-        let dst_ip = Ipv4Addr::new(
-            packet[16], packet[17], packet[18], packet[19],
-        );
+        let src_ip = Ipv4Addr::new(packet[12], packet[13], packet[14], packet[15]);
+        let dst_ip = Ipv4Addr::new(packet[16], packet[17], packet[18], packet[19]);
         let tcp_segment = &packet[ip_header_len..];
 
         let mut sum = 0u32;
@@ -674,11 +662,19 @@ impl OsDetector {
         let tests = vec![
             ("T1", self.open_port, tcp_flags::SYN),
             ("T2", self.open_port, 0), // NULL
-            ("T3", self.open_port, tcp_flags::SYN | tcp_flags::FIN | tcp_flags::PSH | tcp_flags::URG),
+            (
+                "T3",
+                self.open_port,
+                tcp_flags::SYN | tcp_flags::FIN | tcp_flags::PSH | tcp_flags::URG,
+            ),
             ("T4", self.closed_port, tcp_flags::ACK),
             ("T5", self.closed_port, tcp_flags::SYN),
             ("T6", self.closed_port, tcp_flags::ACK),
-            ("T7", self.closed_port, tcp_flags::FIN | tcp_flags::PSH | tcp_flags::URG),
+            (
+                "T7",
+                self.closed_port,
+                tcp_flags::FIN | tcp_flags::PSH | tcp_flags::URG,
+            ),
         ];
 
         let mut results = Vec::with_capacity(tests.len());
@@ -694,16 +690,11 @@ impl OsDetector {
                 Vec::new()
             };
 
-            let packet = TcpPacketBuilder::new(
-                self.local_addr,
-                target,
-                src_port,
-                port,
-            )
-            .seq(seq)
-            .window(65535)
-            .options(&options)
-            .build();
+            let packet = TcpPacketBuilder::new(self.local_addr, target, src_port, port)
+                .seq(seq)
+                .window(65535)
+                .options(&options)
+                .build();
 
             // Set the appropriate flags
             let mut packet = packet;
@@ -718,12 +709,12 @@ impl OsDetector {
 
             let dst_sockaddr = SocketAddr::new(IpAddr::V4(target), port);
 
-            socket
-                .send_packet(&packet, &dst_sockaddr)
-                .map_err(|e| crate::FingerprintError::Network {
+            socket.send_packet(&packet, &dst_sockaddr).map_err(|e| {
+                crate::FingerprintError::Network {
                     operation: format!("send {} probe", name),
                     reason: e.to_string(),
-                })?;
+                }
+            })?;
 
             // Wait for response
             let mut recv_buf = vec![0u8; 65535];
@@ -775,12 +766,12 @@ impl OsDetector {
 
         let dst_sockaddr = SocketAddr::new(IpAddr::V4(target), 0);
 
-        socket
-            .send_packet(&packet1, &dst_sockaddr)
-            .map_err(|e| crate::FingerprintError::Network {
+        socket.send_packet(&packet1, &dst_sockaddr).map_err(|e| {
+            crate::FingerprintError::Network {
                 operation: "send IE probe 1".to_string(),
                 reason: e.to_string(),
-            })?;
+            }
+        })?;
 
         // Wait for response
         let mut recv_buf = vec![0u8; 65535];
@@ -814,12 +805,12 @@ impl OsDetector {
             .payload(&[0xFFu8; 150]) // Different payload size and content
             .build();
 
-        socket
-            .send_packet(&packet2, &dst_sockaddr)
-            .map_err(|e| crate::FingerprintError::Network {
+        socket.send_packet(&packet2, &dst_sockaddr).map_err(|e| {
+            crate::FingerprintError::Network {
                 operation: "send IE probe 2".to_string(),
                 reason: e.to_string(),
-            })?;
+            }
+        })?;
 
         // Wait for response
         match socket.recv_packet(&mut recv_buf, Some(self.timeout)) {
@@ -861,23 +852,18 @@ impl OsDetector {
 
         // Build UDP packet with specific payload (Nmap uses 300 bytes)
         let payload = vec![0x41u8; 300]; // 'A' repeated 300 times
-        let packet = UdpPacketBuilder::new(
-            self.local_addr,
-            target,
-            src_port,
-            self.closed_udp_port,
-        )
-        .payload(&payload)
-        .build();
+        let packet = UdpPacketBuilder::new(self.local_addr, target, src_port, self.closed_udp_port)
+            .payload(&payload)
+            .build();
 
         let dst_sockaddr = SocketAddr::new(IpAddr::V4(target), self.closed_udp_port);
 
-        socket
-            .send_packet(&packet, &dst_sockaddr)
-            .map_err(|e| crate::FingerprintError::Network {
+        socket.send_packet(&packet, &dst_sockaddr).map_err(|e| {
+            crate::FingerprintError::Network {
                 operation: "send U1 probe".to_string(),
                 reason: e.to_string(),
-            })?;
+            }
+        })?;
 
         // Wait for ICMP response
         let mut recv_buf = vec![0u8; 65535];
@@ -920,19 +906,32 @@ impl OsDetector {
 
         vec![
             // Window Scale (kind=3, len=3, value=10)
-            3, 3, 10,
+            3,
+            3,
+            10,
             // NOP (kind=1)
             1,
             // MSS (kind=2, len=4, value=1460)
-            2, 4, 0x05, 0xB4,
+            2,
+            4,
+            0x05,
+            0xB4,
             // Timestamp (kind=8, len=10, TSval, TSecr)
-            8, 10,
+            8,
+            10,
             // TSval (4 bytes)
-            (tsval >> 24) as u8, (tsval >> 16) as u8, (tsval >> 8) as u8, (tsval & 0xFF) as u8,
+            (tsval >> 24) as u8,
+            (tsval >> 16) as u8,
+            (tsval >> 8) as u8,
+            (tsval & 0xFF) as u8,
             // TSecr (4 bytes) - 0 for initial SYN
-            0, 0, 0, 0,
+            0,
+            0,
+            0,
+            0,
             // SACK permitted (kind=4, len=2)
-            4, 2,
+            4,
+            2,
         ]
     }
 

@@ -7,7 +7,7 @@ use crate::{
 };
 use rustnmap_common::Ipv4Addr;
 use rustnmap_net::raw_socket::{
-    parse_icmp_echo_reply, parse_icmp_response, IcmpResponse, IcmpPacketBuilder, RawSocket,
+    parse_icmp_echo_reply, parse_icmp_response, IcmpPacketBuilder, IcmpResponse, RawSocket,
 };
 use std::io;
 use std::net::{SocketAddr, SocketAddrV4};
@@ -146,7 +146,11 @@ impl IcmpTraceroute {
     /// # Returns
     ///
     /// `Some(ProbeResponse)` if valid Echo Reply from target, `None` otherwise.
-    fn handle_echo_reply(&self, packet: &[u8], _expected_target: Ipv4Addr) -> Option<ProbeResponse> {
+    fn handle_echo_reply(
+        &self,
+        packet: &[u8],
+        _expected_target: Ipv4Addr,
+    ) -> Option<ProbeResponse> {
         if let Some((identifier, sequence)) = parse_icmp_echo_reply(packet) {
             // Verify this is a response to our probe
             if identifier != self.identifier || sequence != self.sequence {
@@ -208,10 +212,12 @@ impl IcmpTraceroute {
                     responder_ip == expected_target,
                 ))
             }
-            IcmpResponse::Other { icmp_type, icmp_code } => {
+            IcmpResponse::Other {
+                icmp_type,
+                icmp_code,
+            } => {
                 // Echo Reply (Type 0, Code 0) - we reached the target
-                (icmp_type == 0 && icmp_code == 0)
-                    .then(|| ProbeResponse::echo_reply(responder_ip))
+                (icmp_type == 0 && icmp_code == 0).then(|| ProbeResponse::echo_reply(responder_ip))
             }
         }
     }
@@ -227,7 +233,10 @@ impl IcmpTraceroute {
         payload[2] = (sequence >> 8) as u8;
         payload[3] = (sequence & 0xFF) as u8;
         // Fill rest with pattern
-        #[expect(clippy::cast_possible_truncation, reason = "i ranges from 4 to 31, safe to truncate")]
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "i ranges from 4 to 31, safe to truncate"
+        )]
         for (i, item) in payload.iter_mut().enumerate().skip(4) {
             *item = (i as u8).wrapping_mul(0x41); // 'A' pattern
         }

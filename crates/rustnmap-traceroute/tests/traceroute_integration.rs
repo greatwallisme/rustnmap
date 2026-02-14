@@ -143,7 +143,13 @@ fn test_hop_info_creation() {
         Duration::from_millis(11),
     ];
 
-    let hop = HopInfo::new(5, Some(ip), Some("router.local".to_string()), rtts.clone(), 0.0);
+    let hop = HopInfo::new(
+        5,
+        Some(ip),
+        Some("router.local".to_string()),
+        rtts.clone(),
+        0.0,
+    );
 
     assert_eq!(hop.ttl(), 5);
     assert_eq!(hop.ip(), Some(ip));
@@ -306,13 +312,7 @@ fn test_rtt_stddev_calculation() {
         Duration::from_millis(30),
     ];
 
-    let hop = HopInfo::new(
-        1,
-        Some(Ipv4Addr::new(192, 168, 1, 1)),
-        None,
-        rtts,
-        0.0,
-    );
+    let hop = HopInfo::new(1, Some(Ipv4Addr::new(192, 168, 1, 1)), None, rtts, 0.0);
 
     // Should have stddev with 3+ samples
     let stddev = hop.rtt_stddev();

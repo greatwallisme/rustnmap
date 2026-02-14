@@ -17,9 +17,10 @@
 
 #![warn(missing_docs)]
 
-use rustnmap_common::{Error, Ipv4Addr, Result};
+use rustnmap_common::{Error, Ipv4Addr, Ipv6Addr, Result};
 
 pub mod discovery;
+pub mod dns;
 pub mod parser;
 pub mod spec;
 
@@ -28,6 +29,7 @@ pub use discovery::{
     ArpPing, HostDiscovery, HostDiscoveryMethod, HostState, IcmpPing, IcmpTimestampPing,
     TcpAckPing, TcpSynPing,
 };
+pub use dns::DnsResolver;
 pub use parser::TargetParser;
 pub use spec::{Target, TargetGroup, TargetSpec};
 
@@ -191,6 +193,81 @@ fn expand_cidr_v4(base: Ipv4Addr, prefix: u8) -> Result<Vec<Ipv4Addr>> {
 
     for i in 0..count {
         let addr = Ipv4Addr::from(base_u32 | i);
+        result.push(addr);
+    }
+
+    Ok(result)
+}
+
+/// Expands an IPv6 CIDR block into individual addresses.
+///
+/// # Errors
+///
+/// Returns an error if prefix is invalid or expansion is too large.
+fn expand_cidr_v6(base: Ipv6Addr, prefix: u8) -> Result<Vec<Ipv6Addr>> {
+    if prefix > 128 {
+        return Err(Error::Target(
+            rustnmap_common::error::TargetError::InvalidCidr {
+                cidr: format!("{base}/{prefix}"),
+                reason: "IPv6 prefix length must be <= 128".to_string(),
+            },
+        ));
+    }
+
+    // For IPv6, we need to be very careful about memory usage
+    // IPv6 CIDR can theoretically have up to 2^64 addresses for /64 prefix
+    // We limit expansion to /112 (65536 addresses max), same as IPv4's /16 limit
+    let host_bits = 128u32.saturating_sub(u32::from(prefix));
+    let count = if host_bits >= 64 {
+        // Too large to materialize - return just the network address
+        // This is common for standard /64 networks
+        return Ok(vec![base]);
+    } else {
+        1u64.wrapping_shl(host_bits)
+    };
+
+    if count > 65536 {
+        return Err(Error::Target(
+            rustnmap_common::error::TargetError::InvalidCidr {
+                cidr: format!("{base}/{prefix}"),
+                reason: format!("IPv6 CIDR expansion too large: {count} addresses"),
+            },
+        ));
+    }
+
+    // Convert IPv6 to u128 for arithmetic
+    let segments = base.segments();
+    let base_u128: u128 = (u128::from(segments[0]) << 112)
+        | (u128::from(segments[1]) << 96)
+        | (u128::from(segments[2]) << 80)
+        | (u128::from(segments[3]) << 64)
+        | (u128::from(segments[4]) << 48)
+        | (u128::from(segments[5]) << 32)
+        | (u128::from(segments[6]) << 16)
+        | u128::from(segments[7]);
+
+    // Create host mask (not used directly - included for clarity)
+    let _host_mask = if host_bits == 0 {
+        0u128
+    } else {
+        (1u128.wrapping_shl(host_bits)) - 1
+    };
+
+    let capacity = usize::try_from(count).unwrap_or(usize::MAX);
+    let mut result = Vec::with_capacity(capacity);
+
+    for i in 0..count {
+        let addr_u128 = base_u128 | u128::from(i);
+        let addr = Ipv6Addr::new(
+            ((addr_u128 >> 112) & 0xFFFF) as u16,
+            ((addr_u128 >> 96) & 0xFFFF) as u16,
+            ((addr_u128 >> 80) & 0xFFFF) as u16,
+            ((addr_u128 >> 64) & 0xFFFF) as u16,
+            ((addr_u128 >> 48) & 0xFFFF) as u16,
+            ((addr_u128 >> 32) & 0xFFFF) as u16,
+            ((addr_u128 >> 16) & 0xFFFF) as u16,
+            (addr_u128 & 0xFFFF) as u16,
+        );
         result.push(addr);
     }
 
@@ -394,5 +471,41 @@ mod tests {
         assert_eq!(result.len(), 2 * 256);
         assert!(result.contains(&Ipv4Addr::new(10, 0, 0, 0)));
         assert!(result.contains(&Ipv4Addr::new(10, 1, 0, 255)));
+    }
+
+    #[test]
+    fn test_expand_cidr_v6() {
+        let base = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0);
+        // /120 gives 256 addresses
+        let result = expand_cidr_v6(base, 120).unwrap();
+        assert_eq!(result.len(), 256);
+        assert_eq!(result[0], base);
+        assert_eq!(result[255], Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0xFF));
+    }
+
+    #[test]
+    fn test_expand_cidr_v6_single() {
+        let base = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1);
+        // /128 gives 1 address
+        let result = expand_cidr_v6(base, 128).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], base);
+    }
+
+    #[test]
+    fn test_expand_cidr_v6_large_prefix() {
+        let base = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0);
+        // /64 returns just the network address (too large to expand)
+        let result = expand_cidr_v6(base, 64).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], base);
+    }
+
+    #[test]
+    fn test_expand_cidr_v6_invalid_prefix() {
+        let base = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0);
+        // /129 is invalid
+        let result = expand_cidr_v6(base, 129);
+        assert!(result.is_err());
     }
 }

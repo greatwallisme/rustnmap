@@ -250,9 +250,7 @@ Match ftp m|^220 ([\w\s]+)| p/$1/
 
     group.bench_function("parse_small_database", |b| {
         b.iter(|| {
-            let db = ProbeDatabase::parse(
-                &black_box(sample_db)
-            ).unwrap();
+            let db = ProbeDatabase::parse(&black_box(sample_db)).unwrap();
             black_box(db);
         });
     });

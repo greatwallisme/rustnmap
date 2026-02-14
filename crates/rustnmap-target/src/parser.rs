@@ -3,9 +3,11 @@
 //! This module provides the parser that converts target strings
 //! into [`TargetSpec`] enums for expansion.
 
-use crate::{OctetSpec, Target, TargetGroup, TargetSpec};
-use rustnmap_common::{error::TargetError, Error, IpAddr, Ipv4Addr, Ipv6Addr};
-use std::net::Ipv4Addr as StdIpv4Addr;
+use crate::{DnsResolver, OctetSpec, Target, TargetGroup, TargetSpec};
+use rustnmap_common::{error::TargetError, Error, Ipv4Addr, Ipv6Addr};
+
+/// Result type for async parser operations.
+pub type AsyncResult<T> = std::pin::Pin<Box<dyn std::future::Future<Output = crate::Result<T>> + Send>>;
 
 /// Target specification parser.
 ///
@@ -19,8 +21,8 @@ use std::net::Ipv4Addr as StdIpv4Addr;
 /// - With ports: `example.com:80,443`
 #[derive(Debug, Clone)]
 pub struct TargetParser {
-    /// Optional DNS resolver (not yet implemented).
-    _dns_resolver: Option<()>,
+    /// DNS resolver for hostname resolution.
+    dns_resolver: Option<DnsResolver>,
 
     /// Exclusion list (not yet implemented).
     #[expect(dead_code, reason = "Will be implemented in future phase")]
@@ -28,13 +30,32 @@ pub struct TargetParser {
 }
 
 impl TargetParser {
-    /// Creates a new target parser.
+    /// Creates a new target parser without DNS resolution.
     #[must_use]
     pub const fn new() -> Self {
         Self {
-            _dns_resolver: None,
+            dns_resolver: None,
             exclude_list: Vec::new(),
         }
+    }
+
+    /// Creates a new target parser with DNS resolution enabled.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the DNS resolver cannot be created.
+    pub fn with_dns() -> crate::Result<Self> {
+        let resolver = DnsResolver::new()?;
+
+        Ok(Self {
+            dns_resolver: Some(resolver),
+            exclude_list: Vec::new(),
+        })
+    }
+
+    /// Sets the DNS resolver for this parser.
+    pub fn set_dns_resolver(&mut self, resolver: DnsResolver) {
+        self.dns_resolver = Some(resolver);
     }
 
     /// Parses a target string into a target group.
@@ -251,13 +272,10 @@ impl TargetParser {
             TargetSpec::SingleIpv4(addr) => Ok(vec![Target::from(*addr)]),
             TargetSpec::SingleIpv6(addr) => Ok(vec![Target::from(*addr)]),
             TargetSpec::Hostname(name) => {
-                // TODO: DNS resolution
-                Ok(vec![Target {
-                    ip: IpAddr::V4(StdIpv4Addr::LOCALHOST),
-                    hostname: Some(name.clone()),
-                    ports: None,
-                    ipv6_scope: None,
-                }])
+                // When no DNS resolver is configured, return an error
+                Err(Error::config(format!(
+                    "Hostname '{name}' requires DNS resolution. Use with_dns() or parse_async()"
+                )))
             }
             TargetSpec::Ipv4Cidr { base, prefix } => {
                 let addrs = crate::expand_cidr_v4(*base, *prefix)?;
@@ -285,9 +303,113 @@ impl TargetParser {
                 }
                 Ok(result)
             }
-            TargetSpec::Ipv6Cidr { .. } => {
-                // TODO: IPv6 CIDR expansion
-                Ok(Vec::new())
+            TargetSpec::Ipv6Cidr { base, prefix } => {
+                let addrs = crate::expand_cidr_v6(*base, *prefix)?;
+                Ok(addrs.into_iter().map(Target::from).collect())
+            }
+        }
+    }
+
+    /// Asynchronously parses a target string into a target group with DNS resolution.
+    ///
+    /// This method enables DNS resolution for hostnames and returns the resolved targets.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the input contains invalid target specifications or DNS resolution fails.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use rustnmap_target::TargetParser;
+    ///
+    /// let parser = TargetParser::with_dns().await.unwrap();
+    /// let group = parser.parse_async("example.com").await.unwrap();
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if the input produces no valid target specifications.
+    pub async fn parse_async(&self, input: &str) -> crate::Result<TargetGroup> {
+        let tokens = Self::tokenize(input)?;
+        let mut specs = Vec::new();
+
+        for token in tokens {
+            let spec = Self::parse_token(&token)?;
+            specs.push(spec);
+        }
+
+        // Combine multiple specs into one if needed
+        let final_spec = if specs.len() == 1 {
+            specs.into_iter().next().unwrap()
+        } else {
+            TargetSpec::Multiple(specs)
+        };
+
+        // Expand the spec into targets asynchronously
+        let targets = self.expand_spec_async(&final_spec).await?;
+
+        Ok(TargetGroup::new(targets))
+    }
+
+    /// Asynchronously expands a target specification into individual targets.
+    #[allow(
+        clippy::only_used_in_recursion,
+        reason = "Required for recursive expansion"
+    )]
+    async fn expand_spec_async(&self, spec: &TargetSpec) -> crate::Result<Vec<Target>> {
+        match spec {
+            TargetSpec::SingleIpv4(addr) => Ok(vec![Target::from(*addr)]),
+            TargetSpec::SingleIpv6(addr) => Ok(vec![Target::from(*addr)]),
+            TargetSpec::Hostname(name) => {
+                // Use DNS resolver if available
+                if let Some(ref resolver) = self.dns_resolver {
+                    let addresses = resolver.resolve(name).await?;
+                    let targets = addresses
+                        .into_iter()
+                        .map(|ip| Target {
+                            ip,
+                            hostname: Some(name.clone()),
+                            ports: None,
+                            ipv6_scope: None,
+                        })
+                        .collect();
+                    Ok(targets)
+                } else {
+                    Err(Error::config(
+                        "DNS resolver not configured. Use with_dns() to enable hostname resolution".to_string(),
+                    ))
+                }
+            }
+            TargetSpec::Ipv4Cidr { base, prefix } => {
+                let addrs = crate::expand_cidr_v4(*base, *prefix)?;
+                Ok(addrs.into_iter().map(Target::from).collect())
+            }
+            TargetSpec::Ipv4Range { start, end } => {
+                let addrs = crate::expand_range_v4(*start, *end)?;
+                Ok(addrs.into_iter().map(Target::from).collect())
+            }
+            TargetSpec::Ipv4OctetRange { octets } => {
+                let addrs = crate::expand_octet_range(octets)?;
+                Ok(addrs.into_iter().map(Target::from).collect())
+            }
+            TargetSpec::WithPort(inner, ports) => {
+                let mut targets = Box::pin(self.expand_spec_async(inner)).await?;
+                for target in &mut targets {
+                    target.ports = Some(ports.clone());
+                }
+                Ok(targets)
+            }
+            TargetSpec::Multiple(specs) => {
+                let mut result = Vec::new();
+                for spec in specs {
+                    result.extend(Box::pin(self.expand_spec_async(spec)).await?);
+                }
+                Ok(result)
+            }
+            TargetSpec::Ipv6Cidr { base, prefix } => {
+                let addrs = crate::expand_cidr_v6(*base, *prefix)?;
+                Ok(addrs.into_iter().map(Target::from).collect())
             }
         }
     }
@@ -302,6 +424,7 @@ impl Default for TargetParser {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rustnmap_common::IpAddr;
 
     #[test]
     fn test_parse_single_ipv4() {
@@ -336,11 +459,22 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_hostname() {
+    fn test_parse_hostname_without_dns() {
+        // Without DNS resolver, hostname parsing should fail
         let parser = TargetParser::new();
-        let group = parser.parse("example.com").unwrap();
-        assert_eq!(group.len(), 1);
-        assert_eq!(group.targets[0].hostname, Some("example.com".to_string()));
+        let result = parser.parse("example.com");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("DNS"));
+    }
+
+    #[tokio::test]
+    async fn test_parse_hostname_with_dns() {
+        // With DNS resolver, hostname parsing should work
+        let parser = TargetParser::with_dns().unwrap();
+        let group = parser.parse_async("localhost").await.unwrap();
+        assert!(!group.is_empty());
+        // localhost should have at least one target with hostname set
+        assert!(group.targets.iter().any(|t| t.hostname == Some("localhost".to_string())));
     }
 
     #[test]

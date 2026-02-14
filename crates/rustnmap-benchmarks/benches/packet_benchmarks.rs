@@ -35,16 +35,14 @@ fn bench_tcp_packet_parsing(c: &mut Criterion) {
 
     group.bench_function("parse_tcp_response_basic", |b| {
         b.iter(|| {
-            let result = parse_tcp_response(&black_box(&packet)
-            );
+            let result = parse_tcp_response(&black_box(&packet));
             black_box(result);
         });
     });
 
     group.bench_function("parse_tcp_response_full", |b| {
         b.iter(|| {
-            let result = parse_tcp_response_full(&black_box(&packet)
-            );
+            let result = parse_tcp_response_full(&black_box(&packet));
             black_box(result);
         });
     });
@@ -61,8 +59,7 @@ fn bench_tcp_packet_parsing(c: &mut Criterion) {
 
     group.bench_function("parse_tcp_response_with_options", |b| {
         b.iter(|| {
-            let result = parse_tcp_response_full(&black_box(&packet_with_options)
-            );
+            let result = parse_tcp_response_full(&black_box(&packet_with_options));
             black_box(result);
         });
     });
@@ -83,10 +80,10 @@ fn bench_tcp_options_parsing(c: &mut Criterion) {
         .window(65535)
         .options(&[
             0x02, 0x04, 0x05, 0xb4, // MSS = 1460
-            0x01, 0x01,             // NOP, NOP
-            0x04, 0x02,             // SACK permitted
+            0x01, 0x01, // NOP, NOP
+            0x04, 0x02, // SACK permitted
             0x08, 0x0a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // Timestamp
-            0x03, 0x03, 0x07,       // Window scale = 7
+            0x03, 0x03, 0x07, // Window scale = 7
         ])
         .build();
 
@@ -95,9 +92,7 @@ fn bench_tcp_options_parsing(c: &mut Criterion) {
     group.bench_function("parse_tcp_options_full", |b| {
         b.iter(|| {
             // TCP header starts at byte 20 (IP header)
-            let result = parse_tcp_options(&black_box(&packet),
-                20
-            );
+            let result = parse_tcp_options(&black_box(&packet), 20);
             black_box(result);
         });
     });
@@ -111,10 +106,7 @@ fn bench_tcp_options_parsing(c: &mut Criterion) {
 
     group.bench_function("parse_tcp_options_empty", |b| {
         b.iter(|| {
-            let result = parse_tcp_options(
-                &black_box(&packet_no_options),
-                20
-            );
+            let result = parse_tcp_options(&black_box(&packet_no_options), 20);
             black_box(result);
         });
     });
@@ -137,9 +129,7 @@ fn bench_udp_packet_parsing(c: &mut Criterion) {
 
     group.bench_function("parse_udp_response", |b| {
         b.iter(|| {
-            let result = parse_udp_response(
-                &black_box(&packet)
-            );
+            let result = parse_udp_response(&black_box(&packet));
             black_box(result);
         });
     });
@@ -164,18 +154,14 @@ fn bench_icmp_packet_parsing(c: &mut Criterion) {
 
     group.bench_function("parse_icmp_echo_reply", |b| {
         b.iter(|| {
-            let result = parse_icmp_echo_reply(
-                &black_box(&echo_packet)
-            );
+            let result = parse_icmp_echo_reply(&black_box(&echo_packet));
             black_box(result);
         });
     });
 
     group.bench_function("parse_icmp_response", |b| {
         b.iter(|| {
-            let result = parse_icmp_response(
-                &black_box(&echo_packet)
-            );
+            let result = parse_icmp_response(&black_box(&echo_packet));
             black_box(result);
         });
     });
@@ -197,9 +183,7 @@ fn bench_arp_packet_parsing(c: &mut Criterion) {
 
     group.bench_function("parse_arp_reply", |b| {
         b.iter(|| {
-            let result = parse_arp_reply(
-                &black_box(&arp_request)
-            );
+            let result = parse_arp_reply(&black_box(&arp_request));
             black_box(result);
         });
     });
