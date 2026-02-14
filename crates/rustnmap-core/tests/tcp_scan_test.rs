@@ -17,12 +17,18 @@
 //!
 //! These tests verify TCP SYN and Connect scanning against real network targets.
 //! Tests requiring root privileges are marked with `#[ignore = "requires root"]`.
+//!
+//! # Configuration
+//!
+//! Tests can be configured via environment variables or a `.env` file:
+//! - `TEST_LOCAL_OPEN_PORTS`: Comma-separated list of open ports on localhost (default: 22,8501)
+//! - `TEST_LOCAL_CLOSED_PORTS`: Comma-separated list of closed ports on localhost (default: 54321,65432)
 
 mod common;
 
 use common::{
     assert_port_state, connect_scan_config, get_available_test_ports, has_raw_socket_privileges,
-    localhost_target, run_scan, syn_scan_config, TEST_CLOSED_PORTS,
+    localhost_target, run_scan, syn_scan_config, test_closed_ports,
 };
 use rustnmap_output::models::PortState;
 
@@ -78,7 +84,7 @@ async fn test_syn_scan_closed_ports_filtered() {
         return;
     }
 
-    let closed_ports: Vec<u16> = TEST_CLOSED_PORTS.to_vec();
+    let closed_ports: Vec<u16> = test_closed_ports();
     let config = syn_scan_config(closed_ports.clone());
     let targets = localhost_target();
 
@@ -132,7 +138,7 @@ async fn test_connect_scan_open_ports() {
 /// Note: Closed ports are filtered from results by design (like Nmap).
 #[tokio::test]
 async fn test_connect_scan_closed_ports_filtered() {
-    let closed_ports: Vec<u16> = TEST_CLOSED_PORTS.to_vec();
+    let closed_ports: Vec<u16> = test_closed_ports();
     let config = connect_scan_config(closed_ports.clone());
     let targets = localhost_target();
 
@@ -168,7 +174,7 @@ async fn test_syn_scan_mixed_ports() {
     }
 
     let open_ports = get_available_test_ports();
-    let closed_ports: Vec<u16> = TEST_CLOSED_PORTS.iter().copied().take(2).collect();
+    let closed_ports: Vec<u16> = test_closed_ports().iter().copied().take(2).collect();
 
     let mut all_ports = open_ports.clone();
     all_ports.extend(&closed_ports);
@@ -207,7 +213,7 @@ async fn test_syn_scan_mixed_ports() {
 #[tokio::test]
 async fn test_connect_scan_mixed_ports() {
     let open_ports = get_available_test_ports();
-    let closed_ports: Vec<u16> = TEST_CLOSED_PORTS.iter().copied().take(2).collect();
+    let closed_ports: Vec<u16> = test_closed_ports().iter().copied().take(2).collect();
 
     let mut all_ports = open_ports.clone();
     all_ports.extend(&closed_ports);

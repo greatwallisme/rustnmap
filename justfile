@@ -254,9 +254,6 @@ check *args="":
 test *args="":
     cargo test --workspace {{args}}
 
-test_with_priviledge *args="":
-    cargo test -p {{args}} -- --include-ignored 
-
 clippy *args="":
     cargo clippy --workspace -- -D warnings {{args}}
 
