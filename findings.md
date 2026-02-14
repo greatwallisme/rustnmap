@@ -233,6 +233,32 @@ Application Binary
 
 ---
 
+## Completed TODOs
+
+### TODO: Parse test results into fingerprint structure (database.rs:386)
+
+**Status**: COMPLETE - Fixed on 2026-02-13
+
+**Implementation**: Added comprehensive test result parsing in `NmapOsFingerprint::parse_fingerprint()`:
+
+| Test Type | Parser Function | Description |
+|-----------|-----------------|-------------|
+| SEQ | `parse_seq()` | ISN analysis (SP, GCD, ISR, TI/CI/II classes) |
+| OPS | `parse_ops()` | TCP options (O1-O7 mapped to T1-T7) |
+| WIN | `parse_win()` | Window sizes (W1-W7 mapped to T1-T7) |
+| ECN | `parse_ecn()` | ECN response flags |
+| T1-T7 | `parse_test()` | Individual test responses |
+| U1 | `parse_u1()` | UDP probe results |
+| IE | `parse_ie()` | ICMP echo responses |
+
+**Key parsing features**:
+- `parse_params()`: Parses `%`-delimited key=value pairs
+- `parse_ops_value()`: Decodes compact OPS format (M=MSS, W=WScale, S=SACK, T=Timestamp, N=NOP, E=EOL)
+- `parse_ip_id_class()`: Maps IP ID codes (Z, R, RI, BI, I) to enum variants
+- `determine_isn_class()`: Classifies ISN generation algorithm
+
+---
+
 ## Technical Decisions
 
 ### Async Runtime: Tokio
