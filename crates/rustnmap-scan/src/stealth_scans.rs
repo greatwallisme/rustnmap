@@ -11,6 +11,7 @@
 //! - **TCP Xmas Scan** (`TcpXmasScanner`): Sends FIN+PSH+URG flags
 //! - **TCP ACK Scan** (`TcpAckScanner`): Sends ACK flag only (firewall detection)
 //! - **TCP Maimon Scan** (`TcpMaimonScanner`): Sends FIN+ACK flags
+//! - **TCP Window Scan** (`TcpWindowScanner`): Sends ACK flag, analyzes window size in RST
 //!
 //! # Port State Determination
 //!
@@ -22,6 +23,11 @@
 //! For ACK scan:
 //! - RST received -> Port Unfiltered
 //! - No response/ICMP -> Port Filtered
+//!
+//! For Window scan:
+//! - RST + Window > 0 -> Port Closed (on some systems like HP-UX)
+//! - RST + Window = 0 -> Port Open (on some systems)
+//! - No response/ICMP -> Port Filtered
 
 #![warn(missing_docs)]
 
@@ -32,8 +38,8 @@ use crate::scanner::{PortScanner, ScanResult};
 use rustnmap_common::ScanConfig;
 use rustnmap_common::{Ipv4Addr, Port, PortState, Protocol};
 use rustnmap_net::raw_socket::{
-    parse_icmp_response, parse_tcp_response, IcmpResponse, IcmpUnreachableCode, RawSocket,
-    TcpPacketBuilder,
+    parse_icmp_response, parse_tcp_response, parse_tcp_response_full, IcmpResponse,
+    IcmpUnreachableCode, RawSocket, TcpPacketBuilder,
 };
 use rustnmap_target::Target;
 
@@ -1008,6 +1014,192 @@ impl PortScanner for TcpMaimonScanner {
     }
 }
 
+/// TCP Window scanner using raw sockets.
+///
+/// Sends TCP packets with the ACK flag set and analyzes the TCP Window field
+/// in RST responses. This scan type exploits differences in TCP stack
+/// implementations where some systems (like HP-UX, AIX) return RST packets
+/// with non-zero window sizes for closed ports.
+///
+/// # Port State Mapping
+///
+/// - RST with Window > 0 -> Port Closed (on some systems like HP-UX)
+/// - RST with Window = 0 -> Port Open (on some systems)
+/// - No response/ICMP -> Port Filtered
+///
+/// Note: Window scan behavior varies by target OS. Not all systems
+/// exhibit different window sizes in RST responses.
+#[derive(Debug)]
+pub struct TcpWindowScanner {
+    /// Local IP address for probes.
+    local_addr: Ipv4Addr,
+    /// Raw socket for packet transmission.
+    socket: RawSocket,
+    /// Scanner configuration.
+    config: ScanConfig,
+}
+
+impl TcpWindowScanner {
+    /// Creates a new TCP Window scanner.
+    ///
+    /// # Arguments
+    ///
+    /// * `local_addr` - Local IP address to use for probes
+    /// * `config` - Scanner configuration
+    ///
+    /// # Returns
+    ///
+    /// A `ScanResult` containing the new `TcpWindowScanner` instance, or an error
+    /// if the raw socket cannot be created.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The process lacks `CAP_NET_RAW` capability (requires root)
+    /// - The system runs out of file descriptors
+    pub fn new(local_addr: Ipv4Addr, config: ScanConfig) -> ScanResult<Self> {
+        // Use IPPROTO_TCP (6) for receiving TCP responses
+        let socket = RawSocket::with_protocol(6).map_err(|e| {
+            rustnmap_common::ScanError::PermissionDenied {
+                operation: format!("create raw socket: {e}"),
+            }
+        })?;
+
+        Ok(Self {
+            local_addr,
+            socket,
+            config,
+        })
+    }
+
+    /// Scans a single port on a target.
+    fn scan_port_impl(
+        &self,
+        target: &Target,
+        port: Port,
+        protocol: Protocol,
+    ) -> ScanResult<PortState> {
+        if protocol != Protocol::Tcp {
+            return Ok(PortState::Filtered);
+        }
+
+        let dst_addr = match target.ip {
+            rustnmap_common::IpAddr::V4(addr) => addr,
+            rustnmap_common::IpAddr::V6(_) => return Ok(PortState::Filtered),
+        };
+
+        self.send_window_probe(dst_addr, port)
+    }
+
+    /// Sends a TCP Window probe (ACK) and determines port state from RST window field.
+    fn send_window_probe(&self, dst_addr: Ipv4Addr, dst_port: Port) -> ScanResult<PortState> {
+        let src_port = Self::generate_source_port();
+        let seq = Self::generate_sequence_number();
+
+        // Build TCP packet with ACK flag only (same as ACK scan)
+        let packet = TcpPacketBuilder::new(self.local_addr, dst_addr, src_port, dst_port)
+            .seq(seq)
+            .ack_flag()
+            .window(65535)
+            .build();
+
+        let dst_sockaddr = SocketAddr::new(std::net::IpAddr::V4(dst_addr), dst_port);
+
+        self.socket
+            .send_packet(&packet, &dst_sockaddr)
+            .map_err(|e| {
+                rustnmap_common::ScanError::Network(rustnmap_common::Error::Network(
+                    rustnmap_common::error::NetworkError::SendError { source: e },
+                ))
+            })?;
+
+        let mut recv_buf = vec![0u8; 65535];
+        let timeout = self.config.initial_rtt;
+
+        match self
+            .socket
+            .recv_packet(recv_buf.as_mut_slice(), Some(timeout))
+        {
+            Ok(len) if len > 0 => {
+                // Use full TCP response parser to get window field
+                if let Some(tcp_resp) = parse_tcp_response_full(&recv_buf[..len]) {
+                    if tcp_resp.src_port != dst_port {
+                        return Ok(PortState::Filtered);
+                    }
+
+                    // Check for RST flag
+                    if (tcp_resp.flags & tcp_flags::RST) != 0 {
+                        // Window scan: analyze window size in RST response
+                        // Some systems (HP-UX, AIX) return non-zero window for closed ports
+                        if tcp_resp.window > 0 {
+                            return Ok(PortState::Closed);
+                        }
+                        return Ok(PortState::Open);
+                    }
+
+                    return Ok(PortState::Filtered);
+                }
+
+                // Check for ICMP response
+                if let Some(icmp_resp) = parse_icmp_response(&recv_buf[..len]) {
+                    return Ok(Self::handle_icmp_response(icmp_resp));
+                }
+
+                Ok(PortState::Filtered)
+            }
+            Ok(_) => Ok(PortState::Filtered),
+            Err(e)
+                if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut =>
+            {
+                Ok(PortState::Filtered)
+            }
+            Err(e) => Err(rustnmap_common::ScanError::Network(
+                rustnmap_common::Error::Network(
+                    rustnmap_common::error::NetworkError::ReceiveError { source: e },
+                ),
+            )),
+        }
+    }
+
+    /// Handles ICMP response for Window scan.
+    fn handle_icmp_response(_icmp_resp: IcmpResponse) -> PortState {
+        PortState::Filtered
+    }
+
+    /// Generates a random source port.
+    #[must_use]
+    fn generate_source_port() -> Port {
+        let offset = (std::process::id() % 1000) as u16;
+        SOURCE_PORT_START + offset
+    }
+
+    /// Generates a random initial sequence number.
+    #[must_use]
+    fn generate_sequence_number() -> u32 {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "Lower bits provide sufficient entropy"
+        )]
+        let now_lower = now as u32;
+        let pid = std::process::id();
+        now_lower.wrapping_add(pid)
+    }
+}
+
+impl PortScanner for TcpWindowScanner {
+    fn scan_port(&self, target: &Target, port: Port, protocol: Protocol) -> ScanResult<PortState> {
+        self.scan_port_impl(target, port, protocol)
+    }
+
+    fn requires_root(&self) -> bool {
+        true
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1028,7 +1220,9 @@ mod tests {
         let local_addr = Ipv4Addr::LOCALHOST;
         let config = ScanConfig::default();
 
-        if let Ok(scanner) = TcpFinScanner::new(local_addr, config) { assert!(scanner.requires_root()) } else {
+        if let Ok(scanner) = TcpFinScanner::new(local_addr, config) {
+            assert!(scanner.requires_root())
+        } else {
             // Expected if not running as root
         }
     }
@@ -1049,7 +1243,9 @@ mod tests {
         let local_addr = Ipv4Addr::LOCALHOST;
         let config = ScanConfig::default();
 
-        if let Ok(scanner) = TcpNullScanner::new(local_addr, config) { assert!(scanner.requires_root()) } else {
+        if let Ok(scanner) = TcpNullScanner::new(local_addr, config) {
+            assert!(scanner.requires_root())
+        } else {
             // Expected if not running as root
         }
     }
@@ -1070,7 +1266,9 @@ mod tests {
         let local_addr = Ipv4Addr::LOCALHOST;
         let config = ScanConfig::default();
 
-        if let Ok(scanner) = TcpXmasScanner::new(local_addr, config) { assert!(scanner.requires_root()) } else {
+        if let Ok(scanner) = TcpXmasScanner::new(local_addr, config) {
+            assert!(scanner.requires_root())
+        } else {
             // Expected if not running as root
         }
     }
@@ -1091,7 +1289,9 @@ mod tests {
         let local_addr = Ipv4Addr::LOCALHOST;
         let config = ScanConfig::default();
 
-        if let Ok(scanner) = TcpAckScanner::new(local_addr, config) { assert!(scanner.requires_root()) } else {
+        if let Ok(scanner) = TcpAckScanner::new(local_addr, config) {
+            assert!(scanner.requires_root())
+        } else {
             // Expected if not running as root
         }
     }
@@ -1112,7 +1312,9 @@ mod tests {
         let local_addr = Ipv4Addr::LOCALHOST;
         let config = ScanConfig::default();
 
-        if let Ok(scanner) = TcpMaimonScanner::new(local_addr, config) { assert!(scanner.requires_root()) } else {
+        if let Ok(scanner) = TcpMaimonScanner::new(local_addr, config) {
+            assert!(scanner.requires_root())
+        } else {
             // Expected if not running as root
         }
     }
@@ -1195,5 +1397,40 @@ mod tests {
     #[test]
     fn test_tcp_flags() {
         assert_eq!(tcp_flags::RST, 0x04);
+    }
+
+    #[test]
+    fn test_window_scanner_creation() {
+        let local_addr = Ipv4Addr::new(192, 168, 1, 100);
+        let config = ScanConfig::default();
+        let result = TcpWindowScanner::new(local_addr, config);
+
+        if let Ok(scanner) = result {
+            assert_eq!(scanner.local_addr, local_addr);
+        }
+    }
+
+    #[test]
+    fn test_window_scanner_requires_root() {
+        let local_addr = Ipv4Addr::LOCALHOST;
+        let config = ScanConfig::default();
+
+        if let Ok(scanner) = TcpWindowScanner::new(local_addr, config) {
+            assert!(scanner.requires_root());
+        } else {
+            // Expected if not running as root
+        }
+    }
+
+    #[test]
+    fn test_window_handle_icmp() {
+        let icmp_resp = IcmpResponse::DestinationUnreachable {
+            code: IcmpUnreachableCode::AdminProhibited,
+            original_dst_ip: Ipv4Addr::new(192, 168, 1, 1),
+            original_dst_port: 80,
+        };
+
+        let result = TcpWindowScanner::handle_icmp_response(icmp_resp);
+        assert_eq!(result, PortState::Filtered);
     }
 }

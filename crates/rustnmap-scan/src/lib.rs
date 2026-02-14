@@ -1,7 +1,8 @@
 //! Port scanning implementations for `RustNmap`.
 //!
 //! This crate provides the core scanning functionality including TCP SYN scan,
-//! TCP Connect scan, UDP scan, and stealth scan implementations (FIN, NULL, Xmas, ACK, Maimon).
+//! TCP Connect scan, UDP scan, IP Protocol scan, and stealth scan implementations
+//! (FIN, NULL, Xmas, ACK, Maimon, Window).
 
 #![warn(missing_docs)]
 // Transitive dependency version conflicts are unavoidable in large workspaces
@@ -11,6 +12,7 @@
 )]
 
 pub mod connect_scan;
+pub mod ip_protocol_scan;
 pub mod probe;
 pub mod scanner;
 pub mod stealth_scans;
@@ -20,9 +22,11 @@ pub mod udp_scan;
 
 // Re-exports
 pub use connect_scan::TcpConnectScanner;
+pub use ip_protocol_scan::IpProtocolScanner;
 pub use scanner::{PortScanner, ScanResult, TimingTemplate};
 pub use stealth_scans::{
-    TcpAckScanner, TcpFinScanner, TcpMaimonScanner, TcpNullScanner, TcpXmasScanner,
+    TcpAckScanner, TcpFinScanner, TcpMaimonScanner, TcpNullScanner, TcpWindowScanner,
+    TcpXmasScanner,
 };
 pub use syn_scan::TcpSynScanner;
 pub use timeout::TimeoutTracker;

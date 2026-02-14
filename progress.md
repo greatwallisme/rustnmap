@@ -1,5 +1,160 @@
 # Progress Log: RustNmap Implementation
 
+## Session 2026-02-14 - IP Protocol Scan (-sO) Implementation COMPLETE
+
+### Activities
+| Time | Activity | Status |
+|------|----------|--------|
+| 00:00 | Read design document and guidelines | Complete |
+| 00:10 | Analyze existing scanner implementations | Complete |
+| 00:25 | Create ip_protocol_scan.rs with IpProtocolScanner | Complete |
+| 00:40 | Add module declaration and re-export to lib.rs | Complete |
+| 00:45 | Add comprehensive unit tests | Complete |
+| 00:55 | Fix clippy warnings | Complete |
+| 01:00 | Run all tests (54 tests pass) | Complete |
+
+### Implementation Summary
+
+**Files Created/Modified:**
+- `crates/rustnmap-scan/src/ip_protocol_scan.rs` - New IP Protocol scanner implementation
+- `crates/rustnmap-scan/src/lib.rs` - Added module and re-export
+
+**Key Features:**
+- Scans IP protocol numbers (0-255) instead of TCP/UDP ports
+- Protocol-specific probes:
+  - ICMP (1): Echo Request
+  - TCP (6): ACK to port 80
+  - UDP (17): Packet to port 80
+  - Others: Raw IP packet with empty payload
+- Port state mapping:
+  - Protocol response received -> Open
+  - ICMP Protocol Unreachable -> Closed
+  - ICMP Admin Prohibited -> Filtered
+  - No response -> Open|Filtered
+
+**Tests Added (10 new tests):**
+- `test_ip_protocol_scanner_creation`
+- `test_ip_protocol_scanner_requires_root`
+- `test_build_icmp_probe`
+- `test_build_tcp_probe`
+- `test_build_udp_probe`
+- `test_build_generic_probe`
+- `test_checksum_calculation`
+- `test_generate_sequence_number`
+- `test_handle_icmp_protocol_unreachable`
+- `test_handle_icmp_admin_prohibited`
+
+**Quality Verification:**
+- Build: PASS
+- Clippy: PASS (zero warnings)
+- Tests: PASS (54 tests, +10 new)
+- Format: PASS
+
+### Impact on Project Completion
+
+Port Scan Types progress: 9/12 -> **10/12 (83%)**
+
+Remaining scan types:
+- FTP Bounce (-b)
+- Idle Scan (-sI)
+
+---
+
+## Session 2026-02-14 - TCP Window Scan (-sW) Implementation COMPLETE
+
+### Activities
+| Time | Activity | Status |
+|------|----------|--------|
+| 00:00 | Read design document doc/modules/port-scanning.md | Complete |
+| 00:10 | Analyze existing stealth scan implementations | Complete |
+| 00:20 | Implement TcpWindowScanner in stealth_scans.rs | Complete |
+| 00:30 | Add re-export to lib.rs | Complete |
+| 00:35 | Add unit tests for TcpWindowScanner | Complete |
+| 00:40 | Run clippy and fix warnings | Complete |
+| 00:45 | Run all tests (44 tests pass) | Complete |
+
+### Implementation Summary
+
+**Files Modified:**
+- `crates/rustnmap-scan/src/stealth_scans.rs` - Added TcpWindowScanner implementation
+- `crates/rustnmap-scan/src/lib.rs` - Added re-export
+
+**Key Features:**
+- Sends TCP ACK probes (same as ACK scan)
+- Parses TCP Window field from RST responses using `parse_tcp_response_full()`
+- Port state mapping:
+  - RST + Window > 0 -> Closed (HP-UX, AIX behavior)
+  - RST + Window = 0 -> Open
+  - No response/ICMP -> Filtered
+
+**Tests Added:**
+- `test_window_scanner_creation`
+- `test_window_scanner_requires_root`
+- `test_window_handle_icmp`
+
+**Quality Verification:**
+- Build: PASS
+- Clippy: PASS (zero warnings)
+- Tests: PASS (44 tests)
+- Format: PASS
+
+### Impact on Project Completion
+
+Port Scan Types progress: 8/12 -> **9/12 (75%)**
+
+Remaining scan types:
+- IP Protocol (-sO)
+- FTP Bounce (-b)
+- Idle Scan (-sI)
+
+---
+
+## Session 2026-02-14 - Project Completion Check
+
+### Activities
+| Time | Activity | Status |
+|------|----------|--------|
+| 00:00 | Read all design documents in doc/ | Complete |
+| 00:30 | Analyze current code implementation | Complete |
+| 01:00 | Compare design requirements vs implementation | Complete |
+| 01:30 | Generate completion report | Complete |
+| 02:00 | Update findings.md with detailed gaps | Complete |
+
+### Key Findings
+
+**Overall Completion: ~75-80%**
+
+| Category | Design Req | Implemented | Completion |
+|----------|------------|-------------|------------|
+| Port Scan Types | 12 | 8 | 67% |
+| Host Discovery | 9 | 7 | 78% |
+| NSE Libraries | 32 | 4 | 12.5% |
+| Output Formats | 5 | 4 | 80% |
+| Evasion Tech | 8 | 7 | 87.5% |
+| Traceroute | 6 | 4 | 67% |
+
+**Major Gaps Identified:**
+
+1. **Missing Scan Types** (P1):
+   - TCP Window (-sW)
+   - IP Protocol (-sO)
+   - FTP Bounce (-b)
+   - Idle Scan (-sI)
+   - SCTP (-sY/sZ)
+
+2. **NSE Libraries Incomplete** (P2):
+   - Only 4/32 libraries fully implemented
+   - http, ssl, ssh, smb need full implementation
+
+3. **PACKET_MMAP V3** (P1):
+   - rustnmap-packet only has 79 lines (framework)
+   - Zero-copy engine not production-ready
+
+**Files Created:**
+- `PROJECT_COMPLETION_REPORT.md` - Comprehensive completion analysis
+
+---
+
 ## Session 2026-02-13 - Removed #[ignore] Attributes from Tests
 
 ### Activities
