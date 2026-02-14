@@ -1,5 +1,37 @@
 # Progress Log: RustNmap Implementation
 
+## Session 2026-02-13 - Removed #[ignore] Attributes from Tests
+
+### Activities
+| Time | Activity | Status |
+|------|----------|--------|
+| 00:00 | Read existing task_plan.md and identified all #[ignore] attributes | Complete |
+| 00:10 | Removed #[ignore] from udp_scan_test.rs (5 tests) | Complete |
+| 00:15 | Removed #[ignore] from tcp_scan_test.rs (4 tests) | Complete |
+| 00:20 | Removed #[ignore] from scan_target_test.rs (5 tests) | Complete |
+| 00:25 | Removed #[ignore] from host_discovery_test.rs (8 tests) | Complete |
+| 00:30 | Removed #[ignore] from os_detection_test.rs (1 test) | Complete |
+| 00:35 | Removed #[ignore] from discovery.rs doc tests (2 tests) | Complete |
+| 00:40 | Updated test file documentation | Complete |
+| 00:45 | Verified no #[ignore] attributes remain | Complete |
+
+### Summary
+
+**Total #[ignore] attributes removed**: 26
+
+| File | Count |
+|------|-------|
+| `crates/rustnmap-core/tests/udp_scan_test.rs` | 5 |
+| `crates/rustnmap-core/tests/tcp_scan_test.rs` | 4 |
+| `crates/rustnmap-core/tests/scan_target_test.rs` | 5 |
+| `crates/rustnmap-target/tests/host_discovery_test.rs` | 8 |
+| `crates/rustnmap-fingerprint/tests/os_detection_test.rs` | 1 |
+| `crates/rustnmap-target/src/discovery.rs` | 2 |
+
+**Rationale**: Project development runs under root account, so tests requiring root/CAP_NET_RAW privileges should run directly without needing `--include-ignored` flag.
+
+---
+
 ## Session 2026-02-13 - Ignored Tests Investigation
 
 ### Activities

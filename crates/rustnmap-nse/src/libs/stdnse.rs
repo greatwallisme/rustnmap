@@ -441,6 +441,9 @@ mod tests {
         let mut lua = NseLua::new_default().unwrap();
         register(&mut lua).unwrap();
 
+        // Clear any existing args first to avoid test interference
+        set_script_args(HashMap::new());
+
         // Set some script args
         let mut args = HashMap::new();
         args.insert("http.useragent".to_string(), "Mozilla/5.0".to_string());

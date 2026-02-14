@@ -16,7 +16,7 @@
 //! Integration tests for UDP scanning functionality.
 //!
 //! These tests verify UDP scanning against real network targets.
-//! Tests requiring root privileges are marked with `#[ignore = "requires root"]`.
+//! All tests require `root/CAP_NET_RAW` privileges to run.
 
 mod common;
 
@@ -40,7 +40,6 @@ fn udp_scan_config() -> ScanConfig {
 ///
 /// This test requires `root/CAP_NET_RAW` privileges.
 #[test]
-#[ignore = "requires root/CAP_NET_RAW privileges"]
 fn test_udp_scanner_creation() {
     // Skip if no privileges
     if !has_raw_socket_privileges().expect("Failed to check privileges") {
@@ -85,7 +84,6 @@ fn test_udp_scanner_requires_root_without_privileges() {
 /// This test requires `root/CAP_NET_RAW` privileges.
 /// Note: UDP scanning is inherently ambiguous - no response means Open|Filtered.
 #[test]
-#[ignore = "requires root/CAP_NET_RAW privileges"]
 fn test_udp_scan_port() {
     // Skip if no privileges
     if !has_raw_socket_privileges().expect("Failed to check privileges") {
@@ -138,7 +136,6 @@ fn test_udp_scan_port() {
 ///
 /// This test requires `root/CAP_NET_RAW` privileges.
 #[test]
-#[ignore = "requires root/CAP_NET_RAW privileges"]
 fn test_udp_scan_wrong_protocol() {
     // Skip if no privileges
     if !has_raw_socket_privileges().expect("Failed to check privileges") {
@@ -173,7 +170,6 @@ fn test_udp_scan_wrong_protocol() {
 ///
 /// This test requires `root/CAP_NET_RAW` privileges.
 #[test]
-#[ignore = "requires root/CAP_NET_RAW privileges"]
 fn test_udp_scan_ipv6_target() {
     // Skip if no privileges
     if !has_raw_socket_privileges().expect("Failed to check privileges") {
@@ -221,7 +217,6 @@ fn test_udp_scan_source_port_range() {
 ///
 /// This test requires `root/CAP_NET_RAW` privileges.
 #[test]
-#[ignore = "requires root/CAP_NET_RAW privileges"]
 fn test_udp_scan_performance() {
     // Skip if no privileges
     if !has_raw_socket_privileges().expect("Failed to check privileges") {

@@ -1,5 +1,4 @@
 // Target scan test for external test target
-// Run with: cargo test -p rustnmap-core --test scan_target_test -- --include-ignored
 //
 // Configuration:
 // - Set TEST_TARGET_IP in .env file or environment (default: 127.0.0.1)
@@ -66,7 +65,6 @@ fn has_raw_socket_privileges() -> bool {
 ///
 /// This test requires `root/CAP_NET_RAW` privileges.
 #[tokio::test]
-#[ignore = "requires root/CAP_NET_RAW privileges - scans external target (configure via TEST_TARGET_IP in .env)"]
 async fn test_syn_scan_target() {
     if !has_raw_socket_privileges() {
         eprintln!("Skipping test: no raw socket privileges");
@@ -138,7 +136,6 @@ async fn test_syn_scan_target() {
 /// Tests TCP Connect scan against the configured external test target.
 /// This does NOT require root privileges.
 #[tokio::test]
-#[ignore = "Scans external target (configure via TEST_TARGET_IP in .env) - may be slow"]
 async fn test_connect_scan_target() {
     let target_ip = target_ip();
     let ports = target_ports();
@@ -191,7 +188,6 @@ async fn test_connect_scan_target() {
 ///
 /// This test requires `root/CAP_NET_RAW` privileges.
 #[tokio::test]
-#[ignore = "requires root/CAP_NET_RAW privileges - scans external target (configure via TEST_TARGET_IP in .env)"]
 async fn test_udp_scan_target() {
     if !has_raw_socket_privileges() {
         eprintln!("Skipping test: no raw socket privileges");
@@ -248,7 +244,6 @@ async fn test_udp_scan_target() {
 ///
 /// This test requires `root/CAP_NET_RAW` privileges.
 #[test]
-#[ignore = "requires root/CAP_NET_RAW privileges - pings external target (configure via TEST_TARGET_IP in .env)"]
 fn test_icmp_ping_target() {
     use rustnmap_common::ScanConfig as CommonScanConfig;
     use rustnmap_target::{HostDiscovery, HostState};
@@ -293,7 +288,6 @@ fn test_icmp_ping_target() {
 ///
 /// This test requires `root/CAP_NET_RAW` privileges.
 #[tokio::test]
-#[ignore = "requires root/CAP_NET_RAW privileges - performs OS detection (configure via TEST_TARGET_IP in .env)"]
 async fn test_os_detection_target() {
     use rustnmap_fingerprint::os::{FingerprintDatabase, OsDetector};
 

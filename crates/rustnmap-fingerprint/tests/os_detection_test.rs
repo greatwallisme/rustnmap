@@ -1,7 +1,6 @@
 //! Integration tests for OS detection functionality.
 //!
 //! These tests require root privileges to create raw sockets.
-//! They are marked with `#[ignore]` to prevent them from running by default.
 
 use std::net::{Ipv4Addr, SocketAddr};
 
@@ -35,11 +34,8 @@ fn test_os_detector_configuration() {
 
 /// Test OS detection against localhost (requires root).
 ///
-/// This test is ignored by default because it requires:
-/// 1. Root privileges (CAP_NET_RAW)
-/// 2. A listening service on port 80 (or configured open_port)
+/// This test requires root privileges (CAP_NET_RAW).
 #[tokio::test]
-#[ignore = "Requires root privileges and a listening service on port 80"]
 async fn test_os_detection_localhost() {
     let db = FingerprintDatabase::empty();
     let local_addr = Ipv4Addr::new(127, 0, 0, 1);
