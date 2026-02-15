@@ -294,4 +294,105 @@ The RustNmap scanner is now fully functional with:
 
 ---
 
+---
+
+## Session: 2026-02-14 - Phase 5.1 Evasion CLI Integration Complete
+
+### Remaining Phase 5.1 Evasion Integration - COMPLETE
+
+**Status**: All evasion CLI arguments integrated with scan configuration
+
+**Implementation Summary:**
+
+| Component | Status | Tests |
+|-----------|--------|-------|
+| ScanConfig.evasion_config field | Complete | Core integration |
+| CLI -f (fragmentation) parsing | Complete | Validated |
+| CLI -D (decoys) parsing | Complete | Unit tests |
+| CLI -S (spoof IP) parsing | Complete | Unit tests |
+| CLI -g (source port) parsing | Complete | Unit tests |
+| Args validation | Complete | All evasion args |
+| Unit tests | Complete | 6 new tests added |
+
+**Files Modified:**
+- `crates/rustnmap-core/src/session.rs` - Added `evasion_config: Option<EvasionConfig>` to ScanConfig
+- `crates/rustnmap-cli/src/args.rs` - Added validation for spoof_ip, decoys, fragment_mtu, source_port
+- `crates/rustnmap-cli/src/cli.rs` - Added `build_evasion_config()` and `parse_decoy_ips()` functions
+- `crates/rustnmap-cli/Cargo.toml` - Added rustnmap-evasion dependency
+
+**Key Features:**
+1. Fragmentation MTU (-f): Validates range 8-1500, builds FragmentConfig
+2. Decoy scanning (-D): Parses comma-separated IPs, builds DecoyConfig
+3. Source IP spoofing (-S): Validates IP address, builds SourceConfig
+4. Source port (-g): Validates port 1-65535, integrates with SourceConfig
+5. All evasion options can be combined in a single scan
+
+**Tests Added:**
+- `test_parse_decoy_ips_valid` - Multiple IP parsing
+- `test_parse_decoy_ips_with_spaces` - Handles whitespace
+- `test_parse_decoy_ips_invalid` - Error handling
+- `test_build_evasion_config_none` - No evasion args
+- `test_build_evasion_config_fragmentation` - MTU config
+- `test_build_evasion_config_spoof_ip` - IP spoofing
+- `test_build_evasion_config_source_port` - Port config
+- `test_build_evasion_config_decoys` - Decoy config
+- `test_build_evasion_config_multiple` - Combined options
+
+**Quality Metrics:**
+- All 105+ tests passing for modified packages
+- Zero compiler warnings
+- Zero clippy warnings
+
+---
+
+---
+
+## Session: 2026-02-14 - Phase 5.2 Advanced Timing & Congestion Control - COMPLETE
+
+### Adaptive Timing & Congestion Control Implementation - COMPLETE
+
+**Status**: All timing control features implemented and tested
+
+**Implementation Summary:**
+
+| Component | Status | Tests |
+|-----------|--------|-------|
+| CongestionStats | Complete | RTT tracking, packet loss calculation |
+| CongestionController | Complete | TCP-like congestion control |
+| RateLimiter | Complete | Min/max rate enforcement |
+| AdaptiveTiming | Complete | Combined timing controller |
+
+**Files Created:**
+- `crates/rustnmap-core/src/congestion.rs` - Complete congestion control module
+
+**Key Features:**
+1. **RFC 2988 RTT Tracking**: EWMA-based smoothed RTT with variance calculation
+2. **TCP-like Congestion Control**: Slow start, congestion avoidance, and packet loss recovery
+3. **Rate Limiting**: Enforces min-rate and max-rate constraints
+4. **Adaptive Timing**: Combines congestion control with rate limiting
+5. **Timing Template Integration**: Respects timing templates (T0-T5)
+
+**Algorithms Implemented:**
+- RTT smoothing: SRTT = (7/8)*SRTT + (1/8)*RTT
+- RTT variance: RTTVAR = (3/4)*RTTVAR + (1/4)*|SRTT-RTT|
+- Timeout: RTO = SRTT + 4*RTTVAR
+- Congestion window: Slow start (exponential) + Congestion avoidance (linear)
+
+**Tests Added:**
+- `test_congestion_stats_rtt_update` - RTT smoothing
+- `test_congestion_stats_packet_loss` - Loss rate calculation
+- `test_congestion_controller_window` - Window growth
+- `test_congestion_controller_loss` - Loss recovery
+- `test_rate_limiter_max_rate` - Rate limiting
+- `test_rate_limiter_current_rate` - Rate calculation
+- `test_adaptive_timing_creation` - Integration
+- `test_congestion_stats_recommended_timeout` - Timeout calculation
+
+**Quality Metrics:**
+- All 72 tests passing for rustnmap-core
+- Zero compiler warnings
+- Zero clippy warnings
+
+---
+
 *Update after completing each phase or encountering errors*

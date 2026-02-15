@@ -217,7 +217,83 @@ fn build_scan_config(args: &Args) -> Result<ScanConfig> {
     // Data payload (--data-hex or --data-string)
     config.data_payload = parse_data_payload(args)?;
 
+    // Evasion configuration (--decoys, --spoof-ip, --fragment-mtu, --source-port)
+    config.evasion_config = build_evasion_config(args)?;
+
     Ok(config)
+}
+
+/// Builds evasion configuration from CLI arguments.
+///
+/// Parses --decoys, --spoof-ip, --fragment-mtu, and --source-port options
+/// into an `EvasionConfig` structure.
+///
+/// # Errors
+///
+/// Returns an error if any evasion argument is invalid.
+fn build_evasion_config(args: &Args) -> Result<Option<rustnmap_evasion::EvasionConfig>> {
+    use rustnmap_evasion::EvasionConfig;
+
+    let mut builder = EvasionConfig::builder();
+    let mut has_evasion = false;
+
+    // Handle fragmentation (-f flag)
+    if let Some(mtu) = args.fragment_mtu {
+        builder = builder.fragmentation_mtu(mtu);
+        has_evasion = true;
+    }
+
+    // Handle decoys (-D flag)
+    if let Some(ref decoy_str) = args.decoys {
+        let decoy_ips = parse_decoy_ips(decoy_str)?;
+        if !decoy_ips.is_empty() {
+            builder = builder.decoys(decoy_ips);
+            has_evasion = true;
+        }
+    }
+
+    // Handle source IP spoofing (-S flag)
+    if let Some(ref spoof_ip) = args.spoof_ip {
+        let ip: std::net::IpAddr = spoof_ip
+            .parse()
+            .map_err(|_| rustnmap_common::Error::Other(format!("Invalid spoof IP address: {spoof_ip}")))?;
+        builder = builder.source_ip(ip);
+        has_evasion = true;
+    }
+
+    // Handle source port (-g flag)
+    if let Some(port) = args.source_port {
+        builder = builder.source_port(port);
+        has_evasion = true;
+    }
+
+    if has_evasion {
+        Ok(Some(builder.build().map_err(|e| {
+            rustnmap_common::Error::Other(format!("Evasion config error: {e}"))
+        })?))
+    } else {
+        Ok(None)
+    }
+}
+
+/// Parses decoy IP list from comma-separated string.
+///
+/// # Errors
+///
+/// Returns an error if any IP address is invalid.
+fn parse_decoy_ips(s: &str) -> Result<Vec<std::net::IpAddr>> {
+    let mut ips = Vec::new();
+    for ip_str in s.split(',') {
+        let ip_str = ip_str.trim();
+        if ip_str.is_empty() {
+            continue;
+        }
+        let ip: std::net::IpAddr = ip_str
+            .parse()
+            .map_err(|_| rustnmap_common::Error::Other(format!("Invalid decoy IP address: {ip_str}")))?;
+        ips.push(ip);
+    }
+    Ok(ips)
 }
 
 /// Parses data payload from CLI arguments.
@@ -947,5 +1023,108 @@ mod tests {
             map_scan_type(crate::args::ScanType::Udp),
             ScanType::Udp
         ));
+    }
+
+    #[test]
+    fn test_parse_decoy_ips_valid() {
+        let result = parse_decoy_ips("192.168.1.1,192.168.1.2,10.0.0.1");
+        assert!(result.is_ok());
+        let ips = result.unwrap();
+        assert_eq!(ips.len(), 3);
+    }
+
+    #[test]
+    fn test_parse_decoy_ips_with_spaces() {
+        let result = parse_decoy_ips("192.168.1.1, 192.168.1.2 , 10.0.0.1");
+        assert!(result.is_ok());
+        let ips = result.unwrap();
+        assert_eq!(ips.len(), 3);
+    }
+
+    #[test]
+    fn test_parse_decoy_ips_invalid() {
+        let result = parse_decoy_ips("192.168.1.1,invalid_ip,10.0.0.1");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_build_evasion_config_none() {
+        let args = Args {
+            targets: vec!["192.168.1.1".to_string()],
+            ..Default::default()
+        };
+        let config = build_evasion_config(&args).unwrap();
+        assert!(config.is_none());
+    }
+
+    #[test]
+    fn test_build_evasion_config_fragmentation() {
+        let args = Args {
+            targets: vec!["192.168.1.1".to_string()],
+            fragment_mtu: Some(100),
+            ..Default::default()
+        };
+        let config = build_evasion_config(&args).unwrap();
+        assert!(config.is_some());
+        let cfg = config.unwrap();
+        assert!(cfg.fragmentation.is_some());
+    }
+
+    #[test]
+    fn test_build_evasion_config_spoof_ip() {
+        let args = Args {
+            targets: vec!["192.168.1.1".to_string()],
+            spoof_ip: Some("10.0.0.1".to_string()),
+            ..Default::default()
+        };
+        let config = build_evasion_config(&args).unwrap();
+        assert!(config.is_some());
+        let cfg = config.unwrap();
+        assert!(cfg.source.source_ip.is_some());
+    }
+
+    #[test]
+    fn test_build_evasion_config_source_port() {
+        let args = Args {
+            targets: vec!["192.168.1.1".to_string()],
+            source_port: Some(53),
+            ..Default::default()
+        };
+        let config = build_evasion_config(&args).unwrap();
+        assert!(config.is_some());
+        let cfg = config.unwrap();
+        assert_eq!(cfg.source.source_port, Some(53));
+    }
+
+    #[test]
+    fn test_build_evasion_config_decoys() {
+        let args = Args {
+            targets: vec!["192.168.1.1".to_string()],
+            decoys: Some("192.168.1.2,192.168.1.3".to_string()),
+            ..Default::default()
+        };
+        let config = build_evasion_config(&args).unwrap();
+        assert!(config.is_some());
+        let cfg = config.unwrap();
+        assert!(cfg.decoys.is_some());
+        let decoy_cfg = cfg.decoys.unwrap();
+        assert_eq!(decoy_cfg.decoys.len(), 2);
+    }
+
+    #[test]
+    fn test_build_evasion_config_multiple() {
+        let args = Args {
+            targets: vec!["192.168.1.1".to_string()],
+            fragment_mtu: Some(64),
+            spoof_ip: Some("10.0.0.1".to_string()),
+            source_port: Some(443),
+            ..Default::default()
+        };
+        let config = build_evasion_config(&args).unwrap();
+        assert!(config.is_some());
+        let cfg = config.unwrap();
+        assert!(cfg.fragmentation.is_some());
+        assert!(cfg.source.source_ip.is_some());
+        assert_eq!(cfg.source.source_port, Some(443));
     }
 }

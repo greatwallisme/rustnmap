@@ -506,6 +506,39 @@ impl Args {
             }
         }
 
+        // Validate spoof IP address
+        if let Some(ref ip) = self.spoof_ip {
+            ip.parse::<std::net::IpAddr>()
+                .map_err(|_| format!("Invalid spoof IP address: {ip}"))?;
+        }
+
+        // Validate decoy IP addresses
+        if let Some(ref decoys) = self.decoys {
+            for ip_str in decoys.split(',') {
+                let ip_str = ip_str.trim();
+                if !ip_str.is_empty() {
+                    ip_str.parse::<std::net::IpAddr>()
+                        .map_err(|_| format!("Invalid decoy IP address: {ip_str}"))?;
+                }
+            }
+        }
+
+        // Validate fragment MTU (must be between 8 and 1500)
+        if let Some(mtu) = self.fragment_mtu {
+            if !(8..=1500).contains(&mtu) {
+                return Err(format!(
+                    "Fragment MTU must be between 8 and 1500, got {mtu}"
+                ));
+            }
+        }
+
+        // Validate source port
+        if let Some(port) = self.source_port {
+            if port == 0 {
+                return Err("Source port must be between 1 and 65535".to_string());
+            }
+        }
+
         Ok(())
     }
 

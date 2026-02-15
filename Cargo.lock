@@ -2065,6 +2065,7 @@ dependencies = [
  "rand 0.10.0",
  "rustnmap-common",
  "rustnmap-core",
+ "rustnmap-evasion",
  "rustnmap-fingerprint",
  "rustnmap-nse",
  "rustnmap-output",

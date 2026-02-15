@@ -32,6 +32,7 @@ rustnmap-scan = { path = "../rustnmap-scan" }
 rustnmap-fingerprint = { path = "../rustnmap-fingerprint" }
 rustnmap-nse = { path = "../rustnmap-nse" }
 rustnmap-output = { path = "../rustnmap-output" }
+rustnmap-evasion = { path = "../rustnmap-evasion" }
 
 # Additional dependencies
 tokio = { workspace = true }

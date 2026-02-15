@@ -54,6 +54,7 @@
     reason = "Allow attributes are used extensively for incremental development"
 )]
 
+pub mod congestion;
 pub mod error;
 pub mod orchestrator;
 pub mod scheduler;
@@ -61,6 +62,7 @@ pub mod session;
 pub mod state;
 
 // Re-exports for convenience
+pub use congestion::{AdaptiveTiming, CongestionController, CongestionStats, RateLimiter};
 pub use error::{CoreError, Result};
 pub use orchestrator::{ScanOrchestrator, ScanPhase, ScanPipeline};
 pub use scheduler::{ScheduledTask, TaskPriority, TaskScheduler};

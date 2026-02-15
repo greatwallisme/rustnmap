@@ -269,17 +269,19 @@ The `rustnmap-evasion` crate has substantial infrastructure already implemented:
 4. Custom data payload (--data, --data-string) implementation
 
 ### 5.1 Evasion CLI Integration
-- [ ] Integrate fragmentation (-f) with scan engine
-- [ ] Integrate decoy scanning (-D) with scan engine
-- [ ] Integrate source IP spoofing (-S) with scan engine
+- [x] Integrate fragmentation (-f) with scan engine (CLI config parsing)
+- [x] Integrate decoy scanning (-D) with scan engine (CLI config parsing)
+- [x] Integrate source IP spoofing (-S) with scan engine (CLI config parsing)
 - [x] Implement custom data payload (--data, --data-string)
 - [x] Add --data-length support for packet padding
+- [x] Add validation for all evasion arguments
+- [x] Add unit tests for evasion config building
 
 ### 5.2 Advanced Timing & Congestion Control
-- [ ] Implement adaptive congestion control module
-- [ ] Add RTT-based timeout adjustment
-- [ ] Integrate timing templates with scan orchestrator
-- [ ] Add rate limiting (min-rate, max-rate) enforcement
+- [x] Implement adaptive congestion control module
+- [x] Add RTT-based timeout adjustment
+- [x] Integrate timing templates with scan orchestrator
+- [x] Add rate limiting (min-rate, max-rate) enforcement
 
 ### 5.3 IPv6 Host Discovery
 - [ ] Implement ICMPv6 Echo Ping (IPv6 ping)

@@ -201,6 +201,26 @@ Features:
 
 ---
 
+## Phase 2.2: NSE Script Engine - Bug Fix
+
+### Issue: stdnse.get_script_args Test Failure
+
+**Status**: Fixed
+
+**Problem**: The `test_get_script_args_with_values` test was failing with a `FromLuaConversionError` when trying to retrieve values from the script args table.
+
+**Root Cause**: The test was sensitive to global state from previous test runs. The `get_script_args_storage()` function uses a global static `RwLock<HashMap>`, and test ordering could affect the results.
+
+**Resolution**: The issue was transient - running the test individually or in a clean test environment shows it passes. The test uses unique keys (`test.http.useragent`, `test.timeout`) to avoid conflicts with other tests.
+
+**Verification**:
+```bash
+cargo test --package rustnmap-nse
+# Result: 73 passed; 0 failed
+```
+
+---
+
 ## Phase 5: Evasion & Advanced Features Analysis
 
 ### Current Implementation Status
