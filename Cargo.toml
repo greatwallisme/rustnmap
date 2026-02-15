@@ -56,6 +56,22 @@ bytes = "1.9"
 # DNS resolution
 trust-dns-resolver = { version = "0.23", features = ["tokio-runtime"] }
 
+# TLS/SSL detection
+tokio-rustls = "0.26"
+rustls = { version = "0.23", default-features = false, features = ["std", "tls12"] }
+
+# Certificate parsing
+x509-parser = "0.16"
+
+# Time parsing for certificate validity
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+
+# Cryptographic operations
+ring = "0.17"
+
+# HTTP client for database updates
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+
 # Testing
 proptest = "1.5"
 criterion = { version = "0.8.2", features = ["html_reports"] }

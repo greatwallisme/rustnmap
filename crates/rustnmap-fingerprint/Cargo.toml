@@ -34,6 +34,22 @@ rustnmap-net = { path = "../rustnmap-net" }
 # Common types
 rustnmap-common = { path = "../rustnmap-common" }
 
+# TLS/SSL detection
+tokio-rustls = { workspace = true }
+rustls = { workspace = true }
+
+# Certificate parsing
+x509-parser = { workspace = true }
+
+# Time parsing for certificate validity
+chrono = { workspace = true }
+
+# Cryptographic operations
+ring = { workspace = true }
+
+# HTTP client for database updates
+reqwest = { workspace = true }
+
 [features]
 default = []
 test-util = []

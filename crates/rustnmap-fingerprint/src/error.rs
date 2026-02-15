@@ -72,6 +72,13 @@ pub enum FingerprintError {
         /// Path that was not found.
         path: PathBuf,
     },
+
+    /// TLS/SSL error.
+    #[error("TLS error: {context}")]
+    Tls {
+        /// Context of the TLS error.
+        context: String,
+    },
 }
 
 impl From<io::Error> for FingerprintError {

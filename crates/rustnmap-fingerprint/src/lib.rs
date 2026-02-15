@@ -83,14 +83,18 @@
 
 #![warn(missing_docs)]
 
+pub mod database;
 pub mod error;
 pub mod os;
 pub mod service;
+pub mod tls;
 
 /// Result type for fingerprinting operations.
 pub type Result<T> = std::result::Result<T, error::FingerprintError>;
 
 // Re-exports for convenience
+#[doc(inline)]
+pub use database::{DatabaseUpdater, MacPrefixDatabase, UpdateOptions};
 pub use error::FingerprintError;
 pub use os::{
     EcnFingerprint, FingerprintDatabase, IcmpTestResult, IpIdPattern, IpIdSeqClass, IsnClass,
@@ -98,3 +102,4 @@ pub use os::{
     UdpTestResult,
 };
 pub use service::{ProbeDatabase, ProbeDefinition, ServiceDetector, ServiceInfo};
+pub use tls::{CertificateInfo, TlsDetector, TlsInfo, TlsVersion};
