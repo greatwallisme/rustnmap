@@ -253,25 +253,41 @@ All output formatters are implemented in `rustnmap-output/src/formatter.rs`:
 
 **Goal**: Complete evasion and advanced scanning features
 
-### 5.1 Evasion Techniques
-- [ ] Complete packet fragmentation (-f)
-- [ ] Implement decoy scanning (-D)
-- [ ] Add source IP spoofing (-S)
-- [ ] Implement custom data payload (--data, --data-string)
+### Current Status Analysis
 
-### 5.2 Advanced Timing
-- [ ] Complete timing template implementation (T0-T5)
-- [ ] Implement adaptive congestion control
+The `rustnmap-evasion` crate has substantial infrastructure already implemented:
+- Packet fragmentation (`Fragmenter`) - Complete
+- Decoy scanning (`DecoyScheduler`) - Complete
+- Source spoofing (`SourceSpoofer`) - Complete
+- Packet modification (`PacketModifier`) - Complete
+- Timing templates (`TimingController` with T0-T5) - Complete
+
+**Missing for full Phase 5 completion:**
+1. CLI integration for evasion flags
+2. Adaptive congestion control and RTT-based adjustments
+3. IPv6 host discovery methods
+4. Custom data payload (--data, --data-string) implementation
+
+### 5.1 Evasion CLI Integration
+- [ ] Integrate fragmentation (-f) with scan engine
+- [ ] Integrate decoy scanning (-D) with scan engine
+- [ ] Integrate source IP spoofing (-S) with scan engine
+- [x] Implement custom data payload (--data, --data-string)
+- [x] Add --data-length support for packet padding
+
+### 5.2 Advanced Timing & Congestion Control
+- [ ] Implement adaptive congestion control module
 - [ ] Add RTT-based timeout adjustment
-- [ ] Test all timing templates
+- [ ] Integrate timing templates with scan orchestrator
+- [ ] Add rate limiting (min-rate, max-rate) enforcement
 
-### 5.3 IPv6 Support
-- [ ] Add IPv6 target parsing
-- [ ] Implement IPv6 host discovery
-- [ ] Add IPv6 scanning support
-- [ ] Test IPv6 functionality
+### 5.3 IPv6 Host Discovery
+- [ ] Implement ICMPv6 Echo Ping (IPv6 ping)
+- [ ] Implement ICMPv6 Neighbor Discovery (NDP)
+- [ ] Add IPv6 TCP SYN Ping support
+- [ ] Update host discovery engine for IPv6
 
-**Status:** pending
+**Status:** in_progress
 
 ---
 

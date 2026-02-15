@@ -56,22 +56,29 @@ pub const TCP_FLAGS_SYN: u8 = 0x02;
 /// * `src_port` - Source port number
 /// * `dst_port` - Destination port number
 /// * `seq` - TCP sequence number
+/// * `payload` - Optional custom payload data to append
 ///
 /// # Returns
 ///
 /// The constructed SYN probe packet as a Vec<u8>.
+///
+/// # Panics
+///
+/// Panics if the payload length exceeds 65535 bytes (TCP maximum segment size).
 pub fn build_tcp_syn_probe(
     src_addr: Ipv4Addr,
     dst_addr: Ipv4Addr,
     src_port: Port,
     dst_port: Port,
     seq: ProbeSeq,
+    payload: Option<&[u8]>,
 ) -> Vec<u8> {
-    // Total IP header length (20) + TCP header length (20) + no options
-    let total_len: u16 = 40;
+    let payload_len = payload.map_or(0, <[u8]>::len);
+    // Total IP header length (20) + TCP header length (20) + payload
+    let total_len: u16 = 40 + u16::try_from(payload_len).expect("payload too large");
 
     // Allocate buffer for the probe packet
-    let mut probe = vec![0u8; total_len as usize];
+    let mut probe = vec![0u8; usize::from(total_len)];
 
     // === IP Header (20 bytes) ===
     // Version (4 bits) = 4, IHL (4 bits) = 5 (20 bytes = 5 * 4)
@@ -129,8 +136,15 @@ pub fn build_tcp_syn_probe(
     // Urgent Pointer = 0
     probe[tcp_offset + 18..tcp_offset + 20].copy_from_slice(&[0u8; 2]);
 
+    // Append custom payload if provided
+    if let Some(data) = payload {
+        let payload_start = tcp_offset + 20;
+        probe[payload_start..payload_start + data.len()].copy_from_slice(data);
+    }
+
     // Calculate TCP checksum (covering TCP header + data)
-    let tcp_checksum = tcp_checksum_data(src_addr, dst_addr, &probe[tcp_offset..tcp_offset + 20]);
+    let tcp_checksum =
+        tcp_checksum_data(src_addr, dst_addr, &probe[tcp_offset..tcp_offset + 20 + payload_len]);
     probe[tcp_offset + 16..tcp_offset + 18].copy_from_slice(&tcp_checksum.to_be_bytes());
 
     probe
@@ -320,10 +334,31 @@ mod tests {
             12345,
             80,
             1000,
+            None,
         );
 
         // IP header (20) + TCP header (20) = 40 bytes
         assert_eq!(probe.len(), 40);
+    }
+
+    #[test]
+    fn test_build_tcp_syn_probe_with_payload() {
+        let payload = b"GET / HTTP/1.1\r\n\r\n";
+        let probe = build_tcp_syn_probe(
+            Ipv4Addr::new(192, 168, 1, 100),
+            Ipv4Addr::new(192, 168, 1, 1),
+            12345,
+            80,
+            1000,
+            Some(payload),
+        );
+
+        // IP header (20) + TCP header (20) + payload
+        assert_eq!(probe.len(), 40 + payload.len());
+
+        // Verify payload is at the end
+        let payload_start = 40;
+        assert_eq!(&probe[payload_start..], payload.as_slice());
     }
 
     #[test]
@@ -334,6 +369,7 @@ mod tests {
             65000,
             443,
             0xDEAD_BEEF,
+            None,
         );
 
         // Check IP version and IHL

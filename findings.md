@@ -201,5 +201,44 @@ Features:
 
 ---
 
+## Phase 5: Evasion & Advanced Features Analysis
+
+### Current Implementation Status
+
+| Component | Status | Location | Notes |
+|-----------|--------|----------|-------|
+| Packet Fragmentation | Complete | `rustnmap-evasion/src/fragment.rs` | `Fragmenter` with MTU support |
+| Decoy Scanning | Complete | `rustnmap-evasion/src/decoy.rs` | `DecoyScheduler` with position control |
+| Source Spoofing | Complete | `rustnmap-evasion/src/source.rs` | `SourceSpoofer` for IP/port |
+| Packet Modification | Complete | `rustnmap-evasion/src/modify.rs` | `PacketModifier` with padding/checksum |
+| Timing Templates | Complete | `rustnmap-evasion/src/timing.rs` | T0-T5 `TimingController` |
+| IPv6 Target Parsing | Complete | `rustnmap-target/src/parser.rs` | Parses IPv6 addrs and CIDR |
+| IPv6 Host Discovery | Missing | - | Only IPv4 methods exist |
+| Custom Data Payload | Missing | - | CLI args exist, not implemented |
+| Adaptive Timing | Missing | - | Needs congestion control module |
+
+### Key Gaps Identified
+
+1. **Host Discovery** only supports IPv4:
+   - `TcpSynPing`, `TcpAckPing`, `IcmpPing` all return `Unknown` for IPv6 targets
+   - Need ICMPv6 Echo and Neighbor Discovery implementations
+
+2. **CLI Evasion Args** exist but may not be wired to scan engine:
+   - `--data-hex`, `--data-string` need payload injection implementation
+   - Fragmentation needs integration with packet builder
+
+3. **Timing Control** is defined but needs scan orchestrator integration:
+   - RTT tracking not connected to `TimingController`
+   - Rate limiting (min-rate, max-rate) needs enforcement
+
+### Implementation Priority
+
+1. Custom data payload (easiest, CLI args exist)
+2. IPv6 host discovery (most complete gap)
+3. Adaptive timing/congestion control
+4. Evasion integration with scan engine
+
+---
+
 *Update this file after every 2 view/browser/search operations*
 *This prevents visual information from being lost*

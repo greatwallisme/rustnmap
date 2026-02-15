@@ -316,6 +316,10 @@ pub struct Args {
     #[arg(long, help_heading = "Firewall/IDS Evasion", value_name = "HEX")]
     pub data_hex: Option<String>,
 
+    /// Append custom string data to packets
+    #[arg(long, help_heading = "Firewall/IDS Evasion", value_name = "STRING")]
+    pub data_string: Option<String>,
+
     // ============================================
     // Output Formats
     // ============================================

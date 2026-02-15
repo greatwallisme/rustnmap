@@ -260,4 +260,38 @@ The RustNmap scanner is now fully functional with:
 
 ---
 
+## Session: 2026-02-14 - Phase 5.1: Custom Data Payload Implementation
+
+### Task 1: Custom Data Payload - COMPLETE
+
+**Status**: Data payload feature implemented and tested
+
+**Implementation Summary:**
+
+| Component | Status | Tests |
+|-----------|--------|-------|
+| ScanConfig.data_payload | Complete | New field added |
+| CLI --data-hex parsing | Complete | Hex decoding with validation |
+| CLI --data-string parsing | Complete | UTF-8 string support |
+| CLI --data-length parsing | Complete | Padding generation |
+| Probe payload injection | Complete | TCP SYN probes with payload |
+
+**Files Modified:**
+- `crates/rustnmap-core/src/session.rs` - Added `data_payload: Option<Vec<u8>>` to ScanConfig
+- `crates/rustnmap-cli/src/args.rs` - Added `--data-string` argument
+- `crates/rustnmap-cli/src/cli.rs` - Added `parse_data_payload()` function
+- `crates/rustnmap-scan/src/probe.rs` - Modified `build_tcp_syn_probe()` to accept optional payload
+
+**Key Features:**
+1. `--data-hex` accepts hex strings (e.g., `48656c6c6f` for "Hello")
+2. `--data-string` accepts plain text strings
+3. `--data-length` generates deterministic padding
+4. Payload is appended to TCP SYN packets after the TCP header
+5. TCP checksum correctly includes the payload data
+
+**Tests Added:**
+- `test_build_tcp_syn_probe_with_payload` - Verifies payload is correctly appended
+
+---
+
 *Update after completing each phase or encountering errors*

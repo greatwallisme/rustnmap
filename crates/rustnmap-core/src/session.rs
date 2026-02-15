@@ -193,6 +193,8 @@ pub struct ScanConfig {
     pub host_timeout: std::time::Duration,
     /// Scan delay between probes.
     pub scan_delay: std::time::Duration,
+    /// Custom data payload to append to packets.
+    pub data_payload: Option<Vec<u8>>,
 }
 
 impl Default for ScanConfig {
@@ -216,6 +218,7 @@ impl Default for ScanConfig {
             nse_categories: Vec::new(),
             host_timeout: std::time::Duration::from_secs(900),
             scan_delay: std::time::Duration::ZERO,
+            data_payload: None,
         }
     }
 }

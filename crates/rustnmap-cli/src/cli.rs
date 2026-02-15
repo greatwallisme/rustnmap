@@ -214,7 +214,52 @@ fn build_scan_config(args: &Args) -> Result<ScanConfig> {
         config.host_timeout = std::time::Duration::from_millis(timeout);
     }
 
+    // Data payload (--data-hex or --data-string)
+    config.data_payload = parse_data_payload(args)?;
+
     Ok(config)
+}
+
+/// Parses data payload from CLI arguments.
+///
+/// Supports --data-hex for hex-encoded data and --data-string for plain text.
+///
+/// # Errors
+///
+/// Returns an error if the hex data is malformed.
+fn parse_data_payload(args: &Args) -> Result<Option<Vec<u8>>> {
+    if let Some(hex_data) = &args.data_hex {
+        // Parse hex string (e.g., "48656c6c6f" -> "Hello")
+        // Remove spaces and colons from hex string efficiently
+        let hex_clean: String = hex_data.chars().filter(|c| *c != ' ' && *c != ':').collect();
+        if hex_clean.len() % 2 != 0 {
+            return Err(rustnmap_common::Error::Other(
+                "Hex data must have an even number of characters".to_string(),
+            ));
+        }
+        let mut bytes = Vec::with_capacity(hex_clean.len() / 2);
+        for i in (0..hex_clean.len()).step_by(2) {
+            let byte_str = &hex_clean[i..i + 2];
+            match u8::from_str_radix(byte_str, 16) {
+                Ok(byte) => bytes.push(byte),
+                Err(_) => {
+                    return Err(rustnmap_common::Error::Other(format!(
+                        "Invalid hex byte: {byte_str}"
+                    )));
+                }
+            }
+        }
+        Ok(Some(bytes))
+    } else if let Some(string_data) = &args.data_string {
+        // Use string data as-is (UTF-8 bytes)
+        Ok(Some(string_data.as_bytes().to_vec()))
+    } else if let Some(length) = args.data_length {
+        // Generate random padding of specified length
+        let padding: Vec<u8> = (0..length).map(|i| (i % 256) as u8).collect();
+        Ok(Some(padding))
+    } else {
+        Ok(None)
+    }
 }
 
 /// Parses port specification from arguments.
