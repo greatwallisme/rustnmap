@@ -321,3 +321,20 @@ coverage-lcov:
 
 coverage-clean:
     cargo llvm-cov clean --workspace
+
+# Run performance benchmarks
+bench *args="":
+    cargo bench --package rustnmap-benchmarks {{args}}
+
+# Run specific benchmark group
+bench-scan:
+    cargo bench --package rustnmap-benchmarks scan_benchmarks
+
+bench-packet:
+    cargo bench --package rustnmap-benchmarks packet_benchmarks
+
+bench-fingerprint:
+    cargo bench --package rustnmap-benchmarks fingerprint_benchmarks
+
+bench-nse:
+    cargo bench --package rustnmap-benchmarks nse_benchmarks

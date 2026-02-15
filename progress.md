@@ -2,7 +2,63 @@
 
 ---
 
-## Current Status: Phase 6.3 COMPLETE - 970 Tests Passing
+## Current Status: Phase 6.1, 6.2, 6.3 COMPLETE - Documentation & Benchmarks Done
+
+---
+
+## Session: 2026-02-15 - Phase 6.1 & 6.2: Benchmarks and Documentation - COMPLETE
+
+### Phase 6.1: Performance Benchmarks - COMPLETE
+
+**Status**: Benchmark recipes added to justfile
+
+**Deliverables**:
+| Task | Status | Details |
+|------|--------|---------|
+| Benchmark recipes | Complete | Added to justfile |
+| `just bench` | Complete | Run all benchmarks |
+| `just bench-scan` | Complete | Scan benchmarks only |
+| `just bench-packet` | Complete | Packet benchmarks only |
+| `just bench-fingerprint` | Complete | Fingerprint benchmarks only |
+| `just bench-nse` | Complete | NSE benchmarks only |
+
+**Existing Benchmarks** (in rustnmap-benchmarks):
+- scan_benchmarks.rs - TCP/UDP packet construction, port iteration, target parsing
+- packet_benchmarks.rs - Packet processing benchmarks
+- fingerprint_benchmarks.rs - OS/service fingerprint matching
+- nse_benchmarks.rs - Lua script execution performance
+
+### Phase 6.2: Documentation - COMPLETE
+
+**Status**: All documentation completed
+
+**Deliverables**:
+| Task | Status | File |
+|------|--------|------|
+| README with full feature list | Complete | /root/project/rust-nmap/README.md |
+| User guide and examples | Complete | /root/project/rust-nmap/doc/user-guide.md |
+| Man page generation | Complete | /root/project/rust-nmap/doc/rustnmap.1 |
+| Documentation index update | Complete | /root/project/rust-nmap/doc/README.md |
+
+**Documentation Statistics**:
+- README.md: 850+ lines, comprehensive feature overview
+- user-guide.md: 1100+ lines, complete user guide with examples
+- rustnmap.1: Full Unix man page
+
+**User Guide Sections**:
+1. Introduction
+2. Getting Started
+3. Basic Scanning
+4. Host Discovery
+5. Port Scanning Techniques
+6. Service Detection
+7. OS Detection
+8. NSE Scripts
+9. Output Formats
+10. Evasion Techniques
+11. Timing and Performance
+12. IPv6 Scanning
+13. Troubleshooting
 
 ---
 

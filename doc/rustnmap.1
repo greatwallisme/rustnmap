@@ -1,0 +1,383 @@
+.TH RUSTNMAP 1 "February 2026" "RustNmap 1.0.0" "User Commands"
+.SH NAME
+rustnmap \- Rust Network Mapper - A high-performance network scanning tool
+.SH SYNOPSIS
+.B rustnmap
+[\fIscan type(s)\fR] [\fIoptions\fR] {\fItarget specification\fR}
+.SH DESCRIPTION
+.B RustNmap
+is a modern, high-performance network scanning tool written in Rust,
+designed to provide 100% functional parity with Nmap while leveraging
+Rust's safety guarantees and asynchronous capabilities for improved
+performance.
+.PP
+It can be used to:
+.RS
+- Discover hosts on a network
+- Identify open ports on target systems
+- Detect services and their versions
+- Determine operating systems
+- Execute Lua scripts for advanced detection
+- Map networks and audit security
+.RE
+.SH SCAN TYPES
+.TP
+.B \-sS
+TCP SYN scan (default, requires root). Half-open scanning that does not
+complete the TCP handshake.
+.TP
+.B \-sT
+TCP Connect scan. Uses full TCP connection, does not require root.
+.TP
+.B \-sU
+UDP scan. Scans for UDP services, often slower than TCP scans.
+.TP
+.B \-sF
+FIN scan. Sends FIN packets to bypass simple firewalls.
+.TP
+.B \-sN
+NULL scan. No flags set in TCP header.
+.TP
+.B \-sX
+XMAS scan. Sets FIN, PSH, and URG flags.
+.TP
+.B \-sA
+ACK scan. Used for firewall rule mapping.
+.TP
+.B \-sW
+Window scan. Similar to ACK but uses window size to determine port state.
+.TP
+.B \-sM
+Maimon scan. Sends FIN/ACK probes.
+.TP
+.B \-sI <zombie>
+Idle scan. Uses a zombie host to perform stealthy scanning.
+.TP
+.B \-b <ftp_relay>
+FTP bounce scan. Uses FTP server as a proxy.
+.TP
+.B \-sY
+SCTP INIT scan. Scans SCTP services.
+.TP
+.B \-sO
+IP protocol scan. Scans for supported IP protocols.
+.SH HOST DISCOVERY
+.TP
+.B \-sL
+List scan. Lists targets without scanning.
+.TP
+.B \-sn
+Ping scan. Disables port scanning, only host discovery.
+.TP
+.B \-Pn
+Treat all hosts as online. Skip host discovery.
+.TP
+.B \-PS<portlist>
+TCP SYN discovery. Sends SYN to specified ports.
+.TP
+.B \-PA<portlist>
+TCP ACK discovery. Sends ACK to specified ports.
+.TP
+.B \-PU<portlist>
+UDP discovery. Sends UDP packets to specified ports.
+.TP
+.B \-PE
+ICMP echo request discovery (standard ping).
+.TP
+.B \-PP
+ICMP timestamp request discovery.
+.TP
+.B \-PM
+ICMP netmask request discovery.
+.TP
+.B \-PR
+ARP ping discovery. Uses ARP for local network.
+.TP
+.B \-PY<portlist>
+SCTP INIT discovery.
+.SH PORT SPECIFICATION
+.TP
+.B \-p <port ranges>
+Scan specified ports. Examples: 22, 1-65535, U:53, T:80.
+.TP
+.B \-F
+Fast scan. Scan top 100 common ports.
+.TP
+.B \-r
+Scan ports consecutively. Don't randomize.
+.TP
+.B \-\-top\-ports <n>
+Scan n most common ports.
+.TP
+.B \-\-port\-ratio <ratio>
+Scan ports more common than ratio (0.0-1.0).
+.SH SERVICE/VERSION DETECTION
+.TP
+.B \-sV
+Probe open ports to determine service/version info.
+.TP
+.B \-\-version\-intensity <0-9>
+Set version scan intensity. 0 is light, 9 is all probes.
+.TP
+.B \-\-version\-light
+Limit to most likely probes (intensity 2).
+.TP
+.B \-\-version\-all
+Try every single probe (intensity 9).
+.TP
+.B \-\-version\-trace
+Show detailed version scan activity.
+.SH OS DETECTION
+.TP
+.B \-O
+Enable OS detection.
+.TP
+.B \-\-osscan\-limit
+Limit OS detection to promising targets.
+.TP
+.B \-\-osscan\-guess
+Guess OS more aggressively.
+.TP
+.B \-\-max\-os\-tries <n>
+Set maximum number of OS detection tries.
+.SH TIMING AND PERFORMANCE
+.TP
+.B \-T<0-5>
+Set timing template. Higher is faster.
+.RS
+- T0: Paranoid (very slow, evasive)
+- T1: Sneaky (slow, evasive)
+- T2: Polite (slow)
+- T3: Normal (default)
+- T4: Aggressive (fast)
+- T5: Insane (very fast)
+.RE
+.TP
+.B \-\-min\-hostgroup <n>
+Parallel host scan group sizes.
+.TP
+.B \-\-max\-hostgroup <n>
+Maximum parallel host scan group sizes.
+.TP
+.B \-\-min\-parallelism <n>
+Probe parallelization minimum.
+.TP
+.B \-\-max\-parallelism <n>
+Probe parallelization maximum.
+.TP
+.B \-\-min\-rtt\-timeout <time>
+Specifies probe round trip time minimum.
+.TP
+.B \-\-max\-rtt\-timeout <time>
+Specifies probe round trip time maximum.
+.TP
+.B \-\-initial\-rtt\-timeout <time>
+Specifies initial probe round trip time.
+.TP
+.B \-\-max\-retries <tries>
+Caps number of port scan probe retransmissions.
+.TP
+.B \-\-host\-timeout <time>
+Give up on target after this long.
+.TP
+.B \-\-scan\-delay <time>
+Adjust delay between probes.
+.TP
+.B \-\-max\-scan\-delay <time>
+Adjust maximum delay between probes.
+.TP
+.B \-\-min\-rate <number>
+Send packets no slower than <number> per second.
+.TP
+.B \-\-max\-rate <number>
+Send packets no faster than <number> per second.
+.SH FIREWALL/IDS EVASION
+.TP
+.B \-f
+Fragment packets. Use 8-byte fragments.
+.TP
+.B \-\-mtu <value>
+Fragment packets with specified MTU.
+.TP
+.B \-D <decoy1,decoy2,...>
+Cloak scan with decoys. Use ME for real IP.
+.TP
+.B \-S <IP_Address>
+Spoof source address.
+.TP
+.B \-g <portnum>
+Use given source port number.
+.TP
+.B \-\-data\-length <num>
+Append random data to sent packets.
+.TP
+.B \-\-data\-string <string>
+Append custom string to sent packets.
+.TP
+.B \-\-data\-hex <hex>
+Append hex string to sent packets.
+.TP
+.B \-\-spoof\-mac <mac>
+Spoof MAC address. 0 for random.
+.SH OUTPUT OPTIONS
+.TP
+.B \-oN <file>
+Output scan in normal format.
+.TP
+.B \-oX <file>
+Output scan in XML format.
+.TP
+.B \-oJ <file>
+Output scan in JSON format.
+.TP
+.B \-oG <file>
+Output scan in grepable format.
+.TP
+.B \-oS <file>
+Output scan in script kiddie format.
+.TP
+.B \-oA <basename>
+Output in all formats (normal, XML, JSON, grepable).
+.TP
+.B \-v
+Increase verbosity level.
+.TP
+.B \-vv
+More verbose.
+.TP
+.B \-d
+Increase debugging level.
+.TP
+.B \-dd
+More debugging.
+.TP
+.B \-\-reason
+Display reason for port state.
+.TP
+.B \-\-open
+Only show open (or possibly open) ports.
+.TP
+.B \-\-packet\-trace
+Show all packets sent and received.
+.TP
+.B \-\-append\-output
+Append to rather than clobber output files.
+.TP
+.B \-\-resume <file>
+Resume aborted scan from file.
+.SH NSE SCRIPTING
+.TP
+.B \-sC
+Perform script scan using default safe set.
+.TP
+.B \-\-script <script>
+Run specified scripts. Comma-separated list.
+.TP
+.B \-\-script\-args <args>
+Provide arguments to scripts.
+.TP
+.B \-\-script\-args\-file <file>
+Provide arguments from file.
+.TP
+.B \-\-script\-trace
+Show all data sent and received.
+.TP
+.B \-\-script\-help <script>
+Show help about scripts.
+.SH TARGET SPECIFICATION
+Can be passed as arguments or from file:
+.TP
+.B \-iL <inputfile>
+Input from list of hosts/networks.
+.TP
+.B \-iR <num hosts>
+Choose random targets.
+.TP
+.B \-\-exclude <host1,...>
+Exclude hosts/networks.
+.TP
+.B \-\-excludefile <exclude_file>
+Exclude list from file.
+.PP
+Target formats:
+.RS
+- Single IP: 192.168.1.1
+- Multiple: 192.168.1.1 192.168.1.2
+- CIDR: 192.168.1.0/24
+- Range: 192.168.1.1-100
+- Hostname: example.com
+- IPv6: 2001:db8::1
+.RE
+.SH EXAMPLES
+.TP
+.B rustnmap 192.168.1.1
+Default scan of single target.
+.TP
+.B rustnmap -sS 192.168.1.0/24
+SYN scan of network.
+.TP
+.B rustnmap -sV -p 22,80,443 192.168.1.1
+Service detection on specific ports.
+.TP
+.B rustnmap -A 192.168.1.1
+Aggressive scan (OS, version, scripts, traceroute).
+.TP
+.B rustnmap -sS -T4 -oA scan-results 192.168.1.0/24
+Fast SYN scan with all output formats.
+.SH EXIT STATUS
+.TP
+.B 0
+Scan completed successfully.
+.TP
+.B 1
+Error during scan.
+.TP
+.B 2
+At least one port was found open.
+.TP
+.B 3
+No ports found open.
+.SH FILES
+.TP
+.I /usr/share/rustnmap/nmap-service-probes
+Service probe database.
+.TP
+.I /usr/share/rustnmap/nmap-os-db
+OS fingerprint database.
+.TP
+.I /usr/share/rustnmap/nmap-mac-prefixes
+MAC vendor database.
+.TP
+.I /usr/share/rustnmap/scripts/
+NSE script directory.
+.SH ENVIRONMENT
+.TP
+.B RUSTNMAP_DEBUG
+Set to enable debug output.
+.TP
+.B TEST_TARGET_IP
+Target IP for integration tests.
+.SH NOTES
+RustNmap requires root privileges for raw socket operations including:
+.RS
+- SYN, FIN, NULL, XMAS, ACK scans
+- UDP scans
+- OS detection
+- Most host discovery methods
+.RE
+.PP
+TCP Connect scans (-sT) and some other operations can run without root.
+.SH BUGS
+Report bugs at https://github.com/greatwallisme/rust-nmap/issues
+.SH AUTHOR
+Written by the RustNmap project contributors.
+.SH COPYRIGHT
+Copyright 2026 RustNmap Project.
+Licensed under the MIT License.
+.SH SEE ALSO
+.BR nmap (1),
+.BR tcpdump (8),
+.BR wireshark (1)
+.PP
+Full documentation available at:
+https://github.com/greatwallisme/rust-nmap/blob/main/doc/user-guide.md
