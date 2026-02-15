@@ -65,10 +65,16 @@ async fn test_syn_scan_target() {
 
     // Verify results contain expected host
     let target_ip = test_target_ip();
-    let host_found = result.hosts.iter().any(|h| h.ip.to_string() == target_ip.to_string());
+    let host_found = result
+        .hosts
+        .iter()
+        .any(|h| h.ip.to_string() == target_ip.to_string());
     assert!(host_found, "Target host {target_ip} should be in results");
 
-    println!("SYN scan completed against {target_ip}, found {} hosts", result.hosts.len());
+    println!(
+        "SYN scan completed against {target_ip}, found {} hosts",
+        result.hosts.len()
+    );
     if let Some(host) = result.hosts.first() {
         println!("Open ports found: {}", host.ports.len());
         for port in &host.ports {
@@ -126,10 +132,16 @@ async fn test_connect_scan_target() {
 
     // Verify results contain expected host
     let target_ip = test_target_ip();
-    let host_found = result.hosts.iter().any(|h| h.ip.to_string() == target_ip.to_string());
+    let host_found = result
+        .hosts
+        .iter()
+        .any(|h| h.ip.to_string() == target_ip.to_string());
     assert!(host_found, "Target host {target_ip} should be in results");
 
-    println!("Connect scan completed against {target_ip}, found {} hosts", result.hosts.len());
+    println!(
+        "Connect scan completed against {target_ip}, found {} hosts",
+        result.hosts.len()
+    );
     if let Some(host) = result.hosts.first() {
         println!("Open ports found: {}", host.ports.len());
         for port in &host.ports {
@@ -263,10 +275,7 @@ async fn test_syn_scan_performance() {
     println!("Found {} hosts with results", result.hosts.len());
 
     // Performance assertion: should complete within 10 seconds
-    assert!(
-        duration.as_secs() < 10,
-        "Scan took too long: {duration:?}"
-    );
+    assert!(duration.as_secs() < 10, "Scan took too long: {duration:?}");
 }
 
 /// Benchmarks TCP Connect scan performance.
@@ -288,8 +297,5 @@ async fn test_connect_scan_performance() {
     println!("Found {} hosts with results", result.hosts.len());
 
     // Performance assertion: should complete within 30 seconds (connect scan is slower)
-    assert!(
-        duration.as_secs() < 30,
-        "Scan took too long: {duration:?}"
-    );
+    assert!(duration.as_secs() < 30, "Scan took too long: {duration:?}");
 }

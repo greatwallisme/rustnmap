@@ -245,10 +245,12 @@ fn bench_parallel_scan_throughput(c: &mut Criterion) {
     // Simulate processing port states
     group.throughput(Throughput::Elements(1000));
     group.bench_function("process_1000_port_states", |b| {
-        let states = [PortState::Open,
+        let states = [
+            PortState::Open,
             PortState::Closed,
             PortState::Filtered,
-            PortState::OpenOrFiltered];
+            PortState::OpenOrFiltered,
+        ];
         b.iter(|| {
             for i in 0..1000 {
                 let state = states[i % states.len()];

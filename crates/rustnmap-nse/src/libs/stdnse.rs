@@ -89,8 +89,7 @@ fn get_mutex_storage() -> &'static std::sync::RwLock<HashMap<String, Arc<Mutex<(
 }
 
 /// Get or initialize the named condition variable storage.
-fn get_cvar_storage() -> &'static std::sync::RwLock<CvarStorage>
-{
+fn get_cvar_storage() -> &'static std::sync::RwLock<CvarStorage> {
     NAMED_CVARS.get_or_init(|| std::sync::RwLock::new(HashMap::new()))
 }
 
@@ -343,11 +342,10 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
         }
 
         // First argument should be the function to run
-        let func_val = args
-            .iter()
-            .next()
-            .cloned()
-            .ok_or_else(|| mlua::Error::RuntimeError("Missing function argument".to_string()))?;
+        let func_val =
+            args.iter().next().cloned().ok_or_else(|| {
+                mlua::Error::RuntimeError("Missing function argument".to_string())
+            })?;
 
         // Convert to function
         let mlua::Value::Function(func) = func_val else {

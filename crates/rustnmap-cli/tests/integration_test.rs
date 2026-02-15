@@ -210,14 +210,8 @@ fn test_scan_phase_ordering() {
         ScanPhase::ServiceDetection.next(),
         Some(ScanPhase::OsDetection)
     );
-    assert_eq!(
-        ScanPhase::OsDetection.next(),
-        Some(ScanPhase::NseExecution)
-    );
-    assert_eq!(
-        ScanPhase::NseExecution.next(),
-        Some(ScanPhase::Traceroute)
-    );
+    assert_eq!(ScanPhase::OsDetection.next(), Some(ScanPhase::NseExecution));
+    assert_eq!(ScanPhase::NseExecution.next(), Some(ScanPhase::Traceroute));
     assert_eq!(
         ScanPhase::Traceroute.next(),
         Some(ScanPhase::ResultAggregation)
@@ -232,9 +226,7 @@ fn test_session_creation() {
     use rustnmap_target::{Target, TargetGroup};
 
     let config = ScanConfig::default();
-    let targets = TargetGroup::new(vec![Target::from(
-        "127.0.0.1".parse::<IpAddr>().unwrap()
-    )]);
+    let targets = TargetGroup::new(vec![Target::from("127.0.0.1".parse::<IpAddr>().unwrap())]);
 
     let session = ScanSession::new(config, targets);
     assert!(session.is_ok());
@@ -356,7 +348,11 @@ fn test_nse_registry_integration() {
     let mut registry = NseRegistry::new();
     assert!(registry.is_empty());
 
-    let script = NseScript::new("test-script", std::path::PathBuf::from("/test.nse"), String::new());
+    let script = NseScript::new(
+        "test-script",
+        std::path::PathBuf::from("/test.nse"),
+        String::new(),
+    );
     registry.add_script(&script);
     assert_eq!(registry.len(), 1);
     assert!(!registry.is_empty());
@@ -375,9 +371,7 @@ fn test_orchestrator_creation() {
     use std::sync::Arc;
 
     let config = ScanConfig::default();
-    let targets = TargetGroup::new(vec![Target::from(
-        "127.0.0.1".parse::<IpAddr>().unwrap()
-    )]);
+    let targets = TargetGroup::new(vec![Target::from("127.0.0.1".parse::<IpAddr>().unwrap())]);
 
     let session = ScanSession::new(config, targets).unwrap();
     let session = Arc::new(session);

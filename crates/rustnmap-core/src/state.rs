@@ -1,6 +1,6 @@
 //! Scan state management for tracking host and port states.
 //!
-//! This module provides the [`ScanState`] struct for tracking the progress
+//! This module provides the `ScanState` struct for tracking the progress
 //! and results of scanning operations, including host states, port states,
 //! and overall scan progress.
 

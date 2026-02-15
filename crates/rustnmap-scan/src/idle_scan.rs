@@ -123,7 +123,11 @@ impl IdleScanner {
     ///
     /// let scanner = IdleScanner::new(local_addr, zombie_addr, config).unwrap();
     /// ```
-    pub fn new(local_addr: Ipv4Addr, zombie_addr: Ipv4Addr, config: ScanConfig) -> ScanResult<Self> {
+    pub fn new(
+        local_addr: Ipv4Addr,
+        zombie_addr: Ipv4Addr,
+        config: ScanConfig,
+    ) -> ScanResult<Self> {
         // Use IPPROTO_TCP (6) for receiving TCP responses from zombie
         let socket = RawSocket::with_protocol(6).map_err(|e| {
             rustnmap_common::ScanError::PermissionDenied {
@@ -272,10 +276,8 @@ impl IdleScanner {
         .window(65535)
         .build();
 
-        let zombie_sockaddr = SocketAddr::new(
-            std::net::IpAddr::V4(self.zombie_addr),
-            self.zombie_port,
-        );
+        let zombie_sockaddr =
+            SocketAddr::new(std::net::IpAddr::V4(self.zombie_addr), self.zombie_port);
 
         // Send the probe
         self.socket

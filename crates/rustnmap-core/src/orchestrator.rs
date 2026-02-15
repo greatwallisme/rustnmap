@@ -638,7 +638,8 @@ impl ScanOrchestrator {
                     };
 
                     // Run detection for this port
-                    let detection_future = detector.detect_service(&target_addr, port_result.number);
+                    let detection_future =
+                        detector.detect_service(&target_addr, port_result.number);
                     match rt.block_on(detection_future) {
                         Ok(services) => {
                             if let Some(service_info) = services.first() {
@@ -660,7 +661,11 @@ impl ScanOrchestrator {
                                     devicetype: service_info.device_type.clone(),
                                     method: "probed".to_string(),
                                     confidence: service_info.confidence,
-                                    cpe: service_info.cpe.clone().map(|c| vec![c]).unwrap_or_default(),
+                                    cpe: service_info
+                                        .cpe
+                                        .clone()
+                                        .map(|c| vec![c])
+                                        .unwrap_or_default(),
                                 });
                             }
                         }
@@ -738,13 +743,27 @@ impl ScanOrchestrator {
                             name: m.name,
                             accuracy: m.accuracy,
                             os_family: match m.family {
-                                rustnmap_fingerprint::os::database::OsFamily::Linux => Some("Linux".to_string()),
-                                rustnmap_fingerprint::os::database::OsFamily::Windows => Some("Windows".to_string()),
-                                rustnmap_fingerprint::os::database::OsFamily::MacOS => Some("MacOS".to_string()),
-                                rustnmap_fingerprint::os::database::OsFamily::BSD => Some("BSD".to_string()),
-                                rustnmap_fingerprint::os::database::OsFamily::Solaris => Some("Solaris".to_string()),
-                                rustnmap_fingerprint::os::database::OsFamily::IOS => Some("iOS".to_string()),
-                                rustnmap_fingerprint::os::database::OsFamily::Android => Some("Android".to_string()),
+                                rustnmap_fingerprint::os::database::OsFamily::Linux => {
+                                    Some("Linux".to_string())
+                                }
+                                rustnmap_fingerprint::os::database::OsFamily::Windows => {
+                                    Some("Windows".to_string())
+                                }
+                                rustnmap_fingerprint::os::database::OsFamily::MacOS => {
+                                    Some("MacOS".to_string())
+                                }
+                                rustnmap_fingerprint::os::database::OsFamily::BSD => {
+                                    Some("BSD".to_string())
+                                }
+                                rustnmap_fingerprint::os::database::OsFamily::Solaris => {
+                                    Some("Solaris".to_string())
+                                }
+                                rustnmap_fingerprint::os::database::OsFamily::IOS => {
+                                    Some("iOS".to_string())
+                                }
+                                rustnmap_fingerprint::os::database::OsFamily::Android => {
+                                    Some("Android".to_string())
+                                }
                                 rustnmap_fingerprint::os::database::OsFamily::Other(s) => Some(s),
                             },
                             os_generation: m.generation,
@@ -769,7 +788,11 @@ impl ScanOrchestrator {
     }
 
     /// Runs NSE scripts on discovered services.
-    #[allow(clippy::unnecessary_wraps, clippy::too_many_lines, clippy::map_unwrap_or)]
+    #[allow(
+        clippy::unnecessary_wraps,
+        clippy::too_many_lines,
+        clippy::map_unwrap_or
+    )]
     fn run_nse_scripts(&self, host_results: &mut [HostResult]) -> Result<()> {
         info!("Starting NSE script execution phase");
 
@@ -784,36 +807,37 @@ impl ScanOrchestrator {
         let engine = self.session.nse_registry.create_engine();
 
         // Get script categories to run
-        let categories: Vec<rustnmap_nse::ScriptCategory> = if self.session.config.nse_categories.is_empty() {
-            // Default to 'default' category if none specified
-            vec![rustnmap_nse::ScriptCategory::Default]
-        } else {
-            self.session
-                .config
-                .nse_categories
-                .iter()
-                .filter_map(|c| match c.as_str() {
-                    "auth" => Some(rustnmap_nse::ScriptCategory::Auth),
-                    "broadcast" => Some(rustnmap_nse::ScriptCategory::Broadcast),
-                    "brute" => Some(rustnmap_nse::ScriptCategory::Brute),
-                    "default" => Some(rustnmap_nse::ScriptCategory::Default),
-                    "discovery" => Some(rustnmap_nse::ScriptCategory::Discovery),
-                    "dos" => Some(rustnmap_nse::ScriptCategory::Dos),
-                    "exploit" => Some(rustnmap_nse::ScriptCategory::Exploit),
-                    "external" => Some(rustnmap_nse::ScriptCategory::External),
-                    "fuzzer" => Some(rustnmap_nse::ScriptCategory::Fuzzer),
-                    "intrusive" => Some(rustnmap_nse::ScriptCategory::Intrusive),
-                    "malware" => Some(rustnmap_nse::ScriptCategory::Malware),
-                    "safe" => Some(rustnmap_nse::ScriptCategory::Safe),
-                    "version" => Some(rustnmap_nse::ScriptCategory::Version),
-                    "vuln" => Some(rustnmap_nse::ScriptCategory::Vuln),
-                    _ => {
-                        warn!("Unknown script category: {}", c);
-                        None
-                    }
-                })
-                .collect()
-        };
+        let categories: Vec<rustnmap_nse::ScriptCategory> =
+            if self.session.config.nse_categories.is_empty() {
+                // Default to 'default' category if none specified
+                vec![rustnmap_nse::ScriptCategory::Default]
+            } else {
+                self.session
+                    .config
+                    .nse_categories
+                    .iter()
+                    .filter_map(|c| match c.as_str() {
+                        "auth" => Some(rustnmap_nse::ScriptCategory::Auth),
+                        "broadcast" => Some(rustnmap_nse::ScriptCategory::Broadcast),
+                        "brute" => Some(rustnmap_nse::ScriptCategory::Brute),
+                        "default" => Some(rustnmap_nse::ScriptCategory::Default),
+                        "discovery" => Some(rustnmap_nse::ScriptCategory::Discovery),
+                        "dos" => Some(rustnmap_nse::ScriptCategory::Dos),
+                        "exploit" => Some(rustnmap_nse::ScriptCategory::Exploit),
+                        "external" => Some(rustnmap_nse::ScriptCategory::External),
+                        "fuzzer" => Some(rustnmap_nse::ScriptCategory::Fuzzer),
+                        "intrusive" => Some(rustnmap_nse::ScriptCategory::Intrusive),
+                        "malware" => Some(rustnmap_nse::ScriptCategory::Malware),
+                        "safe" => Some(rustnmap_nse::ScriptCategory::Safe),
+                        "version" => Some(rustnmap_nse::ScriptCategory::Version),
+                        "vuln" => Some(rustnmap_nse::ScriptCategory::Vuln),
+                        _ => {
+                            warn!("Unknown script category: {}", c);
+                            None
+                        }
+                    })
+                    .collect()
+            };
 
         // Select scripts by category
         let scripts: Vec<&rustnmap_nse::NseScript> = engine.scheduler().select_scripts(&categories);
@@ -876,11 +900,13 @@ impl ScanOrchestrator {
                                                 "NSE script executed successfully"
                                             );
 
-                                            port_result.scripts.push(rustnmap_output::models::ScriptResult {
-                                                id: result.script_id,
-                                                output: result.output.to_display(),
-                                                elements: Vec::new(),
-                                            });
+                                            port_result.scripts.push(
+                                                rustnmap_output::models::ScriptResult {
+                                                    id: result.script_id,
+                                                    output: result.output.to_display(),
+                                                    elements: Vec::new(),
+                                                },
+                                            );
                                         }
                                     }
                                     Err(e) => {
@@ -914,27 +940,27 @@ impl ScanOrchestrator {
             // Also execute host scripts against the host
             for script in &scripts {
                 match engine.evaluate_hostrule(script, host_result.ip) {
-                    Ok(true) => {
-                        match engine.execute_script(script, host_result.ip) {
-                            Ok(result) => {
-                                if result.is_success() && !result.output.is_empty() {
-                                    host_result.scripts.push(rustnmap_output::models::ScriptResult {
+                    Ok(true) => match engine.execute_script(script, host_result.ip) {
+                        Ok(result) => {
+                            if result.is_success() && !result.output.is_empty() {
+                                host_result
+                                    .scripts
+                                    .push(rustnmap_output::models::ScriptResult {
                                         id: result.script_id,
                                         output: result.output.to_display(),
                                         elements: Vec::new(),
                                     });
-                                }
-                            }
-                            Err(e) => {
-                                debug!(
-                                    ip = %host_result.ip,
-                                    script = %script.id,
-                                    error = %e,
-                                    "Host script execution failed"
-                                );
                             }
                         }
-                    }
+                        Err(e) => {
+                            debug!(
+                                ip = %host_result.ip,
+                                script = %script.id,
+                                error = %e,
+                                "Host script execution failed"
+                            );
+                        }
+                    },
                     Ok(false) => {}
                     Err(e) => {
                         debug!(
@@ -1030,10 +1056,13 @@ impl ScanOrchestrator {
                     if !hops.is_empty() {
                         // Use the protocol from traceroute config, default to UDP
                         let protocol = match tracer.config().probe_type() {
-                            rustnmap_traceroute::ProbeType::TcpSyn | rustnmap_traceroute::ProbeType::TcpAck => {
+                            rustnmap_traceroute::ProbeType::TcpSyn
+                            | rustnmap_traceroute::ProbeType::TcpAck => {
                                 rustnmap_output::models::Protocol::Tcp
                             }
-                            rustnmap_traceroute::ProbeType::Udp => rustnmap_output::models::Protocol::Udp,
+                            rustnmap_traceroute::ProbeType::Udp => {
+                                rustnmap_output::models::Protocol::Udp
+                            }
                             rustnmap_traceroute::ProbeType::Icmp => {
                                 // ICMP is not in Protocol enum, use UDP as fallback
                                 rustnmap_output::models::Protocol::Udp

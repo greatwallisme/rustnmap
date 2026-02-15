@@ -7,7 +7,8 @@ use crate::{DnsResolver, OctetSpec, Target, TargetGroup, TargetSpec};
 use rustnmap_common::{error::TargetError, Error, Ipv4Addr, Ipv6Addr};
 
 /// Result type for async parser operations.
-pub type AsyncResult<T> = std::pin::Pin<Box<dyn std::future::Future<Output = crate::Result<T>> + Send>>;
+pub type AsyncResult<T> =
+    std::pin::Pin<Box<dyn std::future::Future<Output = crate::Result<T>> + Send>>;
 
 /// Target specification parser.
 ///
@@ -377,7 +378,8 @@ impl TargetParser {
                     Ok(targets)
                 } else {
                     Err(Error::config(
-                        "DNS resolver not configured. Use with_dns() to enable hostname resolution".to_string(),
+                        "DNS resolver not configured. Use with_dns() to enable hostname resolution"
+                            .to_string(),
                     ))
                 }
             }
@@ -474,7 +476,10 @@ mod tests {
         let group = parser.parse_async("localhost").await.unwrap();
         assert!(!group.is_empty());
         // localhost should have at least one target with hostname set
-        assert!(group.targets.iter().any(|t| t.hostname == Some("localhost".to_string())));
+        assert!(group
+            .targets
+            .iter()
+            .any(|t| t.hostname == Some("localhost".to_string())));
     }
 
     #[test]

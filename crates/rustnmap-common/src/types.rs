@@ -27,7 +27,7 @@ impl MacAddr {
         Self([0xff, 0xff, 0xff, 0xff, 0xff, 0xff])
     }
 
-    /// Deprecated: Use [`broadcast()`] instead.
+    /// Deprecated: Use `broadcast()` instead.
     #[deprecated(since = "0.1.0", note = "Use broadcast() instead")]
     #[expect(non_snake_case, reason = "Nmap compatibility")]
     #[must_use]
@@ -180,12 +180,12 @@ impl PortState {
     /// Returns the Nmap-style string representation.
     ///
     /// Nmap uses these strings to represent port states in its output:
-    /// - `open` for [`Open`]
-    /// - `closed` for [`Closed`]
-    /// - `filtered` for [`Filtered`]
-    /// - `unfiltered` for [`Unfiltered`]
-    /// - `open|filtered` for [`OpenOrFiltered`]
-    /// - `closed|filtered` for [`ClosedOrFiltered`]
+    /// - `open` for [`Self::Open`]
+    /// - `closed` for [`Self::Closed`]
+    /// - `filtered` for [`Self::Filtered`]
+    /// - `unfiltered` for [`Self::Unfiltered`]
+    /// - `open|filtered` for [`Self::OpenOrFiltered`]
+    /// - `closed|filtered` for [`Self::ClosedOrFiltered`]
     #[must_use]
     pub const fn as_str(&self) -> &'static str {
         match self {

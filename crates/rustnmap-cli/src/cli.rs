@@ -254,9 +254,9 @@ fn build_evasion_config(args: &Args) -> Result<Option<rustnmap_evasion::EvasionC
 
     // Handle source IP spoofing (-S flag)
     if let Some(ref spoof_ip) = args.spoof_ip {
-        let ip: std::net::IpAddr = spoof_ip
-            .parse()
-            .map_err(|_| rustnmap_common::Error::Other(format!("Invalid spoof IP address: {spoof_ip}")))?;
+        let ip: std::net::IpAddr = spoof_ip.parse().map_err(|_| {
+            rustnmap_common::Error::Other(format!("Invalid spoof IP address: {spoof_ip}"))
+        })?;
         builder = builder.source_ip(ip);
         has_evasion = true;
     }
@@ -288,9 +288,9 @@ fn parse_decoy_ips(s: &str) -> Result<Vec<std::net::IpAddr>> {
         if ip_str.is_empty() {
             continue;
         }
-        let ip: std::net::IpAddr = ip_str
-            .parse()
-            .map_err(|_| rustnmap_common::Error::Other(format!("Invalid decoy IP address: {ip_str}")))?;
+        let ip: std::net::IpAddr = ip_str.parse().map_err(|_| {
+            rustnmap_common::Error::Other(format!("Invalid decoy IP address: {ip_str}"))
+        })?;
         ips.push(ip);
     }
     Ok(ips)
@@ -307,7 +307,10 @@ fn parse_data_payload(args: &Args) -> Result<Option<Vec<u8>>> {
     if let Some(hex_data) = &args.data_hex {
         // Parse hex string (e.g., "48656c6c6f" -> "Hello")
         // Remove spaces and colons from hex string efficiently
-        let hex_clean: String = hex_data.chars().filter(|c| *c != ' ' && *c != ':').collect();
+        let hex_clean: String = hex_data
+            .chars()
+            .filter(|c| *c != ' ' && *c != ':')
+            .collect();
         if hex_clean.len() % 2 != 0 {
             return Err(rustnmap_common::Error::Other(
                 "Hex data must have an even number of characters".to_string(),

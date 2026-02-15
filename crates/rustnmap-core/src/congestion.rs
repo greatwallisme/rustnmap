@@ -92,8 +92,7 @@ impl CongestionStats {
                 .compare_exchange(old_srtt, clamped_srtt, Ordering::Relaxed, Ordering::Relaxed)
                 .is_ok()
             {
-                self.rttvar_micros
-                    .store(clamped_rttvar, Ordering::Relaxed);
+                self.rttvar_micros.store(clamped_rttvar, Ordering::Relaxed);
                 *self.last_update.lock().unwrap() = Some(Instant::now());
                 trace!(srtt = clamped_srtt, rttvar = clamped_rttvar, "RTT updated");
                 break;

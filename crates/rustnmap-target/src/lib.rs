@@ -27,8 +27,8 @@ pub mod spec;
 // Re-exports
 pub use discovery::{
     ArpPing, HostDiscovery, HostDiscoveryMethod, HostState, IcmpPing, IcmpTimestampPing,
-    Icmpv6NeighborDiscovery, Icmpv6PacketBuilder, Icmpv6Ping, TcpAckPing, TcpSynPing,
-    TcpSynPingV6, Tcpv6PacketBuilder,
+    Icmpv6NeighborDiscovery, Icmpv6PacketBuilder, Icmpv6Ping, TcpAckPing, TcpSynPing, TcpSynPingV6,
+    Tcpv6PacketBuilder,
 };
 pub use dns::DnsResolver;
 pub use parser::TargetParser;
@@ -481,7 +481,10 @@ mod tests {
         let result = expand_cidr_v6(base, 120).unwrap();
         assert_eq!(result.len(), 256);
         assert_eq!(result[0], base);
-        assert_eq!(result[255], Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0xFF));
+        assert_eq!(
+            result[255],
+            Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0xFF)
+        );
     }
 
     #[test]

@@ -794,7 +794,7 @@ pub struct Icmpv6Ping {
 }
 
 impl Icmpv6Ping {
-    /// Creates a new ICMPv6 ping discovery method.
+    /// Creates a new `ICMPv6` ping discovery method.
     ///
     /// # Arguments
     ///
@@ -822,7 +822,7 @@ impl Icmpv6Ping {
         })
     }
 
-    /// Sends an ICMPv6 echo request probe.
+    /// Sends an `ICMPv6` echo request probe.
     fn send_echo_probe(&self, dst_addr: Ipv6Addr, sequence: u16) -> Result<bool, ScanError> {
         let packet = Icmpv6PacketBuilder::echo_request(self.local_addr, dst_addr)
             .identifier(self.identifier)
@@ -889,9 +889,9 @@ impl HostDiscoveryMethod for Icmpv6Ping {
     }
 }
 
-/// ICMPv6 Neighbor Discovery Protocol (NDP) discovery method.
+/// `ICMPv6` Neighbor Discovery Protocol (NDP) discovery method.
 ///
-/// Sends ICMPv6 Neighbor Solicitation packets. If Neighbor Advertisement
+/// Sends `ICMPv6` Neighbor Solicitation packets. If Neighbor Advertisement
 /// is received, the host is considered up. This is the IPv6 equivalent of ARP.
 #[derive(Debug)]
 pub struct Icmpv6NeighborDiscovery {
@@ -906,7 +906,7 @@ pub struct Icmpv6NeighborDiscovery {
 }
 
 impl Icmpv6NeighborDiscovery {
-    /// Creates a new ICMPv6 NDP discovery method.
+    /// Creates a new `ICMPv6` NDP discovery method.
     ///
     /// # Arguments
     ///
@@ -934,7 +934,7 @@ impl Icmpv6NeighborDiscovery {
     /// Computes the solicited-node multicast address for a target IPv6 address.
     ///
     /// The solicited-node multicast address is formed by taking the prefix
-    /// ff02::1:ff00:0/104 and appending the last 24 bits of the target address.
+    /// `ff02::1:ff00:0/104` and appending the last 24 bits of the target address.
     #[must_use]
     fn solicited_node_multicast(target: Ipv6Addr) -> Ipv6Addr {
         let target_octets = target.octets();
@@ -951,7 +951,7 @@ impl Icmpv6NeighborDiscovery {
         )
     }
 
-    /// Sends an ICMPv6 Neighbor Solicitation probe.
+    /// Sends an `ICMPv6` Neighbor Solicitation probe.
     fn send_neighbor_solicitation(&self, target: Ipv6Addr) -> Result<bool, ScanError> {
         // Target is the solicited-node multicast address
         let multicast_target = Self::solicited_node_multicast(target);
@@ -1205,29 +1205,29 @@ impl HostDiscoveryMethod for TcpSynPingV6 {
     }
 }
 
-/// ICMPv6 packet builder for constructing ICMPv6 packets.
+/// `ICMPv6` packet builder for constructing `ICMPv6` packets.
 #[derive(Debug)]
 pub struct Icmpv6PacketBuilder {
     /// Source IPv6 address.
     src_ip: Ipv6Addr,
     /// Destination IPv6 address.
     dst_ip: Ipv6Addr,
-    /// ICMPv6 type.
+    /// `ICMPv6` type.
     icmp_type: u8,
-    /// ICMPv6 code.
+    /// `ICMPv6` code.
     icmp_code: u8,
-    /// ICMPv6 identifier.
+    /// `ICMPv6` identifier.
     identifier: u16,
-    /// ICMPv6 sequence number.
+    /// `ICMPv6` sequence number.
     sequence: u16,
     /// Target address for Neighbor Solicitation.
     target_address: Option<Ipv6Addr>,
-    /// ICMPv6 payload/data.
+    /// `ICMPv6` payload/data.
     payload: Vec<u8>,
 }
 
 impl Icmpv6PacketBuilder {
-    /// Creates a new ICMPv6 packet builder for echo request.
+    /// Creates a new `ICMPv6` packet builder for echo request.
     #[must_use]
     pub fn echo_request(src_ip: Ipv6Addr, dst_ip: Ipv6Addr) -> Self {
         Self {
@@ -1242,7 +1242,7 @@ impl Icmpv6PacketBuilder {
         }
     }
 
-    /// Creates a new ICMPv6 packet builder for neighbor solicitation.
+    /// Creates a new `ICMPv6` packet builder for neighbor solicitation.
     #[must_use]
     pub fn neighbor_solicitation(src_ip: Ipv6Addr, dst_ip: Ipv6Addr) -> Self {
         Self {
@@ -1257,14 +1257,14 @@ impl Icmpv6PacketBuilder {
         }
     }
 
-    /// Sets the ICMPv6 identifier.
+    /// Sets the `ICMPv6` identifier.
     #[must_use]
     pub fn identifier(mut self, identifier: u16) -> Self {
         self.identifier = identifier;
         self
     }
 
-    /// Sets the ICMPv6 sequence number.
+    /// Sets the `ICMPv6` sequence number.
     #[must_use]
     pub fn sequence(mut self, sequence: u16) -> Self {
         self.sequence = sequence;
@@ -1278,9 +1278,9 @@ impl Icmpv6PacketBuilder {
         self
     }
 
-    /// Builds the ICMPv6 packet.
+    /// Builds the `ICMPv6` packet.
     ///
-    /// Returns a complete IPv6 packet with ICMPv6 header and payload.
+    /// Returns a complete IPv6 packet with `ICMPv6` header and payload.
     #[must_use]
     #[expect(
         clippy::cast_possible_truncation,
@@ -1359,7 +1359,7 @@ impl Icmpv6PacketBuilder {
         packet
     }
 
-    /// Calculates the ICMPv6 checksum with pseudo-header.
+    /// Calculates the `ICMPv6` checksum with pseudo-header.
     fn calculate_checksum(&self, icmp_data: &[u8], payload_len: usize) -> u16 {
         let mut sum = 0u32;
 
@@ -1423,7 +1423,7 @@ pub struct Tcpv6PacketBuilder {
 }
 
 impl Tcpv6PacketBuilder {
-    /// Creates a new TCPv6 packet builder.
+    /// Creates a new `TCPv6` packet builder.
     #[must_use]
     pub fn new(src_ip: Ipv6Addr, dst_ip: Ipv6Addr, src_port: Port, dst_port: Port) -> Self {
         Self {
@@ -1466,7 +1466,7 @@ impl Tcpv6PacketBuilder {
         self
     }
 
-    /// Builds the TCPv6 packet.
+    /// Builds the `TCPv6` packet.
     ///
     /// Returns a complete IPv6 packet with TCP header.
     #[must_use]
@@ -1579,10 +1579,10 @@ impl Tcpv6PacketBuilder {
     }
 }
 
-/// Parses an ICMPv6 echo reply packet.
+/// Parses an `ICMPv6` echo reply packet.
 ///
 /// Returns the identifier and sequence number if the packet is a valid
-/// ICMPv6 echo reply.
+/// `ICMPv6` echo reply.
 ///
 /// # Arguments
 ///
@@ -1590,7 +1590,7 @@ impl Tcpv6PacketBuilder {
 ///
 /// # Returns
 ///
-/// `Some((identifier, sequence))` if valid ICMPv6 echo reply, `None` otherwise.
+/// `Some((identifier, sequence))` if valid `ICMPv6` echo reply, `None` otherwise.
 #[must_use]
 pub fn parse_icmpv6_echo_reply(packet: &[u8]) -> Option<(u16, u16)> {
     // Minimum IPv6 header + ICMPv6 header
@@ -1630,7 +1630,7 @@ pub fn parse_icmpv6_echo_reply(packet: &[u8]) -> Option<(u16, u16)> {
     Some((identifier, sequence))
 }
 
-/// Parses an ICMPv6 Neighbor Advertisement packet.
+/// Parses an `ICMPv6` Neighbor Advertisement packet.
 ///
 /// Returns the target address and MAC address if the packet is valid.
 ///
@@ -1709,7 +1709,7 @@ pub fn parse_icmpv6_neighbor_advertisement(packet: &[u8]) -> Option<(Ipv6Addr, O
     Some((target_addr, mac_addr))
 }
 
-/// Parses a TCP response packet over IPv6.
+/// Parses a TCP response packet over `IPv6`.
 ///
 /// Returns the TCP flags, sequence number, acknowledgment number, and source port
 /// if the packet is a valid TCP response over IPv6.
@@ -1720,7 +1720,7 @@ pub fn parse_icmpv6_neighbor_advertisement(packet: &[u8]) -> Option<(Ipv6Addr, O
 ///
 /// # Returns
 ///
-/// `Some((flags, seq, ack, src_port))` if valid TCPv6 packet, `None` otherwise.
+/// `Some((flags, seq, ack, src_port))` if valid `TCPv6` packet, `None` otherwise.
 #[must_use]
 pub fn parse_tcpv6_response(packet: &[u8]) -> Option<(u8, u32, u32, Port)> {
     // Minimum IPv6 header + TCP header
@@ -1770,7 +1770,7 @@ pub fn parse_tcpv6_response(packet: &[u8]) -> Option<(u8, u32, u32, Port)> {
 /// Host discovery engine.
 ///
 /// Probes targets to determine if they are up using ICMP,
-/// TCP ping, ARP methods, and IPv6-specific methods (ICMPv6 Echo, NDP).
+/// TCP ping, ARP methods, and IPv6-specific methods (`ICMPv6` Echo, NDP).
 #[derive(Debug)]
 pub struct HostDiscovery {
     /// Configuration for discovery.
@@ -1877,9 +1877,9 @@ impl HostDiscovery {
         arp_ping.discover(target)
     }
 
-    /// Discovers if a host is up using ICMPv6 echo ping.
+    /// Discovers if a host is up using `ICMPv6` echo ping.
     ///
-    /// Sends ICMPv6 echo requests to determine IPv6 reachability.
+    /// Sends `ICMPv6` echo requests to determine IPv6 reachability.
     ///
     /// # Arguments
     ///
@@ -1909,9 +1909,9 @@ impl HostDiscovery {
         ndp.discover(target)
     }
 
-    /// Discovers if a host is up using TCP SYN ping over IPv6.
+    /// Discovers if a host is up using TCP SYN ping over `IPv6`.
     ///
-    /// Sends TCP SYN probes over IPv6 to well-known ports.
+    /// Sends TCP SYN probes over `IPv6` to well-known ports.
     ///
     /// # Arguments
     ///
@@ -2007,7 +2007,9 @@ mod tests {
         let timeout = Duration::from_secs(1);
 
         // This will fail without root, but we can verify the error type
-        if let Ok(ping) = TcpSynPing::new(local_addr, vec![], timeout, 2) { assert!(ping.requires_root()) } else {
+        if let Ok(ping) = TcpSynPing::new(local_addr, vec![], timeout, 2) {
+            assert!(ping.requires_root())
+        } else {
             // Expected if not running as root
         }
     }
@@ -2017,7 +2019,9 @@ mod tests {
         let local_addr = Ipv4Addr::new(192, 168, 1, 100);
         let timeout = Duration::from_secs(1);
 
-        if let Ok(ping) = TcpAckPing::new(local_addr, vec![], timeout, 2) { assert!(ping.requires_root()) } else {
+        if let Ok(ping) = TcpAckPing::new(local_addr, vec![], timeout, 2) {
+            assert!(ping.requires_root())
+        } else {
             // Expected if not running as root
         }
     }
@@ -2027,7 +2031,9 @@ mod tests {
         let local_addr = Ipv4Addr::new(192, 168, 1, 100);
         let timeout = Duration::from_secs(1);
 
-        if let Ok(ping) = IcmpPing::new(local_addr, timeout, 2) { assert!(ping.requires_root()) } else {
+        if let Ok(ping) = IcmpPing::new(local_addr, timeout, 2) {
+            assert!(ping.requires_root())
+        } else {
             // Expected if not running as root
         }
     }
@@ -2037,7 +2043,9 @@ mod tests {
         let local_addr = Ipv4Addr::new(192, 168, 1, 100);
         let timeout = Duration::from_secs(1);
 
-        if let Ok(ping) = IcmpTimestampPing::new(local_addr, timeout, 2) { assert!(ping.requires_root()) } else {
+        if let Ok(ping) = IcmpTimestampPing::new(local_addr, timeout, 2) {
+            assert!(ping.requires_root())
+        } else {
             // Expected if not running as root
         }
     }
@@ -2048,7 +2056,9 @@ mod tests {
         let src_ip = Ipv4Addr::new(192, 168, 1, 100);
         let timeout = Duration::from_secs(1);
 
-        if let Ok(ping) = ArpPing::new(src_mac, src_ip, timeout, 2) { assert!(ping.requires_root()) } else {
+        if let Ok(ping) = ArpPing::new(src_mac, src_ip, timeout, 2) {
+            assert!(ping.requires_root())
+        } else {
             // Expected if not running as root
         }
     }

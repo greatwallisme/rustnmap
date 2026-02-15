@@ -173,7 +173,7 @@ pub struct Args {
     )]
     pub port_range_all: bool,
 
-    /// Top <N> most common ports
+    /// Top `<N>` most common ports
     #[arg(
         long,
         help_heading = "Port Specification",
@@ -517,7 +517,8 @@ impl Args {
             for ip_str in decoys.split(',') {
                 let ip_str = ip_str.trim();
                 if !ip_str.is_empty() {
-                    ip_str.parse::<std::net::IpAddr>()
+                    ip_str
+                        .parse::<std::net::IpAddr>()
                         .map_err(|_| format!("Invalid decoy IP address: {ip_str}"))?;
                 }
             }

@@ -3,11 +3,11 @@
 //! This module provides DNS resolution using trust-dns-resolver,
 //! supporting A, AAAA, and PTR records.
 
+use rustnmap_common::{Error, IpAddr, Result};
 use trust_dns_resolver::{
     config::{ResolverConfig, ResolverOpts},
     TokioAsyncResolver,
 };
-use rustnmap_common::{Error, IpAddr, Result};
 
 /// DNS resolver for target hostnames.
 ///
@@ -25,7 +25,8 @@ impl DnsResolver {
     ///
     /// Returns an error if the resolver cannot be created.
     pub fn new() -> Result<Self> {
-        let resolver = TokioAsyncResolver::tokio(ResolverConfig::default(), ResolverOpts::default());
+        let resolver =
+            TokioAsyncResolver::tokio(ResolverConfig::default(), ResolverOpts::default());
 
         Ok(Self { resolver })
     }
@@ -55,7 +56,9 @@ impl DnsResolver {
         }
 
         if addresses.is_empty() {
-            return Err(Error::config(format!("No IP addresses found for {hostname}")));
+            return Err(Error::config(format!(
+                "No IP addresses found for {hostname}"
+            )));
         }
 
         Ok(addresses)
@@ -68,7 +71,6 @@ impl DnsResolver {
     /// Returns an error if the reverse lookup fails.
     #[allow(dead_code, reason = "Will be used for -R always-resolve option")]
     pub async fn reverse_lookup(&self, ip: IpAddr) -> Result<Option<String>> {
-
         let name = match ip {
             IpAddr::V4(v4) => {
                 let octets = v4.octets();
@@ -90,7 +92,11 @@ impl DnsResolver {
             }
         };
 
-        match self.resolver.lookup(&name, trust_dns_resolver::proto::rr::RecordType::PTR).await {
+        match self
+            .resolver
+            .lookup(&name, trust_dns_resolver::proto::rr::RecordType::PTR)
+            .await
+        {
             Ok(lookup) => {
                 for record in lookup.record_iter() {
                     if let Some(ptr) = record.data().and_then(|d| d.as_ptr()) {
@@ -115,7 +121,9 @@ mod tests {
 
         // localhost should resolve to at least 127.0.0.1
         assert!(!addresses.is_empty());
-        assert!(addresses.iter().any(|ip| matches!(ip, IpAddr::V4(v4) if v4.octets() == [127, 0, 0, 1])));
+        assert!(addresses
+            .iter()
+            .any(|ip| matches!(ip, IpAddr::V4(v4) if v4.octets() == [127, 0, 0, 1])));
     }
 
     #[tokio::test]

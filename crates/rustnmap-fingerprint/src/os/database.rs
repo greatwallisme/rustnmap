@@ -128,7 +128,11 @@ impl FingerprintDatabase {
             }
             // Test result line - belongs to current fingerprint
             // Test lines start with test name followed by '(' (e.g., "SEQ(...)", "OPS(...)")
-            else if line.contains('(') && !line.starts_with("Fingerprint ") && !line.starts_with("Class ") && !line.starts_with("CPE ") {
+            else if line.contains('(')
+                && !line.starts_with("Fingerprint ")
+                && !line.starts_with("Class ")
+                && !line.starts_with("CPE ")
+            {
                 if let Some(ref mut fp) = current_fp {
                     fp.parse_test_line(line)?;
                 }

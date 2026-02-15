@@ -567,13 +567,18 @@ impl FingerprintDatabase {
     /// # Errors
     ///
     /// Returns an error if the database file cannot be loaded.
-    pub async fn load_service_db(&mut self, path: impl AsRef<std::path::Path>) -> crate::error::Result<()> {
+    pub async fn load_service_db(
+        &mut self,
+        path: impl AsRef<std::path::Path>,
+    ) -> crate::error::Result<()> {
         match rustnmap_fingerprint::ProbeDatabase::load_from_nmap_db(path).await {
             Ok(db) => {
                 self.service_db = Some(db);
                 Ok(())
             }
-            Err(e) => Err(crate::error::CoreError::fingerprint(format!("Failed to load service DB: {e}"))),
+            Err(e) => Err(crate::error::CoreError::fingerprint(format!(
+                "Failed to load service DB: {e}"
+            ))),
         }
     }
 
@@ -582,13 +587,18 @@ impl FingerprintDatabase {
     /// # Errors
     ///
     /// Returns an error if the database file cannot be loaded.
-    pub async fn load_os_db(&mut self, path: impl AsRef<std::path::Path>) -> crate::error::Result<()> {
+    pub async fn load_os_db(
+        &mut self,
+        path: impl AsRef<std::path::Path>,
+    ) -> crate::error::Result<()> {
         match rustnmap_fingerprint::FingerprintDatabase::load_from_nmap_db(path).await {
             Ok(db) => {
                 self.os_db = Some(db);
                 Ok(())
             }
-            Err(e) => Err(crate::error::CoreError::fingerprint(format!("Failed to load OS DB: {e}"))),
+            Err(e) => Err(crate::error::CoreError::fingerprint(format!(
+                "Failed to load OS DB: {e}"
+            ))),
         }
     }
 }
@@ -664,13 +674,18 @@ impl NseRegistry {
     /// # Errors
     ///
     /// Returns an error if the directory cannot be read.
-    pub fn load_from_directory(&mut self, path: impl AsRef<std::path::Path>) -> crate::error::Result<()> {
+    pub fn load_from_directory(
+        &mut self,
+        path: impl AsRef<std::path::Path>,
+    ) -> crate::error::Result<()> {
         match rustnmap_nse::ScriptDatabase::from_directory(path.as_ref()) {
             Ok(db) => {
                 self.script_db = db;
                 Ok(())
             }
-            Err(e) => Err(crate::error::CoreError::nse(format!("Failed to load scripts: {e}"))),
+            Err(e) => Err(crate::error::CoreError::nse(format!(
+                "Failed to load scripts: {e}"
+            ))),
         }
     }
 }
@@ -943,7 +958,11 @@ mod tests {
         use rustnmap_nse::NseScript;
         let mut registry = NseRegistry::new();
         assert!(registry.is_empty());
-        let script = NseScript::new("test-script", std::path::PathBuf::from("/test.nse"), String::new());
+        let script = NseScript::new(
+            "test-script",
+            std::path::PathBuf::from("/test.nse"),
+            String::new(),
+        );
         registry.add_script(&script);
         assert_eq!(registry.len(), 1);
         assert!(!registry.is_empty());

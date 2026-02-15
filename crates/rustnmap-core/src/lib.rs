@@ -20,7 +20,7 @@
 //! - [`ScanSession`]: The central context holding all scan state and dependencies
 //! - [`ScanOrchestrator`]: Coordinates the execution of all scan phases
 //! - [`TaskScheduler`]: Manages concurrent execution of scan tasks
-//! - [`ScanState`]: Tracks the state of individual hosts and ports during scanning
+//! - `ScanState`: Tracks the state of individual hosts and ports during scanning
 //!
 //! # Example
 //!
@@ -102,7 +102,10 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::assertions_on_constants, reason = "compile-time constant sanity check")]
+    #[allow(
+        clippy::assertions_on_constants,
+        reason = "compile-time constant sanity check"
+    )]
     fn test_constants_are_positive() {
         assert!(MAX_CONCURRENT_HOSTS > 0);
         assert!(MAX_CONCURRENT_PORTS > 0);

@@ -304,3 +304,20 @@ install-tools:
     cargo install cargo-watch
     cargo install cargo-edit
     cargo install cargo-criterion
+    cargo install cargo-llvm-cov
+
+# Code coverage recipes
+coverage:
+    cargo llvm-cov --workspace --html --output-dir target/coverage
+
+coverage-text:
+    cargo llvm-cov --workspace --text
+
+coverage-summary:
+    cargo llvm-cov --workspace --summary-only
+
+coverage-lcov:
+    cargo llvm-cov --workspace --lcov --output-path target/lcov.info
+
+coverage-clean:
+    cargo llvm-cov clean --workspace

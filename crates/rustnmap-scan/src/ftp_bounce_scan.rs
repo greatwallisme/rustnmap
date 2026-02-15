@@ -52,11 +52,7 @@ impl FtpBounceScanner {
     /// * `username` - Optional username for authentication
     /// * `password` - Optional password for authentication
     #[must_use]
-    pub fn new(
-        ftp_server: SocketAddr,
-        username: Option<String>,
-        password: Option<String>,
-    ) -> Self {
+    pub fn new(ftp_server: SocketAddr, username: Option<String>, password: Option<String>) -> Self {
         Self {
             ftp_server,
             connect_timeout: DEFAULT_CONNECT_TIMEOUT,
@@ -215,9 +211,7 @@ impl FtpBounceScanner {
 
         if !response.starts_with("200") {
             return Err(rustnmap_common::ScanError::Network(
-                rustnmap_common::Error::Other(format!(
-                    "FTP PORT command failed: {response}"
-                )),
+                rustnmap_common::Error::Other(format!("FTP PORT command failed: {response}")),
             ));
         }
 
@@ -327,12 +321,7 @@ impl FtpConnection {
     /// # Errors
     ///
     /// Returns an error if send or receive fails.
-    fn send_command(
-        &mut self,
-        command: &str,
-        target: &str,
-        port: Port,
-    ) -> ScanResult<String> {
+    fn send_command(&mut self, command: &str, target: &str, port: Port) -> ScanResult<String> {
         // Send command
         let cmd_line = format!("{command}\r\n");
         self.stream
@@ -363,18 +352,16 @@ impl FtpConnection {
     /// Returns an error if read fails or times out.
     fn read_response(&mut self, target: &str, port: Port) -> ScanResult<String> {
         let mut line = String::new();
-        self.reader
-            .read_line(&mut line)
-            .map_err(|e| {
-                if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut {
-                    rustnmap_common::ScanError::Timeout {
-                        target: target.to_string(),
-                        port,
-                    }
-                } else {
-                    rustnmap_common::ScanError::Network(rustnmap_common::Error::Io(e))
+        self.reader.read_line(&mut line).map_err(|e| {
+            if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut {
+                rustnmap_common::ScanError::Timeout {
+                    target: target.to_string(),
+                    port,
                 }
-            })?;
+            } else {
+                rustnmap_common::ScanError::Network(rustnmap_common::Error::Io(e))
+            }
+        })?;
 
         // Remove trailing CRLF
         let line = line.trim_end().to_string();
@@ -413,8 +400,8 @@ mod tests {
     #[test]
     fn test_with_timeout() {
         let ftp_server = SocketAddr::from(([127, 0, 0, 1], 21));
-        let scanner = FtpBounceScanner::new(ftp_server, None, None)
-            .with_timeout(Duration::from_secs(30));
+        let scanner =
+            FtpBounceScanner::new(ftp_server, None, None).with_timeout(Duration::from_secs(30));
 
         assert_eq!(scanner.connect_timeout, Duration::from_secs(30));
     }

@@ -60,7 +60,7 @@ pub const TCP_FLAGS_SYN: u8 = 0x02;
 ///
 /// # Returns
 ///
-/// The constructed SYN probe packet as a Vec<u8>.
+/// The constructed SYN probe packet as a `Vec<u8>`.
 ///
 /// # Panics
 ///
@@ -143,8 +143,11 @@ pub fn build_tcp_syn_probe(
     }
 
     // Calculate TCP checksum (covering TCP header + data)
-    let tcp_checksum =
-        tcp_checksum_data(src_addr, dst_addr, &probe[tcp_offset..tcp_offset + 20 + payload_len]);
+    let tcp_checksum = tcp_checksum_data(
+        src_addr,
+        dst_addr,
+        &probe[tcp_offset..tcp_offset + 20 + payload_len],
+    );
     probe[tcp_offset + 16..tcp_offset + 18].copy_from_slice(&tcp_checksum.to_be_bytes());
 
     probe

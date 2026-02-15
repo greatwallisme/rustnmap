@@ -71,7 +71,7 @@ impl MacPrefixDatabase {
     /// Load database from nmap-mac-prefixes file.
     ///
     /// Parses the Nmap MAC prefixes file format which consists of
-    /// lines with "OUI<whitespace>Vendor" format.
+    /// lines with "OUI`<whitespace>`Vendor" format.
     ///
     /// # Errors
     ///
@@ -172,7 +172,10 @@ impl MacPrefixDatabase {
             db.prefixes.insert(oui, vendor);
         }
 
-        info!("Loaded {} MAC prefix entries from database", db.prefixes.len());
+        info!(
+            "Loaded {} MAC prefix entries from database",
+            db.prefixes.len()
+        );
         Ok(db)
     }
 
@@ -289,10 +292,7 @@ impl MacPrefixDatabase {
     /// uppercase hex digits.
     fn normalize_mac(mac: &str) -> Option<String> {
         // Remove common separators and whitespace
-        let cleaned: String = mac
-            .chars()
-            .filter(|c| c.is_ascii_hexdigit())
-            .collect();
+        let cleaned: String = mac.chars().filter(|c| c.is_ascii_hexdigit()).collect();
 
         // Validate length (should be 12 hex digits for a full MAC)
         if cleaned.len() != 12 {
@@ -460,10 +460,18 @@ mod tests {
 
     #[test]
     fn test_is_locally_administered() {
-        assert!(MacPrefixDatabase::is_locally_administered("02:00:00:00:00:00"));
-        assert!(MacPrefixDatabase::is_locally_administered("06:00:00:00:00:00"));
-        assert!(!MacPrefixDatabase::is_locally_administered("00:00:00:00:00:00"));
-        assert!(!MacPrefixDatabase::is_locally_administered("04:00:00:00:00:00"));
+        assert!(MacPrefixDatabase::is_locally_administered(
+            "02:00:00:00:00:00"
+        ));
+        assert!(MacPrefixDatabase::is_locally_administered(
+            "06:00:00:00:00:00"
+        ));
+        assert!(!MacPrefixDatabase::is_locally_administered(
+            "00:00:00:00:00:00"
+        ));
+        assert!(!MacPrefixDatabase::is_locally_administered(
+            "04:00:00:00:00:00"
+        ));
     }
 
     #[test]

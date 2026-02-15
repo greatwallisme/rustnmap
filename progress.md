@@ -448,4 +448,345 @@ The RustNmap scanner is now fully functional with:
 
 ---
 
+## Session: 2026-02-15 - Phase 6: Integration & Polish - IN PROGRESS
+
+### Phase 6 Started
+
+**Status**: Beginning final integration and polish phase
+
+**Current Focus Areas:**
+1. Integration Testing - comprehensive test suite
+2. Documentation - complete API docs, user guide, man page
+3. Quality Assurance - clippy clean, coverage >95%, security audit
+
+**Current Test Count:** 566+ tests passing
+**Current Warning Count:** Zero (all crates)
+
+---
+
+## 5-Question Reboot Check
+
+| Question | Answer |
+|----------|--------|
+| Where am I? | Phase 6 - Integration & Polish |
+| Where am I going? | Production-ready release |
+| What's the goal? | Full integration, documentation, QA |
+| What have I learned? | All core features implemented, need comprehensive testing |
+| What have I done? | Completed Phases 1-5, starting final polish |
+
+---
+
+## Session: 2026-02-15 - Phase 6.3: Quality Assurance - IN PROGRESS
+
+### QA Assessment Complete
+
+**Status**: Comprehensive code quality assessment performed
+
+#### Issues Found and Fixed
+
+| Issue | Count | Status |
+|-------|-------|--------|
+| Clippy doc_markdown errors | 31 | Fixed |
+| Documentation warnings | 12 | Fixed |
+| Formatting issues | ~40 files | Fixed |
+
+**Files Modified:**
+- `crates/rustnmap-target/src/discovery.rs` - Fixed 31 doc_markdown errors (ICMPv6, TCPv6, IPv6 addresses)
+- `crates/rustnmap-common/src/types.rs` - Fixed 7 unresolved doc links
+- `crates/rustnmap-scan/src/probe.rs` - Fixed unclosed HTML tag `<u8>`
+- `crates/rustnmap-fingerprint/src/database/mac.rs` - Fixed unclosed HTML tag `<whitespace>`
+- `crates/rustnmap-core/src/lib.rs` - Fixed unresolved ScanState link
+- `crates/rustnmap-core/src/state.rs` - Fixed unresolved ScanState link
+- `crates/rustnmap-cli/src/args.rs` - Fixed unclosed HTML tag `<N>`
+
+#### Final QA Metrics
+
+| Metric | Status | Details |
+|--------|--------|---------|
+| Tests | PASS | 625 tests passing |
+| Clippy | PASS | Zero warnings (workspace-wide) |
+| Documentation | PASS | Zero warnings |
+| Formatting | PASS | All files formatted |
+
+---
+
+## Session: 2026-02-15 - Phase 6.3: Code Coverage Setup - COMPLETE
+
+### Coverage Tooling Setup Complete
+
+**Status**: cargo-llvm-cov installed and configured
+
+**Justfile Recipes Added:**
+- `just coverage` - Generate HTML coverage report
+- `just coverage-text` - Generate text coverage report
+- `just coverage-summary` - Summary only
+- `just coverage-lcov` - Generate LCOV format for CI integration
+- `just coverage-clean` - Clean coverage artifacts
+
+### Current Coverage Metrics
+
+| Metric | Coverage | Lines | Missed |
+|--------|----------|-------|--------|
+| Lines | **63.77%** | 28,066 | 10,168 |
+| Functions | **64.94%** | 2,085 | 731 |
+| Branches | **62.16%** | 18,171 | 6,876 |
+
+### Lowest Coverage Files (Priority for Improvement)
+
+| File | Line Coverage | Priority |
+|------|--------------|----------|
+| `rustnmap-cli/src/main.rs` | 0.00% | Low (entry point) |
+| `rustnmap-scan/src/scanner.rs` | 0.00% | Low (trait only) |
+| `rustnmap-fingerprint/src/database/updater.rs` | 13.73% | High |
+| `rustnmap-fingerprint/src/tls.rs` | 22.37% | High |
+| `rustnmap-cli/src/cli.rs` | 24.39% | High |
+| `rustnmap-fingerprint/src/service/detector.rs` | 26.00% | High |
+| `rustnmap-traceroute/src/tcp.rs` | 26.02% | Medium |
+| `rustnmap-common/src/error.rs` | 30.40% | Medium |
+| `rustnmap-scan/src/stealth_scans.rs` | 31.43% | Medium |
+| `rustnmap-nse/src/libs/comm.rs` | 34.68% | High |
+
+---
+
+## Session: 2026-02-15 - Phase 6.1: Integration Tests for Scan Types - COMPLETE
+
+### Scan Integration Tests Added
+
+**File**: `crates/rustnmap-scan/tests/scan_integration_tests.rs`
+
+**Tests Added (16 total):**
+| Test | Description | Status |
+|------|-------------|--------|
+| `test_syn_scan` | TCP SYN scan with raw sockets | **PASS** |
+| `test_connect_scan` | TCP Connect scan | **PASS** |
+| `test_udp_scan` | UDP scan with raw sockets | **PASS** |
+| `test_fin_scan` | TCP FIN scan with raw sockets | **PASS** |
+| `test_null_scan` | TCP NULL scan with raw sockets | **PASS** |
+| `test_xmas_scan` | TCP XMAS scan with raw sockets | **PASS** |
+| `test_ack_scan` | TCP ACK scan with raw sockets | **PASS** |
+| `test_maimon_scan` | TCP Maimon scan with raw sockets | **PASS** |
+| `test_window_scan` | TCP Window scan with raw sockets | **PASS** |
+| `test_ip_protocol_scan` | IP Protocol scan with raw sockets | **PASS** |
+| `test_connect_scanner_requires_no_root` | Verify non-root scanner property | **PASS** |
+| `test_syn_scanner_reports_requires_root` | Verify root requirement | **PASS** |
+| `test_scan_timeout` | Timeout behavior test | **PASS** |
+| `test_stealth_scanners_creation` | Scanner creation validation | **PASS** |
+| `test_scan_multiple_ports` | Multi-port scan test | **PASS** |
+| `test_scanner_error_handling` | Error handling test | **PASS** |
+
+**Test Status:**
+- **16 tests passing**
+- **0 tests ignored**
+- All tests use real network operations against localhost (127.0.0.1)
+
+**Test Target:**
+Tests read `TEST_TARGET_IP` from `.env` file (currently: 192.168.15.113), defaulting to localhost if not set.
+
+**Development Environment:**
+Root privileges are available, so all raw socket tests execute successfully.
+
+### Host Discovery Integration Tests
+
+**File**: `crates/rustnmap-target/tests/discovery_integration_tests.rs`
+
+**Tests Added (15 total):**
+| Test | Description | Status |
+|------|-------------|--------|
+| `test_icmp_ping_discovery` | ICMP ping discovery | **PASS** |
+| `test_icmp_timestamp_discovery` | ICMP timestamp ping | **PASS** |
+| `test_tcp_syn_ping_discovery` | TCP SYN ping discovery | **PASS** |
+| `test_tcp_ack_ping_discovery` | TCP ACK ping discovery | **PASS** |
+| `test_arp_ping_discovery` | ARP ping discovery | **PASS** |
+| `test_host_discovery_icmp` | HostDiscovery engine ICMP | **PASS** |
+| `test_host_discovery_tcp_ping` | HostDiscovery engine TCP ping | **PASS** |
+| `test_host_discovery_auto` | HostDiscovery auto-selection | **PASS** |
+| `test_icmpv6_ping_discovery` | ICMPv6 ping discovery | **PASS** |
+| `test_icmpv6_neighbor_discovery` | IPv6 NDP discovery | **PASS** |
+| `test_discovery_requires_root` | Root requirement test | **PASS** |
+| `test_discovery_timeout` | Timeout behavior test | **PASS** |
+| `test_host_discovery_creation` | Engine creation test | **PASS** |
+| `test_multiple_discovery_methods` | Multiple methods test | **PASS** |
+| `test_discovery_invalid_target` | Invalid target handling | **PASS** |
+
+**Total Integration Tests**: 64 (16 scan + 15 discovery + 33 NSE)
+
+### NSE Integration Tests
+
+**File**: `crates/rustnmap-nse/tests/nse_integration_tests.rs`
+
+**Tests Added (33 total):**
+| Test | Description | Status |
+|------|-------------|--------|
+| `test_script_database_empty` | Empty database creation | **PASS** |
+| `test_script_category_from_str` | Category parsing | **PASS** |
+| `test_script_category_as_str` | Category string conversion | **PASS** |
+| `test_script_engine_empty_database` | Engine with empty DB | **PASS** |
+| `test_script_scheduler_creation` | Scheduler creation | **PASS** |
+| `test_scheduler_config_defaults` | Config defaults | **PASS** |
+| `test_scheduler_config_custom` | Custom config | **PASS** |
+| `test_script_engine_with_config` | Engine with config | **PASS** |
+| `test_select_scripts_empty_database` | Select by category | **PASS** |
+| `test_select_scripts_by_pattern_empty` | Select by pattern | **PASS** |
+| `test_get_script_empty_database` | Get by ID | **PASS** |
+| `test_load_scripts_nonexistent_directory` | Error handling | **PASS** |
+| `test_load_scripts_empty_directory` | Empty directory | **PASS** |
+| `test_create_simple_script` | Script creation | **PASS** |
+| `test_script_with_populated_fields` | Field population | **PASS** |
+| `test_script_database_register_and_get` | DB registration | **PASS** |
+| `test_script_database_all_scripts` | All scripts query | **PASS** |
+| `test_lua_runtime_creation` | Lua runtime | **PASS** |
+| `test_lua_simple_expression` | Lua expression eval | **PASS** |
+| `test_lua_table_creation` | Lua table operations | **PASS** |
+| `test_script_timeout_configuration` | Timeout config | **PASS** |
+| `test_script_categories_distinct` | Category uniqueness | **PASS** |
+| `test_engine_multiple_categories` | Multi-category select | **PASS** |
+| `test_script_id_validation` | ID validation | **PASS** |
+| `test_invalid_script_path_handling` | Path error handling | **PASS** |
+| `test_script_metadata_parsing` | Metadata extraction | **PASS** |
+| `test_script_has_hostrule` | Hostrule detection | **PASS** |
+| `test_script_has_portrule` | Portrule detection | **PASS** |
+| `test_script_matches_categories` | Category matching | **PASS** |
+| `test_script_matches_pattern` | Pattern matching | **PASS** |
+| `test_script_matches_pattern_glob` | Glob matching | **PASS** |
+| `test_category_is_safe` | Safety check | **PASS** |
+| `test_category_is_intrusive` | Intrusive check | **PASS** |
+
+---
+
+## Session: 2026-02-15 - Phase 6.1: Integration Tests for Output Formatters - COMPLETE
+
+### Output Formatter Integration Tests
+
+**File**: `crates/rustnmap-output/tests/formatter_integration_tests.rs`
+
+**Tests Added (28 total):**
+| Test | Description | Status |
+|------|-------------|--------|
+| `test_normal_formatter_empty_scan` | Empty scan normal format | **PASS** |
+| `test_normal_formatter_single_host` | Single host normal format | **PASS** |
+| `test_normal_formatter_with_services` | Services in normal format | **PASS** |
+| `test_normal_formatter_verbosity` | Verbosity levels | **PASS** |
+| `test_xml_formatter_empty_scan` | Empty scan XML format | **PASS** |
+| `test_xml_formatter_full_scan` | Full scan XML format | **PASS** |
+| `test_xml_formatter_valid_structure` | XML structure validation | **PASS** |
+| `test_json_formatter_empty_scan` | Empty scan JSON format | **PASS** |
+| `test_json_formatter_full_scan` | Full scan JSON format | **PASS** |
+| `test_json_formatter_compact` | Compact JSON output | **PASS** |
+| `test_json_formatter_pretty` | Pretty JSON output | **PASS** |
+| `test_json_formatter_with_errors` | JSON with error fields | **PASS** |
+| `test_grepable_formatter_empty_scan` | Empty scan grepable | **PASS** |
+| `test_grepable_formatter_with_ports` | Grepable with ports | **PASS** |
+| `test_grepable_formatter_port_format` | Grepable port format | **PASS** |
+| `test_script_kiddie_formatter_empty_scan` | Empty scan kiddie | **PASS** |
+| `test_script_kiddie_formatter_with_hosts` | Kiddie with hosts | **PASS** |
+| `test_script_kiddie_formatter_with_scripts` | Kiddie with scripts | **PASS** |
+| `test_all_formatters_port_states` | All port states (9 states) | **PASS** |
+| `test_all_formatters_protocols` | All protocols (TCP/UDP/SCTP) | **PASS** |
+| `test_all_formatters_host_statuses` | All host statuses | **PASS** |
+| `test_formatter_file_extensions` | File extension constants | **PASS** |
+| `test_formatter_format_names` | Format name constants | **PASS** |
+| `test_normal_formatter_format_host` | Direct host formatting | **PASS** |
+| `test_normal_formatter_format_port` | Direct port formatting | **PASS** |
+| `test_normal_formatter_format_script` | Direct script formatting | **PASS** |
+| `test_formatters_with_port_scripts` | Port script output | **PASS** |
+| `test_formatters_multiple_hosts` | Multiple hosts formatting | **PASS** |
+
+**Test Coverage:**
+- All 5 output formats: Normal (.nmap), XML (.xml), JSON (.json), Grepable (.gnmap), Script Kiddie (.txt)
+- All 9 port states: Open, Closed, Filtered, Unfiltered, Open|Filtered, Closed|Filtered, Open|Closed, Filtered|Closed, Unknown
+- All 3 protocols: TCP, UDP, SCTP
+- All 3 host statuses: Up, Down, Unknown
+- Service information, OS detection, traceroute, and NSE script output
+
+**Total Tests**: 754 (up from 716)
+
+---
+
+## Session: 2026-02-15 - Phase 6.1: Integration Tests for Service Detection - COMPLETE
+
+### Service Detection Integration Tests
+
+**File**: `crates/rustnmap-fingerprint/tests/service_detection_integration_tests.rs`
+
+**Tests Added (38 total):**
+| Test | Description | Status |
+|------|-------------|--------|
+| `test_service_detector_empty_database` | Detector with empty DB | **PASS** |
+| `test_service_detector_configuration` | Detector configuration | **PASS** |
+| `test_service_detector_intensity_clamping` | Intensity clamping | **PASS** |
+| `test_probe_database_empty` | Empty database | **PASS** |
+| `test_service_info_creation` | ServiceInfo creation | **PASS** |
+| `test_service_info_with_confidence` | Confidence setting | **PASS** |
+| `test_service_info_confidence_clamping` | Confidence clamping | **PASS** |
+| `test_probe_definition_creation` | Probe creation | **PASS** |
+| `test_match_rule_creation` | MatchRule creation | **PASS** |
+| `test_soft_match_rule` | Soft match rules | **PASS** |
+| `test_service_detection_http` | HTTP detection | **PASS** |
+| `test_banner_grabbing` | Banner grabbing | **PASS** |
+| `test_intensity_levels` | All intensity levels | **PASS** |
+| `test_probe_protocols` | TCP/UDP protocols | **PASS** |
+| `test_service_info_from_match` | Match result handling | **PASS** |
+| `test_multiple_service_infos` | Multiple services | **PASS** |
+| `test_detection_timeout` | Timeout handling | **PASS** |
+| `test_detector_debug` | Debug output | **PASS** |
+| `test_database_debug` | DB debug output | **PASS** |
+| `test_service_info_debug` | Info debug output | **PASS** |
+| `test_probe_definition_debug` | Probe debug output | **PASS** |
+| `test_service_detection_ssh` | SSH detection | **PASS** |
+| `test_database_load_nonexistent` | Error handling | **PASS** |
+| `test_service_info_equality` | Equality checks | **PASS** |
+| `test_service_info_clone` | Clone implementation | **PASS** |
+| `test_match_rule_full` | Full MatchRule | **PASS** |
+| `test_match_template` | MatchTemplate | **PASS** |
+| `test_probe_definition_builder` | Builder pattern | **PASS** |
+| `test_probe_definition_udp` | UDP probes | **PASS** |
+| `test_probe_add_match` | Add match rules | **PASS** |
+| `test_match_rule_compile_regex` | Regex compilation | **PASS** |
+| `test_invalid_regex_pattern` | Invalid regex | **PASS** |
+| `test_timeout_configuration` | Timeout config | **PASS** |
+| `test_service_info_full` | Full ServiceInfo | **PASS** |
+| `test_default_rarity` | Default rarity | **PASS** |
+| `test_rarity_clamping` | Rarity clamping | **PASS** |
+| `test_empty_ports_matches_all` | Port matching | **PASS** |
+| `test_detection_scenarios` | Various scenarios | **PASS** |
+
+**Test Coverage:**
+- ServiceDetector creation and configuration
+- ProbeDatabase operations
+- ServiceInfo handling
+- ProbeDefinition creation and manipulation
+- MatchRule and MatchTemplate usage
+- Banner grabbing functionality
+- Network detection against real services
+- Timeout handling
+- Error handling
+
+**Total Tests**: 754 (up from 716)
+
+### Coverage Gap Analysis
+
+**Critical Gaps (>500 lines missed):**
+- `rustnmap-cli/src/cli.rs` - 1,023 lines missed (CLI integration)
+- `rustnmap-scan/src/stealth_scans.rs` - 720 lines missed (FIN/NULL/XMAS scans) - **improved with integration tests**
+- `rustnmap-target/src/discovery.rs` - 757 lines missed (host discovery)
+- `rustnmap-core/src/orchestrator.rs` - 587 lines missed (scan orchestration)
+- `rustnmap-nse/src/engine.rs` - 441 lines missed (NSE script execution)
+- `rustnmap-output/src/formatter.rs` - 438 lines missed (output formatting)
+
+**Testing Approach (Root Available):**
+Since development environment has root privileges, use actual network operations:
+- Test against localhost (127.0.0.1, ::1)
+- Test against docker containers if available
+- Test with actual raw sockets for packet operations
+- No mocking needed for network layer
+
+**Next Steps to Reach 95%:**
+1. Run integration tests with TEST_TARGET_IP to improve coverage
+2. Add integration tests for host discovery methods
+3. Add integration tests for NSE scripts
+4. Add integration tests for output formatters
+5. Add tests for error handling paths
+
+---
+
 *Update after completing each phase or encountering errors*

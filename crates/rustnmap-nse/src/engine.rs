@@ -412,15 +412,12 @@ impl ScriptEngine {
         let start = std::time::Instant::now();
 
         // Acquire semaphore permit for concurrency control
-        let _permit = self
-            .scheduler
-            .semaphore
-            .acquire()
-            .await
-            .map_err(|e| crate::error::Error::ExecutionError {
+        let _permit = self.scheduler.semaphore.acquire().await.map_err(|e| {
+            crate::error::Error::ExecutionError {
                 script_id: script.id.clone(),
                 message: format!("Failed to acquire execution permit: {e}"),
-            })?;
+            }
+        })?;
 
         // Execute script with timeout
         let timeout = self.scheduler.config.default_timeout;
@@ -551,8 +548,8 @@ impl ScriptEngine {
         lua.set_global("host", mlua::Value::Table(host_table))?;
 
         // Create port table
-        let port_table = Self::create_port_table(
-            &mut lua, port, protocol, port_state, service, None)?;
+        let port_table =
+            Self::create_port_table(&mut lua, port, protocol, port_state, service, None)?;
         lua.set_global("port", mlua::Value::Table(port_table))?;
 
         // Execute the action function if it exists
@@ -606,7 +603,11 @@ impl ScriptEngine {
     /// # Errors
     ///
     /// Returns an error if rule evaluation fails.
-    pub fn evaluate_hostrule(&self, script: &NseScript, target_ip: std::net::IpAddr) -> Result<bool> {
+    pub fn evaluate_hostrule(
+        &self,
+        script: &NseScript,
+        target_ip: std::net::IpAddr,
+    ) -> Result<bool> {
         if !script.has_hostrule() {
             // No hostrule means it doesn't match (port scripts need portrule)
             return Ok(false);
@@ -670,8 +671,8 @@ impl ScriptEngine {
         lua.set_global("host", mlua::Value::Table(host_table.clone()))?;
 
         // Create port table
-        let port_table = Self::create_port_table(
-            &mut lua, port, protocol, port_state, service, None)?;
+        let port_table =
+            Self::create_port_table(&mut lua, port, protocol, port_state, service, None)?;
         lua.set_global("port", mlua::Value::Table(port_table.clone()))?;
 
         // Evaluate the portrule

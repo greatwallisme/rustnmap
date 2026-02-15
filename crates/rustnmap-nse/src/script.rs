@@ -222,7 +222,8 @@ impl NseScript {
     pub fn has_hostrule(&self) -> bool {
         self.hostrule_source.is_some()
             || (self.source.contains("hostrule")
-                && (self.source.contains("hostrule =") || self.source.contains("function hostrule")))
+                && (self.source.contains("hostrule =")
+                    || self.source.contains("function hostrule")))
     }
 
     /// Check if the script has a portrule.
@@ -230,7 +231,8 @@ impl NseScript {
     pub fn has_portrule(&self) -> bool {
         self.portrule_source.is_some()
             || (self.source.contains("portrule")
-                && (self.source.contains("portrule =") || self.source.contains("function portrule")))
+                && (self.source.contains("portrule =")
+                    || self.source.contains("function portrule")))
     }
 
     /// Check if the script has an action function.
@@ -253,10 +255,7 @@ impl NseScript {
     /// Extract a function definition from Lua source.
     fn extract_function(source: &str, name: &str) -> Option<String> {
         // Try to find function definition: "name = function(...)" or "function name(...)"
-        let patterns = [
-            format!("{name} = function"),
-            format!("function {name}"),
-        ];
+        let patterns = [format!("{name} = function"), format!("function {name}")];
 
         for pattern in &patterns {
             if let Some(start_pos) = source.find(pattern) {
@@ -299,9 +298,7 @@ impl NseScript {
                                 return Some(rest[..=i].to_string());
                             }
                         }
-                    } else if c == 'e' && rest[i..].starts_with("end")
-                        && !found_first_brace
-                    {
+                    } else if c == 'e' && rest[i..].starts_with("end") && !found_first_brace {
                         // Check if this is a standalone "end"
                         let after_end = i + 3;
                         if after_end <= rest.len() {

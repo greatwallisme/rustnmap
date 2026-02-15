@@ -83,8 +83,12 @@ pub mod raw_socket {
             use rustnmap_common::Error;
             use socket2::{Domain, Protocol, Type};
 
-            let socket = socket2::Socket::new(Domain::IPV4, Type::RAW, Some(Protocol::from(i32::from(protocol))))
-                .map_err(|e| Error::Network(NetworkError::RawSocketCreation { source: e }))?;
+            let socket = socket2::Socket::new(
+                Domain::IPV4,
+                Type::RAW,
+                Some(Protocol::from(i32::from(protocol))),
+            )
+            .map_err(|e| Error::Network(NetworkError::RawSocketCreation { source: e }))?;
 
             // Set socket options for better performance
             socket

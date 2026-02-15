@@ -208,11 +208,7 @@ impl TlsDetector {
         trace!("Starting TLS detection on {}", target);
 
         // Connect via TCP first
-        let tcp_stream = match tokio::time::timeout(
-            self.timeout,
-            TcpStream::connect(target),
-        )
-        .await
+        let tcp_stream = match tokio::time::timeout(self.timeout, TcpStream::connect(target)).await
         {
             Ok(Ok(stream)) => stream,
             Ok(Err(e)) => {
@@ -236,16 +232,18 @@ impl TlsDetector {
             target.ip().to_string()
         };
 
-        let rustls_server_name = match rustls::pki_types::ServerName::try_from(server_name.clone()) {
+        let rustls_server_name = match rustls::pki_types::ServerName::try_from(server_name.clone())
+        {
             Ok(name) => name,
             Err(_) => {
                 // If the server name is not a valid DNS name (e.g., an IP address),
                 // try to use it as-is without SNI
                 trace!("Invalid server name for SNI: {}", server_name);
-                rustls::pki_types::ServerName::try_from("localhost".to_string())
-                    .map_err(|_| FingerprintError::Tls {
+                rustls::pki_types::ServerName::try_from("localhost".to_string()).map_err(|_| {
+                    FingerprintError::Tls {
                         context: "failed to create server name".to_string(),
-                    })?
+                    }
+                })?
             }
         };
 
@@ -331,34 +329,34 @@ impl TlsDetector {
         };
 
         // Check if self-signed and expiry
-        let (is_self_signed, is_expired, days_until_expiry) =
-            if let Some(ref cert) = certificate {
-                let now = SystemTime::now();
-                let is_expired = now > cert.not_after;
-                let is_self_signed = cert.subject == cert.issuer;
+        let (is_self_signed, is_expired, days_until_expiry) = if let Some(ref cert) = certificate {
+            let now = SystemTime::now();
+            let is_expired = now > cert.not_after;
+            let is_self_signed = cert.subject == cert.issuer;
 
-                let days_until = if is_expired {
-                    Some(
-                        -(now.duration_since(cert.not_after)
-                            .unwrap_or_default()
-                            .as_secs() as i64)
-                            / 86400,
-                    )
-                } else {
-                    Some(
-                        (cert
-                            .not_after
-                            .duration_since(now)
-                            .unwrap_or_default()
-                            .as_secs() as i64)
-                            / 86400,
-                    )
-                };
-
-                (is_self_signed, is_expired, days_until)
+            let days_until = if is_expired {
+                Some(
+                    -(now
+                        .duration_since(cert.not_after)
+                        .unwrap_or_default()
+                        .as_secs() as i64)
+                        / 86400,
+                )
             } else {
-                (false, false, None)
+                Some(
+                    (cert
+                        .not_after
+                        .duration_since(now)
+                        .unwrap_or_default()
+                        .as_secs() as i64)
+                        / 86400,
+                )
             };
+
+            (is_self_signed, is_expired, days_until)
+        } else {
+            (false, false, None)
+        };
 
         Ok(TlsInfo {
             version,

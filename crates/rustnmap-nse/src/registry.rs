@@ -423,7 +423,10 @@ impl ScriptDatabase {
                 self.visit_dependency(dep, visited, temp_mark, resolved)?;
             }
         } else {
-            return Err(Error::MissingDependency(id.to_string(), "unknown".to_string()));
+            return Err(Error::MissingDependency(
+                id.to_string(),
+                "unknown".to_string(),
+            ));
         }
 
         temp_mark.remove(id);

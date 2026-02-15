@@ -88,10 +88,7 @@ fn test_seq_analysis_incremental() {
 fn test_ip_id_classification() {
     // Incremental sequence
     let ip_ids = [100, 101, 102, 103, 104, 105];
-    let diffs: Vec<i32> = ip_ids
-        .windows(2)
-        .map(|w| w[1] - w[0])
-        .collect();
+    let diffs: Vec<i32> = ip_ids.windows(2).map(|w| w[1] - w[0]).collect();
     assert!(diffs.iter().all(|&d| d == 1 || d == -65535));
 
     // Fixed sequence
