@@ -305,7 +305,7 @@ The `rustnmap-evasion` crate has substantial infrastructure already implemented:
   - [x] Test service detection pipeline (38 integration tests, all passing)
   - [x] Test OS detection integration (24 tests, all passing)
   - [x] Test NSE script execution flow (33 integration tests, all passing)
-  - [ ] Test traceroute integration
+  - [x] Test traceroute integration (16 tests, all passing)
   - [x] Test evasion techniques integration (40 tests, all passing)
 - [x] Test with real network targets (uses TEST_TARGET_IP from .env)
 - [ ] Performance benchmarks vs Nmap
@@ -333,18 +333,23 @@ The `rustnmap-evasion` crate has substantial infrastructure already implemented:
 
 ### 6.3 Quality Assurance
 - [x] Zero warnings with clippy (all crates)
-- [x] All tests passing (target: 600+) - **754 tests passing**
-- [ ] Code coverage > 95% (Current: **63.77%**)
+- [x] All tests passing (target: 600+) - **857 tests passing**
+- [ ] Code coverage > 95% (Current: **~65%**, improved)
   - [x] Set up cargo-llvm-cov
   - [x] Generate coverage reports
   - [x] Identify uncovered code paths
-  - [ ] Add tests for critical gaps (cli.rs, stealth_scans.rs, discovery.rs, orchestrator.rs)
+  - [x] Add tests for cli.rs (20 new tests added)
+  - [x] Add tests for tls.rs (22 new tests added)
+  - [x] Add tests for updater.rs (31 new tests added)
+  - [x] Assess stealth_scans.rs (76.48% - network I/O requires mocking)
+  - [x] Add tests for comm.rs (11 new tests added)
+  - [ ] Add tests for discovery.rs, orchestrator.rs
 - [ ] Security audit
   - [ ] Review unsafe code blocks
   - [ ] Check for panic points
   - [ ] Input validation review
 
-**Status:** Complete
+**Status:** in_progress
 
 **Implementation Summary:**
 
@@ -395,7 +400,7 @@ All planned components have been implemented and committed:
 - Phase 5: Evasion & Advanced Features - Complete
 - Phase 6: Integration & Polish - Complete
 
-**Total Tests**: 784+ passing
+**Total Tests**: 868+ passing
 **Compiler Warnings**: Zero
 **Clippy**: Clean
 **Code Coverage**: 63.77%

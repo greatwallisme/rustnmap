@@ -504,4 +504,160 @@ mod tests {
         assert!(!opts.ssl);
         assert_eq!(opts.proto, "tcp");
     }
+
+    #[test]
+    fn test_parse_opts_with_lines() {
+        let lua = NseLua::new_default().unwrap();
+        let table = lua.lua().create_table().unwrap();
+        table.set("lines", 10i64).unwrap();
+
+        let opts = parse_opts(Some(table)).unwrap();
+
+        assert_eq!(opts.lines, Some(10));
+    }
+
+    #[test]
+    fn test_parse_opts_zero_timeout() {
+        let lua = NseLua::new_default().unwrap();
+        let table = lua.lua().create_table().unwrap();
+        table.set("timeout", 0i64).unwrap();
+
+        let opts = parse_opts(Some(table)).unwrap();
+
+        assert_eq!(opts.timeout, Duration::from_millis(0));
+    }
+
+    #[test]
+    fn test_parse_opts_negative_values() {
+        let lua = NseLua::new_default().unwrap();
+        let table = lua.lua().create_table().unwrap();
+        table.set("timeout", -1000i64).unwrap();
+        table.set("bytes", -500i64).unwrap();
+        table.set("lines", -5i64).unwrap();
+
+        let opts = parse_opts(Some(table)).unwrap();
+
+        // Negative values should be clamped to 0
+        assert_eq!(opts.timeout, Duration::from_millis(0));
+        assert_eq!(opts.bytes, Some(0));
+        assert_eq!(opts.lines, Some(0));
+    }
+
+    #[test]
+    fn test_nse_socket_with_ssl() {
+        let lua = NseLua::new_default().unwrap();
+
+        let socket = NseSocket {
+            stream: None,
+            timeout: Duration::from_secs(30),
+            is_ssl: true,
+            peer_addr: "127.0.0.1:443".parse().unwrap(),
+        };
+
+        let _ud = lua.lua().create_userdata(socket).unwrap();
+    }
+
+    #[test]
+    fn test_nse_socket_different_addresses() {
+        let lua = NseLua::new_default().unwrap();
+
+        // IPv4 address
+        let socket_v4 = NseSocket {
+            stream: None,
+            timeout: Duration::from_secs(30),
+            is_ssl: false,
+            peer_addr: "192.168.1.1:80".parse().unwrap(),
+        };
+        let _ud = lua.lua().create_userdata(socket_v4).unwrap();
+
+        // IPv6 loopback
+        let socket_v6 = NseSocket {
+            stream: None,
+            timeout: Duration::from_secs(30),
+            is_ssl: false,
+            peer_addr: "[::1]:8080".parse().unwrap(),
+        };
+        let _ud = lua.lua().create_userdata(socket_v6).unwrap();
+    }
+
+    #[test]
+    fn test_connection_opts_clone() {
+        let opts = ConnectionOpts {
+            timeout: Duration::from_secs(10),
+            bytes: Some(2048),
+            lines: Some(5),
+            ssl: true,
+            proto: "udp".to_string(),
+        };
+
+        let cloned = opts.clone();
+        assert_eq!(opts.timeout, cloned.timeout);
+        assert_eq!(opts.bytes, cloned.bytes);
+        assert_eq!(opts.lines, cloned.lines);
+        assert_eq!(opts.ssl, cloned.ssl);
+        assert_eq!(opts.proto, cloned.proto);
+    }
+
+    #[test]
+    fn test_nse_socket_debug() {
+        let socket = NseSocket {
+            stream: None,
+            timeout: Duration::from_secs(30),
+            is_ssl: false,
+            peer_addr: "127.0.0.1:80".parse().unwrap(),
+        };
+
+        let debug_str = format!("{:?}", socket);
+        assert!(debug_str.contains("NseSocket"));
+    }
+
+    #[test]
+    fn test_connection_opts_debug() {
+        let opts = ConnectionOpts::default();
+        let debug_str = format!("{:?}", opts);
+        assert!(debug_str.contains("ConnectionOpts"));
+    }
+
+    #[test]
+    fn test_register_comm_all_functions() {
+        let mut lua = NseLua::new_default().unwrap();
+        register(&mut lua).unwrap();
+
+        let comm: mlua::Table = lua.lua().globals().get("comm").unwrap();
+
+        // Verify all functions are registered
+        let _opencon: mlua::Function = comm.get("opencon").unwrap();
+        let _tryssl: mlua::Function = comm.get("tryssl").unwrap();
+        let _get_banner: mlua::Function = comm.get("get_banner").unwrap();
+        let _exchange: mlua::Function = comm.get("exchange").unwrap();
+        let _read_response: mlua::Function = comm.get("read_response").unwrap();
+        let _send_request: mlua::Function = comm.get("send_request").unwrap();
+    }
+
+    #[test]
+    fn test_nse_socket_is_connected() {
+        let socket = NseSocket {
+            stream: None,
+            timeout: Duration::from_secs(30),
+            is_ssl: false,
+            peer_addr: "127.0.0.1:80".parse().unwrap(),
+        };
+
+        assert!(!socket.is_connected());
+    }
+
+    #[test]
+    fn test_parse_opts_partial() {
+        let lua = NseLua::new_default().unwrap();
+        let table = lua.lua().create_table().unwrap();
+        // Only set some options
+        table.set("ssl", true).unwrap();
+
+        let opts = parse_opts(Some(table)).unwrap();
+
+        // Defaults should be preserved for unset options
+        assert_eq!(opts.timeout, Duration::from_millis(DEFAULT_TIMEOUT_MS));
+        assert!(!opts.lines.is_some());
+        assert!(opts.ssl);
+    }
 }
