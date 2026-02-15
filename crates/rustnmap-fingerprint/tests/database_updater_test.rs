@@ -550,3 +550,225 @@ fn test_update_options_all_combinations() {
         .verify_checksums(true)
         .custom_urls(urls);
 }
+
+// =============================================================================
+// Real Network Tests
+// =============================================================================
+
+use tempfile::TempDir;
+
+/// Real network test: Download service probes database from Nmap SVN.
+#[tokio::test]
+async fn test_real_download_service_probes() {
+    let updater = DatabaseUpdater::new();
+    let temp_dir = TempDir::new().unwrap();
+
+    let options = UpdateOptions::default().backup(false);
+
+    let result = updater
+        .update_service_probes(temp_dir.path(), &options)
+        .await;
+
+    assert!(
+        result.is_ok(),
+        "Service probes download should succeed: {:?}",
+        result.err()
+    );
+
+    let detail = result.unwrap();
+    assert!(detail.success, "Service probes update should succeed");
+
+    // Verify file was created and has content
+    let file_path = temp_dir.path().join("nmap-service-probes");
+    assert!(file_path.exists(), "Downloaded file should exist");
+
+    let content = std::fs::read_to_string(&file_path).unwrap();
+    assert!(
+        content.len() > 1000,
+        "Service probes file should have substantial content"
+    );
+
+    // Verify it starts with the expected Nmap header
+    assert!(
+        content.starts_with("#")
+            || content.contains("Probe")
+            || content.contains("Exclude"),
+        "File should contain Nmap service probe content"
+    );
+}
+
+/// Real network test: Download OS fingerprint database from Nmap SVN.
+#[tokio::test]
+async fn test_real_download_os_db() {
+    let updater = DatabaseUpdater::new();
+    let temp_dir = TempDir::new().unwrap();
+
+    let options = UpdateOptions::default().backup(false);
+
+    let result = updater.update_os_db(temp_dir.path(), &options).await;
+
+    assert!(
+        result.is_ok(),
+        "OS database download should succeed: {:?}",
+        result.err()
+    );
+
+    let detail = result.unwrap();
+    assert!(detail.success, "OS database update should succeed");
+
+    // Verify file was created and has content
+    let file_path = temp_dir.path().join("nmap-os-db");
+    assert!(file_path.exists(), "Downloaded file should exist");
+
+    let content = std::fs::read_to_string(&file_path).unwrap();
+    assert!(
+        content.len() > 1000,
+        "OS database file should have substantial content"
+    );
+
+    // Verify it contains OS fingerprints
+    assert!(
+        content.contains("Fingerprint")
+            || content.contains("Class")
+            || content.contains("Match"),
+        "File should contain OS fingerprint content"
+    );
+}
+
+/// Real network test: Download MAC prefixes database from Nmap SVN.
+#[tokio::test]
+async fn test_real_download_mac_prefixes() {
+    let updater = DatabaseUpdater::new();
+    let temp_dir = TempDir::new().unwrap();
+
+    let options = UpdateOptions::default().backup(false);
+
+    let result = updater.update_mac_prefixes(temp_dir.path(), &options).await;
+
+    assert!(
+        result.is_ok(),
+        "MAC prefixes download should succeed: {:?}",
+        result.err()
+    );
+
+    let detail = result.unwrap();
+    assert!(detail.success, "MAC prefixes update should succeed");
+
+    // Verify file was created and has content
+    let file_path = temp_dir.path().join("nmap-mac-prefixes");
+    assert!(file_path.exists(), "Downloaded file should exist");
+
+    let content = std::fs::read_to_string(&file_path).unwrap();
+    assert!(
+        content.len() > 1000,
+        "MAC prefixes file should have substantial content"
+    );
+
+    // Verify it contains MAC vendor mappings
+    assert!(
+        content.contains(":")
+            || content.contains("Cisco")
+            || content.contains("Intel"),
+        "File should contain MAC vendor content"
+    );
+}
+
+/// Real network test: Download all databases.
+#[tokio::test]
+async fn test_real_download_all_databases() {
+    let updater = DatabaseUpdater::new();
+    let temp_dir = TempDir::new().unwrap();
+
+    let options = UpdateOptions::default().backup(false);
+
+    let result = updater.update_all(temp_dir.path(), &options).await;
+
+    assert!(
+        result.is_ok(),
+        "All databases download should succeed: {:?}",
+        result.err()
+    );
+
+    let update_result = result.unwrap();
+
+    // At least some should succeed (we allow for some to be unchanged)
+    assert!(
+        update_result.updated_count + update_result.unchanged_count >= 1,
+        "At least one database should be updated or unchanged"
+    );
+
+    // Verify files exist
+    assert!(
+        temp_dir.path().join("nmap-service-probes").exists()
+            || temp_dir.path().join("nmap-os-db").exists()
+            || temp_dir.path().join("nmap-mac-prefixes").exists(),
+        "At least one database file should exist"
+    );
+}
+
+/// Real network test: Database update with backup enabled.
+#[tokio::test]
+async fn test_real_download_with_backup() {
+    let updater = DatabaseUpdater::new();
+    let temp_dir = TempDir::new().unwrap();
+
+    // First download without backup
+    let options = UpdateOptions::default().backup(false);
+    updater
+        .update_service_probes(temp_dir.path(), &options)
+        .await
+        .unwrap();
+
+    // Now download with backup enabled
+    let options_with_backup = UpdateOptions::default().backup(true);
+    let result = updater
+        .update_service_probes(temp_dir.path(), &options_with_backup)
+        .await;
+
+    assert!(result.is_ok());
+    let detail = result.unwrap();
+
+    // If the file was updated, backup should have been created
+    // If unchanged, backup might not be created
+    if detail.backup_created {
+        let backup_exists = std::fs::read_dir(temp_dir.path())
+            .unwrap()
+            .any(|entry| {
+                entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .contains(".backup")
+            });
+        assert!(backup_exists, "Backup file should exist");
+    }
+}
+
+/// Real network test: Invalid URL should fail gracefully.
+#[tokio::test]
+async fn test_real_download_invalid_url() {
+    let updater = DatabaseUpdater::new();
+    let temp_dir = TempDir::new().unwrap();
+
+    let custom_urls = CustomUrls {
+        service_probes: Some("https://invalid-domain-that-does-not-exist-12345.com/test".to_string()),
+        os_db: None,
+        mac_prefixes: None,
+    };
+
+    let options = UpdateOptions::default()
+        .backup(false)
+        .custom_urls(custom_urls);
+
+    let result = updater
+        .update_service_probes(temp_dir.path(), &options)
+        .await;
+
+    // Should return an error for invalid URL
+    assert!(
+        result.is_err() || !result.as_ref().unwrap().success,
+        "Invalid URL should fail"
+    );
+}
+
+// Rust guideline compliant 2026-02-15

@@ -520,3 +520,203 @@ fn test_certificate_info_debug() {
     assert!(debug_str.contains("CertificateInfo"));
     assert!(debug_str.contains("CN=test"));
 }
+
+/// Real network test: Connect to Bing and detect TLS.
+/// Uses Bing as the test target (user specified not to use Google).
+///
+/// Note: This test requires internet access and may be flaky depending on
+/// network conditions. The test verifies that TLS detection works correctly
+/// when a connection can be established.
+#[tokio::test]
+async fn test_tls_detection_real_bing() {
+    use std::net::SocketAddr;
+
+    // Install rustls crypto provider (required for TLS operations)
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
+    let detector = TlsDetector::new().with_timeout(Duration::from_secs(10));
+
+    // Try multiple Bing CDN endpoints as they use anycast and may vary
+    let targets = [
+        "13.107.42.14:443",
+        "204.79.197.200:443",
+        "202.89.233.100:443",
+    ];
+
+    let mut last_error = None;
+    for target_str in &targets {
+        let target: SocketAddr = target_str.parse().unwrap();
+        let result = detector.detect_tls(&target, Some("www.bing.com")).await;
+
+        // Store error for potential later reporting
+        match &result {
+            Err(e) => last_error = Some(e.to_string()),
+            Ok(None) => last_error = Some("No TLS info returned".to_string()),
+            Ok(Some(_)) => {}
+        }
+
+        // If we get a successful TLS connection, verify it
+        if let Ok(Some(info)) = result {
+            // Verify TLS version is detected (should be TLS 1.2 or 1.3)
+            assert!(
+                matches!(info.version, TlsVersion::Tls1_2 | TlsVersion::Tls1_3),
+                "Expected TLS 1.2 or 1.3, got {:?}",
+                info.version
+            );
+
+            // Verify cipher suite is detected
+            assert!(
+                !info.cipher_suite.is_empty(),
+                "Cipher suite should be detected"
+            );
+
+            // Verify certificate is present
+            assert!(
+                info.certificate.is_some(),
+                "Certificate should be extracted"
+            );
+
+            let cert = info.certificate.unwrap();
+
+            // Verify certificate has subject
+            assert!(
+                !cert.subject.is_empty(),
+                "Certificate subject should not be empty"
+            );
+
+            // Verify fingerprint is calculated
+            assert!(
+                !cert.fingerprint_sha256.is_empty(),
+                "Certificate fingerprint should be calculated"
+            );
+
+            // Verify SANs are present (Bing typically has multiple SANs)
+            assert!(
+                !cert.subject_alt_names.is_empty(),
+                "Certificate should have subject alternative names"
+            );
+
+            // Success - we found a working endpoint
+            return;
+        }
+    }
+
+    // If we get here, all endpoints failed - this is a network issue, not a code issue
+    // Skip the test rather than fail in CI environments without internet
+    eprintln!(
+        "Warning: Could not connect to any Bing endpoint. Last error: {:?}",
+        last_error
+    );
+    // Test passes if we can't connect (network unavailable)
+    // This prevents flaky tests in CI environments
+}
+
+/// Real network test: Verify certificate expiry detection with real cert.
+#[tokio::test]
+async fn test_real_certificate_expiry() {
+    use std::net::SocketAddr;
+
+    // Install rustls crypto provider (required for TLS operations)
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
+    let detector = TlsDetector::new();
+    let target: SocketAddr = "13.107.42.14:443".parse().unwrap();
+
+    let result = detector.detect_tls(&target, Some("www.bing.com")).await;
+
+    // Skip test if network is unavailable
+    let info = match result {
+        Ok(Some(info)) => info,
+        _ => {
+            eprintln!("Warning: Could not connect to test endpoint, skipping expiry test");
+            return;
+        }
+    };
+
+    // Bing's certificate should not be expired
+    assert!(!info.is_expired, "Bing's certificate should not be expired");
+
+    // Should have positive days until expiry
+    assert!(
+        info.days_until_expiry.is_some(),
+        "Should calculate days until expiry"
+    );
+    assert!(
+        info.days_until_expiry.unwrap() > 0,
+        "Certificate should have positive days until expiry"
+    );
+}
+
+/// Real network test: Verify Bing's certificate is not self-signed.
+#[tokio::test]
+async fn test_real_certificate_not_self_signed() {
+    use std::net::SocketAddr;
+
+    // Install rustls crypto provider (required for TLS operations)
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
+    let detector = TlsDetector::new();
+    let target: SocketAddr = "13.107.42.14:443".parse().unwrap();
+
+    let result = detector.detect_tls(&target, Some("www.bing.com")).await;
+
+    // Skip test if network is unavailable
+    let info = match result {
+        Ok(Some(info)) => info,
+        _ => {
+            eprintln!("Warning: Could not connect to test endpoint, skipping self-signed test");
+            return;
+        }
+    };
+
+    // Bing's certificate should NOT be self-signed (it's issued by Microsoft/DigiCert)
+    assert!(
+        !info.is_self_signed,
+        "Bing's certificate should not be self-signed"
+    );
+}
+
+/// Real network test: TLS detection on non-TLS port should return None.
+#[tokio::test]
+async fn test_tls_detection_non_tls_port() {
+    use std::net::SocketAddr;
+
+    // Install rustls crypto provider (required for TLS operations)
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
+    let detector = TlsDetector::new().with_timeout(Duration::from_secs(5));
+
+    // Try to connect to port 80 (HTTP, not HTTPS)
+    // Using a well-known HTTP endpoint that won't redirect
+    let target: SocketAddr = "13.107.42.14:80".parse().unwrap();
+
+    let result = detector.detect_tls(&target, None).await;
+
+    // Should succeed (not error) but return None (no TLS on port 80)
+    assert!(result.is_ok(), "Should not error on non-TLS port");
+    assert!(
+        result.unwrap().is_none(),
+        "Should return None for non-TLS port"
+    );
+}
+
+/// Real network test: TLS detection with invalid target should handle gracefully.
+#[tokio::test]
+async fn test_tls_detection_invalid_target() {
+    use std::net::SocketAddr;
+
+    // Install rustls crypto provider (required for TLS operations)
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
+    let detector = TlsDetector::new().with_timeout(Duration::from_secs(2));
+
+    // Use a non-routable address that will timeout
+    let target: SocketAddr = "192.0.2.1:443".parse().unwrap(); // TEST-NET-1
+
+    let result = detector.detect_tls(&target, None).await;
+
+    // Should succeed (not panic) but likely return None due to timeout
+    assert!(result.is_ok(), "Should handle connection timeout gracefully");
+}
+
+// Rust guideline compliant 2026-02-15

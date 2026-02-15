@@ -69,6 +69,9 @@ impl CongestionStats {
     /// This function may panic if the internal lock is poisoned.
     #[expect(clippy::cast_possible_truncation, reason = "RTT in micros fits in u64")]
     pub fn update_rtt(&self, rtt: Duration) {
+        debug_assert!(!rtt.is_zero(), "RTT should never be zero");
+        debug_assert!(rtt.as_secs() < 300, "RTT should be less than 5 minutes");
+
         let rtt_micros = rtt.as_micros() as u64;
 
         loop {
@@ -167,9 +170,11 @@ impl CongestionController {
     /// # Arguments
     ///
     /// * `timing_template` - Base timing template for rate control
-    /// * `max_parallel` - Maximum number of parallel probes
+    /// * `max_parallel` - Maximum number of parallel probes (must be > 0)
     #[must_use]
     pub fn new(timing_template: TimingTemplate, max_parallel: usize) -> Self {
+        debug_assert!(max_parallel > 0, "max_parallel must be greater than 0");
+
         let initial_cwnd = (max_parallel / 4).max(1); // Start conservatively
 
         Self {
@@ -438,9 +443,13 @@ impl AdaptiveTiming {
     /// # Arguments
     ///
     /// * `timing_template` - Base timing template
-    /// * `max_parallel` - Maximum parallel probes
+    /// * `max_parallel` - Maximum parallel probes (must be > 0)
     /// * `min_rate` - Minimum packets per second
     /// * `max_rate` - Maximum packets per second
+    ///
+    /// # Panics
+    ///
+    /// Panics in debug builds if `max_parallel` is 0 or if `min_rate` > `max_rate`.
     #[must_use]
     pub fn new(
         timing_template: TimingTemplate,
@@ -448,6 +457,11 @@ impl AdaptiveTiming {
         min_rate: Option<u64>,
         max_rate: Option<u64>,
     ) -> Self {
+        debug_assert!(max_parallel > 0, "max_parallel must be greater than 0");
+        debug_assert!(
+            min_rate.is_none() || max_rate.is_none() || min_rate <= max_rate,
+            "min_rate must be less than or equal to max_rate"
+        );
         Self {
             congestion: CongestionController::new(timing_template, max_parallel),
             rate_limiter: RateLimiter::new(min_rate, max_rate),

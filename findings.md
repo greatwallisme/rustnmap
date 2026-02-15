@@ -237,22 +237,29 @@ pub enum Error {
 
 None identified.
 
-### 6.2 Medium Priority
+### 6.2 Medium Priority - COMPLETED ✅
 
-1. **Document panic conditions** in `ScanProgress::completion_percentage()`
-   - Add `// Panics if total_targets is 0` documentation
+1. **Document panic conditions** in `ScanProgress::completion_percentage()` - DONE
+   - Updated documentation in `rustnmap-core/src/state.rs:110-124`
+   - Clarified that function returns 0 when `total_targets` is 0 (no panic)
+   - Added example code demonstrating usage
 
-2. **Add debug_assert! for preconditions** in performance-critical code
-   - Use `debug_assert!` instead of `assert!` for performance
+2. **Add debug_assert! for preconditions** in performance-critical code - DONE
+   - Added `debug_assert!` in `CongestionStats::update_rtt()` for RTT bounds checking
+   - Added `debug_assert!` in `CongestionController::new()` for max_parallel validation
+   - Added `debug_assert!` in `AdaptiveTiming::new()` for rate limit validation
 
-### 6.3 Low Priority
+### 6.3 Low Priority - COMPLETED ✅
 
-1. **Consider replacing remaining unwrap() in production code**
-   - Service database parsing has `result.unwrap().unwrap()`
-   - Could be replaced with proper error propagation
+1. **Consider replacing remaining unwrap() in production code** - REVIEWED
+   - `result.unwrap().unwrap()` found only in test code (`database.rs:818`)
+   - Production code already uses proper error handling with `Result<T>`
+   - No changes required
 
-2. **Add cargo-audit to CI pipeline**
-   - Check for known vulnerabilities in dependencies
+2. **Add cargo-audit to CI pipeline** - DONE
+   - Added `just audit` recipe to justfile
+   - Added cargo-audit to `just ci` pipeline
+   - Added cargo-audit to `just install-tools`
 
 ---
 
@@ -580,17 +587,44 @@ Remaining tasks:
 - [ ] Code coverage improvement (current: 63.77%, target: 95%)
 - [ ] Security audit (unsafe code review, panic points, input validation)
 
-### Coverage Gap Analysis
+### Coverage Gap Analysis - UPDATED
 
-Files needing additional test coverage:
+Files with improved test coverage after adding real network tests:
 
-| File | Line Coverage | Priority |
-|------|---------------|----------|
-| `rustnmap-cli/src/cli.rs` | 24.39% | High |
-| `rustnmap-fingerprint/src/tls.rs` | 22.37% | High |
-| `rustnmap-fingerprint/src/database/updater.rs` | 13.73% | High |
-| `rustnmap-scan/src/stealth_scans.rs` | 31.43% | Medium |
-| `rustnmap-nse/src/libs/comm.rs` | 34.68% | High |
+| File | Line Coverage | Status | Change |
+|------|---------------|--------|--------|
+| `rustnmap-cli/src/cli.rs` | 24.39% | High | Pending |
+| `rustnmap-fingerprint/src/tls.rs` | 22.37% → **84.11%** | DONE | +22 tests added |
+| `rustnmap-fingerprint/src/database/updater.rs` | 13.73% → **67.36%** | DONE | +6 real network tests |
+| `rustnmap-traceroute/src/tcp.rs` | 23.81% → **57.51%** | DONE | +7 real network tests |
+| `rustnmap-scan/src/stealth_scans.rs` | 31.43% | Medium | Pending |
+| `rustnmap-nse/src/libs/comm.rs` | 34.68% | High | Pending |
+
+**Real Network Tests Added:**
+
+1. **TLS Tests** (`tls_certificate_test.rs`):
+   - `test_tls_detection_real_bing` - Connect to Bing HTTPS
+   - `test_real_certificate_expiry` - Verify certificate validity
+   - `test_real_certificate_not_self_signed` - Verify CA chain
+   - `test_tls_detection_non_tls_port` - HTTP port returns None
+   - `test_tls_detection_invalid_target` - Timeout handling
+
+2. **Database Updater Tests** (`database_updater_test.rs`):
+   - `test_real_download_service_probes` - Download from Nmap SVN
+   - `test_real_download_os_db` - Download OS fingerprints
+   - `test_real_download_mac_prefixes` - Download MAC vendors
+   - `test_real_download_all_databases` - Bulk download
+   - `test_real_download_with_backup` - Backup functionality
+   - `test_real_download_invalid_url` - Error handling
+
+3. **TCP Traceroute Tests** (`traceroute_integration.rs`):
+   - `test_real_tcp_syn_traceroute_localhost` - SYN probes to localhost
+   - `test_real_tcp_ack_traceroute_localhost` - ACK probes to localhost
+   - `test_real_tcp_syn_traceroute_external` - Multi-hop traceroute to 8.8.8.8
+   - `test_real_tcp_traceroute_different_ports` - Various destination ports
+   - `test_real_tcp_syn_vs_ack_behavior` - SYN vs ACK comparison
+   - `test_real_source_port_generation` - Source port functionality
+   - `test_real_tcp_traceroute_configured_source_port` - Custom source port
 
 ---
 

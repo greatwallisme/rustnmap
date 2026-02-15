@@ -108,6 +108,18 @@ impl ScanProgress {
     }
 
     /// Returns the completion percentage (0-100).
+    ///
+    /// Returns 0 if `total_targets` is 0 to avoid division by zero.
+    /// The returned value is clamped to 100 in case of overflow.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rustnmap_core::state::ScanProgress;
+    ///
+    /// let progress = ScanProgress::new(100);
+    /// assert_eq!(progress.completion_percentage(), 0);
+    /// ```
     #[must_use]
     pub fn completion_percentage(&self) -> u8 {
         if self.total_targets == 0 {

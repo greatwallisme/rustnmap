@@ -2144,6 +2144,7 @@ dependencies = [
  "rustnmap-common",
  "rustnmap-net",
  "serde",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tokio-rustls",

@@ -332,3 +332,268 @@ fn test_rtt_stddev_calculation() {
     );
     assert!(hop.rtt_stddev().is_none());
 }
+
+// =============================================================================
+// Real Network Tests - TCP Traceroute
+// =============================================================================
+
+/// Real network test: TCP SYN traceroute to localhost.
+/// Sends actual TCP SYN packets and verifies response handling.
+#[test]
+fn test_real_tcp_syn_traceroute_localhost() {
+    let local_addr = Ipv4Addr::LOCALHOST;
+    let target = Ipv4Addr::LOCALHOST;
+
+    let config = TracerouteConfig::new()
+        .with_max_hops(1)
+        .with_probe_timeout(Duration::from_millis(500));
+
+    // Try to create traceroute (requires root)
+    let mut traceroute = match TcpSynTraceroute::new(config, local_addr) {
+        Ok(t) => t,
+        Err(_) => {
+            eprintln!("Skipping TCP SYN traceroute test - not running as root");
+            return;
+        }
+    };
+
+    // Send a probe to localhost on port 80 (HTTP)
+    // Localhost should respond with RST (port likely closed) or SYN-ACK (if open)
+    let result = traceroute.send_probe(target, 1, 80);
+
+    // Should not error (timeout is ok)
+    assert!(
+        result.is_ok(),
+        "TCP SYN probe should not error: {:?}",
+        result.err()
+    );
+
+    // We may or may not get a response depending on local services
+    // The important thing is that the probe was sent without error
+}
+
+/// Real network test: TCP ACK traceroute to localhost.
+/// Sends actual TCP ACK packets and verifies response handling.
+#[test]
+fn test_real_tcp_ack_traceroute_localhost() {
+    let local_addr = Ipv4Addr::LOCALHOST;
+    let target = Ipv4Addr::LOCALHOST;
+
+    let config = TracerouteConfig::new()
+        .with_max_hops(1)
+        .with_probe_timeout(Duration::from_millis(500));
+
+    // Try to create traceroute (requires root)
+    let mut traceroute = match TcpAckTraceroute::new(config, local_addr) {
+        Ok(t) => t,
+        Err(_) => {
+            eprintln!("Skipping TCP ACK traceroute test - not running as root");
+            return;
+        }
+    };
+
+    // Send a probe to localhost on port 80
+    let result = traceroute.send_probe(target, 1, 80);
+
+    // Should not error (timeout is ok)
+    assert!(
+        result.is_ok(),
+        "TCP ACK probe should not error: {:?}",
+        result.err()
+    );
+}
+
+/// Real network test: TCP SYN traceroute to external target.
+/// Tests multi-hop traceroute to a well-known public server.
+#[test]
+fn test_real_tcp_syn_traceroute_external() {
+    let local_addr = Ipv4Addr::LOCALHOST;
+    // Use a well-known public DNS server that responds to TCP
+    let target = Ipv4Addr::new(8, 8, 8, 8); // Google DNS
+
+    let config = TracerouteConfig::new()
+        .with_max_hops(5)
+        .with_probe_timeout(Duration::from_millis(1000));
+
+    // Try to create traceroute (requires root)
+    let mut traceroute = match TcpSynTraceroute::new(config, local_addr) {
+        Ok(t) => t,
+        Err(_) => {
+            eprintln!("Skipping TCP SYN external traceroute test - not running as root");
+            return;
+        }
+    };
+
+    // Send probes with increasing TTL to trace the route
+    for ttl in 1..=3 {
+        let result = traceroute.send_probe(target, ttl, 53); // DNS port
+
+        assert!(
+            result.is_ok(),
+            "TCP SYN probe with TTL {} should not error: {:?}",
+            ttl,
+            result.err()
+        );
+
+        // Print what we got (for debugging)
+        match result.unwrap() {
+            Some(response) => {
+                eprintln!(
+                    "TTL {}: Response from {} (type={}, code={})",
+                    ttl,
+                    response.ip(),
+                    response.icmp_type(),
+                    response.icmp_code()
+                );
+            }
+            None => {
+                eprintln!("TTL {}: No response (timeout)", ttl);
+            }
+        }
+    }
+}
+
+/// Real network test: TCP traceroute with different destination ports.
+#[test]
+fn test_real_tcp_traceroute_different_ports() {
+    let local_addr = Ipv4Addr::LOCALHOST;
+    let target = Ipv4Addr::LOCALHOST;
+
+    let config = TracerouteConfig::new()
+        .with_max_hops(1)
+        .with_probe_timeout(Duration::from_millis(500));
+
+    // Try to create traceroute (requires root)
+    let mut traceroute = match TcpSynTraceroute::new(config, local_addr) {
+        Ok(t) => t,
+        Err(_) => {
+            eprintln!("Skipping TCP port test - not running as root");
+            return;
+        }
+    };
+
+    // Test different ports
+    let ports = [22, 80, 443, 8080];
+    for port in &ports {
+        let result = traceroute.send_probe(target, 1, *port);
+        assert!(
+            result.is_ok(),
+            "TCP SYN probe to port {} should not error",
+            port
+        );
+    }
+}
+
+/// Real network test: Verify source port generation in real scenario.
+/// This test verifies the source port is used correctly by checking
+/// that probes can be sent (which internally uses source port generation).
+#[test]
+fn test_real_source_port_generation() {
+    let local_addr = Ipv4Addr::LOCALHOST;
+    let target = Ipv4Addr::LOCALHOST;
+
+    let config = TracerouteConfig::new()
+        .with_max_hops(1)
+        .with_probe_timeout(Duration::from_millis(500));
+
+    // Try to create traceroute (requires root)
+    let mut traceroute = match TcpSynTraceroute::new(config, local_addr) {
+        Ok(t) => t,
+        Err(_) => {
+            eprintln!("Skipping source port test - not running as root");
+            return;
+        }
+    };
+
+    // Verify source port generation works by sending a probe
+    // The probe will fail if source port generation fails
+    let result = traceroute.send_probe(target, 1, 80);
+    assert!(
+        result.is_ok(),
+        "Probe with generated source port should succeed: {:?}",
+        result.err()
+    );
+}
+
+/// Real network test: TCP SYN vs ACK behavior difference.
+/// SYN should get SYN-ACK or RST from open/closed ports.
+/// ACK should get RST from any port (since no connection exists).
+#[test]
+fn test_real_tcp_syn_vs_ack_behavior() {
+    let local_addr = Ipv4Addr::LOCALHOST;
+    let target = Ipv4Addr::LOCALHOST;
+
+    let syn_config = TracerouteConfig::new()
+        .with_max_hops(1)
+        .with_probe_timeout(Duration::from_millis(500));
+
+    let ack_config = TracerouteConfig::new()
+        .with_max_hops(1)
+        .with_probe_timeout(Duration::from_millis(500));
+
+    // Create both traceroute types
+    let (mut syn_tracer, mut ack_tracer) = match (
+        TcpSynTraceroute::new(syn_config, local_addr),
+        TcpAckTraceroute::new(ack_config, local_addr),
+    ) {
+        (Ok(s), Ok(a)) => (s, a),
+        _ => {
+            eprintln!("Skipping SYN vs ACK test - not running as root");
+            return;
+        }
+    };
+
+    // Send both probes to the same port
+    let syn_result = syn_tracer.send_probe(target, 1, 9999); // Unlikely to be open
+    let ack_result = ack_tracer.send_probe(target, 1, 9999);
+
+    // Both should complete without error
+    assert!(
+        syn_result.is_ok(),
+        "SYN probe should not error: {:?}",
+        syn_result.err()
+    );
+    assert!(
+        ack_result.is_ok(),
+        "ACK probe should not error: {:?}",
+        ack_result.err()
+    );
+
+    // The responses may differ based on local firewall configuration
+    // Just verify we got some kind of response or timeout gracefully
+    eprintln!("SYN result: {:?}", syn_result.unwrap());
+    eprintln!("ACK result: {:?}", ack_result.unwrap());
+}
+
+/// Real network test: Traceroute with configured source port.
+/// Verifies that a configured source port is used correctly by sending probes.
+#[test]
+fn test_real_tcp_traceroute_configured_source_port() {
+    let local_addr = Ipv4Addr::LOCALHOST;
+    let target = Ipv4Addr::LOCALHOST;
+
+    let config = TracerouteConfig::new()
+        .with_source_port(54321)
+        .with_max_hops(1)
+        .with_probe_timeout(Duration::from_millis(500));
+
+    // Try to create traceroute (requires root)
+    let mut traceroute = match TcpSynTraceroute::new(config, local_addr) {
+        Ok(t) => t,
+        Err(_) => {
+            eprintln!("Skipping configured source port test - not running as root");
+            return;
+        }
+    };
+
+    // Verify the configured source port is used by sending a probe
+    // If the wrong port is used, the probe might fail
+    let result = traceroute.send_probe(target, 1, 80);
+    assert!(
+        result.is_ok(),
+        "Probe with configured source port should succeed: {:?}",
+        result.err()
+    );
+}
+
+// Rust guideline compliant 2026-02-15

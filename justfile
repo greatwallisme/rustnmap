@@ -287,8 +287,12 @@ lock-check:
 tree:
     cargo tree
 
-# Full check (fmt + clippy + test)
-ci: fmt-check clippy test
+# Full check (fmt + clippy + test + audit)
+ci: fmt-check clippy test audit
+
+# Security audit - check for known vulnerabilities in dependencies
+audit:
+    cargo audit
 
 # Workspace info
 info:
@@ -305,6 +309,7 @@ install-tools:
     cargo install cargo-edit
     cargo install cargo-criterion
     cargo install cargo-llvm-cov
+    cargo install cargo-audit
 
 # Code coverage recipes
 coverage:
