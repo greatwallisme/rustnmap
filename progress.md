@@ -395,4 +395,57 @@ The RustNmap scanner is now fully functional with:
 
 ---
 
+## Session: 2026-02-15 - Phase 5.3 IPv6 Host Discovery - COMPLETE
+
+### IPv6 Host Discovery Implementation - COMPLETE
+
+**Status**: All IPv6 host discovery methods implemented and tested
+
+**Implementation Summary:**
+
+| Component | Status | Description |
+|-----------|--------|-------------|
+| Icmpv6Ping | Complete | ICMPv6 Echo Request/Reply (Type 128/129) |
+| Icmpv6NeighborDiscovery | Complete | NDP Neighbor Solicitation/Advertisement |
+| TcpSynPingV6 | Complete | TCP SYN ping over IPv6 |
+| HostDiscovery | Complete | Unified discovery engine with IPv4/IPv6 auto-selection |
+
+**Files Modified:**
+- `crates/rustnmap-target/src/discovery.rs` - Added IPv6 discovery methods and packet builders
+- `crates/rustnmap-target/src/lib.rs` - Exported new IPv6 types
+
+**Key Features:**
+1. **ICMPv6 Echo Ping**: Standard IPv6 ping using Echo Request (Type 128) and Echo Reply (Type 129)
+2. **Neighbor Discovery Protocol (NDP)**: IPv6 equivalent of ARP
+   - Neighbor Solicitation (Type 135)
+   - Neighbor Advertisement (Type 136)
+   - Solicited-node multicast address calculation
+3. **TCP SYN Ping for IPv6**: TCP-based discovery over IPv6
+4. **Unified Discovery Engine**: Automatic protocol selection based on target IP version
+
+**Packet Builders Added:**
+- `Icmpv6PacketBuilder` - Builds ICMPv6 packets with proper pseudo-header checksums
+- `Tcpv6PacketBuilder` - Builds TCP packets over IPv6 with proper pseudo-header checksums
+
+**Parser Functions Added:**
+- `parse_icmpv6_echo_reply` - Parses ICMPv6 Echo Reply packets
+- `parse_icmpv6_neighbor_advertisement` - Parses NDP Neighbor Advertisement
+- `parse_tcpv6_response` - Parses TCP responses over IPv6
+
+**Tests Added:**
+- `test_icmpv6_ping_requires_root`
+- `test_icmpv6_neighbor_discovery_requires_root`
+- `test_tcp_syn_ping_v6_requires_root`
+- `test_icmpv6_ping_default_ports`
+- `test_solicited_node_multicast` - Tests multicast address calculation
+- `test_icmpv6_neighbor_discovery_skips_multicast`
+- `test_host_discovery_ipv6_methods`
+
+**Quality Metrics:**
+- 61 tests passing for rustnmap-target
+- Zero compiler warnings
+- Zero clippy warnings
+
+---
+
 *Update after completing each phase or encountering errors*

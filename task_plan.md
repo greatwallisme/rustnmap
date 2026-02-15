@@ -284,12 +284,12 @@ The `rustnmap-evasion` crate has substantial infrastructure already implemented:
 - [x] Add rate limiting (min-rate, max-rate) enforcement
 
 ### 5.3 IPv6 Host Discovery
-- [ ] Implement ICMPv6 Echo Ping (IPv6 ping)
-- [ ] Implement ICMPv6 Neighbor Discovery (NDP)
-- [ ] Add IPv6 TCP SYN Ping support
-- [ ] Update host discovery engine for IPv6
+- [x] Implement ICMPv6 Echo Ping (IPv6 ping)
+- [x] Implement ICMPv6 Neighbor Discovery (NDP)
+- [x] Add IPv6 TCP SYN Ping support
+- [x] Update host discovery engine for IPv6
 
-**Status:** in_progress
+**Status:** complete
 
 ---
 
@@ -312,7 +312,7 @@ The `rustnmap-evasion` crate has substantial infrastructure already implemented:
 ### 6.3 Quality Assurance
 - [ ] Zero warnings with clippy
 - [ ] All tests passing
-- [ ] Code coverage > 80%
+- [ ] Code coverage > 95%
 - [ ] Security audit
 
 **Status:** pending

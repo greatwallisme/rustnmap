@@ -27,7 +27,8 @@ pub mod spec;
 // Re-exports
 pub use discovery::{
     ArpPing, HostDiscovery, HostDiscoveryMethod, HostState, IcmpPing, IcmpTimestampPing,
-    TcpAckPing, TcpSynPing,
+    Icmpv6NeighborDiscovery, Icmpv6PacketBuilder, Icmpv6Ping, TcpAckPing, TcpSynPing,
+    TcpSynPingV6, Tcpv6PacketBuilder,
 };
 pub use dns::DnsResolver;
 pub use parser::TargetParser;
