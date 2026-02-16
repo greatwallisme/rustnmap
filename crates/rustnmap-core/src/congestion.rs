@@ -559,7 +559,7 @@ mod tests {
         let stats = CongestionStats::new();
 
         // Initially no loss
-        assert_eq!(stats.packet_loss_rate(), 0.0);
+        assert!(stats.packet_loss_rate() == 0.0);
 
         // Send 10 packets
         for _ in 0..10 {

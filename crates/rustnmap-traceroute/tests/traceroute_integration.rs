@@ -349,12 +349,9 @@ fn test_real_tcp_syn_traceroute_localhost() {
         .with_probe_timeout(Duration::from_millis(500));
 
     // Try to create traceroute (requires root)
-    let mut traceroute = match TcpSynTraceroute::new(config, local_addr) {
-        Ok(t) => t,
-        Err(_) => {
-            eprintln!("Skipping TCP SYN traceroute test - not running as root");
-            return;
-        }
+    let Ok(mut traceroute) = TcpSynTraceroute::new(config, local_addr) else {
+        eprintln!("Skipping TCP SYN traceroute test - not running as root");
+        return;
     };
 
     // Send a probe to localhost on port 80 (HTTP)
@@ -384,12 +381,9 @@ fn test_real_tcp_ack_traceroute_localhost() {
         .with_probe_timeout(Duration::from_millis(500));
 
     // Try to create traceroute (requires root)
-    let mut traceroute = match TcpAckTraceroute::new(config, local_addr) {
-        Ok(t) => t,
-        Err(_) => {
-            eprintln!("Skipping TCP ACK traceroute test - not running as root");
-            return;
-        }
+    let Ok(mut traceroute) = TcpAckTraceroute::new(config, local_addr) else {
+        eprintln!("Skipping TCP ACK traceroute test - not running as root");
+        return;
     };
 
     // Send a probe to localhost on port 80
@@ -416,12 +410,9 @@ fn test_real_tcp_syn_traceroute_external() {
         .with_probe_timeout(Duration::from_millis(1000));
 
     // Try to create traceroute (requires root)
-    let mut traceroute = match TcpSynTraceroute::new(config, local_addr) {
-        Ok(t) => t,
-        Err(_) => {
-            eprintln!("Skipping TCP SYN external traceroute test - not running as root");
-            return;
-        }
+    let Ok(mut traceroute) = TcpSynTraceroute::new(config, local_addr) else {
+        eprintln!("Skipping TCP SYN external traceroute test - not running as root");
+        return;
     };
 
     // Send probes with increasing TTL to trace the route
@@ -447,7 +438,7 @@ fn test_real_tcp_syn_traceroute_external() {
                 );
             }
             None => {
-                eprintln!("TTL {}: No response (timeout)", ttl);
+                eprintln!("TTL {ttl}: No response (timeout)");
             }
         }
     }
@@ -464,12 +455,9 @@ fn test_real_tcp_traceroute_different_ports() {
         .with_probe_timeout(Duration::from_millis(500));
 
     // Try to create traceroute (requires root)
-    let mut traceroute = match TcpSynTraceroute::new(config, local_addr) {
-        Ok(t) => t,
-        Err(_) => {
-            eprintln!("Skipping TCP port test - not running as root");
-            return;
-        }
+    let Ok(mut traceroute) = TcpSynTraceroute::new(config, local_addr) else {
+        eprintln!("Skipping TCP port test - not running as root");
+        return;
     };
 
     // Test different ports
@@ -478,8 +466,7 @@ fn test_real_tcp_traceroute_different_ports() {
         let result = traceroute.send_probe(target, 1, *port);
         assert!(
             result.is_ok(),
-            "TCP SYN probe to port {} should not error",
-            port
+            "TCP SYN probe to port {port} should not error"
         );
     }
 }
@@ -497,12 +484,9 @@ fn test_real_source_port_generation() {
         .with_probe_timeout(Duration::from_millis(500));
 
     // Try to create traceroute (requires root)
-    let mut traceroute = match TcpSynTraceroute::new(config, local_addr) {
-        Ok(t) => t,
-        Err(_) => {
-            eprintln!("Skipping source port test - not running as root");
-            return;
-        }
+    let Ok(mut traceroute) = TcpSynTraceroute::new(config, local_addr) else {
+        eprintln!("Skipping source port test - not running as root");
+        return;
     };
 
     // Verify source port generation works by sending a probe
@@ -532,15 +516,12 @@ fn test_real_tcp_syn_vs_ack_behavior() {
         .with_probe_timeout(Duration::from_millis(500));
 
     // Create both traceroute types
-    let (mut syn_tracer, mut ack_tracer) = match (
+    let (Ok(mut syn_tracer), Ok(mut ack_tracer)) = (
         TcpSynTraceroute::new(syn_config, local_addr),
         TcpAckTraceroute::new(ack_config, local_addr),
-    ) {
-        (Ok(s), Ok(a)) => (s, a),
-        _ => {
-            eprintln!("Skipping SYN vs ACK test - not running as root");
-            return;
-        }
+    ) else {
+        eprintln!("Skipping SYN vs ACK test - not running as root");
+        return;
     };
 
     // Send both probes to the same port
@@ -578,12 +559,9 @@ fn test_real_tcp_traceroute_configured_source_port() {
         .with_probe_timeout(Duration::from_millis(500));
 
     // Try to create traceroute (requires root)
-    let mut traceroute = match TcpSynTraceroute::new(config, local_addr) {
-        Ok(t) => t,
-        Err(_) => {
-            eprintln!("Skipping configured source port test - not running as root");
-            return;
-        }
+    let Ok(mut traceroute) = TcpSynTraceroute::new(config, local_addr) else {
+        eprintln!("Skipping configured source port test - not running as root");
+        return;
     };
 
     // Verify the configured source port is used by sending a probe

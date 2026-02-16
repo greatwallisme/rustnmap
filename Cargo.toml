@@ -19,7 +19,7 @@ resolver = "2"
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.85"
+rust-version = "1.90"
 license = "Apache-2.0"
 authors = ["greatwallisme <greatwallisme@gmail.com>"]
 repository = "https://github.com/greatwalllisme/rustnmap"
@@ -61,7 +61,7 @@ tokio-rustls = "0.26"
 rustls = { version = "0.23", default-features = false, features = ["std", "tls12"] }
 
 # Certificate parsing
-x509-parser = "0.16"
+x509-parser = "0.18.1"
 
 # Time parsing for certificate validity
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
@@ -118,3 +118,13 @@ unused_result_ok = "warn"
 
 # Allow string formatting for structured logging compatibility
 literal_string_with_formatting_args = "allow"
+
+# Release profile optimized for performance
+# Network scanning requires high throughput and low latency
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+debug = 1
+panic = "abort"
+overflow-checks = true

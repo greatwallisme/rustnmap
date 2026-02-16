@@ -6,10 +6,10 @@
 use std::net::{Ipv4Addr, SocketAddr};
 use std::time::Duration;
 
+use rustnmap_fingerprint::service::probe::Protocol;
 use rustnmap_fingerprint::service::{
     MatchRule, MatchTemplate, ProbeDatabase, ProbeDefinition, ServiceDetector, ServiceInfo,
 };
-use rustnmap_fingerprint::service::probe::Protocol;
 
 /// Get test target from environment or use localhost.
 fn get_test_target() -> SocketAddr {
@@ -182,7 +182,9 @@ async fn test_service_detection_http() {
             if !services.is_empty() {
                 // Got some results
                 assert!(
-                    services.iter().any(|s| s.name == "http" || s.name == "unknown"),
+                    services
+                        .iter()
+                        .any(|s| s.name == "http" || s.name == "unknown"),
                     "Should detect http or unknown"
                 );
             }
@@ -295,10 +297,7 @@ fn test_multiple_service_infos() {
     ];
 
     // Check we can filter by confidence
-    let high_confidence: Vec<_> = services
-        .iter()
-        .filter(|s| s.confidence >= 8)
-        .collect();
+    let high_confidence: Vec<_> = services.iter().filter(|s| s.confidence >= 8).collect();
 
     assert_eq!(high_confidence.len(), 2);
 }
@@ -310,8 +309,7 @@ async fn test_detection_timeout() {
     let target = SocketAddr::new(Ipv4Addr::new(192, 0, 2, 1).into(), 80); // TEST-NET-1
 
     let db = ProbeDatabase::empty();
-    let detector = ServiceDetector::new(db)
-        .with_timeout(Duration::from_millis(100)); // Very short timeout
+    let detector = ServiceDetector::new(db).with_timeout(Duration::from_millis(100)); // Very short timeout
 
     // Should timeout quickly or return empty results
     let result = detector.detect_service(&target, 80).await;
@@ -385,8 +383,7 @@ async fn test_service_detection_ssh() {
     let ssh_target = SocketAddr::new(Ipv4Addr::new(127, 0, 0, 1).into(), 22);
 
     let db = ProbeDatabase::empty();
-    let detector = ServiceDetector::new(db)
-        .with_timeout(Duration::from_secs(2));
+    let detector = ServiceDetector::new(db).with_timeout(Duration::from_secs(2));
 
     // Try to grab banner from SSH port
     let result = detector.grab_banner(&ssh_target, 22).await;
@@ -484,14 +481,10 @@ fn test_match_template() {
 /// Test ProbeDefinition builder methods.
 #[test]
 fn test_probe_definition_builder() {
-    let mut probe = ProbeDefinition::new_tcp(
-        "HTTPProbe".to_string(),
-        b"GET / HTTP/1.0\r\n\r\n".to_vec(),
-    );
+    let mut probe =
+        ProbeDefinition::new_tcp("HTTPProbe".to_string(), b"GET / HTTP/1.0\r\n\r\n".to_vec());
 
-    probe
-        .with_rarity(3)
-        .with_ports(&[80, 443, 8080]);
+    probe.with_rarity(3).with_ports(&[80, 443, 8080]);
 
     assert_eq!(probe.rarity, 3);
     assert!(probe.matches_port(80));
@@ -576,8 +569,7 @@ fn test_invalid_regex_pattern() {
 fn test_timeout_configuration() {
     let db = ProbeDatabase::empty();
 
-    let detector = ServiceDetector::new(db)
-        .with_timeout(Duration::from_secs(30));
+    let detector = ServiceDetector::new(db).with_timeout(Duration::from_secs(30));
 
     let debug_str = format!("{:?}", detector);
     assert!(debug_str.contains("30s") || debug_str.contains("30"));
@@ -643,8 +635,7 @@ fn test_empty_ports_matches_all() {
 #[tokio::test]
 async fn test_detection_scenarios() {
     let db = ProbeDatabase::empty();
-    let detector = ServiceDetector::new(db)
-        .with_timeout(Duration::from_millis(500));
+    let detector = ServiceDetector::new(db).with_timeout(Duration::from_millis(500));
 
     // Test with localhost on various ports
     let targets = vec![

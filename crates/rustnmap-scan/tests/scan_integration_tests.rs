@@ -2,7 +2,7 @@
 //!
 //! These tests use actual network operations. Root privileges are available
 //! in the development environment for raw socket operations.
-//! The test target IP is read from the TEST_TARGET_IP environment variable,
+//! The test target IP is read from the `TEST_TARGET_IP` environment variable,
 //! defaulting to localhost (127.0.0.1) if not set.
 
 use std::env;
@@ -44,7 +44,7 @@ fn test_syn_scan() {
     let scanner = match rustnmap_scan::syn_scan::TcpSynScanner::new(local_addr, config) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("Skipping test: cannot create SYN scanner (requires root): {}", e);
+            eprintln!("Skipping test: cannot create SYN scanner (requires root): {e}");
             return;
         }
     };
@@ -63,7 +63,7 @@ fn test_syn_scan() {
         | PortState::Unfiltered
         | PortState::OpenOrFiltered
         | PortState::ClosedOrFiltered => {}
-        _ => panic!("Unexpected port state: {:?}", state),
+        PortState::OpenOrClosed => panic!("Unexpected port state: {state:?}"),
     }
 }
 
@@ -86,13 +86,9 @@ fn test_connect_scan() {
     assert!(
         matches!(
             state,
-            PortState::Open
-                | PortState::Closed
-                | PortState::Filtered
-                | PortState::OpenOrFiltered
+            PortState::Open | PortState::Closed | PortState::Filtered | PortState::OpenOrFiltered
         ),
-        "Unexpected state: {:?}",
-        state
+        "Unexpected state: {state:?}"
     );
 }
 
@@ -106,7 +102,7 @@ fn test_udp_scan() {
     let scanner = match rustnmap_scan::udp_scan::UdpScanner::new(local_addr, config) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("Skipping test: cannot create UDP scanner (requires root): {}", e);
+            eprintln!("Skipping test: cannot create UDP scanner (requires root): {e}");
             return;
         }
     };
@@ -120,13 +116,9 @@ fn test_udp_scan() {
     assert!(
         matches!(
             state,
-            PortState::Open
-                | PortState::Closed
-                | PortState::Filtered
-                | PortState::OpenOrFiltered
+            PortState::Open | PortState::Closed | PortState::Filtered | PortState::OpenOrFiltered
         ),
-        "Unexpected state: {:?}",
-        state
+        "Unexpected state: {state:?}"
     );
 }
 
@@ -140,7 +132,7 @@ fn test_fin_scan() {
     let scanner = match rustnmap_scan::stealth_scans::TcpFinScanner::new(local_addr, config) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("Skipping test: cannot create FIN scanner (requires root): {}", e);
+            eprintln!("Skipping test: cannot create FIN scanner (requires root): {e}");
             return;
         }
     };
@@ -153,13 +145,9 @@ fn test_fin_scan() {
     assert!(
         matches!(
             state,
-            PortState::Closed
-                | PortState::Filtered
-                | PortState::OpenOrFiltered
-                | PortState::Open
+            PortState::Closed | PortState::Filtered | PortState::OpenOrFiltered | PortState::Open
         ),
-        "Unexpected state: {:?}",
-        state
+        "Unexpected state: {state:?}"
     );
 }
 
@@ -173,7 +161,7 @@ fn test_null_scan() {
     let scanner = match rustnmap_scan::stealth_scans::TcpNullScanner::new(local_addr, config) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("Skipping test: cannot create NULL scanner (requires root): {}", e);
+            eprintln!("Skipping test: cannot create NULL scanner (requires root): {e}");
             return;
         }
     };
@@ -186,13 +174,9 @@ fn test_null_scan() {
     assert!(
         matches!(
             state,
-            PortState::Closed
-                | PortState::Filtered
-                | PortState::OpenOrFiltered
-                | PortState::Open
+            PortState::Closed | PortState::Filtered | PortState::OpenOrFiltered | PortState::Open
         ),
-        "Unexpected state: {:?}",
-        state
+        "Unexpected state: {state:?}"
     );
 }
 
@@ -206,7 +190,7 @@ fn test_xmas_scan() {
     let scanner = match rustnmap_scan::stealth_scans::TcpXmasScanner::new(local_addr, config) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("Skipping test: cannot create XMAS scanner (requires root): {}", e);
+            eprintln!("Skipping test: cannot create XMAS scanner (requires root): {e}");
             return;
         }
     };
@@ -219,13 +203,9 @@ fn test_xmas_scan() {
     assert!(
         matches!(
             state,
-            PortState::Closed
-                | PortState::Filtered
-                | PortState::OpenOrFiltered
-                | PortState::Open
+            PortState::Closed | PortState::Filtered | PortState::OpenOrFiltered | PortState::Open
         ),
-        "Unexpected state: {:?}",
-        state
+        "Unexpected state: {state:?}"
     );
 }
 
@@ -239,7 +219,7 @@ fn test_ack_scan() {
     let scanner = match rustnmap_scan::stealth_scans::TcpAckScanner::new(local_addr, config) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("Skipping test: cannot create ACK scanner (requires root): {}", e);
+            eprintln!("Skipping test: cannot create ACK scanner (requires root): {e}");
             return;
         }
     };
@@ -254,8 +234,7 @@ fn test_ack_scan() {
             state,
             PortState::Filtered | PortState::Unfiltered | PortState::Closed | PortState::Open
         ),
-        "Unexpected state: {:?}",
-        state
+        "Unexpected state: {state:?}"
     );
 }
 
@@ -269,7 +248,7 @@ fn test_maimon_scan() {
     let scanner = match rustnmap_scan::stealth_scans::TcpMaimonScanner::new(local_addr, config) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("Skipping test: cannot create Maimon scanner (requires root): {}", e);
+            eprintln!("Skipping test: cannot create Maimon scanner (requires root): {e}");
             return;
         }
     };
@@ -282,13 +261,9 @@ fn test_maimon_scan() {
     assert!(
         matches!(
             state,
-            PortState::Closed
-                | PortState::Filtered
-                | PortState::OpenOrFiltered
-                | PortState::Open
+            PortState::Closed | PortState::Filtered | PortState::OpenOrFiltered | PortState::Open
         ),
-        "Unexpected state: {:?}",
-        state
+        "Unexpected state: {state:?}"
     );
 }
 
@@ -302,7 +277,7 @@ fn test_window_scan() {
     let scanner = match rustnmap_scan::stealth_scans::TcpWindowScanner::new(local_addr, config) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("Skipping test: cannot create Window scanner (requires root): {}", e);
+            eprintln!("Skipping test: cannot create Window scanner (requires root): {e}");
             return;
         }
     };
@@ -315,13 +290,9 @@ fn test_window_scan() {
     assert!(
         matches!(
             state,
-            PortState::Closed
-                | PortState::Filtered
-                | PortState::OpenOrFiltered
-                | PortState::Open
+            PortState::Closed | PortState::Filtered | PortState::OpenOrFiltered | PortState::Open
         ),
-        "Unexpected state: {:?}",
-        state
+        "Unexpected state: {state:?}"
     );
 }
 
@@ -332,10 +303,11 @@ fn test_ip_protocol_scan() {
     let config = test_config();
     let local_addr = Ipv4Addr::UNSPECIFIED;
 
-    let scanner = match rustnmap_scan::ip_protocol_scan::IpProtocolScanner::new(local_addr, config) {
+    let scanner = match rustnmap_scan::ip_protocol_scan::IpProtocolScanner::new(local_addr, config)
+    {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("Skipping test: cannot create IP Protocol scanner (requires root): {}", e);
+            eprintln!("Skipping test: cannot create IP Protocol scanner (requires root): {e}");
             return;
         }
     };
@@ -348,13 +320,9 @@ fn test_ip_protocol_scan() {
     assert!(
         matches!(
             state,
-            PortState::Open
-                | PortState::Closed
-                | PortState::Filtered
-                | PortState::OpenOrFiltered
+            PortState::Open | PortState::Closed | PortState::Filtered | PortState::OpenOrFiltered
         ),
-        "Unexpected state: {:?}",
-        state
+        "Unexpected state: {state:?}"
     );
 }
 
@@ -371,11 +339,14 @@ fn test_connect_scanner_requires_no_root() {
 fn test_syn_scanner_reports_requires_root() {
     let config = test_config();
 
-    match rustnmap_scan::syn_scan::TcpSynScanner::new(Ipv4Addr::UNSPECIFIED, config) {
-        Ok(scanner) => assert!(scanner.requires_root(), "SYN scanner should report requiring root"),
-        Err(_) => {
-            // If we can't create it due to permissions, that's expected without root
-        }
+    if let Ok(scanner) = rustnmap_scan::syn_scan::TcpSynScanner::new(Ipv4Addr::UNSPECIFIED, config)
+    {
+        assert!(
+            scanner.requires_root(),
+            "SYN scanner should report requiring root"
+        )
+    } else {
+        // If we can't create it due to permissions, that's expected without root
     }
 }
 
@@ -402,8 +373,7 @@ fn test_scan_timeout() {
     // Should complete relatively quickly due to short timeout
     assert!(
         elapsed < Duration::from_secs(2),
-        "Scan should respect timeout, took {:?}",
-        elapsed
+        "Scan should respect timeout, took {elapsed:?}"
     );
 }
 
@@ -420,8 +390,10 @@ fn test_stealth_scanners_creation() {
     let null_result = rustnmap_scan::stealth_scans::TcpNullScanner::new(local_addr, config.clone());
     let xmas_result = rustnmap_scan::stealth_scans::TcpXmasScanner::new(local_addr, config.clone());
     let ack_result = rustnmap_scan::stealth_scans::TcpAckScanner::new(local_addr, config.clone());
-    let maimon_result = rustnmap_scan::stealth_scans::TcpMaimonScanner::new(local_addr, config.clone());
-    let window_result = rustnmap_scan::stealth_scans::TcpWindowScanner::new(local_addr, config.clone());
+    let maimon_result =
+        rustnmap_scan::stealth_scans::TcpMaimonScanner::new(local_addr, config.clone());
+    let window_result =
+        rustnmap_scan::stealth_scans::TcpWindowScanner::new(local_addr, config.clone());
 
     // All results should be consistent - either all succeed (root) or all fail (non-root)
     let results = [
@@ -438,12 +410,9 @@ fn test_stealth_scanners_creation() {
     let all_ok = results.iter().all(|&r| r);
     let all_err = results.iter().all(|&r| !r);
 
-    if !all_ok && !all_err {
-        panic!(
-            "All scanner creation results should be consistent (all succeed or all fail). Got: {:?}",
-            results
+    assert!(!(!all_ok && !all_err),
+            "All scanner creation results should be consistent (all succeed or all fail). Got: {results:?}"
         );
-    }
 
     if all_ok {
         println!("All stealth scanners created successfully (running as root)");
@@ -467,10 +436,11 @@ fn test_scan_multiple_ports() {
             .scan_port(&target, port, Protocol::Tcp)
             .expect("Scan failed");
         assert!(
-            matches!(state, PortState::Closed | PortState::Filtered | PortState::Open),
-            "Port {}: Unexpected state: {:?}",
-            port,
-            state
+            matches!(
+                state,
+                PortState::Closed | PortState::Filtered | PortState::Open
+            ),
+            "Port {port}: Unexpected state: {state:?}"
         );
     }
 }
@@ -493,5 +463,5 @@ fn test_scanner_error_handling() {
 
     // Should complete quickly even with aggressive timeouts
     let result = scanner.scan_port(&target, 59999, Protocol::Tcp);
-    assert!(result.is_ok(), "Scan should complete: {:?}", result);
+    assert!(result.is_ok(), "Scan should complete: {result:?}");
 }

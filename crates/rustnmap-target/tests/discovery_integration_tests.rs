@@ -2,7 +2,7 @@
 //!
 //! These tests use actual network operations. Root privileges are available
 //! in the development environment for raw socket operations.
-//! The test target IP is read from the TEST_TARGET_IP environment variable,
+//! The test target IP is read from the `TEST_TARGET_IP` environment variable,
 //! defaulting to localhost (127.0.0.1) if not set.
 
 use std::env;
@@ -46,7 +46,7 @@ fn test_icmp_ping_discovery() {
     let icmp_ping = match IcmpPing::new(local_addr, timeout, retries) {
         Ok(ping) => ping,
         Err(e) => {
-            eprintln!("Skipping test: cannot create ICMP ping (requires root): {}", e);
+            eprintln!("Skipping test: cannot create ICMP ping (requires root): {e}");
             return;
         }
     };
@@ -56,8 +56,7 @@ fn test_icmp_ping_discovery() {
     // Should get a valid host state
     assert!(
         matches!(state, HostState::Up | HostState::Down | HostState::Unknown),
-        "Unexpected host state: {:?}",
-        state
+        "Unexpected host state: {state:?}"
     );
 }
 
@@ -72,17 +71,18 @@ fn test_icmp_timestamp_discovery() {
     let timestamp_ping = match IcmpTimestampPing::new(local_addr, timeout, retries) {
         Ok(ping) => ping,
         Err(e) => {
-            eprintln!("Skipping test: cannot create ICMP timestamp ping (requires root): {}", e);
+            eprintln!("Skipping test: cannot create ICMP timestamp ping (requires root): {e}");
             return;
         }
     };
 
-    let state = timestamp_ping.discover(&target).expect("ICMP timestamp ping failed");
+    let state = timestamp_ping
+        .discover(&target)
+        .expect("ICMP timestamp ping failed");
 
     assert!(
         matches!(state, HostState::Up | HostState::Down | HostState::Unknown),
-        "Unexpected host state: {:?}",
-        state
+        "Unexpected host state: {state:?}"
     );
 }
 
@@ -98,7 +98,7 @@ fn test_tcp_syn_ping_discovery() {
     let syn_ping = match TcpSynPing::new(local_addr, ports, timeout, retries) {
         Ok(ping) => ping,
         Err(e) => {
-            eprintln!("Skipping test: cannot create TCP SYN ping (requires root): {}", e);
+            eprintln!("Skipping test: cannot create TCP SYN ping (requires root): {e}");
             return;
         }
     };
@@ -107,8 +107,7 @@ fn test_tcp_syn_ping_discovery() {
 
     assert!(
         matches!(state, HostState::Up | HostState::Down | HostState::Unknown),
-        "Unexpected host state: {:?}",
-        state
+        "Unexpected host state: {state:?}"
     );
 }
 
@@ -124,7 +123,7 @@ fn test_tcp_ack_ping_discovery() {
     let ack_ping = match TcpAckPing::new(local_addr, ports, timeout, retries) {
         Ok(ping) => ping,
         Err(e) => {
-            eprintln!("Skipping test: cannot create TCP ACK ping (requires root): {}", e);
+            eprintln!("Skipping test: cannot create TCP ACK ping (requires root): {e}");
             return;
         }
     };
@@ -133,8 +132,7 @@ fn test_tcp_ack_ping_discovery() {
 
     assert!(
         matches!(state, HostState::Up | HostState::Down | HostState::Unknown),
-        "Unexpected host state: {:?}",
-        state
+        "Unexpected host state: {state:?}"
     );
 }
 
@@ -150,7 +148,7 @@ fn test_arp_ping_discovery() {
     let arp_ping = match ArpPing::new(src_mac, src_ip, timeout, retries) {
         Ok(ping) => ping,
         Err(e) => {
-            eprintln!("Skipping test: cannot create ARP ping (requires root): {}", e);
+            eprintln!("Skipping test: cannot create ARP ping (requires root): {e}");
             return;
         }
     };
@@ -159,44 +157,45 @@ fn test_arp_ping_discovery() {
 
     assert!(
         matches!(state, HostState::Up | HostState::Down | HostState::Unknown),
-        "Unexpected host state: {:?}",
-        state
+        "Unexpected host state: {state:?}"
     );
 }
 
-/// Test HostDiscovery engine with ICMP.
+/// Test `HostDiscovery` engine with ICMP.
 #[test]
 fn test_host_discovery_icmp() {
     let target = get_test_target();
     let config = test_config();
 
     let discovery = HostDiscovery::new(config);
-    let state = discovery.discover_icmp(&target).expect("Host discovery failed");
+    let state = discovery
+        .discover_icmp(&target)
+        .expect("Host discovery failed");
 
     assert!(
         matches!(state, HostState::Up | HostState::Down | HostState::Unknown),
-        "Unexpected host state: {:?}",
-        state
+        "Unexpected host state: {state:?}"
     );
 }
 
-/// Test HostDiscovery engine with TCP ping.
+/// Test `HostDiscovery` engine with TCP ping.
 #[test]
 fn test_host_discovery_tcp_ping() {
     let target = get_test_target();
     let config = test_config();
 
     let discovery = HostDiscovery::new(config);
-    let state = discovery.discover_tcp_ping(&target).expect("TCP ping discovery failed");
+    let state = discovery
+        .discover_tcp_ping(&target)
+        .expect("TCP ping discovery failed");
 
     assert!(
         matches!(state, HostState::Up | HostState::Down | HostState::Unknown),
-        "Unexpected host state: {:?}",
-        state
+        "Unexpected host state: {state:?}"
     );
 }
 
-/// Test HostDiscovery engine auto-selection.
+/// Test `HostDiscovery` engine auto-selection.
 #[test]
 fn test_host_discovery_auto() {
     let target = get_test_target();
@@ -207,12 +206,11 @@ fn test_host_discovery_auto() {
 
     assert!(
         matches!(state, HostState::Up | HostState::Down | HostState::Unknown),
-        "Unexpected host state: {:?}",
-        state
+        "Unexpected host state: {state:?}"
     );
 }
 
-/// Test IPv6 ICMPv6 ping discovery.
+/// Test IPv6 `ICMPv6` ping discovery.
 #[test]
 fn test_icmpv6_ping_discovery() {
     let local_addr = Ipv6Addr::UNSPECIFIED;
@@ -222,7 +220,7 @@ fn test_icmpv6_ping_discovery() {
     let icmpv6_ping = match Icmpv6Ping::new(local_addr, timeout, retries) {
         Ok(ping) => ping,
         Err(e) => {
-            eprintln!("Skipping test: cannot create ICMPv6 ping (requires root): {}", e);
+            eprintln!("Skipping test: cannot create ICMPv6 ping (requires root): {e}");
             return;
         }
     };
@@ -236,13 +234,12 @@ fn test_icmpv6_ping_discovery() {
         Ok(state) => {
             assert!(
                 matches!(state, HostState::Up | HostState::Down | HostState::Unknown),
-                "Unexpected host state: {:?}",
-                state
+                "Unexpected host state: {state:?}"
             );
         }
         Err(e) => {
             // IPv6 may not be supported in this environment
-            eprintln!("ICMPv6 ping error (IPv6 may not be supported): {}", e);
+            eprintln!("ICMPv6 ping error (IPv6 may not be supported): {e}");
         }
     }
 }
@@ -257,7 +254,7 @@ fn test_icmpv6_neighbor_discovery() {
     let ndp = match Icmpv6NeighborDiscovery::new(local_addr, timeout, retries) {
         Ok(ping) => ping,
         Err(e) => {
-            eprintln!("Skipping test: cannot create NDP (requires root): {}", e);
+            eprintln!("Skipping test: cannot create NDP (requires root): {e}");
             return;
         }
     };
@@ -271,8 +268,7 @@ fn test_icmpv6_neighbor_discovery() {
 
     assert!(
         matches!(state, HostState::Up | HostState::Down | HostState::Unknown),
-        "Unexpected host state: {:?}",
-        state
+        "Unexpected host state: {state:?}"
     );
 }
 
@@ -286,13 +282,13 @@ fn test_discovery_requires_root() {
 
     let icmp_result = IcmpPing::new(local_addr, timeout, retries);
 
-    match icmp_result {
-        Ok(ping) => {
-            assert!(ping.requires_root(), "ICMP ping should report requiring root");
-        }
-        Err(_) => {
-            // Expected without root - test passes
-        }
+    if let Ok(ping) = icmp_result {
+        assert!(
+            ping.requires_root(),
+            "ICMP ping should report requiring root"
+        );
+    } else {
+        // Expected without root - test passes
     }
 }
 
@@ -306,13 +302,10 @@ fn test_discovery_timeout() {
 
     let start = std::time::Instant::now();
 
-    match IcmpPing::new(local_addr, timeout, retries) {
-        Ok(ping) => {
-            let _ = ping.discover(&target);
-        }
-        Err(_) => {
-            // If we can't create the ping, that's fine for this test
-        }
+    if let Ok(ping) = IcmpPing::new(local_addr, timeout, retries) {
+        let _ = ping.discover(&target);
+    } else {
+        // If we can't create the ping, that's fine for this test
     }
 
     let elapsed = start.elapsed();
@@ -320,8 +313,7 @@ fn test_discovery_timeout() {
     // Should complete quickly even with short timeout
     assert!(
         elapsed < Duration::from_secs(2),
-        "Discovery should respect timeout, took {:?}",
-        elapsed
+        "Discovery should respect timeout, took {elapsed:?}"
     );
 }
 
@@ -329,12 +321,12 @@ fn test_discovery_timeout() {
 #[test]
 fn test_host_discovery_creation() {
     let config = test_config();
-    let discovery = HostDiscovery::new(config);
+    let _discovery = HostDiscovery::new(config);
 
     // Just verify the engine can be created
     // The engine itself doesn't expose much for direct testing
     // The discovery methods internally handle root requirements
-    drop(discovery);
+    // _discovery is dropped here
 }
 
 /// Test multiple discovery methods against same target.
@@ -372,9 +364,7 @@ fn test_multiple_discovery_methods() {
     for (method, state) in &results {
         assert!(
             matches!(state, HostState::Up | HostState::Down | HostState::Unknown),
-            "{}: Unexpected host state: {:?}",
-            method,
-            state
+            "{method}: Unexpected host state: {state:?}"
         );
     }
 }
@@ -395,14 +385,14 @@ fn test_discovery_invalid_target() {
 
     // This may fail or return Unknown depending on implementation
     match state {
-        Ok(HostState::Unknown) | Ok(HostState::Down) => {
+        Ok(HostState::Unknown | HostState::Down) => {
             // Expected behavior
         }
         Ok(other) => {
-            println!("IPv4 discovery on IPv6 target returned: {:?}", other);
+            println!("IPv4 discovery on IPv6 target returned: {other:?}");
         }
         Err(e) => {
-            println!("IPv4 discovery on IPv6 target error (expected): {}", e);
+            println!("IPv4 discovery on IPv6 target error (expected): {e}");
         }
     }
 }

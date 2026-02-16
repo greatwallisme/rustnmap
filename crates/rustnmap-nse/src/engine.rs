@@ -836,7 +836,11 @@ end
 "
         .to_string();
 
-        let script = NseScript::new("test-bool-true", std::path::PathBuf::from("/test.nse"), source);
+        let script = NseScript::new(
+            "test-bool-true",
+            std::path::PathBuf::from("/test.nse"),
+            source,
+        );
         db.register_script(&script);
 
         let engine = ScriptEngine::new(db);
@@ -862,8 +866,11 @@ end
 "
         .to_string();
 
-        let script =
-            NseScript::new("test-bool-false", std::path::PathBuf::from("/test.nse"), source);
+        let script = NseScript::new(
+            "test-bool-false",
+            std::path::PathBuf::from("/test.nse"),
+            source,
+        );
         db.register_script(&script);
 
         let engine = ScriptEngine::new(db);
@@ -952,8 +959,8 @@ end
         assert_eq!(
             bin_ip,
             vec![
-                0x20, 0x01, 0x0d, 0xb8, 0x85, 0xa3, 0x00, 0x00, 0x00, 0x00, 0x8a, 0x2e, 0x03,
-                0x70, 0x73, 0x34
+                0x20, 0x01, 0x0d, 0xb8, 0x85, 0xa3, 0x00, 0x00, 0x00, 0x00, 0x8a, 0x2e, 0x03, 0x70,
+                0x73, 0x34
             ]
         );
     }
@@ -990,8 +997,7 @@ end
 "#
         .to_string();
 
-        let script =
-            NseScript::new("test-async", std::path::PathBuf::from("/test.nse"), source);
+        let script = NseScript::new("test-async", std::path::PathBuf::from("/test.nse"), source);
         db.register_script(&script);
 
         let engine = ScriptEngine::new(db);
@@ -1021,8 +1027,11 @@ end
 "#
         .to_string();
 
-        let script =
-            NseScript::new("test-timeout", std::path::PathBuf::from("/test.nse"), source);
+        let script = NseScript::new(
+            "test-timeout",
+            std::path::PathBuf::from("/test.nse"),
+            source,
+        );
         db.register_script(&script);
 
         let config = SchedulerConfig {
@@ -1058,7 +1067,11 @@ end
 "#
         .to_string();
 
-        let script = NseScript::new("test-concurrent", std::path::PathBuf::from("/test.nse"), source);
+        let script = NseScript::new(
+            "test-concurrent",
+            std::path::PathBuf::from("/test.nse"),
+            source,
+        );
         db.register_script(&script);
 
         let config = SchedulerConfig {
@@ -1070,8 +1083,14 @@ end
         let engine = ScriptEngine::with_config(db, config);
         let script_ref = engine.database().get("test-concurrent").unwrap();
 
-        let handle1 = engine.execute_script_async(script_ref, std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
-        let handle2 = engine.execute_script_async(script_ref, std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
+        let handle1 = engine.execute_script_async(
+            script_ref,
+            std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+        );
+        let handle2 = engine.execute_script_async(
+            script_ref,
+            std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+        );
 
         let (result1, result2) = tokio::join!(handle1, handle2);
 
@@ -1099,26 +1118,43 @@ end
 "#
         .to_string();
 
-        let script1 = NseScript::new("test-multi-1", std::path::PathBuf::from("/test1.nse"), source1);
-        let script2 = NseScript::new("test-multi-2", std::path::PathBuf::from("/test2.nse"), source2);
+        let script1 = NseScript::new(
+            "test-multi-1",
+            std::path::PathBuf::from("/test1.nse"),
+            source1,
+        );
+        let script2 = NseScript::new(
+            "test-multi-2",
+            std::path::PathBuf::from("/test2.nse"),
+            source2,
+        );
         db.register_script(&script1);
         db.register_script(&script2);
 
         let engine = ScriptEngine::new(db);
-        let scripts: Vec<&NseScript> = vec![
+        let script_refs: Vec<&NseScript> = vec![
             engine.database().get("test-multi-1").unwrap(),
             engine.database().get("test-multi-2").unwrap(),
         ];
 
         let results = engine
-            .execute_scripts_async(&scripts, std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST))
+            .execute_scripts_async(
+                &script_refs,
+                std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+            )
             .await;
 
         assert_eq!(results.len(), 2);
         assert!(results[0].as_ref().unwrap().is_success());
         assert!(results[1].as_ref().unwrap().is_success());
-        assert_eq!(results[0].as_ref().unwrap().output.to_display(), "script1 output");
-        assert_eq!(results[1].as_ref().unwrap().output.to_display(), "script2 output");
+        assert_eq!(
+            results[0].as_ref().unwrap().output.to_display(),
+            "script1 output"
+        );
+        assert_eq!(
+            results[1].as_ref().unwrap().output.to_display(),
+            "script2 output"
+        );
     }
 
     #[tokio::test]
@@ -1152,8 +1188,16 @@ end
 "
         .to_string();
 
-        let script1 = NseScript::new("test-mix-1", std::path::PathBuf::from("/test1.nse"), source1);
-        let script2 = NseScript::new("test-mix-2", std::path::PathBuf::from("/test2.nse"), source2);
+        let script1 = NseScript::new(
+            "test-mix-1",
+            std::path::PathBuf::from("/test1.nse"),
+            source1,
+        );
+        let script2 = NseScript::new(
+            "test-mix-2",
+            std::path::PathBuf::from("/test2.nse"),
+            source2,
+        );
         db.register_script(&script1);
         db.register_script(&script2);
 
@@ -1164,13 +1208,16 @@ end
         };
 
         let engine = ScriptEngine::with_config(db, config);
-        let scripts: Vec<&NseScript> = vec![
+        let script_refs: Vec<&NseScript> = vec![
             engine.database().get("test-mix-1").unwrap(),
             engine.database().get("test-mix-2").unwrap(),
         ];
 
         let results = engine
-            .execute_scripts_async(&scripts, std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST))
+            .execute_scripts_async(
+                &script_refs,
+                std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+            )
             .await;
 
         assert_eq!(results.len(), 2);
@@ -1191,8 +1238,11 @@ end
 "#
         .to_string();
 
-        let script =
-            NseScript::new("test-port-script", std::path::PathBuf::from("/test.nse"), source);
+        let script = NseScript::new(
+            "test-port-script",
+            std::path::PathBuf::from("/test.nse"),
+            source,
+        );
         db.register_script(&script);
 
         let engine = ScriptEngine::new(db);
@@ -1224,8 +1274,11 @@ end
 "#
         .to_string();
 
-        let script =
-            NseScript::new("test-version", std::path::PathBuf::from("/test.nse"), source);
+        let script = NseScript::new(
+            "test-version",
+            std::path::PathBuf::from("/test.nse"),
+            source,
+        );
         db.register_script(&script);
 
         let engine = ScriptEngine::new(db);
@@ -1286,8 +1339,11 @@ end
 "#
         .to_string();
 
-        let script =
-            NseScript::new("test-no-service", std::path::PathBuf::from("/test.nse"), source);
+        let script = NseScript::new(
+            "test-no-service",
+            std::path::PathBuf::from("/test.nse"),
+            source,
+        );
         db.register_script(&script);
 
         let engine = ScriptEngine::new(db);
@@ -1320,8 +1376,11 @@ end
 "#
         .to_string();
 
-        let script =
-            NseScript::new("test-filtered", std::path::PathBuf::from("/test.nse"), source);
+        let script = NseScript::new(
+            "test-filtered",
+            std::path::PathBuf::from("/test.nse"),
+            source,
+        );
         db.register_script(&script);
 
         let engine = ScriptEngine::new(db);
@@ -1357,8 +1416,11 @@ end
 "#
         .to_string();
 
-        let script =
-            NseScript::new("test-hostrule-false", std::path::PathBuf::from("/test.nse"), source);
+        let script = NseScript::new(
+            "test-hostrule-false",
+            std::path::PathBuf::from("/test.nse"),
+            source,
+        );
         db.register_script(&script);
 
         let engine = ScriptEngine::new(db);
@@ -1387,8 +1449,11 @@ end
 "#
         .to_string();
 
-        let script =
-            NseScript::new("test-hostrule-true", std::path::PathBuf::from("/test.nse"), source);
+        let script = NseScript::new(
+            "test-hostrule-true",
+            std::path::PathBuf::from("/test.nse"),
+            source,
+        );
         db.register_script(&script);
 
         let engine = ScriptEngine::new(db);
@@ -1413,8 +1478,11 @@ end
 "#
         .to_string();
 
-        let script =
-            NseScript::new("test-no-hostrule", std::path::PathBuf::from("/test.nse"), source);
+        let script = NseScript::new(
+            "test-no-hostrule",
+            std::path::PathBuf::from("/test.nse"),
+            source,
+        );
         db.register_script(&script);
 
         let engine = ScriptEngine::new(db);
@@ -1439,8 +1507,11 @@ end
 "#
         .to_string();
 
-        let script =
-            NseScript::new("test-hostrule-ip", std::path::PathBuf::from("/test.nse"), source);
+        let script = NseScript::new(
+            "test-hostrule-ip",
+            std::path::PathBuf::from("/test.nse"),
+            source,
+        );
         db.register_script(&script);
 
         let engine = ScriptEngine::new(db);
@@ -1479,8 +1550,11 @@ end
 "#
         .to_string();
 
-        let script =
-            NseScript::new("test-portrule-false", std::path::PathBuf::from("/test.nse"), source);
+        let script = NseScript::new(
+            "test-portrule-false",
+            std::path::PathBuf::from("/test.nse"),
+            source,
+        );
         db.register_script(&script);
 
         let engine = ScriptEngine::new(db);
@@ -1513,8 +1587,11 @@ end
 "#
         .to_string();
 
-        let script =
-            NseScript::new("test-portrule-true", std::path::PathBuf::from("/test.nse"), source);
+        let script = NseScript::new(
+            "test-portrule-true",
+            std::path::PathBuf::from("/test.nse"),
+            source,
+        );
         db.register_script(&script);
 
         let engine = ScriptEngine::new(db);
@@ -1543,8 +1620,11 @@ end
 "#
         .to_string();
 
-        let script =
-            NseScript::new("test-no-portrule", std::path::PathBuf::from("/test.nse"), source);
+        let script = NseScript::new(
+            "test-no-portrule",
+            std::path::PathBuf::from("/test.nse"),
+            source,
+        );
         db.register_script(&script);
 
         let engine = ScriptEngine::new(db);
@@ -1573,8 +1653,11 @@ end
 "
         .to_string();
 
-        let script =
-            NseScript::new("test-portrule-port", std::path::PathBuf::from("/test.nse"), source);
+        let script = NseScript::new(
+            "test-portrule-port",
+            std::path::PathBuf::from("/test.nse"),
+            source,
+        );
         db.register_script(&script);
 
         let engine = ScriptEngine::new(db);
@@ -1615,8 +1698,11 @@ end
 "#
         .to_string();
 
-        let script =
-            NseScript::new("test-portrule-state", std::path::PathBuf::from("/test.nse"), source);
+        let script = NseScript::new(
+            "test-portrule-state",
+            std::path::PathBuf::from("/test.nse"),
+            source,
+        );
         db.register_script(&script);
 
         let engine = ScriptEngine::new(db);

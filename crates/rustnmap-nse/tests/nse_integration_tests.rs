@@ -7,12 +7,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use rustnmap_nse::{
-    ScriptCategory, ScriptDatabase, ScriptEngine, ScriptScheduler,
-};
 use rustnmap_nse::engine::SchedulerConfig;
 use rustnmap_nse::lua::NseLua;
 use rustnmap_nse::script::NseScript;
+use rustnmap_nse::{ScriptCategory, ScriptDatabase, ScriptEngine, ScriptScheduler};
 
 /// Test creating an empty script database.
 #[test]
@@ -25,9 +23,15 @@ fn test_script_database_empty() {
 /// Test script category parsing.
 #[test]
 fn test_script_category_from_str() {
-    assert_eq!(ScriptCategory::from_str("default"), Some(ScriptCategory::Default));
+    assert_eq!(
+        ScriptCategory::from_str("default"),
+        Some(ScriptCategory::Default)
+    );
     assert_eq!(ScriptCategory::from_str("auth"), Some(ScriptCategory::Auth));
-    assert_eq!(ScriptCategory::from_str("discovery"), Some(ScriptCategory::Discovery));
+    assert_eq!(
+        ScriptCategory::from_str("discovery"),
+        Some(ScriptCategory::Discovery)
+    );
     assert_eq!(ScriptCategory::from_str("safe"), Some(ScriptCategory::Safe));
     assert_eq!(ScriptCategory::from_str("vuln"), Some(ScriptCategory::Vuln));
     assert_eq!(ScriptCategory::from_str("UNKNOWN"), None);
@@ -100,7 +104,10 @@ fn test_script_engine_with_config() {
     let engine = ScriptEngine::with_config(db, config);
 
     assert_eq!(engine.scheduler().config().max_concurrent, 5);
-    assert_eq!(engine.scheduler().config().default_timeout, Duration::from_secs(60));
+    assert_eq!(
+        engine.scheduler().config().default_timeout,
+        Duration::from_secs(60)
+    );
 }
 
 /// Test script selection by category from empty database.
@@ -142,14 +149,14 @@ fn test_get_script_empty_database() {
 fn test_load_scripts_nonexistent_directory() {
     let result = ScriptDatabase::from_directory(Path::new("/nonexistent/path"));
 
-    assert!(result.is_err());
+    result.unwrap_err();
 }
 
 /// Test script database loading from temp directory (empty).
 #[test]
 fn test_load_scripts_empty_directory() {
     let temp_dir = std::env::temp_dir().join("nse_test_empty");
-    std::fs::create_dir_all(&temp_dir).ok();
+    let _ = std::fs::create_dir_all(&temp_dir);
 
     let result = ScriptDatabase::from_directory(&temp_dir);
 
@@ -159,7 +166,7 @@ fn test_load_scripts_empty_directory() {
     assert_eq!(db.len(), 0);
 
     // Cleanup
-    std::fs::remove_dir(&temp_dir).ok();
+    let _ = std::fs::remove_dir(&temp_dir);
 }
 
 /// Test creating a simple test script inline.
@@ -179,7 +186,8 @@ fn test_create_simple_script() {
             action = function(host, port)
                 return "Test output"
             end
-        "#.to_string(),
+        "#
+        .to_string(),
     );
 
     assert_eq!(script.id, "test-script");
@@ -206,7 +214,8 @@ fn test_script_with_populated_fields() {
             action = function(host, port)
                 return "Test output"
             end
-        "#.to_string(),
+        "#
+        .to_string(),
     );
 
     // Set fields manually for testing
@@ -259,7 +268,7 @@ fn test_lua_runtime_creation() {
     let lua = NseLua::new_default();
 
     // Should be able to create Lua state
-    assert!(lua.is_ok());
+    lua.unwrap();
 }
 
 /// Test Lua runtime with simple expression.
@@ -308,7 +317,7 @@ fn test_script_timeout_configuration() {
 fn test_script_categories_distinct() {
     use std::collections::HashSet;
 
-    let categories = vec![
+    let categories = [
         ScriptCategory::Auth,
         ScriptCategory::Broadcast,
         ScriptCategory::Brute,
@@ -350,19 +359,10 @@ fn test_engine_multiple_categories() {
 #[test]
 fn test_script_id_validation() {
     // Valid script IDs
-    let valid_ids = vec![
-        "http-title",
-        "ssh-version",
-        "ftp-anon",
-        "test_script",
-    ];
+    let valid_ids = vec!["http-title", "ssh-version", "ftp-anon", "test_script"];
 
     for id in valid_ids {
-        let script = NseScript::new(
-            id,
-            PathBuf::from(format!("/test/{}.nse", id)),
-            "".to_string(),
-        );
+        let script = NseScript::new(id, PathBuf::from(format!("/test/{id}.nse")), String::new());
         assert_eq!(script.id, id);
     }
 }
@@ -372,14 +372,14 @@ fn test_script_id_validation() {
 fn test_invalid_script_path_handling() {
     // Try to load from a file path that's not a directory
     let temp_file = std::env::temp_dir().join("nse_test_file.txt");
-    std::fs::write(&temp_file, "not a script").ok();
+    let _ = std::fs::write(&temp_file, "not a script");
 
     // Attempting to load from a file (not directory) should fail
     let result = ScriptDatabase::from_directory(&temp_file);
-    assert!(result.is_err());
+    result.unwrap_err();
 
     // Cleanup
-    std::fs::remove_file(&temp_file).ok();
+    let _ = std::fs::remove_file(&temp_file);
 }
 
 /// Test script metadata extraction (from source).
@@ -408,7 +408,7 @@ end
     assert!(source.contains("action"));
 }
 
-/// Test script has_hostrule detection.
+/// Test script `has_hostrule` detection.
 #[test]
 fn test_script_has_hostrule() {
     let script = NseScript::new(
@@ -422,7 +422,8 @@ fn test_script_has_hostrule() {
             action = function(host)
                 return "test"
             end
-        "#.to_string(),
+        "#
+        .to_string(),
     );
 
     assert!(script.has_hostrule());
@@ -430,7 +431,7 @@ fn test_script_has_hostrule() {
     assert!(script.has_action());
 }
 
-/// Test script has_portrule detection.
+/// Test script `has_portrule` detection.
 #[test]
 fn test_script_has_portrule() {
     let script = NseScript::new(
@@ -444,7 +445,8 @@ fn test_script_has_portrule() {
             action = function(host, port)
                 return "test"
             end
-        "#.to_string(),
+        "#
+        .to_string(),
     );
 
     assert!(!script.has_hostrule());
@@ -452,13 +454,13 @@ fn test_script_has_portrule() {
     assert!(script.has_action());
 }
 
-/// Test script matches_categories.
+/// Test script `matches_categories`.
 #[test]
 fn test_script_matches_categories() {
     let mut script = NseScript::new(
         "category-test",
         PathBuf::from("/test/cat.nse"),
-        "".to_string(),
+        String::new(),
     );
     script.categories = vec![ScriptCategory::Safe, ScriptCategory::Discovery];
 
@@ -468,13 +470,13 @@ fn test_script_matches_categories() {
     assert!(!script.matches_categories(&[ScriptCategory::Vuln]));
 }
 
-/// Test script matches_pattern.
+/// Test script `matches_pattern`.
 #[test]
 fn test_script_matches_pattern() {
     let script = NseScript::new(
         "http-title",
         PathBuf::from("/test/http-title.nse"),
-        "".to_string(),
+        String::new(),
     );
 
     assert!(script.matches_pattern("http"));
@@ -483,13 +485,13 @@ fn test_script_matches_pattern() {
     assert!(!script.matches_pattern("ssh"));
 }
 
-/// Test script matches_pattern with glob.
+/// Test script `matches_pattern` with glob.
 #[test]
 fn test_script_matches_pattern_glob() {
     let script = NseScript::new(
         "http-title",
         PathBuf::from("/test/http-title.nse"),
-        "".to_string(),
+        String::new(),
     );
 
     assert!(script.matches_pattern("http-*"));

@@ -42,8 +42,7 @@ fn test_os_detector_with_seq_count() {
 fn test_os_detector_with_timeout() {
     let db = FingerprintDatabase::empty();
     let local_addr = Ipv4Addr::new(127, 0, 0, 1);
-    let _detector = OsDetector::new(db, local_addr)
-        .with_timeout(Duration::from_secs(5));
+    let _detector = OsDetector::new(db, local_addr).with_timeout(Duration::from_secs(5));
 
     // Verify detector was created
 }
@@ -124,7 +123,9 @@ async fn test_os_detection_with_target_ip() {
 
     // Get target from environment or skip
     let target_ip = match std::env::var("TEST_TARGET_IP") {
-        Ok(ip) => ip.parse::<Ipv4Addr>().unwrap_or(Ipv4Addr::new(127, 0, 0, 1)),
+        Ok(ip) => ip
+            .parse::<Ipv4Addr>()
+            .unwrap_or(Ipv4Addr::new(127, 0, 0, 1)),
         Err(_) => {
             // Skip test if no target IP configured
             eprintln!("Skipping test: TEST_TARGET_IP not set");
@@ -161,8 +162,7 @@ async fn test_os_detection_timeout() {
     let local_addr = Ipv4Addr::new(127, 0, 0, 1);
 
     // Use a very short timeout
-    let detector = OsDetector::new(db, local_addr)
-        .with_timeout(Duration::from_millis(100));
+    let detector = OsDetector::new(db, local_addr).with_timeout(Duration::from_millis(100));
 
     // Target a non-existent host
     let target: SocketAddr = "192.0.2.1:80".parse().unwrap();
@@ -222,7 +222,10 @@ fn test_seq_analysis_random() {
 
     // With random ISNs, differences should vary widely
     let unique_diffs: std::collections::HashSet<u32> = diffs.iter().copied().collect();
-    assert!(unique_diffs.len() > 1, "Random ISNs should have varying differences");
+    assert!(
+        unique_diffs.len() > 1,
+        "Random ISNs should have varying differences"
+    );
 }
 
 /// Test SEQ analysis with time-dependent ISN pattern.
@@ -312,8 +315,8 @@ fn test_tcp_options_parsing() {
         2, 4, 0x05, 0xB4, // MSS = 1460
         8, 10, 0, 0, 0, 0, 0, 0, 0, 0, // Timestamp (TSval=0, TSecr=0)
         4, 2, // SACK permitted
-        1,  // NOP
-        1,  // NOP
+        1, // NOP
+        1, // NOP
     ];
 
     // Verify options structure
@@ -502,8 +505,7 @@ async fn test_os_detection_invalid_target() {
 async fn test_os_detection_unreachable_target() {
     let db = FingerprintDatabase::empty();
     let local_addr = Ipv4Addr::new(127, 0, 0, 1);
-    let detector = OsDetector::new(db, local_addr)
-        .with_timeout(Duration::from_millis(100));
+    let detector = OsDetector::new(db, local_addr).with_timeout(Duration::from_millis(100));
 
     // Use RFC 5737 documentation range (should be unreachable)
     let target: SocketAddr = "192.0.2.99:80".parse().unwrap();
@@ -512,10 +514,9 @@ async fn test_os_detection_unreachable_target() {
 
     // May succeed with empty results or fail depending on implementation
     // Just verify it doesn't panic
-    match result {
-        Ok(matches) => assert!(matches.is_empty()),
-        Err(_) => (), // Error is acceptable for unreachable target
-    }
+    if let Ok(matches) = result {
+        assert!(matches.is_empty());
+    } // Error is acceptable for unreachable target
 }
 
 // Rust guideline compliant 2026-02-15

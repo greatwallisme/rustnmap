@@ -17,9 +17,7 @@ use std::net::IpAddr;
 use std::sync::Arc;
 
 use rustnmap_common::Ipv4Addr;
-use rustnmap_core::orchestrator::{
-    ScanOrchestrator, ScanPhase, ScanPipeline, ScanState,
-};
+use rustnmap_core::orchestrator::{ScanOrchestrator, ScanPhase, ScanPipeline, ScanState};
 use rustnmap_core::session::{ScanConfig, ScanSession};
 use rustnmap_core::state::{HostState, PortScanState, ScanProgress};
 use rustnmap_target::{Target, TargetGroup};
@@ -298,15 +296,21 @@ fn test_scan_pipeline_dependencies() {
     // Check dependencies exist for some phases
     let host_discovery_deps = pipeline.dependencies(ScanPhase::HostDiscovery);
     assert!(host_discovery_deps.is_some());
-    assert!(host_discovery_deps.unwrap().contains(&ScanPhase::TargetParsing));
+    assert!(host_discovery_deps
+        .unwrap()
+        .contains(&ScanPhase::TargetParsing));
 
     let port_scanning_deps = pipeline.dependencies(ScanPhase::PortScanning);
     assert!(port_scanning_deps.is_some());
-    assert!(port_scanning_deps.unwrap().contains(&ScanPhase::HostDiscovery));
+    assert!(port_scanning_deps
+        .unwrap()
+        .contains(&ScanPhase::HostDiscovery));
 
     let service_detection_deps = pipeline.dependencies(ScanPhase::ServiceDetection);
     assert!(service_detection_deps.is_some());
-    assert!(service_detection_deps.unwrap().contains(&ScanPhase::PortScanning));
+    assert!(service_detection_deps
+        .unwrap()
+        .contains(&ScanPhase::PortScanning));
 }
 
 #[test]
@@ -328,7 +332,9 @@ fn test_scan_pipeline_add_phase_with_dependency() {
     // Service detection should be added after port scanning
     let phases = pipeline.phases();
     let port_scan_idx = phases.iter().position(|&p| p == ScanPhase::PortScanning);
-    let service_idx = phases.iter().position(|&p| p == ScanPhase::ServiceDetection);
+    let service_idx = phases
+        .iter()
+        .position(|&p| p == ScanPhase::ServiceDetection);
 
     assert!(port_scan_idx.is_some());
     assert!(service_idx.is_some());
@@ -377,7 +383,10 @@ fn test_scan_state_host_state_creation() {
     let ip = IpAddr::V4(std::net::Ipv4Addr::new(192, 168, 1, 1));
 
     let host_state = state.host_state(ip);
-    assert_eq!(host_state.status, rustnmap_output::models::HostStatus::Unknown);
+    assert_eq!(
+        host_state.status,
+        rustnmap_output::models::HostStatus::Unknown
+    );
     assert_eq!(state.host_count(), 1);
 }
 

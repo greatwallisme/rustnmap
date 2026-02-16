@@ -817,7 +817,10 @@ mod tests {
             );
 
             let response = traceroute.handle_tcp_response(&packet, target_ip, expected_port);
-            assert!(response.is_none(), "should reject packet with wrong source port");
+            assert!(
+                response.is_none(),
+                "should reject packet with wrong source port"
+            );
         }
     }
 
@@ -845,7 +848,10 @@ mod tests {
             );
 
             let response = traceroute.handle_tcp_response(&packet, target_ip, dest_port);
-            assert!(response.is_none(), "should reject packet with wrong ACK number");
+            assert!(
+                response.is_none(),
+                "should reject packet with wrong ACK number"
+            );
         }
     }
 
@@ -861,7 +867,10 @@ mod tests {
             // Packet with only 19 bytes (less than 20 needed for IP header)
             let short_packet = vec![0u8; 19];
             let response = traceroute.handle_tcp_response(&short_packet, target_ip, dest_port);
-            assert!(response.is_none(), "should reject packet too short for IP header");
+            assert!(
+                response.is_none(),
+                "should reject packet too short for IP header"
+            );
         }
     }
 
@@ -920,7 +929,10 @@ mod tests {
             );
 
             let response = traceroute.handle_tcp_response(&packet, target_ip, expected_port);
-            assert!(response.is_none(), "should reject packet with wrong source port");
+            assert!(
+                response.is_none(),
+                "should reject packet with wrong source port"
+            );
         }
     }
 
@@ -1014,7 +1026,8 @@ mod tests {
             let dest_port = 80;
 
             // Build ICMP Destination Unreachable (code 1 = Host Unreachable)
-            let packet = build_icmp_destination_unreachable_packet(router_ip, target_ip, dest_port, 1);
+            let packet =
+                build_icmp_destination_unreachable_packet(router_ip, target_ip, dest_port, 1);
 
             let icmp_resp = parse_icmp_response(&packet).expect("should parse ICMP");
             let response = traceroute
@@ -1042,7 +1055,8 @@ mod tests {
             let packet = build_icmp_other_packet(responder_ip, 0, 0);
 
             let icmp_resp = parse_icmp_response(&packet).expect("should parse ICMP");
-            let response = traceroute.handle_icmp_response(icmp_resp, target_ip, dest_port, &packet);
+            let response =
+                traceroute.handle_icmp_response(icmp_resp, target_ip, dest_port, &packet);
             assert!(
                 response.is_none(),
                 "should return None for other ICMP types"
@@ -1107,7 +1121,8 @@ mod tests {
             let dest_port = 443;
 
             // Build ICMP Destination Unreachable (code 3 = Port Unreachable)
-            let packet = build_icmp_destination_unreachable_packet(router_ip, target_ip, dest_port, 3);
+            let packet =
+                build_icmp_destination_unreachable_packet(router_ip, target_ip, dest_port, 3);
 
             let icmp_resp = parse_icmp_response(&packet).expect("should parse ICMP");
             let response = traceroute
@@ -1134,7 +1149,8 @@ mod tests {
             let packet = build_icmp_other_packet(responder_ip, 5, 0);
 
             let icmp_resp = parse_icmp_response(&packet).expect("should parse ICMP");
-            let response = traceroute.handle_icmp_response(icmp_resp, target_ip, dest_port, &packet);
+            let response =
+                traceroute.handle_icmp_response(icmp_resp, target_ip, dest_port, &packet);
             assert!(response.is_none());
         }
     }
@@ -1153,10 +1169,7 @@ mod tests {
         // Packet with 39 bytes (less than minimum 40 for IP + TCP headers)
         let short_packet = vec![0u8; 39];
         let result = parse_tcp_response(&short_packet);
-        assert!(
-            result.is_none(),
-            "should return None for packet < 40 bytes"
-        );
+        assert!(result.is_none(), "should return None for packet < 40 bytes");
     }
 
     #[test]
@@ -1295,7 +1308,10 @@ mod tests {
 
             let response =
                 traceroute.handle_icmp_response(icmp_resp, target_ip, dest_port, &short_packet);
-            assert!(response.is_none(), "should return None for packet too short");
+            assert!(
+                response.is_none(),
+                "should return None for packet too short"
+            );
         }
     }
 
@@ -1367,7 +1383,8 @@ mod tests {
             let dest_port = 80;
 
             // Build ICMP Destination Unreachable from the target itself
-            let packet = build_icmp_destination_unreachable_packet(target_ip, target_ip, dest_port, 3);
+            let packet =
+                build_icmp_destination_unreachable_packet(target_ip, target_ip, dest_port, 3);
 
             let icmp_resp = parse_icmp_response(&packet).expect("should parse ICMP");
             let response = traceroute

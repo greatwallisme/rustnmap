@@ -16,8 +16,8 @@ use rustnmap_common::{Ipv4Addr, Ipv6Addr, ScanConfig};
 use rustnmap_target::{
     discovery::{
         parse_icmpv6_echo_reply, parse_icmpv6_neighbor_advertisement, parse_tcpv6_response,
-        HostDiscovery, HostDiscoveryMethod, HostState, Icmpv6PacketBuilder,
-        Tcpv6PacketBuilder, TcpSynPingV6,
+        HostDiscovery, HostDiscoveryMethod, HostState, Icmpv6PacketBuilder, TcpSynPingV6,
+        Tcpv6PacketBuilder,
     },
     Target,
 };
@@ -613,7 +613,7 @@ fn test_parse_icmpv6_echo_reply_minimal_packet() {
     // ICMPv6 Echo Reply
     packet[40] = 129; // Type: Echo Reply
     packet[41] = 0; // Code: 0
-    // Checksum at bytes 42-43
+                    // Checksum at bytes 42-43
     packet[44] = 0x12; // Identifier high
     packet[45] = 0x34; // Identifier low
     packet[46] = 0x56; // Sequence high

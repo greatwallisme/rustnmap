@@ -547,7 +547,7 @@ mod tests {
         let scanner = FtpBounceScanner::new(ftp_server, None, None);
 
         // Create an IPv6 target using From trait
-        let target = Target::from(std::net::Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1));
+        let target = Target::from(std::net::Ipv6Addr::LOCALHOST);
 
         // IPv6 targets should return Filtered
         let result = scanner.scan_port(&target, 80, Protocol::Tcp);
@@ -558,10 +558,7 @@ mod tests {
     #[test]
     fn test_parse_port_state_empty_response() {
         // Empty string should be treated as Filtered
-        assert_eq!(
-            FtpBounceScanner::parse_port_state(""),
-            PortState::Filtered
-        );
+        assert_eq!(FtpBounceScanner::parse_port_state(""), PortState::Filtered);
     }
 
     #[test]
@@ -591,17 +588,17 @@ mod tests {
     #[test]
     fn test_build_port_command_various_ips() {
         // Test with 0.0.0.0
-        let ip = std::net::Ipv4Addr::new(0, 0, 0, 0);
+        let ip = std::net::Ipv4Addr::UNSPECIFIED;
         let cmd = FtpBounceScanner::build_port_command(ip, 21);
         assert_eq!(cmd, "PORT 0,0,0,0,0,21");
 
         // Test with 255.255.255.255 (broadcast)
-        let ip = std::net::Ipv4Addr::new(255, 255, 255, 255);
+        let ip = std::net::Ipv4Addr::BROADCAST;
         let cmd = FtpBounceScanner::build_port_command(ip, 21);
         assert_eq!(cmd, "PORT 255,255,255,255,0,21");
 
         // Test with mixed octets
-        let ip = std::net::Ipv4Addr::new(127, 0, 0, 1);
+        let ip = std::net::Ipv4Addr::LOCALHOST;
         let cmd = FtpBounceScanner::build_port_command(ip, 8080);
         // 8080 = 31*256 + 144
         assert_eq!(cmd, "PORT 127,0,0,1,31,144");

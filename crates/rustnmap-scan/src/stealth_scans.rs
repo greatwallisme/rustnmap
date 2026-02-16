@@ -1221,7 +1221,7 @@ mod tests {
         let config = ScanConfig::default();
 
         if let Ok(scanner) = TcpFinScanner::new(local_addr, config) {
-            assert!(scanner.requires_root())
+            assert!(scanner.requires_root());
         } else {
             // Expected if not running as root
         }
@@ -1244,7 +1244,7 @@ mod tests {
         let config = ScanConfig::default();
 
         if let Ok(scanner) = TcpNullScanner::new(local_addr, config) {
-            assert!(scanner.requires_root())
+            assert!(scanner.requires_root());
         } else {
             // Expected if not running as root
         }
@@ -1267,7 +1267,7 @@ mod tests {
         let config = ScanConfig::default();
 
         if let Ok(scanner) = TcpXmasScanner::new(local_addr, config) {
-            assert!(scanner.requires_root())
+            assert!(scanner.requires_root());
         } else {
             // Expected if not running as root
         }
@@ -1290,7 +1290,7 @@ mod tests {
         let config = ScanConfig::default();
 
         if let Ok(scanner) = TcpAckScanner::new(local_addr, config) {
-            assert!(scanner.requires_root())
+            assert!(scanner.requires_root());
         } else {
             // Expected if not running as root
         }
@@ -1313,7 +1313,7 @@ mod tests {
         let config = ScanConfig::default();
 
         if let Ok(scanner) = TcpMaimonScanner::new(local_addr, config) {
-            assert!(scanner.requires_root())
+            assert!(scanner.requires_root());
         } else {
             // Expected if not running as root
         }

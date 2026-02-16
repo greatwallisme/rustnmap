@@ -293,7 +293,7 @@ mod tests {
 
         // Test that scanner creation requires root
         if let Ok(scanner) = UdpScanner::new(local_addr, config) {
-            assert!(scanner.requires_root())
+            assert!(scanner.requires_root());
         } else {
             // Expected if not running as root
         }

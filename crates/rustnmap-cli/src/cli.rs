@@ -311,7 +311,7 @@ fn parse_data_payload(args: &Args) -> Result<Option<Vec<u8>>> {
             .chars()
             .filter(|c| *c != ' ' && *c != ':')
             .collect();
-        if hex_clean.len() % 2 != 0 {
+        if !hex_clean.len().is_multiple_of(2) {
             return Err(rustnmap_common::Error::Other(
                 "Hex data must have an even number of characters".to_string(),
             ));

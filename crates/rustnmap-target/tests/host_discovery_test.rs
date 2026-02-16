@@ -16,7 +16,7 @@
 //! Integration tests for host discovery functionality.
 //!
 //! These tests verify host discovery methods against real network targets.
-//! Raw socket tests require root/CAP_NET_RAW privileges to run.
+//! Raw socket tests require `root/CAP_NET_RAW` privileges to run.
 
 use std::net::Ipv4Addr;
 use std::time::Duration;
@@ -77,8 +77,7 @@ fn test_tcp_syn_ping_localhost() {
     // Note: Localhost may return Down due to Linux kernel raw socket limitations
     assert!(
         matches!(result, HostState::Up | HostState::Down),
-        "Localhost discovery should return Up or Down, got {:?}",
-        result
+        "Localhost discovery should return Up or Down, got {result:?}"
     );
 }
 
@@ -109,8 +108,7 @@ fn test_tcp_ack_ping_localhost() {
     // Note: Localhost may return Down due to Linux kernel raw socket limitations
     assert!(
         matches!(result, HostState::Up | HostState::Down),
-        "Localhost discovery should return Up or Down, got {:?}",
-        result
+        "Localhost discovery should return Up or Down, got {result:?}"
     );
 }
 
@@ -136,8 +134,7 @@ fn test_icmp_ping_localhost() {
     // Note: Localhost may return Down due to Linux kernel raw socket limitations
     assert!(
         matches!(result, HostState::Up | HostState::Down),
-        "Localhost discovery should return Up or Down, got {:?}",
-        result
+        "Localhost discovery should return Up or Down, got {result:?}"
     );
 }
 
@@ -163,8 +160,7 @@ fn test_icmp_timestamp_ping_localhost() {
     // Note: Localhost may return Down due to Linux kernel raw socket limitations
     assert!(
         matches!(result, HostState::Up | HostState::Down),
-        "Localhost discovery should return Up or Down, got {:?}",
-        result
+        "Localhost discovery should return Up or Down, got {result:?}"
     );
 }
 
@@ -213,8 +209,7 @@ fn test_host_discovery_tcp_ping() {
     // Note: Localhost may return Down due to Linux kernel raw socket limitations
     assert!(
         matches!(result, HostState::Up | HostState::Down),
-        "Localhost discovery should return Up or Down, got {:?}",
-        result
+        "Localhost discovery should return Up or Down, got {result:?}"
     );
 }
 
@@ -237,8 +232,7 @@ fn test_host_discovery_icmp() {
     // Note: Localhost may return Down due to Linux kernel raw socket limitations
     assert!(
         matches!(result, HostState::Up | HostState::Down),
-        "Localhost discovery should return Up or Down, got {:?}",
-        result
+        "Localhost discovery should return Up or Down, got {result:?}"
     );
 }
 

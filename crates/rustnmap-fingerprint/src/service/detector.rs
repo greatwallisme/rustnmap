@@ -420,8 +420,8 @@ impl ServiceDetector {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::probe::{MatchRule, MatchTemplate};
+    use super::*;
 
     #[test]
     fn test_service_info_new() {
@@ -532,25 +532,22 @@ mod tests {
 
     #[test]
     fn test_detector_with_intensity() {
-        let detector = ServiceDetector::new(ProbeDatabase::empty())
-            .with_intensity(5);
+        let detector = ServiceDetector::new(ProbeDatabase::empty()).with_intensity(5);
         assert_eq!(detector.intensity, 5);
 
         // Test clamping at upper bound
-        let detector2 = ServiceDetector::new(ProbeDatabase::empty())
-            .with_intensity(15);
+        let detector2 = ServiceDetector::new(ProbeDatabase::empty()).with_intensity(15);
         assert_eq!(detector2.intensity, 9);
 
         // Test clamping at lower bound
-        let detector3 = ServiceDetector::new(ProbeDatabase::empty())
-            .with_intensity(0);
+        let detector3 = ServiceDetector::new(ProbeDatabase::empty()).with_intensity(0);
         assert_eq!(detector3.intensity, 1);
     }
 
     #[test]
     fn test_detector_with_timeout() {
-        let detector = ServiceDetector::new(ProbeDatabase::empty())
-            .with_timeout(Duration::from_secs(10));
+        let detector =
+            ServiceDetector::new(ProbeDatabase::empty()).with_timeout(Duration::from_secs(10));
         assert_eq!(detector.default_timeout, Duration::from_secs(10));
     }
 
@@ -603,10 +600,7 @@ mod tests {
 
     #[test]
     fn test_match_response_success() {
-        let mut probe = ProbeDefinition::new_tcp(
-            "SSHProbe".to_string(),
-            b"".to_vec(),
-        );
+        let mut probe = ProbeDefinition::new_tcp("SSHProbe".to_string(), b"".to_vec());
         probe.add_match(MatchRule {
             pattern: r"^SSH-([\d.]+)-OpenSSH_(.*)".to_string(),
             service: "ssh".to_string(),
@@ -640,10 +634,7 @@ mod tests {
 
     #[test]
     fn test_match_response_soft_match() {
-        let mut probe = ProbeDefinition::new_tcp(
-            "GenericProbe".to_string(),
-            b"".to_vec(),
-        );
+        let mut probe = ProbeDefinition::new_tcp("GenericProbe".to_string(), b"".to_vec());
         probe.add_match(MatchRule {
             pattern: r"^SSH".to_string(),
             service: "ssh".to_string(),
@@ -668,10 +659,7 @@ mod tests {
 
     #[test]
     fn test_match_response_no_match() {
-        let mut probe = ProbeDefinition::new_tcp(
-            "SSHProbe".to_string(),
-            b"".to_vec(),
-        );
+        let mut probe = ProbeDefinition::new_tcp("SSHProbe".to_string(), b"".to_vec());
         probe.add_match(MatchRule {
             pattern: r"^SSH-".to_string(),
             service: "ssh".to_string(),
@@ -694,10 +682,7 @@ mod tests {
 
     #[test]
     fn test_match_response_multiple_rules() {
-        let mut probe = ProbeDefinition::new_tcp(
-            "MultiProbe".to_string(),
-            b"".to_vec(),
-        );
+        let mut probe = ProbeDefinition::new_tcp("MultiProbe".to_string(), b"".to_vec());
         probe.add_match(MatchRule {
             pattern: r"^SSH-".to_string(),
             service: "ssh".to_string(),
@@ -738,10 +723,7 @@ mod tests {
 
     #[test]
     fn test_match_response_invalid_regex() {
-        let mut probe = ProbeDefinition::new_tcp(
-            "BadProbe".to_string(),
-            b"".to_vec(),
-        );
+        let mut probe = ProbeDefinition::new_tcp("BadProbe".to_string(), b"".to_vec());
         probe.add_match(MatchRule {
             pattern: r"[invalid(".to_string(), // Invalid regex
             service: "test".to_string(),
@@ -760,15 +742,15 @@ mod tests {
         let result = detector.match_response(&probe, response);
 
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), FingerprintError::InvalidRegex { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            FingerprintError::InvalidRegex { .. }
+        ));
     }
 
     #[test]
     fn test_match_response_binary_data() {
-        let mut probe = ProbeDefinition::new_tcp(
-            "BinaryProbe".to_string(),
-            b"".to_vec(),
-        );
+        let mut probe = ProbeDefinition::new_tcp("BinaryProbe".to_string(), b"".to_vec());
         probe.add_match(MatchRule {
             pattern: r"\x00\x01\x02".to_string(),
             service: "binary".to_string(),
@@ -849,7 +831,7 @@ Ports 80
 
         assert_eq!(probes.len(), 3);
         assert_eq!(probes[0].name, "Alpha"); // rarity 1
-        assert_eq!(probes[1].name, "Beta");  // rarity 3
+        assert_eq!(probes[1].name, "Beta"); // rarity 3
         assert_eq!(probes[2].name, "Zebra"); // rarity 5
     }
 

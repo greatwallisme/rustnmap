@@ -12,8 +12,8 @@ use rustnmap_output::formatter::{
 };
 use rustnmap_output::models::{
     HostResult, HostStatus, HostTimes, MacAddress, OsMatch, PortResult, PortState, Protocol,
-    ScanResult, ScanStatistics, ScanType, ScriptElement, ScriptResult, ServiceInfo,
-    TracerouteHop, TracerouteResult,
+    ScanResult, ScanStatistics, ScanType, ScriptElement, ScriptResult, ServiceInfo, TracerouteHop,
+    TracerouteResult,
 };
 
 /// Create a test host with basic information.
@@ -151,16 +151,14 @@ fn create_host_with_ports() -> HostResult {
                 cpe: vec!["cpe:/o:linux:linux_kernel:5.15".to_string()],
             },
         ],
-        scripts: vec![
-            ScriptResult {
-                id: "http-title".to_string(),
-                output: "Welcome to Test Server".to_string(),
-                elements: vec![ScriptElement {
-                    key: "title".to_string(),
-                    value: serde_json::json!("Welcome to Test Server"),
-                }],
-            },
-        ],
+        scripts: vec![ScriptResult {
+            id: "http-title".to_string(),
+            output: "Welcome to Test Server".to_string(),
+            elements: vec![ScriptElement {
+                key: "title".to_string(),
+                value: serde_json::json!("Welcome to Test Server"),
+            }],
+        }],
         traceroute: Some(TracerouteResult {
             protocol: Protocol::Tcp,
             port: 80,
@@ -390,16 +388,30 @@ fn test_xml_formatter_valid_structure() {
     // Verify balanced tags - <nmaprun> appears as opening tag and closing tag
     let open_nmaprun = output.matches("<nmaprun").count();
     let close_nmaprun = output.matches("</nmaprun>").count();
-    assert_eq!(open_nmaprun, 1, "Should have exactly one nmaprun opening tag");
-    assert_eq!(close_nmaprun, 1, "Should have exactly one nmaprun closing tag");
+    assert_eq!(
+        open_nmaprun, 1,
+        "Should have exactly one nmaprun opening tag"
+    );
+    assert_eq!(
+        close_nmaprun, 1,
+        "Should have exactly one nmaprun closing tag"
+    );
 
     // Count host elements - each host has one opening tag with attributes
     // Use "<host " to avoid matching "<hostnames" or "<hostname"
     let host_count = result.hosts.len();
     let open_host = output.matches("<host ").count();
     let close_host = output.matches("</host>").count();
-    assert_eq!(open_host, host_count, "Should have {} host opening tags", host_count);
-    assert_eq!(close_host, host_count, "Should have {} host closing tags", host_count);
+    assert_eq!(
+        open_host, host_count,
+        "Should have {} host opening tags",
+        host_count
+    );
+    assert_eq!(
+        close_host, host_count,
+        "Should have {} host closing tags",
+        host_count
+    );
 
     // Verify ports tags are balanced
     let open_ports = output.matches("<ports>").count();
@@ -440,7 +452,10 @@ fn test_json_formatter_full_scan() {
 
     // Check metadata
     assert_eq!(parsed["metadata"]["scanner_version"], "1.0.0");
-    assert_eq!(parsed["metadata"]["command_line"], "rustnmap -sS -A 192.168.1.0/24");
+    assert_eq!(
+        parsed["metadata"]["command_line"],
+        "rustnmap -sS -A 192.168.1.0/24"
+    );
     assert_eq!(parsed["metadata"]["scan_type"], "tcpsyn");
 
     // Check hosts
@@ -948,7 +963,11 @@ fn test_formatters_multiple_hosts() {
     for i in 1..=5 {
         let mut host = create_basic_host();
         host.ip = IpAddr::V4(Ipv4Addr::new(192, 168, 1, i as u8));
-        host.status = if i % 2 == 0 { HostStatus::Up } else { HostStatus::Down };
+        host.status = if i % 2 == 0 {
+            HostStatus::Up
+        } else {
+            HostStatus::Down
+        };
         result.hosts.push(host);
     }
 
@@ -968,7 +987,10 @@ fn test_formatters_multiple_hosts() {
     let host_count_normal = normal_out.matches("Nmap scan report for").count();
     let host_count_xml = xml_out.matches("<host").count();
 
-    assert_eq!(host_count_normal, 5, "Normal formatter should show all 5 hosts");
+    assert_eq!(
+        host_count_normal, 5,
+        "Normal formatter should show all 5 hosts"
+    );
     assert_eq!(host_count_xml, 5, "XML formatter should show all 5 hosts");
 
     let parsed: serde_json::Value = serde_json::from_str(&json_out).unwrap();

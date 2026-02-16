@@ -489,7 +489,11 @@ fn test_update_result_many_details() {
             success: i % 2 == 0,
             previous_version: Some(format!("v{}", i)),
             new_version: Some(format!("v{}", i + 1)),
-            error: if i % 2 == 0 { None } else { Some("error".to_string()) },
+            error: if i % 2 == 0 {
+                None
+            } else {
+                Some("error".to_string())
+            },
             backup_created: i % 3 == 0,
         })
         .collect();
@@ -590,9 +594,7 @@ async fn test_real_download_service_probes() {
 
     // Verify it starts with the expected Nmap header
     assert!(
-        content.starts_with("#")
-            || content.contains("Probe")
-            || content.contains("Exclude"),
+        content.starts_with("#") || content.contains("Probe") || content.contains("Exclude"),
         "File should contain Nmap service probe content"
     );
 }
@@ -628,9 +630,7 @@ async fn test_real_download_os_db() {
 
     // Verify it contains OS fingerprints
     assert!(
-        content.contains("Fingerprint")
-            || content.contains("Class")
-            || content.contains("Match"),
+        content.contains("Fingerprint") || content.contains("Class") || content.contains("Match"),
         "File should contain OS fingerprint content"
     );
 }
@@ -666,9 +666,7 @@ async fn test_real_download_mac_prefixes() {
 
     // Verify it contains MAC vendor mappings
     assert!(
-        content.contains(":")
-            || content.contains("Cisco")
-            || content.contains("Intel"),
+        content.contains(":") || content.contains("Cisco") || content.contains("Intel"),
         "File should contain MAC vendor content"
     );
 }
@@ -731,15 +729,13 @@ async fn test_real_download_with_backup() {
     // If the file was updated, backup should have been created
     // If unchanged, backup might not be created
     if detail.backup_created {
-        let backup_exists = std::fs::read_dir(temp_dir.path())
-            .unwrap()
-            .any(|entry| {
-                entry
-                    .unwrap()
-                    .file_name()
-                    .to_string_lossy()
-                    .contains(".backup")
-            });
+        let backup_exists = std::fs::read_dir(temp_dir.path()).unwrap().any(|entry| {
+            entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .contains(".backup")
+        });
         assert!(backup_exists, "Backup file should exist");
     }
 }
@@ -751,7 +747,9 @@ async fn test_real_download_invalid_url() {
     let temp_dir = TempDir::new().unwrap();
 
     let custom_urls = CustomUrls {
-        service_probes: Some("https://invalid-domain-that-does-not-exist-12345.com/test".to_string()),
+        service_probes: Some(
+            "https://invalid-domain-that-does-not-exist-12345.com/test".to_string(),
+        ),
         os_db: None,
         mac_prefixes: None,
     };

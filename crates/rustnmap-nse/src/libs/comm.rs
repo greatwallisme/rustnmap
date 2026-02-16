@@ -657,7 +657,7 @@ mod tests {
 
         // Defaults should be preserved for unset options
         assert_eq!(opts.timeout, Duration::from_millis(DEFAULT_TIMEOUT_MS));
-        assert!(!opts.lines.is_some());
+        assert!(opts.lines.is_none());
         assert!(opts.ssl);
     }
 }

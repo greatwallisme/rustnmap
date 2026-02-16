@@ -1,0 +1,27 @@
+[toolchain]
+# Rust 1.85 is the minimum supported version for this project
+# Using stable channel as the baseline (1.85+ features)
+#
+# NOTE: This file configures rustup-managed components only.
+# Additional cargo tools (cargo-watch, cargo-edit, cargo-criterion,
+# cargo-llvm-cov, cargo-audit) are installed via:
+#   just install-tools
+# See justfile for the complete list.
+channel = "1.90"
+
+# Components required for development and quality assurance
+components = [
+    "rustc",
+    "cargo",
+    "clippy",
+    "rustfmt",
+    "rust-src",
+    "rust-std",
+    "rust-docs",
+]
+
+# Target platform: Linux x86_64 only (as per project requirements)
+targets = ["x86_64-unknown-linux-gnu"]
+
+# Profile for component installation (minimal for CI, default for dev)
+profile = "default"

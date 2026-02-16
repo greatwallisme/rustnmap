@@ -517,7 +517,7 @@ mod tests {
 
         // Test that scanner creation requires root
         if let Ok(scanner) = IdleScanner::new(local_addr, zombie_addr, config) {
-            assert!(scanner.requires_root())
+            assert!(scanner.requires_root());
         } else {
             // Expected if not running as root
         }

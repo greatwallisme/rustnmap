@@ -22,7 +22,7 @@ use rustnmap_evasion::{
 // EvasionConfig Tests
 // =============================================================================
 
-/// Test that EvasionConfig can be created with builder pattern.
+/// Test that `EvasionConfig` can be created with builder pattern.
 #[test]
 fn test_evasion_config_builder_complete() {
     let config = EvasionConfig::builder()
@@ -63,15 +63,15 @@ fn test_evasion_config_not_enabled() {
 fn test_evasion_config_fragmentation_validation() {
     // Too small
     let result = EvasionConfig::builder().fragmentation_mtu(5).build();
-    assert!(result.is_err());
+    result.unwrap_err();
 
     // Too large
     let result = EvasionConfig::builder().fragmentation_mtu(2000).build();
-    assert!(result.is_err());
+    result.unwrap_err();
 
     // Valid
     let result = EvasionConfig::builder().fragmentation_mtu(1000).build();
-    assert!(result.is_ok());
+    result.unwrap();
 }
 
 /// Test decoy validation.
@@ -79,13 +79,13 @@ fn test_evasion_config_fragmentation_validation() {
 fn test_evasion_config_decoy_validation() {
     // Empty decoys
     let result = EvasionConfig::builder().decoys(vec![]).build();
-    assert!(result.is_err());
+    result.unwrap_err();
 
     // Valid
     let result = EvasionConfig::builder()
         .decoys(vec!["192.0.2.1".parse().unwrap()])
         .build();
-    assert!(result.is_ok());
+    result.unwrap();
 }
 
 /// Test source port validation.
@@ -93,11 +93,11 @@ fn test_evasion_config_decoy_validation() {
 fn test_evasion_config_source_port_validation() {
     // Port 0 is invalid
     let result = EvasionConfig::builder().source_port(0).build();
-    assert!(result.is_err());
+    result.unwrap_err();
 
     // Valid port
     let result = EvasionConfig::builder().source_port(80).build();
-    assert!(result.is_ok());
+    result.unwrap();
 }
 
 /// Test TTL validation.
@@ -105,11 +105,11 @@ fn test_evasion_config_source_port_validation() {
 fn test_evasion_config_ttl_validation() {
     // TTL 0 is invalid
     let result = EvasionConfig::builder().ttl(0).build();
-    assert!(result.is_err());
+    result.unwrap_err();
 
     // Valid TTL
     let result = EvasionConfig::builder().ttl(64).build();
-    assert!(result.is_ok());
+    result.unwrap();
 }
 
 // =============================================================================
@@ -313,7 +313,7 @@ fn test_decoy_scheduler_empty_decoys() {
     let real_ip = "192.0.2.100".parse::<IpAddr>().unwrap();
 
     let result = DecoyScheduler::new(config, real_ip);
-    assert!(result.is_err());
+    result.unwrap_err();
 }
 
 /// Test decoy scheduler validation - invalid position.
@@ -328,10 +328,10 @@ fn test_decoy_scheduler_invalid_position() {
     let real_ip = "192.0.2.100".parse::<IpAddr>().unwrap();
 
     let result = DecoyScheduler::new(config, real_ip);
-    assert!(result.is_err());
+    result.unwrap_err();
 }
 
-/// Test decoy scheduler is_real_ip check.
+/// Test decoy scheduler `is_real_ip` check.
 #[test]
 fn test_decoy_scheduler_is_real_ip() {
     let decoys = vec!["192.0.2.1".parse::<IpAddr>().unwrap()];
@@ -498,7 +498,9 @@ fn test_packet_modifier_bad_checksum() {
     let modifier = PacketModifier::new(config);
 
     // Create a packet with at least 12 bytes
-    let packet = vec![0x45, 0x00, 0x00, 0x28, 0x00, 0x00, 0x40, 0x00, 0x40, 0x06, 0x00, 0x00];
+    let packet = vec![
+        0x45, 0x00, 0x00, 0x28, 0x00, 0x00, 0x40, 0x00, 0x40, 0x06, 0x00, 0x00,
+    ];
     let result = modifier.apply(packet.clone()).unwrap();
 
     // Checksum bytes should be modified
@@ -539,7 +541,9 @@ fn test_packet_modifier_combined() {
     };
     let modifier = PacketModifier::new(config);
 
-    let packet = vec![0x45, 0x00, 0x00, 0x28, 0x00, 0x00, 0x40, 0x00, 0x40, 0x06, 0x00, 0x00];
+    let packet = vec![
+        0x45, 0x00, 0x00, 0x28, 0x00, 0x00, 0x40, 0x00, 0x40, 0x06, 0x00, 0x00,
+    ];
     let result = modifier.apply(packet).unwrap();
 
     // Should have padding
@@ -715,8 +719,8 @@ fn test_combined_evasion_techniques() {
 
     // Test packet modifier
     let modifier = PacketModifier::new(config.packet_modification.clone());
-    let modified = modifier.apply(packet).unwrap();
-    assert_eq!(modified.len(), 1050); // 1000 + 50 padding
+    let modified_pkt = modifier.apply(packet).unwrap();
+    assert_eq!(modified_pkt.len(), 1050); // 1000 + 50 padding
 
     // Test timing controller
     let timing = TimingController::new(config.timing.template);

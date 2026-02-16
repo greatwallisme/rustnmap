@@ -2008,7 +2008,7 @@ mod tests {
 
         // This will fail without root, but we can verify the error type
         if let Ok(ping) = TcpSynPing::new(local_addr, vec![], timeout, 2) {
-            assert!(ping.requires_root())
+            assert!(ping.requires_root());
         } else {
             // Expected if not running as root
         }
@@ -2020,7 +2020,7 @@ mod tests {
         let timeout = Duration::from_secs(1);
 
         if let Ok(ping) = TcpAckPing::new(local_addr, vec![], timeout, 2) {
-            assert!(ping.requires_root())
+            assert!(ping.requires_root());
         } else {
             // Expected if not running as root
         }
@@ -2032,7 +2032,7 @@ mod tests {
         let timeout = Duration::from_secs(1);
 
         if let Ok(ping) = IcmpPing::new(local_addr, timeout, 2) {
-            assert!(ping.requires_root())
+            assert!(ping.requires_root());
         } else {
             // Expected if not running as root
         }
@@ -2044,7 +2044,7 @@ mod tests {
         let timeout = Duration::from_secs(1);
 
         if let Ok(ping) = IcmpTimestampPing::new(local_addr, timeout, 2) {
-            assert!(ping.requires_root())
+            assert!(ping.requires_root());
         } else {
             // Expected if not running as root
         }
@@ -2057,7 +2057,7 @@ mod tests {
         let timeout = Duration::from_secs(1);
 
         if let Ok(ping) = ArpPing::new(src_mac, src_ip, timeout, 2) {
-            assert!(ping.requires_root())
+            assert!(ping.requires_root());
         } else {
             // Expected if not running as root
         }
@@ -2121,8 +2121,7 @@ mod tests {
         // The important thing is that the scan completes without error
         assert!(
             matches!(result, HostState::Up | HostState::Down),
-            "Localhost discovery should return Up or Down, got {:?}",
-            result
+            "Localhost discovery should return Up or Down, got {result:?}"
         );
     }
 
@@ -2145,8 +2144,7 @@ mod tests {
         // The important thing is that the scan completes without error
         assert!(
             matches!(result, HostState::Up | HostState::Down),
-            "Localhost discovery should return Up or Down, got {:?}",
-            result
+            "Localhost discovery should return Up or Down, got {result:?}"
         );
     }
 

@@ -71,13 +71,15 @@ fn test_tls_info_builder_complete() {
         subject: "CN=test.example.com".to_string(),
         issuer: "CN=Test CA".to_string(),
         serial_number: "1234567890".to_string(),
-        subject_alt_names: vec!["test.example.com".to_string(), "www.test.example.com".to_string()],
+        subject_alt_names: vec![
+            "test.example.com".to_string(),
+            "www.test.example.com".to_string(),
+        ],
         not_before: SystemTime::UNIX_EPOCH + Duration::from_secs(1609459200), // 2021-01-01
-        not_after: SystemTime::UNIX_EPOCH + Duration::from_secs(1893456000), // 2030-01-01
+        not_after: SystemTime::UNIX_EPOCH + Duration::from_secs(1893456000),  // 2030-01-01
         signature_algorithm: "sha256WithRSAEncryption".to_string(),
         public_key_info: "RSA 2048".to_string(),
-        fingerprint_sha256: "AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99"
-            .to_string(),
+        fingerprint_sha256: "AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99".to_string(),
     };
 
     let info = TlsInfo::new()
@@ -415,7 +417,7 @@ fn test_expired_certificate_detection() {
         serial_number: "00".to_string(),
         subject_alt_names: vec![],
         not_before: now - Duration::from_secs(86400 * 365 * 2), // 2 years ago
-        not_after: now - Duration::from_secs(86400),           // Yesterday
+        not_after: now - Duration::from_secs(86400),            // Yesterday
         signature_algorithm: "sha256WithRSAEncryption".to_string(),
         public_key_info: "RSA 2048".to_string(),
         fingerprint_sha256: "AA".to_string(),
@@ -429,7 +431,7 @@ fn test_expired_certificate_detection() {
         issuer: "CN=CA".to_string(),
         serial_number: "01".to_string(),
         subject_alt_names: vec![],
-        not_before: now - Duration::from_secs(86400),         // Yesterday
+        not_before: now - Duration::from_secs(86400), // Yesterday
         not_after: now + Duration::from_secs(86400 * 365), // 1 year from now
         signature_algorithm: "sha256WithRSAEncryption".to_string(),
         public_key_info: "RSA 2048".to_string(),
@@ -458,12 +460,7 @@ fn test_days_until_expiry_calculation() {
         fingerprint_sha256: "AA".to_string(),
     };
 
-    let days_remaining = cert
-        .not_after
-        .duration_since(now)
-        .unwrap()
-        .as_secs() as i64
-        / 86400;
+    let days_remaining = cert.not_after.duration_since(now).unwrap().as_secs() as i64 / 86400;
 
     assert!((29..=30).contains(&days_remaining));
 }
@@ -475,10 +472,7 @@ fn test_certificate_with_wildcard_san() {
         subject: "CN=*.example.com".to_string(),
         issuer: "CN=Wildcard CA".to_string(),
         serial_number: "WILD123".to_string(),
-        subject_alt_names: vec![
-            "*.example.com".to_string(),
-            "example.com".to_string(),
-        ],
+        subject_alt_names: vec!["*.example.com".to_string(), "example.com".to_string()],
         not_before: SystemTime::UNIX_EPOCH,
         not_after: SystemTime::UNIX_EPOCH + Duration::from_secs(1000000),
         signature_algorithm: "sha256WithRSAEncryption".to_string(),
@@ -486,7 +480,9 @@ fn test_certificate_with_wildcard_san() {
         fingerprint_sha256: "WILD".to_string(),
     };
 
-    assert!(cert.subject_alt_names.contains(&"*.example.com".to_string()));
+    assert!(cert
+        .subject_alt_names
+        .contains(&"*.example.com".to_string()));
 }
 
 /// Test TLS info debug formatting.
@@ -716,7 +712,10 @@ async fn test_tls_detection_invalid_target() {
     let result = detector.detect_tls(&target, None).await;
 
     // Should succeed (not panic) but likely return None due to timeout
-    assert!(result.is_ok(), "Should handle connection timeout gracefully");
+    assert!(
+        result.is_ok(),
+        "Should handle connection timeout gracefully"
+    );
 }
 
 // Rust guideline compliant 2026-02-15
