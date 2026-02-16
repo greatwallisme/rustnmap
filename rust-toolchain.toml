@@ -1,5 +1,5 @@
 [toolchain]
-# Rust 1.85 is the minimum supported version for this project
+# Rust 1.90 is the minimum supported version for this project
 # Using stable channel as the baseline (1.85+ features)
 #
 # NOTE: This file configures rustup-managed components only.
