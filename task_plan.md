@@ -1,437 +1,140 @@
-# Task Plan: Complete RustNmap Project
+# Task Plan: Generate RustNmap User Manual
 
 > **Project**: RustNmap - Rust Network Mapper
-> **Status**: In Progress
-> **Created**: 2026-02-14
-> **Goal**: Finish the project according to design in doc/ - achieve 100% functional parity with Nmap
+> **Goal**: Generate comprehensive user manual in doc/manual/
+> **Created**: 2026-02-16
+> **Status**: IN PROGRESS
 
 ---
 
-## Project Overview
+## Goal
 
-RustNmap is a modern, high-performance network scanning tool written in Rust, designed to provide 100% functional parity with Nmap. The project currently has 35,356 lines of Rust code across 14 crates.
-
-### Current Implementation Status
-
-| Component | Status | Lines | Notes |
-|-----------|--------|-------|-------|
-| rustnmap-cli | Complete | ~1,400 | Full CLI with all scan types and evasion |
-| rustnmap-core | Complete | ~1,200 | Orchestrator, session, congestion control |
-| rustnmap-scan | Complete | ~2,600 | All 12 scan types + integration tests |
-| rustnmap-target | Complete | ~2,800 | Target parsing, IPv4/IPv6 host discovery |
-| rustnmap-net | Complete | ~800 | Raw sockets, packet I/O |
-| rustnmap-packet | Complete | ~600 | Packet building/parsing |
-| rustnmap-fingerprint | Complete | ~1,600 | OS/service detection, TLS, MAC database |
-| rustnmap-nse | Complete | ~1,200 | Full Lua 5.4 engine with all libraries |
-| rustnmap-output | Complete | ~1,600 | All 5 output formats with tests |
-| rustnmap-evasion | Complete | ~2,500 | Timing, decoys, fragmentation, CLI integration |
-| rustnmap-traceroute | Complete | ~900 | All traceroute methods |
-| rustnmap-common | Complete | ~600 | Types, errors, utilities |
-| rustnmap-benchmarks | Complete | ~400 | Performance benchmarks |
-
-### Design Documents Reference
-
-- `doc/architecture.md` - System architecture
-- `doc/roadmap.md` - Development phases and milestones
-- `doc/structure.md` - Module structure
-- `doc/modules/port-scanning.md` - All scan types
-- `doc/modules/nse-engine.md` - NSE implementation details
-- `doc/modules/os-detection.md` - OS fingerprinting
-- `doc/modules/service-detection.md` - Service detection
-- `doc/modules/evasion.md` - Evasion techniques
-- `doc/modules/output.md` - Output formats
+Create a comprehensive user manual for RustNmap saved to `doc/manual/` directory, containing:
+- Quick reference guide
+- Complete command-line option reference
+- Scan type detailed documentation
+- Output format specifications
+- NSE scripting reference
+- Exit codes and error handling
+- Environment variables
+- Configuration file format
 
 ---
 
-## Phase 1: Core Integration & CLI Completion
+## Current Phase
 
-**Goal**: Make the CLI fully functional end-to-end
-
-### 1.1 CLI Integration
-- [x] Complete CLI run_scan implementation in `rustnmap-cli/src/cli.rs`
-- [x] Integrate all scan types with CLI arguments
-- [x] Add proper error handling and user feedback
-- [x] Test CLI with different scan combinations
-
-### 1.2 Core Orchestrator Completion
-- [x] Complete `ScanOrchestrator::run()` implementation
-- [x] Integrate host discovery with port scanning pipeline
-- [x] Add service detection trigger after port scan
-- [x] Add OS detection trigger when requested
-- [x] Integrate traceroute when requested
-
-### 1.3 Testing
-- [x] End-to-end CLI tests
-- [x] Integration tests for full scan workflow
-- [x] Verify all scan types work through CLI
-
-**Status:** Complete
-
-**Implementation Summary:**
-
-1. **Session Database Integration (`rustnmap-core/src/session.rs`)**:
-   - Updated `FingerprintDatabase` to hold actual `ProbeDatabase` and `FingerprintDatabase` instances
-   - Updated `NseRegistry` to hold actual `ScriptDatabase` instance
-   - Added methods to load databases from files
-   - Added `create_engine()` method for script engine creation
-
-2. **Orchestrator Integration (`rustnmap-core/src/orchestrator.rs`)**:
-   - Implemented `run_service_detection()` - integrates with `rustnmap_fingerprint::ServiceDetector`
-   - Implemented `run_os_detection()` - integrates with `rustnmap_fingerprint::OsDetector`
-   - Implemented `run_nse_scripts()` - integrates with `rustnmap_nse::ScriptEngine`
-   - Implemented `run_traceroute()` - integrates with `rustnmap_traceroute::Traceroute`
-   - All methods properly handle database availability checks and error handling
-
-3. **Integration Tests (`rustnmap-cli/tests/integration_test.rs`)**:
-   - 15 integration tests covering CLI arguments, scan configuration, pipeline, output models
-   - Tests for fingerprint database and NSE registry integration
-   - Tests for orchestrator creation and session management
-   - All tests passing
-
-4. **Quality Metrics**:
-   - Zero compiler warnings
-   - Zero clippy warnings
-   - All 544+ tests passing
+Phase 2: Planning & Structure
 
 ---
 
-## Phase 2: NSE Script Engine Completion
+## Phases
 
-**Goal**: Full Nmap Scripting Engine with Lua 5.4
+### Phase 1: Requirements & Discovery
 
-### 2.1 Core NSE Infrastructure
-- [x] Complete script parser for .nse files
-- [x] Implement script metadata extraction (description, categories, rules)
-- [x] Complete script registry and database
-- [x] Implement script dependency resolution
+- [x] Understand existing documentation (README.md, user-guide.md)
+- [x] Review CLI arguments in args.rs
+- [x] Identify all command-line options and features
+- [x] Document findings
+- **Status:** complete
 
-### 2.2 NSE Libraries
-- [x] Complete `nmap` library (nmap.new_socket, nmap.clock, nmap.log_write, nmap.address_family)
-- [x] Complete `stdnse` library (format_output, debug, verbose, mutex, condition_variable, new_thread)
-- [x] Complete `comm` library (banner grabbing, connection handling)
-- [x] Complete `shortport` library (port matching rules)
+### Phase 2: Planning & Structure
 
-### 2.3 Script Execution
-- [x] Implement script scheduler
-- [x] Implement rule evaluation (hostrule, portrule)
-- [x] Implement action execution with proper context
-- [x] Add timeout handling and resource limits
+- [x] Define manual structure and sections
+- [x] Create doc/manual/ directory
+- [x] Define file organization
+- **Status:** in_progress
 
-### 2.4 Testing
-- [x] Unit tests for script parsing
-- [x] Integration tests with sample NSE scripts
-- [x] Verify compatibility with existing Nmap scripts
+**Manual Structure:**
+```
+doc/manual/
+├── README.md              # Manual index and navigation
+├── quick-reference.md     # Quick reference card
+├── options.md             # Complete CLI options reference
+├── scan-types.md          # Detailed scan type documentation
+├── output-formats.md      # Output format specifications
+├── nse-scripts.md         # NSE scripting guide
+├── exit-codes.md          # Exit codes and errors
+├── environment.md         # Environment variables
+└── configuration.md       # Configuration file format
+```
 
-**Status:** Completed
+### Phase 3: Implementation
 
-**Implementation Summary:**
+- [x] Create quick-reference.md
+- [x] Create options.md (complete CLI reference)
+- [x] Create scan-types.md (detailed scan explanations)
+- [x] Create output-formats.md (format specifications)
+- [x] Create nse-scripts.md (scripting reference)
+- [x] Create exit-codes.md
+- [x] Create environment.md
+- [x] Create configuration.md
+- [x] Create README.md (manual index)
+- **Status:** complete
 
-1. **Script Parser (`script.rs`)**:
-   - Enhanced `NseScript` struct with `hostrule_source`, `portrule_source`, `action_source` fields
-   - Added `extract_functions()` method to parse Lua function definitions
-   - Improved rule detection for hostrule and portrule
+### Phase 4: Testing & Verification
 
-2. **Script Registry (`registry.rs`)**:
-   - Added `resolve_dependencies()` method with topological sort and cycle detection
-   - Added `scripts_for_port()` for port-based script selection
-   - Added `port_matches_common_service()` for heuristic port matching
+- [x] Verify all options are documented
+- [x] Check for consistency with existing docs
+- [x] Validate markdown formatting
+- **Status:** complete
 
-3. **NSE Libraries**:
-   - `nmap.rs`: Added `nmap.clock()`, `nmap.log_write()`, `nmap.address_family()`, `nmap.new_socket()` with `NseSocket` implementation
-   - `stdnse.rs`: Added `stdnse.format_output()`, `stdnse.mutex()`, `stdnse.condition_variable()`, `stdnse.new_thread()`
-   - `comm.rs`: Complete with `NseSocket`, `ConnectionOpts`, banner grabbing, connection handling
-   - `shortport.rs`: Complete with predefined port rules (http, ssl, ftp, ssh, smtp, dns, pop3, imap, telnet) and generic matching functions
+### Phase 5: Delivery
 
-4. **Script Engine (`engine.rs`)**:
-   - Added `create_port_table()` for full port table creation with all NSE properties
-   - Added `execute_port_script()` for port-specific script execution
-   - Added `evaluate_hostrule()` and `evaluate_portrule()` for rule evaluation
-   - Enhanced async execution with semaphore-based concurrency control
-
-5. **Testing**:
-   - 73 unit tests passing
-   - Zero clippy warnings
-   - All NSE libraries tested
-
----
-
-## Phase 3: Output Formatters
-
-**Goal**: All Nmap-compatible output formats
-
-### 3.1 XML Output
-- [x] Implement XML formatter in `rustnmap-output/src/formatter.rs`
-- [x] Match Nmap's XML schema exactly
-- [x] Include all scan metadata, hosts, ports, scripts
-- [x] Add XML output tests
-
-### 3.2 JSON Output
-- [x] Implement JSON formatter in `rustnmap-output/src/formatter.rs`
-- [x] Structured JSON matching Nmap's format
-- [x] Include all scan data
-- [x] Add JSON output tests
-
-### 3.3 Grepable Output
-- [x] Implement grepable formatter in `rustnmap-output/src/formatter.rs`
-- [x] Match Nmap's -oG format
-- [x] Proper delimiters and escaping
-- [x] Add grepable output tests
-
-### 3.4 Integration
-- [x] Integrate all formatters with CLI -o options
-- [x] Implement -oA (all formats) support
-- [x] Test output file creation and content
-
-**Status:** Complete
-
-**Implementation Summary:**
-All output formatters are implemented in `rustnmap-output/src/formatter.rs`:
-- `NormalFormatter` - Human-readable text output (.nmap)
-- `XmlFormatter` - Nmap-compatible XML output (.xml)
-- `JsonFormatter` - Structured JSON output (.json)
-- `GrepableFormatter` - Simple line-based grepable output (.gnmap)
-- `ScriptKiddieFormatter` - Fun pipe-delimited format (.txt)
-
-25 tests passing for all formatters.
+- [x] Final review
+- [x] Commit manual files
+- **Status:** complete
 
 ---
 
-## Phase 4: Service & OS Detection Enhancement
+## Completion Summary / 完成总结
 
-**Goal**: Complete service and OS fingerprinting
+**Total Files Created / 创建文件总数**: 9
+**Total Lines / 总行数**: 5,371 lines
+**Directory / 目录**: `/root/project/rust-nmap/doc/manual/`
 
-### 4.1 Service Detection
-- [x] Complete service probe matching engine
-- [x] Implement service version extraction
-- [x] Add SSL/TLS detection and certificate parsing
-- [x] Integrate with NSE for enhanced detection
+### Files / 文件
 
-### 4.2 OS Detection
-- [x] Complete TCP/IP fingerprint matching
-- [x] Implement nmap-os-db parser
-- [x] Add OS classification and confidence scoring
-- [x] Integrate with scan results
+| File | Lines | Description |
+|------|-------|-------------|
+| README.md | 101 | Manual index and navigation / 手册索引和导航 |
+| quick-reference.md | 322 | Quick reference card / 快速参考卡 |
+| options.md | 1,072 | Complete CLI reference / 完整 CLI 参考 |
+| scan-types.md | 794 | Detailed scan documentation / 详细扫描文档 |
+| output-formats.md | 675 | Output format specifications / 输出格式规范 |
+| nse-scripts.md | 672 | NSE scripting guide / NSE 脚本指南 |
+| exit-codes.md | 425 | Exit codes and errors / 退出代码和错误 |
+| environment.md | 736 | Environment variables / 环境变量 |
+| configuration.md | 574 | Configuration file format / 配置文件格式 |
 
-### 4.3 Database Updates
-- [x] Implement fingerprint database update mechanism
-- [x] Add service probes update
-- [x] Add MAC prefix database
+### Coverage / 覆盖范围
 
-**Status:** Complete
+- All 60+ CLI options documented / 所有 60+ CLI 选项已记录
+- 12 scan types detailed / 12 种扫描类型详细说明
+- 5 output formats specified / 5 种输出格式规范
+- NSE script engine fully documented / NSE 脚本引擎完整文档
+- Environment variables reference / 环境变量参考
+- Configuration file format / 配置文件格式
 
-**Implementation Summary:**
-
-1. **TLS Detection Module (`rustnmap-fingerprint/src/tls.rs`)**:
-   - `TlsDetector` for TLS handshake and version detection
-   - X.509 certificate parsing with x509-parser
-   - Certificate info extraction (subject, issuer, SANs, validity)
-   - TLS version detection (SSL3 through TLS1.3)
-   - Cipher suite identification
-   - Self-signed and expiry detection
-   - Common TLS port detection helper
-
-2. **New Types**:
-   - `TlsInfo` - Complete TLS connection information
-   - `TlsVersion` - SSL/TLS version enumeration
-   - `CertificateInfo` - Parsed certificate details
-   - `TlsDetector` - Detection engine
-
-3. **Dependencies Added**:
-   - `tokio-rustls` - Async TLS connections
-   - `rustls` - TLS implementation
-   - `x509-parser` - Certificate parsing
-   - `ring` - Cryptographic operations (SHA-256)
-
-4. **Quality Metrics**:
-   - 5 new unit tests for TLS module
-   - Zero compiler warnings
-   - Zero clippy warnings
+**Status: COMPLETE / 完成**
 
 ---
 
-## Phase 5: Evasion & Advanced Features
+## Key Questions
 
-**Goal**: Complete evasion and advanced scanning features
-
-### Current Status Analysis
-
-The `rustnmap-evasion` crate has substantial infrastructure already implemented:
-- Packet fragmentation (`Fragmenter`) - Complete
-- Decoy scanning (`DecoyScheduler`) - Complete
-- Source spoofing (`SourceSpoofer`) - Complete
-- Packet modification (`PacketModifier`) - Complete
-- Timing templates (`TimingController` with T0-T5) - Complete
-
-**Missing for full Phase 5 completion:**
-1. CLI integration for evasion flags
-2. Adaptive congestion control and RTT-based adjustments
-3. IPv6 host discovery methods
-4. Custom data payload (--data, --data-string) implementation
-
-### 5.1 Evasion CLI Integration
-- [x] Integrate fragmentation (-f) with scan engine (CLI config parsing)
-- [x] Integrate decoy scanning (-D) with scan engine (CLI config parsing)
-- [x] Integrate source IP spoofing (-S) with scan engine (CLI config parsing)
-- [x] Implement custom data payload (--data, --data-string)
-- [x] Add --data-length support for packet padding
-- [x] Add validation for all evasion arguments
-- [x] Add unit tests for evasion config building
-
-### 5.2 Advanced Timing & Congestion Control
-- [x] Implement adaptive congestion control module
-- [x] Add RTT-based timeout adjustment
-- [x] Integrate timing templates with scan orchestrator
-- [x] Add rate limiting (min-rate, max-rate) enforcement
-
-### 5.3 IPv6 Host Discovery
-- [x] Implement ICMPv6 Echo Ping (IPv6 ping)
-- [x] Implement ICMPv6 Neighbor Discovery (NDP)
-- [x] Add IPv6 TCP SYN Ping support
-- [x] Update host discovery engine for IPv6
-
-**Status:** complete
+1. What format should the manual use? (Markdown for consistency)
+2. Should manual be translated? (Chinese/English bilingual)
+3. Should examples be included? (Yes, comprehensive examples)
 
 ---
 
-## Phase 6: Integration & Polish
-
-**Goal**: Full integration and production readiness
-
-### 6.1 Integration Testing
-- [x] Comprehensive integration test suite
-  - [x] Test all scan type combinations (16 integration tests, all passing)
-  - [x] Test host discovery integration with port scanning (15 integration tests, all passing)
-  - [x] Test output formatters (28 integration tests, all passing)
-  - [x] Test service detection pipeline (38 integration tests, all passing)
-  - [x] Test OS detection integration (24 tests, all passing)
-  - [x] Test NSE script execution flow (33 integration tests, all passing)
-  - [x] Test traceroute integration (16 tests, all passing)
-  - [x] Test evasion techniques integration (40 tests, all passing)
-- [x] Test with real network targets (uses TEST_TARGET_IP from .env)
-- [x] Performance benchmarks vs Nmap
-  - [x] Benchmark scan speed (via Criterion benchmarks)
-  - [x] Benchmark memory usage (via Criterion benchmarks)
-  - [x] Benchmark concurrency scaling (via Criterion benchmarks)
-
-### 6.2 Documentation
-- [x] Complete API documentation
-  - [x] rustnmap-core public APIs (via cargo doc)
-  - [x] rustnmap-scan public APIs (via cargo doc)
-  - [x] rustnmap-target public APIs (via cargo doc)
-  - [x] rustnmap-fingerprint public APIs (via cargo doc)
-  - [x] rustnmap-nse public APIs (via cargo doc)
-  - [x] rustnmap-output public APIs (via cargo doc)
-  - [x] rustnmap-evasion public APIs (via cargo doc)
-  - [x] rustnmap-traceroute public APIs (via cargo doc)
-- [x] User guide and examples
-  - [x] Basic scan examples
-  - [x] Advanced scan techniques
-  - [x] NSE script usage
-  - [x] Output format examples
-- [x] Man page generation
-- [x] README with full feature list
-
-### 6.3 Quality Assurance
-- [x] Zero warnings with clippy (all crates)
-- [x] All tests passing (target: 600+) - **970 tests passing**
-- [ ] Code coverage > 95% (Current: **~65%**, improved)
-  - [x] Set up cargo-llvm-cov
-  - [x] Generate coverage reports
-  - [x] Identify uncovered code paths
-  - [x] Add tests for cli.rs (20 new tests added)
-  - [x] Add tests for tls.rs (22 new tests added)
-  - [x] Add tests for updater.rs (31 new tests added)
-  - [x] Assess stealth_scans.rs (76.48% - network I/O requires mocking)
-  - [x] Add tests for comm.rs (11 new tests added)
-  - [x] Add tests for discovery.rs (39 new tests), orchestrator.rs (63 new tests)
-  - [ ] Add tests for 4 key files (detector.rs, engine.rs, ftp_bounce_scan.rs, tcp.rs) - **IN PROGRESS**
-- [x] Security audit - COMPLETE
-  - [x] Review unsafe code blocks - 7 locations, all documented
-  - [x] Check for panic points - 18 occurrences, minimal risk
-  - [x] Input validation review - comprehensive validation found
-
-**Status:** IN PROGRESS - Code Coverage Enhancement
-
-**Implementation Summary:**
-
-1. **Integration Testing**:
-   - 16 scan type integration tests (crates/rustnmap-scan/tests/scan_integration_tests.rs)
-   - 15 host discovery integration tests (crates/rustnmap-target/tests/discovery_integration_tests.rs)
-   - 28 output formatter tests (crates/rustnmap-output/tests/formatter_integration_tests.rs)
-   - 38 service detection tests (crates/rustnmap-fingerprint/tests/service_detection_integration_tests.rs)
-   - 33 NSE script execution tests (crates/rustnmap-nse/tests/nse_integration_tests.rs)
-   - 40 evasion integration tests (crates/rustnmap-evasion/tests/evasion_integration_tests.rs)
-   - All 970+ tests passing
-
-2. **Quality Assurance**:
-   - Zero clippy warnings (all crates)
-   - All tests passing (970+)
-   - Code coverage: 63.77% (measured with cargo-llvm-cov)
-   - Coverage tooling added to justfile
-   - Security audit complete (Grade A-)
-     - 7 unsafe blocks reviewed, all documented
-     - 18 panic points analyzed, acceptable risk
-     - Comprehensive input validation verified
-
----
-
-## Phase 6.4: Code Coverage Enhancement for 4 Key Files
-
-**Goal**: Increase code coverage for specific files from ~44% to 80%+
-
-### Target Files and Current Coverage
-
-| File | Crate | Current Coverage | Target Coverage |
-|------|-------|-----------------|-----------------|
-| service/detector.rs | rustnmap-fingerprint | 45% | 80%+ |
-| engine.rs | rustnmap-nse | 40% | 80%+ |
-| ftp_bounce_scan.rs | rustnmap-scan | 55% | 80%+ |
-| tcp.rs | rustnmap-traceroute | 35% | 80%+ |
-
-### 6.4.1 detector.rs Tests - COMPLETE
-- [x] Tests already present via existing test suite
-- [x] Coverage achieved: 80.77% (target: 80%+)
-
-### 6.4.2 engine.rs Tests - COMPLETE
-- [x] Fixed `test_execute_script_returns_nil` - assertion correction
-- [x] Fixed `test_execute_port_script_with_version` - Lua nil handling
-- [x] Marked 2 async timeout tests as `#[ignore]` (infinite loop limitation)
-- [x] Improved `execute_script_async` with `spawn_blocking`
-- [x] Coverage achieved: 87.01% (target: 80%+)
-
-### 6.4.3 ftp_bounce_scan.rs Tests - PARTIAL
-- [x] Existing tests cover build_port_command, parse_port_state
-- [ ] Network I/O tests require mock FTP server (not implemented)
-- [x] Coverage achieved: 65.58% (target: 80% - not met due to network I/O)
-
-### 6.4.4 tcp.rs Tests - COMPLETE
-- [x] Tests already present via existing test suite
-- [x] Coverage achieved: 93.10% (target: 80%+)
-
-### Final Results
-
-| File | Original | Final | Target Met |
-|------|----------|-------|------------|
-| service/detector.rs | 45% | **80.77%** | ✅ |
-| engine.rs | 40% | **87.01%** | ✅ |
-| ftp_bounce_scan.rs | 55% | **65.58%** | ⚠️ |
-| tcp.rs | 35% | **93.10%** | ✅ |
-| **Average** | **43.75%** | **81.62%** | **✅** |
-
-**Status:** COMPLETE - 3/4 files meet 80%+ target, average exceeds target
-
----
-
-## Key Decisions
+## Decisions Made
 
 | Decision | Rationale |
 |----------|-----------|
-| Complete NSE before output formats | NSE results need to be included in output |
-| Service/OS detection before evasion | Core features before advanced features |
-| Integration testing at end | Validate all components work together |
-| Use mock objects for network tests | Deterministic, no root required, faster |
-| Feature-gate integration tests | Prevent CI failures due to network issues |
-| Avoid Google servers | User-specified access restriction |
+| Use Markdown format | Consistent with existing docs |
+| Bilingual (Chinese/English) | Match project requirements |
+| Separate files per topic | Easier maintenance |
+| Include examples for all options | Better usability |
 
 ---
 
@@ -443,33 +146,10 @@ The `rustnmap-evasion` crate has substantial infrastructure already implemented:
 
 ---
 
-## Current Status
-
-**Project Complete - Commit 48e247b**
-
-All planned components have been implemented and committed:
-- Phase 1: Core Integration & CLI - Complete
-- Phase 2: NSE Script Engine - Complete
-- Phase 3: Output Formatters - Complete
-- Phase 4: Service & OS Detection Enhancement - Complete
-- Phase 5: Evasion & Advanced Features - Complete
-- Phase 6: Integration & Polish - Complete
-- Phase 6.4: Code Coverage Enhancement - **COMPLETE**
-
-**Total Tests**: 970+ passing
-**Compiler Warnings**: Zero
-**Clippy**: Clean
-**Code Coverage**: 63.77% (target: 80%+ for 4 key files)
-
-## Current Phase
-
-**ALL PHASES COMPLETE** - Code coverage enhancement finished
-
----
-
 ## Notes
 
-- All code must follow rust-guidelines skill requirements
-- Zero compiler warnings required
-- All tests must pass before marking phase complete
-- Documentation updated after each phase
+- Existing documentation: README.md (658 lines), user-guide.md (928 lines)
+- CLI has 60+ command-line options
+- 7 scan types documented in args.rs
+- 5 output formats supported
+- Full NSE script engine implemented
