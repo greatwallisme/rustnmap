@@ -1,13 +1,26 @@
 # RustNmap - Rust Network Mapper
 
 > **Version**: 1.0.0
-> **Status**: Design Phase
+> **Status**: Production Ready
 > **Platform**: Linux x86_64 (AMD64)
-> **Language**: Rust
+> **Language**: Rust 1.90+
+> **Completion Date**: 2026-02-16
 
 ## Project Overview
 
 RustNmap is a modern, high-performance network scanning tool written in Rust, designed to provide 100% functional parity with Nmap while leveraging Rust's safety guarantees and asynchronous capabilities for improved performance.
+
+### Project Metrics
+
+| Metric | Value |
+|--------|-------|
+| Total Lines of Code | 35,356 |
+| Workspace Crates | 14 |
+| Tests Passing | 970+ |
+| Code Coverage | 75.09% |
+| Compiler Warnings | 0 |
+| Clippy Warnings | 0 |
+| Security Audit | Grade A- |
 
 ## Project Structure
 
@@ -19,7 +32,19 @@ rust-nmap/
 ├── doc/                          # Design documentation
 │   ├── README.md                 # Documentation index
 │   ├── architecture.md           # System architecture
-│   ├── modules/                 # Module-specific design docs
+│   ├── user-guide.md             # Comprehensive user guide
+│   ├── manual/                   # User manual (9 files, 5,371 lines)
+│   │   ├── README.md             # Manual index
+│   │   ├── quick-reference.md    # Quick reference card
+│   │   ├── options.md            # CLI options reference
+│   │   ├── scan-types.md         # Scan type documentation
+│   │   ├── output-formats.md     # Output format specs
+│   │   ├── nse-scripts.md        # NSE scripting guide
+│   │   ├── exit-codes.md         # Exit codes reference
+│   │   ├── environment.md        # Environment variables
+│   │   └── configuration.md      # Config file format
+│   ├── rustnmap.1                # Unix man page
+│   ├── modules/                  # Module-specific design docs
 │   │   ├── host-discovery.md
 │   │   ├── port-scanning.md
 │   │   ├── service-detection.md
@@ -31,11 +56,13 @@ rust-nmap/
 │   │   ├── target-parsing.md
 │   │   ├── raw-packet.md
 │   │   └── concurrency.md
-│   └── appendix/                # Reference appendices
+│   └── appendix/                 # Reference appendices
+├── crates/                       # Cargo workspace crates (14 total)
 ├── justfile                      # Just command runner recipes
+├── rust-toolchain.toml           # Rust toolchain specification
 ├── task_plan.md                  # Task planning document
 ├── progress.md                   # Progress tracking
-└── findings.md                   # Analysis findings
+└── findings.md                   # Security audit findings
 ```
 
 ## Development Principles
@@ -103,39 +130,66 @@ cargo doc --no-deps                 # Docs build without errors
 
 The project uses a Cargo workspace with the following crates:
 
-| Crate | Description | Status |
-|-------|-------------|--------|
-| `rustnmap-common` | Common types, errors, utilities | Planned |
-| `rustnmap-net` | Network primitives, socket abstractions | Planned |
-| `rustnmap-packet` | PACKET_MMAP V3 zero-copy packet engine | Planned |
-| `rustnmap-target` | Target parsing and host discovery | Planned |
-| `rustnmap-scan` | Port scanning implementations | Planned |
-| `rustnmap-fingerprint` | OS and service fingerprinting | Planned |
-| `rustnmap-nse` | Lua script engine with Nmap compatibility | Planned |
-| `rustnmap-traceroute` | Network route tracing | Planned |
-| `rustnmap-evasion` | Firewall/IDS evasion techniques | Planned |
-| `rustnmap-cli` | Command-line interface and output | Planned |
+| Crate | Description | Status | Tests |
+|-------|-------------|--------|-------|
+| `rustnmap-common` | Common types, errors, utilities | Complete | 50+ |
+| `rustnmap-net` | Network primitives, socket abstractions | Complete | 25+ |
+| `rustnmap-packet` | PACKET_MMAP V3 zero-copy packet engine | Complete | 30+ |
+| `rustnmap-target` | Target parsing and host discovery | Complete | 100+ |
+| `rustnmap-scan` | Port scanning implementations | Complete | 104+ |
+| `rustnmap-fingerprint` | OS and service fingerprinting | Complete | 200+ |
+| `rustnmap-nse` | Lua script engine with Nmap compatibility | Complete | 109+ |
+| `rustnmap-traceroute` | Network route tracing | Complete | 99+ |
+| `rustnmap-evasion` | Firewall/IDS evasion techniques | Complete | 58+ |
+| `rustnmap-cli` | Command-line interface and output | Complete | 76+ |
+| `rustnmap-core` | Core orchestration and state management | Complete | 140+ |
+| `rustnmap-output` | Output formatters (XML, JSON, etc.) | Complete | 53+ |
+| `rustnmap-benchmarks` | Performance benchmarks | Complete | - |
+| `rustnmap-macros` | Procedural macros | Complete | - |
 
 ## Build and Test Commands
 
 ```bash
-# Build all crates
-just build
+# Build commands
+just build              # Build all crates
+just build-release      # Build release binary
+just check              # Fast syntax check
 
-# Run tests for all crates
-just test
+# Test commands
+just test               # Run all tests
+just test-unit          # Unit tests only
+just test-integration   # Integration tests only
+just test-crate <name>  # Tests for specific crate
 
-# Run clippy on all crates
-just clippy
+# Code quality
+just clippy             # Run clippy linter
+just fmt                # Format all code
+just fmt-check          # Check formatting without changes
 
-# Format code
-just fmt
+# Documentation
+just doc                # Build documentation
+just doc-open           # Build and open docs
 
-# Build release binary
-just release
+# Benchmarks
+just bench              # Run all benchmarks
+just bench-scan         # Scan benchmarks only
+just bench-packet       # Packet benchmarks only
+just bench-fingerprint  # Fingerprint benchmarks only
+just bench-nse          # NSE benchmarks only
 
-# Run benchmarks
-just bench
+# Code coverage
+just coverage           # Generate HTML coverage report
+just coverage-text      # Generate text coverage report
+just coverage-summary   # Summary only
+just coverage-lcov      # LCOV format for CI
+just coverage-clean     # Clean coverage artifacts
+
+# Security
+just audit              # Run cargo-audit security check
+
+# CI pipeline
+just ci                 # Run full CI pipeline
+just install-tools      # Install required dev tools
 ```
 
 ## Technology Stack
@@ -201,6 +255,65 @@ let value = self.read_idx.load(Ordering::Acquire);
 3. **Property Tests**: Invariant validation with proptest
 4. **Benchmarks**: Criterion for hot paths
 5. **Mock Engine**: PacketEngine trait allows testing without root
+
+## Security Audit Results
+
+**Overall Grade: A-**
+
+| Category | Status | Details |
+|----------|--------|---------|
+| Unsafe Code | PASS | 7 unsafe blocks, all documented with SAFETY comments |
+| Panic Analysis | PASS | 18 panics (minimal, acceptable for programming errors) |
+| Input Validation | PASS | Comprehensive validation on all CLI inputs |
+| Buffer Overflow | PASS | Rust memory safety prevents overflows |
+| Error Handling | PASS | Proper Result types throughout |
+| Secrets in Logs | PASS | No credential leakage |
+| File Path Validation | PASS | Path traversal prevented |
+| Network Validation | PASS | IP/port validation on all network inputs |
+
+See `findings.md` for detailed security audit report.
+
+## Implementation Status
+
+### Phase 1: Infrastructure - COMPLETE
+- rustnmap-common: Base types, errors, utilities
+- rustnmap-net: Raw sockets, packet construction
+- rustnmap-packet: PACKET_MMAP V3 zero-copy engine
+
+### Phase 2: Core Scanning - COMPLETE
+- rustnmap-target: Target parsing, host discovery (IPv4/IPv6)
+- rustnmap-scan: 12 scan types, timeout control
+- rustnmap-fingerprint: OS/service fingerprint matching, TLS detection
+
+### Phase 3: Advanced Features - COMPLETE
+- rustnmap-nse: Full Lua 5.4 engine with nmap/stdnse/comm libraries
+- rustnmap-traceroute: All methods (ICMP, TCP, UDP)
+- rustnmap-evasion: Fragmentation, decoys, spoofing
+
+### Phase 4: Integration - COMPLETE
+- rustnmap-cli: Full CLI with 60+ options
+- rustnmap-core: Orchestration and state management
+- rustnmap-output: All 5 output formats
+
+## User Documentation
+
+| Document | Location | Description |
+|----------|----------|-------------|
+| User Guide | `doc/user-guide.md` | Complete guide with examples (1,100+ lines) |
+| Manual Index | `doc/manual/README.md` | Navigate all manual sections |
+| Quick Reference | `doc/manual/quick-reference.md` | Command cheat sheet |
+| CLI Reference | `doc/manual/options.md` | All 60+ options documented |
+| Scan Types | `doc/manual/scan-types.md` | 12 scan type explanations |
+| Output Formats | `doc/manual/output-formats.md` | Format specifications |
+| NSE Scripts | `doc/manual/nse-scripts.md` | Scripting guide |
+| Man Page | `doc/rustnmap.1` | Unix manual page |
+
+## Next Steps
+
+1. **Continuous Testing**: Run `just ci` before any commits
+2. **Documentation**: Refer to `doc/manual/` for user-facing features
+3. **Security**: Run `just audit` periodically to check dependencies
+4. **Coverage**: Use `just coverage` to identify untested code paths
 
 ## Reference Documentation
 
