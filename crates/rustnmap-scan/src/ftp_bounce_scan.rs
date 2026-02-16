@@ -475,6 +475,137 @@ mod tests {
             PortState::Filtered
         );
     }
+
+    #[test]
+    fn test_build_port_command_port_zero() {
+        let ip = std::net::Ipv4Addr::new(192, 168, 1, 1);
+        let port: Port = 0;
+
+        let cmd = FtpBounceScanner::build_port_command(ip, port);
+
+        // 0 = 0*256 + 0
+        assert_eq!(cmd, "PORT 192,168,1,1,0,0");
+    }
+
+    #[test]
+    fn test_build_port_command_port_max() {
+        let ip = std::net::Ipv4Addr::new(192, 168, 1, 1);
+        let port: Port = 65535;
+
+        let cmd = FtpBounceScanner::build_port_command(ip, port);
+
+        // 65535 = 255*256 + 255
+        assert_eq!(cmd, "PORT 192,168,1,1,255,255");
+    }
+
+    #[test]
+    fn test_build_port_command_boundary_ports() {
+        // Test port 1 (minimum valid port)
+        let ip = std::net::Ipv4Addr::new(10, 0, 0, 1);
+        let cmd = FtpBounceScanner::build_port_command(ip, 1);
+        // 1 = 0*256 + 1
+        assert_eq!(cmd, "PORT 10,0,0,1,0,1");
+
+        // Test port 255 (single byte boundary)
+        let cmd = FtpBounceScanner::build_port_command(ip, 255);
+        // 255 = 0*256 + 255
+        assert_eq!(cmd, "PORT 10,0,0,1,0,255");
+
+        // Test port 256 (crosses byte boundary)
+        let cmd = FtpBounceScanner::build_port_command(ip, 256);
+        // 256 = 1*256 + 0
+        assert_eq!(cmd, "PORT 10,0,0,1,1,0");
+
+        // Test port 65534 (maximum valid port - 1)
+        let cmd = FtpBounceScanner::build_port_command(ip, 65534);
+        // 65534 = 255*256 + 254
+        assert_eq!(cmd, "PORT 10,0,0,1,255,254");
+    }
+
+    #[test]
+    fn test_scan_port_non_tcp_protocol() {
+        let ftp_server = SocketAddr::from(([127, 0, 0, 1], 21));
+        let scanner = FtpBounceScanner::new(ftp_server, None, None);
+
+        // Create an IPv4 target using From trait
+        let target = Target::from(std::net::Ipv4Addr::new(192, 168, 1, 1));
+
+        // UDP should return Filtered without attempting connection
+        let result = scanner.scan_port(&target, 80, Protocol::Udp);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), PortState::Filtered);
+
+        // SCTP should return Filtered
+        let result = scanner.scan_port(&target, 80, Protocol::Sctp);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), PortState::Filtered);
+    }
+
+    #[test]
+    fn test_scan_port_ipv6_target() {
+        let ftp_server = SocketAddr::from(([127, 0, 0, 1], 21));
+        let scanner = FtpBounceScanner::new(ftp_server, None, None);
+
+        // Create an IPv6 target using From trait
+        let target = Target::from(std::net::Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1));
+
+        // IPv6 targets should return Filtered
+        let result = scanner.scan_port(&target, 80, Protocol::Tcp);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), PortState::Filtered);
+    }
+
+    #[test]
+    fn test_parse_port_state_empty_response() {
+        // Empty string should be treated as Filtered
+        assert_eq!(
+            FtpBounceScanner::parse_port_state(""),
+            PortState::Filtered
+        );
+    }
+
+    #[test]
+    fn test_parse_port_state_extended_codes() {
+        // Extended codes that start with valid prefixes are treated as those codes
+        // This is correct behavior - "1500" starts with "150" indicating Open
+        assert_eq!(
+            FtpBounceScanner::parse_port_state("1500 Some extended code"),
+            PortState::Open
+        );
+        // "4250" starts with "425" indicating Closed
+        assert_eq!(
+            FtpBounceScanner::parse_port_state("4250 Another extended code"),
+            PortState::Closed
+        );
+    }
+
+    #[test]
+    fn test_parse_port_state_multiline_response() {
+        // Test first line parsing behavior (multiline would be handled by connection)
+        assert_eq!(
+            FtpBounceScanner::parse_port_state("150-Opening data connection"),
+            PortState::Open
+        );
+    }
+
+    #[test]
+    fn test_build_port_command_various_ips() {
+        // Test with 0.0.0.0
+        let ip = std::net::Ipv4Addr::new(0, 0, 0, 0);
+        let cmd = FtpBounceScanner::build_port_command(ip, 21);
+        assert_eq!(cmd, "PORT 0,0,0,0,0,21");
+
+        // Test with 255.255.255.255 (broadcast)
+        let ip = std::net::Ipv4Addr::new(255, 255, 255, 255);
+        let cmd = FtpBounceScanner::build_port_command(ip, 21);
+        assert_eq!(cmd, "PORT 255,255,255,255,0,21");
+
+        // Test with mixed octets
+        let ip = std::net::Ipv4Addr::new(127, 0, 0, 1);
+        let cmd = FtpBounceScanner::build_port_command(ip, 8080);
+        // 8080 = 31*256 + 144
+        assert_eq!(cmd, "PORT 127,0,0,1,31,144");
+    }
 }
 
 // Rust guideline compliant 2026-02-14

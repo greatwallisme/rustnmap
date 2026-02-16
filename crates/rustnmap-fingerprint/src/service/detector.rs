@@ -421,32 +421,137 @@ impl ServiceDetector {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::probe::{MatchRule, MatchTemplate};
 
     #[test]
     fn test_service_info_new() {
         let info = ServiceInfo::new("ssh");
         assert_eq!(info.name, "ssh");
         assert_eq!(info.confidence, 5);
+        assert!(info.product.is_none());
+        assert!(info.version.is_none());
     }
 
     #[test]
     fn test_service_info_with_confidence() {
         let info = ServiceInfo::new("http").with_confidence(15);
-        assert_eq!(info.confidence, 10); // Clamped
+        assert_eq!(info.confidence, 10); // Clamped to max
+
+        let info2 = ServiceInfo::new("ftp").with_confidence(3);
+        assert_eq!(info2.confidence, 3); // Unchanged
+
+        let info3 = ServiceInfo::new("smtp").with_confidence(0);
+        assert_eq!(info3.confidence, 0); // Zero allowed
     }
 
     #[test]
-    fn test_intensity_to_max_rarity() {
+    fn test_service_info_from_match_full() {
+        let match_result = MatchResult {
+            service: "ssh".to_string(),
+            product: Some("OpenSSH".to_string()),
+            version: Some("8.4".to_string()),
+            info: Some("protocol 2.0".to_string()),
+            hostname: Some("server.example.com".to_string()),
+            os_type: Some("Linux".to_string()),
+            device_type: Some("general purpose".to_string()),
+            cpe: Some("cpe:/a:openbsd:openssh:8.4".to_string()),
+            confidence: 9,
+        };
+
+        let info = ServiceInfo::from_match(match_result);
+        assert_eq!(info.name, "ssh");
+        assert_eq!(info.product, Some("OpenSSH".to_string()));
+        assert_eq!(info.version, Some("8.4".to_string()));
+        assert_eq!(info.info, Some("protocol 2.0".to_string()));
+        assert_eq!(info.hostname, Some("server.example.com".to_string()));
+        assert_eq!(info.os_type, Some("Linux".to_string()));
+        assert_eq!(info.device_type, Some("general purpose".to_string()));
+        assert_eq!(info.cpe, Some("cpe:/a:openbsd:openssh:8.4".to_string()));
+        assert_eq!(info.confidence, 9);
+    }
+
+    #[test]
+    fn test_service_info_from_match_minimal() {
+        let match_result = MatchResult {
+            service: "unknown".to_string(),
+            product: None,
+            version: None,
+            info: None,
+            hostname: None,
+            os_type: None,
+            device_type: None,
+            cpe: None,
+            confidence: 5,
+        };
+
+        let info = ServiceInfo::from_match(match_result);
+        assert_eq!(info.name, "unknown");
+        assert!(info.product.is_none());
+        assert!(info.version.is_none());
+        assert_eq!(info.confidence, 5);
+    }
+
+    #[test]
+    fn test_intensity_to_max_rarity_boundaries() {
         let mut detector = ServiceDetector::new(ProbeDatabase::empty());
 
+        // Test boundary value 0
         detector.intensity = 0;
         assert_eq!(detector.intensity_to_max_rarity(), 3);
 
+        // Test boundary values 1-3 -> rarity 5
+        detector.intensity = 1;
+        assert_eq!(detector.intensity_to_max_rarity(), 5);
+        detector.intensity = 2;
+        assert_eq!(detector.intensity_to_max_rarity(), 5);
+        detector.intensity = 3;
+        assert_eq!(detector.intensity_to_max_rarity(), 5);
+
+        // Test boundary values 4-6 -> rarity 7
+        detector.intensity = 4;
+        assert_eq!(detector.intensity_to_max_rarity(), 7);
         detector.intensity = 5;
         assert_eq!(detector.intensity_to_max_rarity(), 7);
+        detector.intensity = 6;
+        assert_eq!(detector.intensity_to_max_rarity(), 7);
 
+        // Test boundary values 7-9 -> rarity 9
+        detector.intensity = 7;
+        assert_eq!(detector.intensity_to_max_rarity(), 9);
+        detector.intensity = 8;
+        assert_eq!(detector.intensity_to_max_rarity(), 9);
         detector.intensity = 9;
         assert_eq!(detector.intensity_to_max_rarity(), 9);
+
+        // Test values above 9 (should clamp to 9)
+        detector.intensity = 10;
+        assert_eq!(detector.intensity_to_max_rarity(), 9);
+        detector.intensity = 255;
+        assert_eq!(detector.intensity_to_max_rarity(), 9);
+    }
+
+    #[test]
+    fn test_detector_with_intensity() {
+        let detector = ServiceDetector::new(ProbeDatabase::empty())
+            .with_intensity(5);
+        assert_eq!(detector.intensity, 5);
+
+        // Test clamping at upper bound
+        let detector2 = ServiceDetector::new(ProbeDatabase::empty())
+            .with_intensity(15);
+        assert_eq!(detector2.intensity, 9);
+
+        // Test clamping at lower bound
+        let detector3 = ServiceDetector::new(ProbeDatabase::empty())
+            .with_intensity(0);
+        assert_eq!(detector3.intensity, 1);
+    }
+
+    #[test]
+    fn test_detector_with_timeout() {
+        let detector = ServiceDetector::new(ProbeDatabase::empty())
+            .with_timeout(Duration::from_secs(10));
+        assert_eq!(detector.default_timeout, Duration::from_secs(10));
     }
 
     #[test]
@@ -457,7 +562,336 @@ mod tests {
         let text = "SSH-8.4-p1";
         let captures = detector.try_match(&regex, text).unwrap();
 
+        assert_eq!(captures.get(&0), Some(&"SSH-8.4-p1".to_string())); // Full match
         assert_eq!(captures.get(&1), Some(&"8.4".to_string()));
         assert_eq!(captures.get(&2), Some(&"p1".to_string()));
+    }
+
+    #[test]
+    fn test_try_match_no_match() {
+        let detector = ServiceDetector::new(ProbeDatabase::empty());
+        let regex = Regex::new(r"SSH-([\d.]+)").unwrap();
+
+        let text = "HTTP/1.1 200 OK";
+        let result = detector.try_match(&regex, text);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_try_match_empty_captures() {
+        let detector = ServiceDetector::new(ProbeDatabase::empty());
+        // Regex with optional group that doesn't match
+        let regex = Regex::new(r"SSH(-[\d.]+)?").unwrap();
+
+        let text = "SSH";
+        let captures = detector.try_match(&regex, text).unwrap();
+        assert_eq!(captures.get(&0), Some(&"SSH".to_string()));
+        // Group 1 doesn't exist in this match because optional part not present
+        assert_eq!(captures.get(&1), None);
+    }
+
+    #[test]
+    fn test_try_match_with_optional_group_present() {
+        let detector = ServiceDetector::new(ProbeDatabase::empty());
+        let regex = Regex::new(r"SSH(-[\d.]+)?").unwrap();
+
+        let text = "SSH-2.0";
+        let captures = detector.try_match(&regex, text).unwrap();
+        assert_eq!(captures.get(&0), Some(&"SSH-2.0".to_string()));
+        assert_eq!(captures.get(&1), Some(&"-2.0".to_string()));
+    }
+
+    #[test]
+    fn test_match_response_success() {
+        let mut probe = ProbeDefinition::new_tcp(
+            "SSHProbe".to_string(),
+            b"".to_vec(),
+        );
+        probe.add_match(MatchRule {
+            pattern: r"^SSH-([\d.]+)-OpenSSH_(.*)".to_string(),
+            service: "ssh".to_string(),
+            product_template: Some(MatchTemplate {
+                value: "OpenSSH".to_string(),
+            }),
+            version_template: Some(MatchTemplate {
+                value: "$1".to_string(),
+            }),
+            info_template: Some(MatchTemplate {
+                value: "$2".to_string(),
+            }),
+            hostname_template: None,
+            os_type_template: None,
+            device_type_template: None,
+            cpe_template: None,
+            soft: false,
+        });
+
+        let detector = ServiceDetector::new(ProbeDatabase::empty());
+        let response = b"SSH-2.0-OpenSSH_8.4p1";
+        let results = detector.match_response(&probe, response).unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].service, "ssh");
+        assert_eq!(results[0].product, Some("OpenSSH".to_string()));
+        assert_eq!(results[0].version, Some("2.0".to_string()));
+        assert_eq!(results[0].info, Some("8.4p1".to_string()));
+        assert_eq!(results[0].confidence, 8); // Hard match
+    }
+
+    #[test]
+    fn test_match_response_soft_match() {
+        let mut probe = ProbeDefinition::new_tcp(
+            "GenericProbe".to_string(),
+            b"".to_vec(),
+        );
+        probe.add_match(MatchRule {
+            pattern: r"^SSH".to_string(),
+            service: "ssh".to_string(),
+            product_template: None,
+            version_template: None,
+            info_template: None,
+            hostname_template: None,
+            os_type_template: None,
+            device_type_template: None,
+            cpe_template: None,
+            soft: true,
+        });
+
+        let detector = ServiceDetector::new(ProbeDatabase::empty());
+        let response = b"SSH-2.0-OpenSSH_8.4";
+        let results = detector.match_response(&probe, response).unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].service, "ssh");
+        assert_eq!(results[0].confidence, 5); // Soft match
+    }
+
+    #[test]
+    fn test_match_response_no_match() {
+        let mut probe = ProbeDefinition::new_tcp(
+            "SSHProbe".to_string(),
+            b"".to_vec(),
+        );
+        probe.add_match(MatchRule {
+            pattern: r"^SSH-".to_string(),
+            service: "ssh".to_string(),
+            product_template: None,
+            version_template: None,
+            info_template: None,
+            hostname_template: None,
+            os_type_template: None,
+            device_type_template: None,
+            cpe_template: None,
+            soft: false,
+        });
+
+        let detector = ServiceDetector::new(ProbeDatabase::empty());
+        let response = b"HTTP/1.1 200 OK";
+        let results = detector.match_response(&probe, response).unwrap();
+
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_match_response_multiple_rules() {
+        let mut probe = ProbeDefinition::new_tcp(
+            "MultiProbe".to_string(),
+            b"".to_vec(),
+        );
+        probe.add_match(MatchRule {
+            pattern: r"^SSH-".to_string(),
+            service: "ssh".to_string(),
+            product_template: None,
+            version_template: None,
+            info_template: None,
+            hostname_template: None,
+            os_type_template: None,
+            device_type_template: None,
+            cpe_template: None,
+            soft: false,
+        });
+        probe.add_match(MatchRule {
+            pattern: r"^HTTP/".to_string(),
+            service: "http".to_string(),
+            product_template: None,
+            version_template: None,
+            info_template: None,
+            hostname_template: None,
+            os_type_template: None,
+            device_type_template: None,
+            cpe_template: None,
+            soft: false,
+        });
+
+        let detector = ServiceDetector::new(ProbeDatabase::empty());
+
+        // Test SSH match
+        let results = detector.match_response(&probe, b"SSH-2.0-OpenSSH").unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].service, "ssh");
+
+        // Test HTTP match
+        let results = detector.match_response(&probe, b"HTTP/1.1 200 OK").unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].service, "http");
+    }
+
+    #[test]
+    fn test_match_response_invalid_regex() {
+        let mut probe = ProbeDefinition::new_tcp(
+            "BadProbe".to_string(),
+            b"".to_vec(),
+        );
+        probe.add_match(MatchRule {
+            pattern: r"[invalid(".to_string(), // Invalid regex
+            service: "test".to_string(),
+            product_template: None,
+            version_template: None,
+            info_template: None,
+            hostname_template: None,
+            os_type_template: None,
+            device_type_template: None,
+            cpe_template: None,
+            soft: false,
+        });
+
+        let detector = ServiceDetector::new(ProbeDatabase::empty());
+        let response = b"test";
+        let result = detector.match_response(&probe, response);
+
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), FingerprintError::InvalidRegex { .. }));
+    }
+
+    #[test]
+    fn test_match_response_binary_data() {
+        let mut probe = ProbeDefinition::new_tcp(
+            "BinaryProbe".to_string(),
+            b"".to_vec(),
+        );
+        probe.add_match(MatchRule {
+            pattern: r"\x00\x01\x02".to_string(),
+            service: "binary".to_string(),
+            product_template: None,
+            version_template: None,
+            info_template: None,
+            hostname_template: None,
+            os_type_template: None,
+            device_type_template: None,
+            cpe_template: None,
+            soft: false,
+        });
+
+        let detector = ServiceDetector::new(ProbeDatabase::empty());
+        let response = vec![0x00, 0x01, 0x02, 0x03];
+        let results = detector.match_response(&probe, &response).unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].service, "binary");
+    }
+
+    #[test]
+    fn test_select_probes_with_empty_database() {
+        let db = ProbeDatabase::empty();
+        let detector = ServiceDetector::new(db);
+        let probes = detector.select_probes(80);
+        assert!(probes.is_empty());
+    }
+
+    #[test]
+    fn test_select_probes_filters_by_rarity_via_parse() {
+        let content = r#"
+Probe TCP Common q|probe1|
+rarity 1
+Ports 80
+
+Probe TCP Uncommon q|probe2|
+rarity 5
+Ports 80
+
+Probe TCP Rare q|probe3|
+rarity 9
+Ports 80
+"#;
+        let db = ProbeDatabase::parse(content).unwrap();
+
+        // Test with intensity 3 (max rarity 5)
+        let detector = ServiceDetector::new(db.clone()).with_intensity(3);
+        let probes = detector.select_probes(80);
+        assert_eq!(probes.len(), 2); // Common and Uncommon
+        assert!(probes.iter().all(|p| p.rarity <= 5));
+
+        // Test with intensity 9 (max rarity 9)
+        let detector = ServiceDetector::new(db).with_intensity(9);
+        let probes = detector.select_probes(80);
+        assert_eq!(probes.len(), 3); // All probes
+    }
+
+    #[test]
+    fn test_select_probes_sorts_by_rarity_via_parse() {
+        let content = r#"
+Probe TCP Zebra q|probe1|
+rarity 5
+Ports 80
+
+Probe TCP Alpha q|probe2|
+rarity 1
+Ports 80
+
+Probe TCP Beta q|probe3|
+rarity 3
+Ports 80
+"#;
+        let db = ProbeDatabase::parse(content).unwrap();
+
+        let detector = ServiceDetector::new(db).with_intensity(9);
+        let probes = detector.select_probes(80);
+
+        assert_eq!(probes.len(), 3);
+        assert_eq!(probes[0].name, "Alpha"); // rarity 1
+        assert_eq!(probes[1].name, "Beta");  // rarity 3
+        assert_eq!(probes[2].name, "Zebra"); // rarity 5
+    }
+
+    #[test]
+    fn test_select_probes_sorts_by_name_for_same_rarity_via_parse() {
+        let content = r#"
+Probe TCP Zebra q|probe1|
+rarity 3
+Ports 80
+
+Probe TCP Alpha q|probe2|
+rarity 3
+Ports 80
+"#;
+        let db = ProbeDatabase::parse(content).unwrap();
+
+        let detector = ServiceDetector::new(db).with_intensity(9);
+        let probes = detector.select_probes(80);
+
+        assert_eq!(probes.len(), 2);
+        assert_eq!(probes[0].name, "Alpha"); // Same rarity, alphabetical
+        assert_eq!(probes[1].name, "Zebra");
+    }
+
+    #[test]
+    fn test_service_info_default_confidence() {
+        let info = ServiceInfo::new("test");
+        assert_eq!(info.confidence, 5);
+    }
+
+    #[test]
+    fn test_service_info_with_confidence_clamping() {
+        // Test upper clamp
+        let info = ServiceInfo::new("test").with_confidence(255);
+        assert_eq!(info.confidence, 10);
+
+        // Test at boundary
+        let info = ServiceInfo::new("test").with_confidence(10);
+        assert_eq!(info.confidence, 10);
+
+        // Test below boundary
+        let info = ServiceInfo::new("test").with_confidence(9);
+        assert_eq!(info.confidence, 9);
     }
 }

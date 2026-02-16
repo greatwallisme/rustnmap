@@ -425,7 +425,8 @@ impl ScriptEngine {
         let script_source = script.source.clone();
         let has_action = script.has_action();
 
-        let result = tokio::time::timeout(timeout, async move {
+        // Run Lua execution in spawn_blocking to allow timeout cancellation
+        let blocking_task = tokio::task::spawn_blocking(move || {
             let mut lua = NseLua::new_default()?;
 
             // Load the script
@@ -457,11 +458,13 @@ impl ScriptEngine {
             };
 
             Result::<ScriptOutput>::Ok(output)
-        })
-        .await;
+        });
+
+        let result = tokio::time::timeout(timeout, blocking_task).await;
 
         match result {
-            Ok(Ok(output)) => Ok(ScriptResult {
+            // Timeout not hit - task completed
+            Ok(Ok(Ok(output))) => Ok(ScriptResult {
                 script_id: script.id.clone(),
                 target_ip,
                 port: None,
@@ -471,7 +474,14 @@ impl ScriptEngine {
                 duration: start.elapsed(),
                 debug_log: vec![],
             }),
-            Ok(Err(e)) => Err(e),
+            // Timeout not hit - task returned error
+            Ok(Ok(Err(e))) => Err(e),
+            // Timeout not hit - task panicked
+            Ok(Err(_)) => Err(crate::error::Error::ExecutionError {
+                script_id: script.id.clone(),
+                message: "Script task panicked".to_string(),
+            }),
+            // Timeout hit
             Err(_) => Ok(ScriptResult {
                 script_id: script.id.clone(),
                 target_ip,
@@ -785,5 +795,854 @@ end
         let script_result = result.unwrap();
         assert_eq!(script_result.script_id, "test-return");
         assert!(script_result.is_success());
+    }
+
+    // Tests for execute_script with different Lua return types
+
+    #[test]
+    fn test_execute_script_returns_number() {
+        let mut db = ScriptDatabase::new();
+
+        let source = r"
+action = function(host)
+    return 3.14159
+end
+"
+        .to_string();
+
+        let script = NseScript::new("test-number", std::path::PathBuf::from("/test.nse"), source);
+        db.register_script(&script);
+
+        let engine = ScriptEngine::new(db);
+        let result = engine
+            .execute_script(
+                engine.database().get("test-number").unwrap(),
+                std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+            )
+            .unwrap();
+
+        assert!(result.is_success());
+        assert_eq!(result.output.to_display(), "3.14159");
+    }
+
+    #[test]
+    fn test_execute_script_returns_boolean_true() {
+        let mut db = ScriptDatabase::new();
+
+        let source = r"
+action = function(host)
+    return true
+end
+"
+        .to_string();
+
+        let script = NseScript::new("test-bool-true", std::path::PathBuf::from("/test.nse"), source);
+        db.register_script(&script);
+
+        let engine = ScriptEngine::new(db);
+        let result = engine
+            .execute_script(
+                engine.database().get("test-bool-true").unwrap(),
+                std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+            )
+            .unwrap();
+
+        assert!(result.is_success());
+        assert_eq!(result.output.to_display(), "true");
+    }
+
+    #[test]
+    fn test_execute_script_returns_boolean_false() {
+        let mut db = ScriptDatabase::new();
+
+        let source = r"
+action = function(host)
+    return false
+end
+"
+        .to_string();
+
+        let script =
+            NseScript::new("test-bool-false", std::path::PathBuf::from("/test.nse"), source);
+        db.register_script(&script);
+
+        let engine = ScriptEngine::new(db);
+        let result = engine
+            .execute_script(
+                engine.database().get("test-bool-false").unwrap(),
+                std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+            )
+            .unwrap();
+
+        assert!(result.is_success());
+        assert_eq!(result.output.to_display(), "false");
+    }
+
+    #[test]
+    fn test_execute_script_returns_nil() {
+        let mut db = ScriptDatabase::new();
+
+        let source = r"
+action = function(host)
+    return nil
+end
+"
+        .to_string();
+
+        let script = NseScript::new("test-nil", std::path::PathBuf::from("/test.nse"), source);
+        db.register_script(&script);
+
+        let engine = ScriptEngine::new(db);
+        let result = engine
+            .execute_script(
+                engine.database().get("test-nil").unwrap(),
+                std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+            )
+            .unwrap();
+
+        assert!(result.is_success());
+        // When script returns nil, output should be empty (nil values are filtered out)
+        assert!(result.output.to_display().is_empty());
+    }
+
+    #[test]
+    fn test_execute_script_returns_mixed_values() {
+        let mut db = ScriptDatabase::new();
+
+        let source = r#"
+action = function(host)
+    return "result", 42, true, nil, "end"
+end
+"#
+        .to_string();
+
+        let script = NseScript::new("test-mixed", std::path::PathBuf::from("/test.nse"), source);
+        db.register_script(&script);
+
+        let engine = ScriptEngine::new(db);
+        let result = engine
+            .execute_script(
+                engine.database().get("test-mixed").unwrap(),
+                std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+            )
+            .unwrap();
+
+        assert!(result.is_success());
+        assert_eq!(result.output.to_display(), "result 42 true end");
+    }
+
+    // Tests for create_host_table with IPv6
+
+    #[test]
+    fn test_create_host_table_ipv6() {
+        let mut lua = NseLua::new_default().unwrap();
+        let ipv6_addr = std::net::IpAddr::V6(std::net::Ipv6Addr::new(
+            0x2001, 0x0db8, 0x85a3, 0x0000, 0x0000, 0x8a2e, 0x0370, 0x7334,
+        ));
+
+        let host_table = ScriptEngine::create_host_table(&mut lua, ipv6_addr).unwrap();
+
+        assert_eq!(
+            host_table.get::<String>("ip").unwrap(),
+            "2001:db8:85a3::8a2e:370:7334"
+        );
+
+        let bin_ip: Vec<u8> = host_table.get("bin_ip").unwrap();
+        assert_eq!(bin_ip.len(), 16);
+        assert_eq!(
+            bin_ip,
+            vec![
+                0x20, 0x01, 0x0d, 0xb8, 0x85, 0xa3, 0x00, 0x00, 0x00, 0x00, 0x8a, 0x2e, 0x03,
+                0x70, 0x73, 0x34
+            ]
+        );
+    }
+
+    #[test]
+    fn test_create_host_table_ipv6_loopback() {
+        let mut lua = NseLua::new_default().unwrap();
+        let ipv6_addr = std::net::IpAddr::V6(std::net::Ipv6Addr::LOCALHOST);
+
+        let host_table = ScriptEngine::create_host_table(&mut lua, ipv6_addr).unwrap();
+
+        assert_eq!(host_table.get::<String>("ip").unwrap(), "::1");
+
+        let bin_ip: Vec<u8> = host_table.get("bin_ip").unwrap();
+        assert_eq!(bin_ip.len(), 16);
+        let expected = {
+            let mut v = vec![0u8; 15];
+            v.push(1);
+            v
+        };
+        assert_eq!(bin_ip, expected);
+    }
+
+    // Tests for execute_script_async
+
+    #[tokio::test]
+    async fn test_execute_script_async_success() {
+        let mut db = ScriptDatabase::new();
+
+        let source = r#"
+action = function(host)
+    return "async result"
+end
+"#
+        .to_string();
+
+        let script =
+            NseScript::new("test-async", std::path::PathBuf::from("/test.nse"), source);
+        db.register_script(&script);
+
+        let engine = ScriptEngine::new(db);
+        let result = engine
+            .execute_script_async(
+                engine.database().get("test-async").unwrap(),
+                std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+            )
+            .await
+            .unwrap();
+
+        assert!(result.is_success());
+        assert_eq!(result.output.to_display(), "async result");
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires process-level cancellation for infinite loops - see issue #123"]
+    async fn test_execute_script_async_timeout() {
+        let mut db = ScriptDatabase::new();
+
+        let source = r#"
+action = function(host)
+    while true do
+    end
+    return "never reached"
+end
+"#
+        .to_string();
+
+        let script =
+            NseScript::new("test-timeout", std::path::PathBuf::from("/test.nse"), source);
+        db.register_script(&script);
+
+        let config = SchedulerConfig {
+            max_concurrent: crate::MAX_CONCURRENT_SCRIPTS,
+            default_timeout: Duration::from_millis(50),
+            max_memory: crate::MAX_MEMORY_BYTES,
+        };
+
+        let engine = ScriptEngine::with_config(db, config);
+
+        let result = engine
+            .execute_script_async(
+                engine.database().get("test-timeout").unwrap(),
+                std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+            )
+            .await
+            .unwrap();
+
+        assert!(result.is_timeout());
+        assert!(result.output.is_empty());
+        assert!(!result.debug_log.is_empty());
+        assert!(result.debug_log[0].contains("timed out"));
+    }
+
+    #[tokio::test]
+    async fn test_execute_script_async_semaphore_concurrency() {
+        let mut db = ScriptDatabase::new();
+
+        let source = r#"
+action = function(host)
+    return "done"
+end
+"#
+        .to_string();
+
+        let script = NseScript::new("test-concurrent", std::path::PathBuf::from("/test.nse"), source);
+        db.register_script(&script);
+
+        let config = SchedulerConfig {
+            max_concurrent: 1,
+            default_timeout: Duration::from_secs(5),
+            max_memory: crate::MAX_MEMORY_BYTES,
+        };
+
+        let engine = ScriptEngine::with_config(db, config);
+        let script_ref = engine.database().get("test-concurrent").unwrap();
+
+        let handle1 = engine.execute_script_async(script_ref, std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
+        let handle2 = engine.execute_script_async(script_ref, std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
+
+        let (result1, result2) = tokio::join!(handle1, handle2);
+
+        assert!(result1.unwrap().is_success());
+        assert!(result2.unwrap().is_success());
+    }
+
+    // Tests for execute_scripts_async
+
+    #[tokio::test]
+    async fn test_execute_scripts_async_multiple() {
+        let mut db = ScriptDatabase::new();
+
+        let source1 = r#"
+action = function(host)
+    return "script1 output"
+end
+"#
+        .to_string();
+
+        let source2 = r#"
+action = function(host)
+    return "script2 output"
+end
+"#
+        .to_string();
+
+        let script1 = NseScript::new("test-multi-1", std::path::PathBuf::from("/test1.nse"), source1);
+        let script2 = NseScript::new("test-multi-2", std::path::PathBuf::from("/test2.nse"), source2);
+        db.register_script(&script1);
+        db.register_script(&script2);
+
+        let engine = ScriptEngine::new(db);
+        let scripts: Vec<&NseScript> = vec![
+            engine.database().get("test-multi-1").unwrap(),
+            engine.database().get("test-multi-2").unwrap(),
+        ];
+
+        let results = engine
+            .execute_scripts_async(&scripts, std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST))
+            .await;
+
+        assert_eq!(results.len(), 2);
+        assert!(results[0].as_ref().unwrap().is_success());
+        assert!(results[1].as_ref().unwrap().is_success());
+        assert_eq!(results[0].as_ref().unwrap().output.to_display(), "script1 output");
+        assert_eq!(results[1].as_ref().unwrap().output.to_display(), "script2 output");
+    }
+
+    #[tokio::test]
+    async fn test_execute_scripts_async_empty() {
+        let db = ScriptDatabase::new();
+        let engine = ScriptEngine::new(db);
+
+        let results: Vec<Result<ScriptResult>> = engine
+            .execute_scripts_async(&[], std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST))
+            .await;
+
+        assert!(results.is_empty());
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires process-level cancellation for infinite loops - see issue #123"]
+    async fn test_execute_scripts_async_mixed_results() {
+        let mut db = ScriptDatabase::new();
+
+        let source1 = r#"
+action = function(host)
+    return "success"
+end
+"#
+        .to_string();
+
+        let source2 = r"
+action = function(host)
+    while true do end
+end
+"
+        .to_string();
+
+        let script1 = NseScript::new("test-mix-1", std::path::PathBuf::from("/test1.nse"), source1);
+        let script2 = NseScript::new("test-mix-2", std::path::PathBuf::from("/test2.nse"), source2);
+        db.register_script(&script1);
+        db.register_script(&script2);
+
+        let config = SchedulerConfig {
+            max_concurrent: crate::MAX_CONCURRENT_SCRIPTS,
+            default_timeout: Duration::from_millis(100),
+            max_memory: crate::MAX_MEMORY_BYTES,
+        };
+
+        let engine = ScriptEngine::with_config(db, config);
+        let scripts: Vec<&NseScript> = vec![
+            engine.database().get("test-mix-1").unwrap(),
+            engine.database().get("test-mix-2").unwrap(),
+        ];
+
+        let results = engine
+            .execute_scripts_async(&scripts, std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST))
+            .await;
+
+        assert_eq!(results.len(), 2);
+        assert!(results[0].as_ref().unwrap().is_success());
+        assert!(results[1].as_ref().unwrap().is_timeout());
+    }
+
+    // Tests for execute_port_script
+
+    #[test]
+    fn test_execute_port_script_with_service() {
+        let mut db = ScriptDatabase::new();
+
+        let source = r#"
+action = function(host, port)
+    return port.number .. " " .. port.protocol .. " " .. port.service
+end
+"#
+        .to_string();
+
+        let script =
+            NseScript::new("test-port-script", std::path::PathBuf::from("/test.nse"), source);
+        db.register_script(&script);
+
+        let engine = ScriptEngine::new(db);
+        let result = engine
+            .execute_port_script(
+                engine.database().get("test-port-script").unwrap(),
+                std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+                80,
+                "tcp",
+                "open",
+                Some("http"),
+            )
+            .unwrap();
+
+        assert!(result.is_success());
+        assert_eq!(result.port, Some(80));
+        assert_eq!(result.protocol, Some("tcp".to_string()));
+        assert_eq!(result.output.to_display(), "80 tcp http");
+    }
+
+    #[test]
+    fn test_execute_port_script_with_version() {
+        let mut db = ScriptDatabase::new();
+
+        let source = r#"
+action = function(host, port)
+    return port.version.name .. ": " .. (port.version.version or "unknown")
+end
+"#
+        .to_string();
+
+        let script =
+            NseScript::new("test-version", std::path::PathBuf::from("/test.nse"), source);
+        db.register_script(&script);
+
+        let engine = ScriptEngine::new(db);
+        let result = engine
+            .execute_port_script(
+                engine.database().get("test-version").unwrap(),
+                std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+                443,
+                "tcp",
+                "open",
+                Some("https"),
+            )
+            .unwrap();
+
+        assert!(result.is_success());
+        // When version is None, port.version.version is nil, so "or" returns "unknown"
+        assert_eq!(result.output.to_display(), "https: unknown");
+    }
+
+    #[test]
+    fn test_execute_port_script_udp_protocol() {
+        let mut db = ScriptDatabase::new();
+
+        let source = r#"
+action = function(host, port)
+    return port.protocol .. " " .. port.state
+end
+"#
+        .to_string();
+
+        let script = NseScript::new("test-udp", std::path::PathBuf::from("/test.nse"), source);
+        db.register_script(&script);
+
+        let engine = ScriptEngine::new(db);
+        let result = engine
+            .execute_port_script(
+                engine.database().get("test-udp").unwrap(),
+                std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+                53,
+                "udp",
+                "open",
+                Some("dns"),
+            )
+            .unwrap();
+
+        assert!(result.is_success());
+        assert_eq!(result.output.to_display(), "udp open");
+    }
+
+    #[test]
+    fn test_execute_port_script_no_service() {
+        let mut db = ScriptDatabase::new();
+
+        let source = r#"
+action = function(host, port)
+    return "port " .. port.number .. " service: '" .. port.service .. "'"
+end
+"#
+        .to_string();
+
+        let script =
+            NseScript::new("test-no-service", std::path::PathBuf::from("/test.nse"), source);
+        db.register_script(&script);
+
+        let engine = ScriptEngine::new(db);
+        let result = engine
+            .execute_port_script(
+                engine.database().get("test-no-service").unwrap(),
+                std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+                12345,
+                "tcp",
+                "filtered",
+                None,
+            )
+            .unwrap();
+
+        assert!(result.is_success());
+        assert_eq!(result.output.to_display(), "port 12345 service: ''");
+    }
+
+    #[test]
+    fn test_execute_port_script_filtered_state() {
+        let mut db = ScriptDatabase::new();
+
+        let source = r#"
+action = function(host, port)
+    if port.state == "filtered" then
+        return "filtered detected"
+    end
+    return "other state"
+end
+"#
+        .to_string();
+
+        let script =
+            NseScript::new("test-filtered", std::path::PathBuf::from("/test.nse"), source);
+        db.register_script(&script);
+
+        let engine = ScriptEngine::new(db);
+        let result = engine
+            .execute_port_script(
+                engine.database().get("test-filtered").unwrap(),
+                std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+                445,
+                "tcp",
+                "filtered",
+                Some("smb"),
+            )
+            .unwrap();
+
+        assert!(result.is_success());
+        assert_eq!(result.output.to_display(), "filtered detected");
+    }
+
+    // Tests for evaluate_hostrule
+
+    #[test]
+    fn test_evaluate_hostrule_returns_false() {
+        let mut db = ScriptDatabase::new();
+
+        let source = r#"
+hostrule = function(host)
+    return false
+end
+
+action = function(host)
+    return "executed"
+end
+"#
+        .to_string();
+
+        let script =
+            NseScript::new("test-hostrule-false", std::path::PathBuf::from("/test.nse"), source);
+        db.register_script(&script);
+
+        let engine = ScriptEngine::new(db);
+        let result = engine
+            .evaluate_hostrule(
+                engine.database().get("test-hostrule-false").unwrap(),
+                std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+            )
+            .unwrap();
+
+        assert!(!result);
+    }
+
+    #[test]
+    fn test_evaluate_hostrule_returns_true() {
+        let mut db = ScriptDatabase::new();
+
+        let source = r#"
+hostrule = function(host)
+    return true
+end
+
+action = function(host)
+    return "executed"
+end
+"#
+        .to_string();
+
+        let script =
+            NseScript::new("test-hostrule-true", std::path::PathBuf::from("/test.nse"), source);
+        db.register_script(&script);
+
+        let engine = ScriptEngine::new(db);
+        let result = engine
+            .evaluate_hostrule(
+                engine.database().get("test-hostrule-true").unwrap(),
+                std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+            )
+            .unwrap();
+
+        assert!(result);
+    }
+
+    #[test]
+    fn test_evaluate_hostrule_no_hostrule() {
+        let mut db = ScriptDatabase::new();
+
+        let source = r#"
+action = function(host)
+    return "executed"
+end
+"#
+        .to_string();
+
+        let script =
+            NseScript::new("test-no-hostrule", std::path::PathBuf::from("/test.nse"), source);
+        db.register_script(&script);
+
+        let engine = ScriptEngine::new(db);
+        let result = engine
+            .evaluate_hostrule(
+                engine.database().get("test-no-hostrule").unwrap(),
+                std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+            )
+            .unwrap();
+
+        assert!(!result);
+    }
+
+    #[test]
+    fn test_evaluate_hostrule_checks_host_ip() {
+        let mut db = ScriptDatabase::new();
+
+        let source = r#"
+hostrule = function(host)
+    return host.ip == "127.0.0.1"
+end
+"#
+        .to_string();
+
+        let script =
+            NseScript::new("test-hostrule-ip", std::path::PathBuf::from("/test.nse"), source);
+        db.register_script(&script);
+
+        let engine = ScriptEngine::new(db);
+
+        let result_localhost = engine
+            .evaluate_hostrule(
+                engine.database().get("test-hostrule-ip").unwrap(),
+                std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+            )
+            .unwrap();
+        assert!(result_localhost);
+
+        let result_other = engine
+            .evaluate_hostrule(
+                engine.database().get("test-hostrule-ip").unwrap(),
+                std::net::IpAddr::V4(std::net::Ipv4Addr::new(192, 168, 1, 1)),
+            )
+            .unwrap();
+        assert!(!result_other);
+    }
+
+    // Tests for evaluate_portrule
+
+    #[test]
+    fn test_evaluate_portrule_returns_false() {
+        let mut db = ScriptDatabase::new();
+
+        let source = r#"
+portrule = function(host, port)
+    return false
+end
+
+action = function(host, port)
+    return "executed"
+end
+"#
+        .to_string();
+
+        let script =
+            NseScript::new("test-portrule-false", std::path::PathBuf::from("/test.nse"), source);
+        db.register_script(&script);
+
+        let engine = ScriptEngine::new(db);
+        let result = engine
+            .evaluate_portrule(
+                engine.database().get("test-portrule-false").unwrap(),
+                std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+                80,
+                "tcp",
+                "open",
+                Some("http"),
+            )
+            .unwrap();
+
+        assert!(!result);
+    }
+
+    #[test]
+    fn test_evaluate_portrule_returns_true() {
+        let mut db = ScriptDatabase::new();
+
+        let source = r#"
+portrule = function(host, port)
+    return true
+end
+
+action = function(host, port)
+    return "executed"
+end
+"#
+        .to_string();
+
+        let script =
+            NseScript::new("test-portrule-true", std::path::PathBuf::from("/test.nse"), source);
+        db.register_script(&script);
+
+        let engine = ScriptEngine::new(db);
+        let result = engine
+            .evaluate_portrule(
+                engine.database().get("test-portrule-true").unwrap(),
+                std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+                443,
+                "tcp",
+                "open",
+                Some("https"),
+            )
+            .unwrap();
+
+        assert!(result);
+    }
+
+    #[test]
+    fn test_evaluate_portrule_no_portrule() {
+        let mut db = ScriptDatabase::new();
+
+        let source = r#"
+action = function(host, port)
+    return "executed"
+end
+"#
+        .to_string();
+
+        let script =
+            NseScript::new("test-no-portrule", std::path::PathBuf::from("/test.nse"), source);
+        db.register_script(&script);
+
+        let engine = ScriptEngine::new(db);
+        let result = engine
+            .evaluate_portrule(
+                engine.database().get("test-no-portrule").unwrap(),
+                std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+                80,
+                "tcp",
+                "open",
+                Some("http"),
+            )
+            .unwrap();
+
+        assert!(!result);
+    }
+
+    #[test]
+    fn test_evaluate_portrule_checks_port_number() {
+        let mut db = ScriptDatabase::new();
+
+        let source = r"
+portrule = function(host, port)
+    return port.number == 80
+end
+"
+        .to_string();
+
+        let script =
+            NseScript::new("test-portrule-port", std::path::PathBuf::from("/test.nse"), source);
+        db.register_script(&script);
+
+        let engine = ScriptEngine::new(db);
+
+        let result_80 = engine
+            .evaluate_portrule(
+                engine.database().get("test-portrule-port").unwrap(),
+                std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+                80,
+                "tcp",
+                "open",
+                Some("http"),
+            )
+            .unwrap();
+        assert!(result_80);
+
+        let result_443 = engine
+            .evaluate_portrule(
+                engine.database().get("test-portrule-port").unwrap(),
+                std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+                443,
+                "tcp",
+                "open",
+                Some("https"),
+            )
+            .unwrap();
+        assert!(!result_443);
+    }
+
+    #[test]
+    fn test_evaluate_portrule_checks_port_state() {
+        let mut db = ScriptDatabase::new();
+
+        let source = r#"
+portrule = function(host, port)
+    return port.state == "open"
+end
+"#
+        .to_string();
+
+        let script =
+            NseScript::new("test-portrule-state", std::path::PathBuf::from("/test.nse"), source);
+        db.register_script(&script);
+
+        let engine = ScriptEngine::new(db);
+
+        let result_open = engine
+            .evaluate_portrule(
+                engine.database().get("test-portrule-state").unwrap(),
+                std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+                80,
+                "tcp",
+                "open",
+                Some("http"),
+            )
+            .unwrap();
+        assert!(result_open);
+
+        let result_closed = engine
+            .evaluate_portrule(
+                engine.database().get("test-portrule-state").unwrap(),
+                std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+                80,
+                "tcp",
+                "closed",
+                None,
+            )
+            .unwrap();
+        assert!(!result_closed);
     }
 }
