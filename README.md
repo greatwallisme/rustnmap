@@ -3,7 +3,7 @@
 > **Version**: 1.0.0
 > **Status**: Production Ready
 > **Platform**: Linux x86_64 (AMD64)
-> **Language**: Rust 1.85+
+> **Language**: Rust 1.80+
 
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen)](https://github.com/greatwallisme/rust-nmap)
 [![Tests](https://img.shields.io/badge/tests-970%2B%20passing-brightgreen)](https://github.com/greatwallisme/rust-nmap)

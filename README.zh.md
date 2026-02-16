@@ -3,7 +3,7 @@
 > **版本**: 1.0.0
 > **状态**: 生产就绪
 > **平台**: Linux x86_64 (AMD64)
-> **语言**: Rust 1.85+
+> **语言**: Rust 1.90+
 
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen)](https://github.com/greatwallisme/rust-nmap)
 [![Tests](https://img.shields.io/badge/tests-970%2B%20passing-brightgreen)](https://github.com/greatwallisme/rust-nmap)
