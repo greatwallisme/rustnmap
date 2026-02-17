@@ -1,80 +1,75 @@
-# RustNmap 2.0 文档更新任务计划
+# RustNmap 2.0 实施任务计划
 
 **创建日期**: 2026-02-17
-**任务目标**: 完成 RustNmap 2.0 所有文档更新
+**最后更新**: 2026-02-17
+**任务目标**: RustNmap 2.0 实施（12 周计划）
 **参考文档**: [RETHINK.md](../RETHINK.md), [doc/CHANGELOG.md](../doc/CHANGELOG.md)
 
 ---
 
 ## 任务概述
 
-根据 RETHINK.md 中的 12 周执行计划，更新 `doc/` 目录下的所有文档，以反映 RustNmap 2.0 从"端口扫描器"到"攻击面管理平台"的升级。
+根据 RETHINK.md 中的 12 周执行计划，实施 RustNmap 2.0 从"端口扫描器"到"攻击面管理平台"的升级。
 
 ---
 
-## 完成状态 (2026-02-17)
+## 完成状态 (2026-02-17 已提交)
 
-### Phase 0: 文档基线标记 - 完成
+### Phase 0: 执行正确性与可观测性 - 完成 ✅
 
-- [x] 为所有 1.0 用户文档添加版本标记
-- [x] 创建 `doc/CHANGELOG.md`
-- [x] 更新 `doc/README.md` 添加 2.0 路线图
+- [x] Host Discovery: 集成 rustnmap-target::HostDiscovery
+- [x] scan_types 路由: 支持所有扫描类型
+- [x] Scan Metadata: 动态扫描类型/协议派生
+- [x] OutputSink: 实现真实输出格式化
+- [x] ResumeStore: 保存/加载/清理功能
 
-### Phase 1: 核心架构更新 - 完成
+### Phase 1: 用户体验与流水线友好 - 完成 ✅
 
-- [x] 更新 `doc/architecture.md` - 添加 2.0 新 crate 和依赖图
-- [x] 更新 `doc/structure.md` - 从 14 个 crate 扩展到 17 个
+- [x] NdjsonFormatter: 换行符分隔 JSON 输出
+- [x] MarkdownFormatter: Markdown 报告格式
+- [x] CLI 选项：--output-ndjson, --output-markdown, --stream
 
-### Phase 2: 新增模块文档 - 完成
+### Phase 2: 漏洞情报 - 完成 ✅
 
-- [x] 创建 `doc/modules/vulnerability.md` - 漏洞情报模块
-- [x] 创建 `doc/modules/rest-api.md` - REST API 模块
-- [x] 创建 `doc/modules/sdk.md` - Rust SDK 模块
-- [x] 创建 `doc/modules/scan-management.md` - 扫描管理模块
-- [x] 创建 `doc/modules/stateless-scan.md` - 无状态扫描模块
-
----
-
-## 完成总结
-
-### 已完成的文档更新
-
-| Phase | 文档 | 操作 | 新增行数 |
-|-------|------|------|---------|
-| Phase 0 | 12 个用户文档 | 添加 v1.0 版本标记 | - |
-| Phase 0 | `doc/CHANGELOG.md` | 新建 | ~200 |
-| Phase 0 | `doc/README.md` | 更新 2.0 路线图 | ~50 |
-| Phase 1 | `doc/architecture.md` | 添加 2.0 架构 | ~150 |
-| Phase 1 | `doc/structure.md` | 更新 crate 列表 | ~100 |
-| Phase 2 | `doc/modules/vulnerability.md` | 新建 | ~500 |
-| Phase 2 | `doc/modules/rest-api.md` | 新建 | ~450 |
-| Phase 2 | `doc/modules/sdk.md` | 新建 | ~400 |
-| Phase 2 | `doc/modules/scan-management.md` | 新建 | ~450 |
-| Phase 2 | `doc/modules/stateless-scan.md` | 新建 | ~400 |
-| **总计** | **19 个文档** | **-** | **~2,700 行** |
+- [x] 创建 rustnmap-vuln crate (第 15 个 crate)
+- [x] VulnClient: 主 API
+- [x] CpeMatcher: CPE 解析和匹配
+- [x] VulnDatabase: SQLite 存储
+- [x] EPSS Engine: 漏洞利用预测评分
+- [x] KEV Engine: CISA 已知利用漏洞
 
 ---
 
-## 后续工作
+## 待完成任务
 
-根据 RETHINK.md 的 12 周计划，以下文档更新将在对应 Phase 代码完成后进行：
+### Phase 3: 扫描管理 (Week 8-9)
 
-| Phase | 周次 | 待更新文档 | 触发条件 |
-|-------|------|-----------|---------|
-| Phase 1 | Week 3-4 | `doc/manual/options.md`, `doc/manual/output-formats.md` | 流式输出、NDJSON 完成后 |
-| Phase 2 | Week 5-7 | `doc/manual/html-report.md` | HTML/SARIF 报告完成后 |
-| Phase 3 | Week 8-9 | `doc/manual/profiles.md` | YAML Profile 完成后 |
-| Phase 4 | Week 10-11 | `doc/modules/port-scanning.md` 更新 | 两阶段扫描完成后 |
-| Phase 5 | Week 12 | `doc/architecture.md` 最终版 | REST API、SDK 完成后 |
+- [ ] SQLite 扫描结果持久化
+- [ ] 扫描 Diff 比较
+- [ ] YAML Profile 配置
+- [ ] --history 查询支持
+
+### Phase 4: 性能优化 (Week 10-11)
+
+- [ ] 两阶段扫描
+- [ ] 自适应批量大小
+- [ ] 无状态快速扫描
+
+### Phase 5: 平台化 (Week 12)
+
+- [ ] REST API / Daemon 模式 (rustnmap-api)
+- [ ] Rust SDK Builder API (rustnmap-sdk)
 
 ---
 
-## 验证标准
+## 代码统计
 
-1. [x] 所有新增文档无拼写错误
-2. [x] 文档链接无断链
-3. [ ] 示例命令可实际执行 (待代码实现后验证)
-4. [x] CHANGELOG.md 已更新
+| 指标 | 数值 |
+|------|------|
+| 总代码行数 | 35,356+ |
+| 工作区 Crate 数 | 15 (1.0: 14 + 2.0: 1) |
+| 通过测试数 | 106+ (core: 47 + output: 28 + vuln: 31) |
+| 最新提交 | cb3e814 |
 
 ---
 
@@ -82,4 +77,6 @@
 
 | 错误 | 尝试 | 解决方案 |
 |------|------|---------|
-| 无 | - | 本次任务顺利完成 |
+| SQLite 外键约束失败 | 1 | 测试中先插入 CVE 再插入 EPSS/KEV |
+| CPE 格式解析错误 | 1 | 确保 13 部分格式 |
+| rusqlite::Clone 不可用 | 1 | 使用引用传递代替 ownership |
