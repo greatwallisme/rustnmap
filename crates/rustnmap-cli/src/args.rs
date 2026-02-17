@@ -363,6 +363,26 @@ pub struct Args {
     )]
     pub output_json: Option<PathBuf>,
 
+    /// NDJSON output to file (newline-delimited JSON for pipelines)
+    #[arg(
+        short = 'o',
+        long,
+        help_heading = "Output",
+        value_name = "FILE",
+        conflicts_with = "output_all"
+    )]
+    pub output_ndjson: Option<PathBuf>,
+
+    /// Markdown output to file
+    #[arg(
+        short = 'o',
+        long,
+        help_heading = "Output",
+        value_name = "FILE",
+        conflicts_with = "output_all"
+    )]
+    pub output_markdown: Option<PathBuf>,
+
     /// Output all formats to basename
     #[arg(
         short = 'o',
@@ -370,7 +390,8 @@ pub struct Args {
         help_heading = "Output",
         value_name = "BASENAME",
         conflicts_with_all = ["output_normal", "output_xml",
-                             "output_grepable", "output_json"]
+                             "output_grepable", "output_json",
+                             "output_ndjson", "output_markdown"]
     )]
     pub output_all: Option<PathBuf>,
 
@@ -381,6 +402,10 @@ pub struct Args {
     /// No output (suppress default output)
     #[arg(long, help_heading = "Output")]
     pub no_output: bool,
+
+    /// Enable streaming output (output hosts as they are discovered)
+    #[arg(long, help_heading = "Output")]
+    pub stream: bool,
 
     /// Append to output files (don't overwrite)
     #[arg(long, help_heading = "Output")]

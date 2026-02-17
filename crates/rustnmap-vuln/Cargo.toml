@@ -1,0 +1,51 @@
+[package]
+name = "rustnmap-vuln"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+description = "Vulnerability intelligence for RustNmap (CVE/CPE, EPSS, CISA KEV)"
+keywords = ["vulnerability", "cve", "cpe", "epss", "security"]
+categories = ["security"]
+
+[dependencies]
+# Workspace dependencies
+rustnmap-common = { path = "../rustnmap-common" }
+rustnmap-output = { path = "../rustnmap-output" }
+
+# Database
+rusqlite = { version = "0.31", features = ["bundled"] }
+
+# HTTP client for NVD API
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Async runtime
+tokio = { workspace = true }
+
+# Date/time
+chrono = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+
+# Utilities
+url = "2.5"
+cpe = "0.1"
+lru = "0.12"
+
+# Logging
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio-test = "0.4"
+dotenvy = { workspace = true }
+
+[lints]
+workspace = true

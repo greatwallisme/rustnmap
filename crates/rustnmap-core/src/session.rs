@@ -9,6 +9,7 @@
 //! privileges or actual network access.
 
 use std::fmt;
+use std::io::Write;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -20,8 +21,10 @@ use rustnmap_common::{MacAddr, Port};
 use rustnmap_output::models::{HostResult, ScanResult};
 use rustnmap_scan::scanner::TimingTemplate;
 use rustnmap_target::{Target, TargetGroup};
+use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 use tokio_stream::Stream;
+use tracing::warn;
 
 use crate::error::{CoreError, Result};
 
@@ -691,11 +694,31 @@ impl NseRegistry {
 }
 
 /// Resume store for session recovery.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct ResumeStore {
     /// Resume data file path.
-    #[allow(dead_code)]
     path: std::path::PathBuf,
+}
+
+/// Resume state for session recovery.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResumeState {
+    /// Completed host IPs.
+    pub completed_hosts: Vec<String>,
+    /// Current scan phase.
+    pub current_phase: String,
+    /// Scanned ports per host.
+    pub scanned_ports: std::collections::HashMap<String, Vec<u16>>,
+}
+
+impl Default for ResumeState {
+    fn default() -> Self {
+        Self {
+            completed_hosts: Vec::new(),
+            current_phase: "TargetParsing".to_string(),
+            scanned_ports: std::collections::HashMap::new(),
+        }
+    }
 }
 
 impl ResumeStore {
@@ -703,6 +726,53 @@ impl ResumeStore {
     #[must_use]
     pub fn new(path: impl Into<std::path::PathBuf>) -> Self {
         Self { path: path.into() }
+    }
+
+    /// Saves the resume state to disk.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the state cannot be serialized or written.
+    pub fn save(&self, state: &ResumeState) -> Result<()> {
+        let json = serde_json::to_string_pretty(state).map_err(|e| {
+            CoreError::config(format!("Failed to serialize resume state: {e}"))
+        })?;
+        std::fs::write(&self.path, &json).map_err(|e| {
+            CoreError::config(format!("Failed to write resume file: {e}"))
+        })?;
+        Ok(())
+    }
+
+    /// Loads the resume state from disk.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the state cannot be read or deserialized.
+    pub fn load(&self) -> Result<Option<ResumeState>> {
+        if !self.path.exists() {
+            return Ok(None);
+        }
+        let json = std::fs::read_to_string(&self.path).map_err(|e| {
+            CoreError::config(format!("Failed to read resume file: {e}"))
+        })?;
+        let state = serde_json::from_str(&json).map_err(|e| {
+            CoreError::config(format!("Failed to deserialize resume state: {e}"))
+        })?;
+        Ok(Some(state))
+    }
+
+    /// Cleans up the resume file after successful completion.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file cannot be removed.
+    pub fn cleanup(&self) -> Result<()> {
+        if self.path.exists() {
+            std::fs::remove_file(&self.path).map_err(|e| {
+                CoreError::config(format!("Failed to remove resume file: {e}"))
+            })?;
+        }
+        Ok(())
     }
 }
 
@@ -787,15 +857,31 @@ impl Stream for PacketStream {
     }
 }
 
-/// Default output sink implementation.
-#[derive(Debug)]
-pub struct DefaultOutputSink;
+/// Default output sink.
+pub struct DefaultOutputSink {
+    /// Output formatter.
+    formatter: Box<dyn rustnmap_output::formatter::OutputFormatter>,
+}
+
+impl std::fmt::Debug for DefaultOutputSink {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DefaultOutputSink").finish()
+    }
+}
 
 impl DefaultOutputSink {
-    /// Creates a new default output sink.
+    /// Creates a new default output sink with normal formatter.
     #[must_use]
-    pub const fn new() -> Self {
-        Self
+    pub fn new() -> Self {
+        Self {
+            formatter: Box::new(rustnmap_output::formatter::NormalFormatter::new()),
+        }
+    }
+
+    /// Creates a new output sink with a custom formatter.
+    #[must_use]
+    pub fn with_formatter(formatter: Box<dyn rustnmap_output::formatter::OutputFormatter>) -> Self {
+        Self { formatter }
     }
 }
 
@@ -807,17 +893,42 @@ impl Default for DefaultOutputSink {
 
 #[async_trait]
 impl OutputSink for DefaultOutputSink {
-    async fn output_host(&self, _result: &HostResult) -> Result<()> {
-        // Console output implementation pending integration with output formatters
+    async fn output_host(&self, result: &HostResult) -> Result<()> {
+        // Format and print host result
+        match self.formatter.format_host(result) {
+            Ok(formatted) => {
+                print!("{formatted}");
+                std::io::stdout().flush().map_err(|e| {
+                    CoreError::config(format!("Failed to flush output: {e}"))
+                })?;
+            }
+            Err(e) => {
+                warn!("Failed to format host result: {e}");
+            }
+        }
         Ok(())
     }
 
-    async fn output_scan_result(&self, _result: &ScanResult) -> Result<()> {
-        // Console output implementation pending integration with output formatters
+    async fn output_scan_result(&self, result: &ScanResult) -> Result<()> {
+        // Format and print complete scan result
+        match self.formatter.format_scan_result(result) {
+            Ok(formatted) => {
+                print!("{formatted}");
+                std::io::stdout().flush().map_err(|e| {
+                    CoreError::config(format!("Failed to flush output: {e}"))
+                })?;
+            }
+            Err(e) => {
+                warn!("Failed to format scan result: {e}");
+            }
+        }
         Ok(())
     }
 
     async fn flush(&self) -> Result<()> {
+        std::io::stdout().flush().map_err(|e| {
+            CoreError::config(format!("Failed to flush output: {e}"))
+        })?;
         Ok(())
     }
 }

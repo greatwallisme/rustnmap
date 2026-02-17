@@ -13,6 +13,7 @@ members = [
     "crates/rustnmap-output",
     "crates/rustnmap-cli",
     "crates/rustnmap-benchmarks",
+    "crates/rustnmap-vuln",
 ]
 resolver = "2"
 
@@ -71,6 +72,18 @@ ring = "0.17"
 
 # HTTP client for database updates
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+
+# Database
+rusqlite = { version = "0.31", features = ["bundled"] }
+
+# CPE parsing
+cpe = "0.1"
+
+# LRU cache
+lru = "0.12"
+
+# URL parsing
+url = "2.5"
 
 # Testing
 proptest = "1.5"

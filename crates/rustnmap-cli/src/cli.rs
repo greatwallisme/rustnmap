@@ -23,6 +23,7 @@ use std::sync::Arc;
 use rustnmap_common::Result;
 use rustnmap_core::session::{PortSpec, ScanType};
 use rustnmap_core::{ScanConfig, ScanOrchestrator, ScanSession};
+use rustnmap_output::formatter::OutputFormatter;
 use rustnmap_output::models::{HostResult, PortResult, PortState, Protocol, ScanResult};
 use rustnmap_scan::scanner::TimingTemplate;
 use rustnmap_target::{Target, TargetGroup, TargetParser};
@@ -430,8 +431,14 @@ async fn output_results(args: &Args, result: &ScanResult) -> Result<()> {
         if let Some(path) = &args.output_json {
             write_json_output(result, path, args.append_output).await?;
         }
+        if let Some(path) = &args.output_ndjson {
+            write_ndjson_output(result, path, args.append_output).await?;
+        }
         if let Some(path) = &args.output_grepable {
             write_grepable_output(result, path, args.append_output).await?;
+        }
+        if let Some(path) = &args.output_markdown {
+            write_markdown_output(result, path, args.append_output).await?;
         }
     }
 
@@ -607,11 +614,15 @@ async fn write_all_formats(
     let xml_path = basename.with_extension("xml");
     let grepable_path = basename.with_extension("gnmap");
     let json_path = basename.with_extension("json");
+    let ndjson_path = basename.with_extension("ndjson");
+    let md_path = basename.with_extension("md");
 
     write_normal_output(result, &normal_path, append).await?;
     write_xml_output(result, &xml_path, append).await?;
     write_grepable_output(result, &grepable_path, append).await?;
     write_json_output(result, &json_path, append).await?;
+    write_ndjson_output(result, &ndjson_path, append).await?;
+    write_markdown_output(result, &md_path, append).await?;
 
     Ok(())
 }
@@ -833,6 +844,76 @@ async fn write_grepable_output(
                 .map_err(|e| rustnmap_common::Error::Other(format!("Write error: {e}")))?;
         }
     }
+
+    Ok(())
+}
+
+/// Writes NDJSON format output to file.
+async fn write_ndjson_output(
+    result: &ScanResult,
+    path: &std::path::Path,
+    append: bool,
+) -> Result<()> {
+    use rustnmap_output::NdjsonFormatter;
+    use std::io::Write;
+
+    let formatter = NdjsonFormatter::new();
+    let output = formatter.format_scan_result(result).map_err(|e| {
+        rustnmap_common::Error::Other(format!("Failed to format NDJSON: {e}"))
+    })?;
+
+    let mut file = if append {
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .map_err(|e| {
+                rustnmap_common::Error::Other(format!("Failed to open output file: {e}"))
+            })?
+    } else {
+        std::fs::File::create(path).map_err(|e| {
+            rustnmap_common::Error::Other(format!("Failed to create output file: {e}"))
+        })?
+    };
+
+    file.write_all(output.as_bytes()).map_err(|e| {
+        rustnmap_common::Error::Other(format!("Write error: {e}"))
+    })?;
+
+    Ok(())
+}
+
+/// Writes Markdown format output to file.
+async fn write_markdown_output(
+    result: &ScanResult,
+    path: &std::path::Path,
+    append: bool,
+) -> Result<()> {
+    use rustnmap_output::MarkdownFormatter;
+    use std::io::Write;
+
+    let formatter = MarkdownFormatter::new();
+    let output = formatter.format_scan_result(result).map_err(|e| {
+        rustnmap_common::Error::Other(format!("Failed to format Markdown: {e}"))
+    })?;
+
+    let mut file = if append {
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .map_err(|e| {
+                rustnmap_common::Error::Other(format!("Failed to open output file: {e}"))
+            })?
+    } else {
+        std::fs::File::create(path).map_err(|e| {
+            rustnmap_common::Error::Other(format!("Failed to create output file: {e}"))
+        })?
+    };
+
+    file.write_all(output.as_bytes()).map_err(|e| {
+        rustnmap_common::Error::Other(format!("Write error: {e}"))
+    })?;
 
     Ok(())
 }

@@ -45,8 +45,8 @@ pub mod writer;
 
 pub use error::{OutputError, Result};
 pub use formatter::{
-    GrepableFormatter, JsonFormatter, NormalFormatter, OutputFormatter, ScriptKiddieFormatter,
-    XmlFormatter,
+    GrepableFormatter, JsonFormatter, MarkdownFormatter, NdjsonFormatter, NormalFormatter,
+    OutputFormatter, ScriptKiddieFormatter, XmlFormatter,
 };
 pub use models::{
     HostResult, MacAddress, OsMatch, PortResult, Protocol, ScanMetadata, ScanResult,

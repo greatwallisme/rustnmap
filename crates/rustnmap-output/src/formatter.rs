@@ -22,6 +22,200 @@ use quick_xml::writer::Writer;
 use std::fmt::Write;
 use std::io::Write as IoWrite;
 
+/// NDJSON formatter (newline-delimited JSON).
+///
+/// Each host result is output as a separate JSON object on a new line,
+/// suitable for pipeline processing and streaming consumption.
+#[derive(Debug, Clone, Default)]
+pub struct NdjsonFormatter;
+
+impl NdjsonFormatter {
+    /// Create new NDJSON formatter.
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl OutputFormatter for NdjsonFormatter {
+    fn format_scan_result(&self, result: &ScanResult) -> Result<String> {
+        let mut output = String::new();
+
+        // Output each host as a separate JSON object
+        for host in &result.hosts {
+            let host_json = serde_json::to_string(&host).map_err(|e| {
+                OutputError::InvalidData(format!("Failed to serialize host: {e}"))
+            })?;
+            output.push_str(&host_json);
+            output.push('\n');
+        }
+
+        Ok(output)
+    }
+
+    fn format_host(&self, host: &HostResult) -> Result<String> {
+        // Single JSON object per host (no trailing newline for single host)
+        serde_json::to_string(host)
+            .map_err(|e| OutputError::InvalidData(format!("Failed to serialize host: {e}")))
+    }
+
+    fn format_port(&self, port: &PortResult) -> Result<String> {
+        serde_json::to_string(port)
+            .map_err(|e| OutputError::InvalidData(format!("Failed to serialize port: {e}")))
+    }
+
+    fn format_script(&self, script: &ScriptResult) -> Result<String> {
+        serde_json::to_string(script)
+            .map_err(|e| OutputError::InvalidData(format!("Failed to serialize script: {e}")))
+    }
+
+    fn file_extension(&self) -> &str {
+        "ndjson"
+    }
+
+    fn format_name(&self) -> &str {
+        "NDJSON"
+    }
+}
+
+/// Markdown report formatter.
+///
+/// Generates a human-readable Markdown report suitable for
+/// documentation and sharing scan results.
+#[derive(Debug, Clone, Default)]
+pub struct MarkdownFormatter;
+
+impl MarkdownFormatter {
+    /// Create new Markdown formatter.
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl OutputFormatter for MarkdownFormatter {
+    fn format_scan_result(&self, result: &ScanResult) -> Result<String> {
+        let mut output = String::new();
+
+        // Title
+        output.push_str("# RustNmap Scan Report\n\n");
+
+        // Metadata
+        output.push_str("## Scan Information\n\n");
+        output.push_str(&format!("- **Scanner Version**: {}\n", result.metadata.scanner_version));
+        output.push_str(&format!("- **Scan Type**: {:?}\n", result.metadata.scan_type));
+        output.push_str(&format!("- **Protocol**: {:?}\n", result.metadata.protocol));
+        output.push_str(&format!("- **Start Time**: {}\n", result.metadata.start_time));
+        output.push_str(&format!("- **End Time**: {}\n", result.metadata.end_time));
+        output.push_str(&format!("- **Elapsed Time**: {:.2}s\n", result.metadata.elapsed.as_secs_f64()));
+        output.push('\n');
+
+        // Statistics
+        output.push_str("## Statistics\n\n");
+        output.push_str(&format!("- **Total Hosts**: {}\n", result.statistics.total_hosts));
+        output.push_str(&format!("- **Hosts Up**: {}\n", result.statistics.hosts_up));
+        output.push_str(&format!("- **Total Open Ports**: {}\n", result.statistics.open_ports));
+        output.push_str(&format!("- **Total Closed Ports**: {}\n", result.statistics.closed_ports));
+        output.push_str(&format!("- **Total Filtered Ports**: {}\n", result.statistics.filtered_ports));
+        output.push_str(&format!("- **Packets Sent**: {}\n", result.statistics.packets_sent));
+        output.push_str(&format!("- **Packets Received**: {}\n", result.statistics.packets_received));
+        output.push('\n');
+
+        // Hosts
+        output.push_str("## Hosts\n\n");
+
+        for host in &result.hosts {
+            output.push_str(&self.format_host(host)?);
+            output.push('\n');
+        }
+
+        Ok(output)
+    }
+
+    fn format_host(&self, host: &HostResult) -> Result<String> {
+        let mut output = String::new();
+
+        // Host header
+        output.push_str(&format!("### {}\n\n", host.ip));
+
+        if let Some(ref hostname) = host.hostname {
+            output.push_str(&format!("- **Hostname**: {}\n", hostname));
+        }
+        output.push_str(&format!("- **Status**: {:?}\n", host.status));
+        output.push_str(&format!("- **Reason**: {}\n", host.status_reason));
+        output.push_str(&format!("- **Latency**: {:.2?}\n", host.latency));
+        output.push('\n');
+
+        // Ports table
+        if !host.ports.is_empty() {
+            output.push_str("#### Open Ports\n\n");
+            output.push_str("| Port | Protocol | State | Service | Version |\n");
+            output.push_str("|------|----------|-------|---------|---------|\n");
+
+            for port in &host.ports {
+                let service_name = port.service.as_ref()
+                    .map(|s| s.name.as_str())
+                    .unwrap_or("");
+                let service_version = port.service.as_ref()
+                    .and_then(|s| s.version.as_ref())
+                    .map(|v| v.as_str())
+                    .unwrap_or("");
+
+                output.push_str(&format!(
+                    "| {} | {} | {:?} | {} | {} |\n",
+                    port.number,
+                    format!("{:?}", port.protocol).to_lowercase(),
+                    port.state,
+                    service_name,
+                    service_version
+                ));
+            }
+            output.push('\n');
+        }
+
+        // Scripts
+        if !host.scripts.is_empty() {
+            output.push_str("#### Scripts\n\n");
+            for script in &host.scripts {
+                output.push_str(&format!("**{}**\n\n", script.id));
+                output.push_str(&format!("```\n{}\n```\n\n", script.output));
+            }
+        }
+
+        // OS matches
+        if !host.os_matches.is_empty() {
+            output.push_str("#### OS Matches\n\n");
+            for os in &host.os_matches {
+                output.push_str(&format!("- {} (accuracy: {}%)\n", os.name, os.accuracy));
+            }
+            output.push('\n');
+        }
+
+        Ok(output)
+    }
+
+    fn format_port(&self, port: &PortResult) -> Result<String> {
+        let service_info = port.service.as_ref()
+            .map(|s| format!("{} {}", s.name, s.version.as_ref().unwrap_or(&String::new()).trim()))
+            .unwrap_or_default();
+
+        Ok(format!(
+            "{} {:?} {:?} {}",
+            port.number, port.protocol, port.state, service_info
+        ))
+    }
+
+    fn format_script(&self, script: &ScriptResult) -> Result<String> {
+        Ok(format!("**{}**\n\n{}\n", script.id, script.output))
+    }
+
+    fn file_extension(&self) -> &str {
+        "md"
+    }
+
+    fn format_name(&self) -> &str {
+        "Markdown"
+    }
+}
+
 /// Verbosity level for output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum VerbosityLevel {
@@ -905,6 +1099,23 @@ mod tests {
         }
     }
 
+    fn create_test_scan_result() -> ScanResult {
+        ScanResult {
+            metadata: ScanMetadata {
+                scanner_version: "1.0.0".to_string(),
+                command_line: "rustnmap 192.168.1.1".to_string(),
+                start_time: chrono::Utc::now(),
+                end_time: chrono::Utc::now(),
+                elapsed: Duration::from_secs(10),
+                scan_type: ScanType::TcpSyn,
+                protocol: Protocol::Tcp,
+            },
+            hosts: Vec::new(),
+            statistics: ScanStatistics::default(),
+            errors: Vec::new(),
+        }
+    }
+
     #[test]
     fn test_normal_formatter_host() {
         let formatter = NormalFormatter::new();
@@ -1011,5 +1222,49 @@ mod tests {
 
         let kiddie = ScriptKiddieFormatter::new();
         assert_eq!(kiddie.file_extension(), "txt");
+
+        let ndjson = NdjsonFormatter::new();
+        assert_eq!(ndjson.file_extension(), "ndjson");
+
+        let md = MarkdownFormatter::new();
+        assert_eq!(md.file_extension(), "md");
+    }
+
+    #[test]
+    fn test_ndjson_formatter_host() {
+        let formatter = NdjsonFormatter::new();
+        let host = create_test_host();
+        let result = formatter.format_host(&host).unwrap();
+
+        assert!(result.contains("192.168.1.1"));
+        assert!(result.contains("\"ip\""));
+        assert!(result.starts_with('{'));
+    }
+
+    #[test]
+    fn test_markdown_formatter_host() {
+        let formatter = MarkdownFormatter::new();
+        let host = create_test_host();
+        let result = formatter.format_host(&host).unwrap();
+
+        assert!(result.contains("### 192.168.1.1"));
+        assert!(result.contains("80"));
+        assert!(result.contains("Open"));
+        assert!(result.contains("http"));
+        assert!(result.contains("|"));
+    }
+
+    #[test]
+    fn test_markdown_formatter_scan_result() {
+        let formatter = MarkdownFormatter::new();
+        let mut result = create_test_scan_result();
+        result.hosts.push(create_test_host());
+
+        let formatted = formatter.format_scan_result(&result).unwrap();
+
+        assert!(formatted.contains("# RustNmap Scan Report"));
+        assert!(formatted.contains("## Scan Information"));
+        assert!(formatted.contains("## Statistics"));
+        assert!(formatted.contains("## Hosts"));
     }
 }
