@@ -1,5 +1,8 @@
 # RustNmap Exit Codes / 退出代码
 
+> **版本**: 1.0.0
+> **状态**: 此文档描述 RustNmap 1.0.0 的退出代码。2.0 版本开发中，详见 [CHANGELOG.md](../CHANGELOG.md)。
+
 > **Exit codes and error handling reference** / 退出代码和错误处理参考
 
 ---

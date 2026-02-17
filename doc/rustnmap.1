@@ -1,6 +1,23 @@
 .TH RUSTNMAP 1 "February 2026" "RustNmap 1.0.0" "User Commands"
 .SH NAME
 rustnmap \- Rust Network Mapper - A high-performance network scanning tool
+.\"
+.\" RustNmap 1.0.0 - 2.0 development in progress, see CHANGELOG.md
+.SH RUSTNMAP 2.0 STATUS
+This man page describes RustNmap 1.0.0. Version 2.0 is under development
+with new features including:
+.IP \(bu 2
+Vulnerability correlation (CVE/CPE, EPSS, KEV)
+.IP \(bu 2
+Streaming output (NDJSON)
+.IP \(bu 2
+REST API and daemon mode
+.IP \(bu 2
+Scan management (history, diff, profiles)
+.IP \(bu 2
+Two-phase scanning (discovery + intensive)
+.PP
+See CHANGELOG.md for details.
 .SH SYNOPSIS
 .B rustnmap
 [\fIscan type(s)\fR] [\fIoptions\fR] {\fItarget specification\fR}

@@ -1,5 +1,8 @@
 # RustNmap Configuration File / 配置文件
 
+> **版本**: 1.0.0
+> **状态**: 此文档描述 RustNmap 1.0.0 的配置文件。2.0 版本开发中，详见 [CHANGELOG.md](../CHANGELOG.md)。
+
 > **Configuration file format and options** / 配置文件格式和选项
 
 ---

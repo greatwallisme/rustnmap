@@ -1,6 +1,39 @@
 # 5. 项目结构与模块划分
 
-## 5.1 Cargo Workspace 结构
+> **版本**: 1.0.0 (2.0 开发中)
+> **最后更新**: 2026-02-17
+
+---
+
+## 5.0 RustNmap 2.0 项目概览
+
+### 5.0.1 Crate 列表 (1.0 + 2.0)
+
+| Crate | 用途 | 状态 | 对应 Phase |
+|-------|------|------|-----------|
+| `rustnmap-common` | 公共类型、工具函数、错误处理 | 1.0 | - |
+| `rustnmap-net` | 原始套接字、数据包构造 | 1.0 | - |
+| `rustnmap-packet` | PACKET_MMAP V3 零拷贝引擎 | 1.0 | - |
+| `rustnmap-target` | 目标解析、主机发现 | 1.0 | - |
+| `rustnmap-scan` | 端口扫描实现 | 1.0 | - |
+| `rustnmap-fingerprint` | OS/服务指纹匹配 | 1.0 | - |
+| `rustnmap-nse` | Lua 脚本引擎 | 1.0 | - |
+| `rustnmap-traceroute` | 网络路由追踪 | 1.0 | - |
+| `rustnmap-evasion` | 防火墙/IDS 规避技术 | 1.0 | - |
+| `rustnmap-cli` | 命令行界面 | 1.0 | - |
+| `rustnmap-core` | 核心编排和状态管理 | 1.0 | - |
+| `rustnmap-output` | 输出格式化 | 1.0 | - |
+| `rustnmap-benchmarks` | 性能基准测试 | 1.0 | - |
+| `rustnmap-macros` | 过程宏 | 1.0 | - |
+| `rustnmap-vuln` | **漏洞情报 (CVE/CPE/EPSS/KEV)** | **2.0 NEW** | Phase 2 |
+| `rustnmap-api` | **REST API / Daemon 模式** | **2.0 NEW** | Phase 5 |
+| `rustnmap-sdk` | **Rust SDK (Builder API)** | **2.0 NEW** | Phase 5 |
+
+**总计**: 14 个 (1.0) + 3 个 (2.0 新增) = **17 个 Crate**
+
+---
+
+## 5.1 Cargo Workspace 结构 (1.0 基线)
 
 ```
 rustnmap/
@@ -142,6 +175,8 @@ rustnmap/
 
 ## 5.2 依赖关系图
 
+### 5.2.1 1.0 基线依赖图
+
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │                         Dependency Graph                            │
@@ -192,5 +227,69 @@ rustnmap/
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
----
+### 5.2.2 2.0 新增依赖关系
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    RustNmap 2.0 New Dependencies                    │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                     │
+│     ┌─────────────────────────────────────────────────────────┐    │
+│     │              rustnmap-sdk (2.0 NEW)                      │    │
+│     │         (稳定高层 Builder API for Rust)                  │    │
+│     └────────────────────┬────────────────────────────────────┘    │
+│                          │ uses                                     │
+│                          ▼                                          │
+│     ┌─────────────────────────────────────────────────────────┐    │
+│     │              rustnmap-api (2.0 NEW)                      │    │
+│     │         (REST API / Daemon Mode with axum)               │    │
+│     │   POST /api/v1/scans, GET /api/v1/scans/{id}/stream     │    │
+│     └────────────────────┬────────────────────────────────────┘    │
+│                          │ uses                                     │
+│          ┌───────────────┼───────────────┐                         │
+│          │               │               │                         │
+│          ▼               ▼               ▼                         │
+│  ┌──────────────┐ ┌──────────────┐ ┌──────────────┐              │
+│  │rustnmap-core │ │rustnmap-vuln │ │rustnmap-output│              │
+│  │ (编排器)     │ │ (2.0 NEW)    │ │ (扩展)        │              │
+│  └──────────────┘ └──────┬───────┘ └──────────────┘              │
+│                          │                                         │
+│                          │ uses                                    │
+│                          ▼                                         │
+│                 ┌─────────────────┐                               │
+│                 │  rusqlite       │                               │
+│                 │  (SQLite ORM)   │                               │
+│                 └─────────────────┘                               │
+│                                                                     │
+├─────────────────────────────────────────────────────────────────────┤
+│  2.0 External Crates (新增依赖):                                    │
+│  ────────────────────────────                                        │
+│  ├── axum (REST API Web 框架)                                       │
+│  ├── tower (中间件支持)                                             │
+│  ├── rusqlite (SQLite 数据库)                                       │
+│  ├── reqwest (NVD API HTTP 客户端)                                  │
+│  └── bincode (状态序列化，用于暂停/恢复)                            │
+│                                                                     │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### 5.2.3 完整依赖链 (1.0 + 2.0)
+
+```
+rustnmap-cli ──> rustnmap-core ──> rustnmap-scan
+                              │
+                              ├──> rustnmap-nse
+                              │
+                              ├──> rustnmap-fingerprint
+                              │
+                              ├──> rustnmap-traceroute
+                              │
+                              └──> rustnmap-evasion
+
+rustnmap-sdk (2.0) ──> rustnmap-api (2.0) ──> rustnmap-core
+                                          │
+                                          └──> rustnmap-vuln (2.0)
+                                                   │
+                                                   └──> rustnmap-output (extended)
+```
 

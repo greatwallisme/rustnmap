@@ -1,5 +1,8 @@
 # RustNmap Scan Types / 扫描类型
 
+> **版本**: 1.0.0
+> **状态**: 此文档描述 RustNmap 1.0.0 的扫描类型。2.0 版本开发中，详见 [CHANGELOG.md](../CHANGELOG.md)。
+
 > **Detailed documentation for each scan type** / 每种扫描类型的详细文档
 
 ---

@@ -1,5 +1,8 @@
 # RustNmap Environment Variables / 环境变量
 
+> **版本**: 1.0.0
+> **状态**: 此文档描述 RustNmap 1.0.0 的环境变量。2.0 版本开发中，详见 [CHANGELOG.md](../CHANGELOG.md)。
+
 > **Environment variables reference for RustNmap** / RustNmap 环境变量参考
 
 ---

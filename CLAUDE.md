@@ -1,21 +1,34 @@
 # RustNmap - Rust Network Mapper
 
-> **Version**: 1.0.0
-> **Status**: Production Ready
+> **Version**: 2.0.0 (In Development)
+> **Status**: Production Ready (1.0) / Development (2.0)
 > **Platform**: Linux x86_64 (AMD64)
 > **Language**: Rust 1.90+
-> **Completion Date**: 2026-02-16
+> **Completion Date**: 2026-02-16 (1.0)
+> **2.0 Roadmap**: See [RETHINK.md](RETHINK.md)
+
+---
 
 ## Project Overview
 
 RustNmap is a modern, high-performance network scanning tool written in Rust, designed to provide 100% functional parity with Nmap while leveraging Rust's safety guarantees and asynchronous capabilities for improved performance.
+
+### RustNmap 2.0 Vision
+
+Evolving from a "port scanner" to an "Attack Surface Management Platform" with:
+- **Vulnerability Intelligence**: CVE/CPE association, EPSS scoring, CISA KEV marking
+- **Platform Integration**: REST API, Rust SDK, daemon mode
+- **Scan Management**: SQLite persistence, diff comparison, YAML profiles
+- **Performance**: Two-phase scanning, stateless mode, adaptive batching
+
+---
 
 ### Project Metrics
 
 | Metric | Value |
 |--------|-------|
 | Total Lines of Code | 35,356 |
-| Workspace Crates | 14 |
+| Workspace Crates | 14 (1.0) / 17 (2.0 planned) |
 | Tests Passing | 970+ |
 | Code Coverage | 75.09% |
 | Compiler Warnings | 0 |
@@ -128,7 +141,7 @@ cargo doc --no-deps                 # Docs build without errors
 
 ## Cargo Workspace Structure
 
-The project uses a Cargo workspace with the following crates:
+### Current Crates (1.0)
 
 | Crate | Description | Status | Tests |
 |-------|-------------|--------|-------|
@@ -146,6 +159,14 @@ The project uses a Cargo workspace with the following crates:
 | `rustnmap-output` | Output formatters (XML, JSON, etc.) | Complete | 53+ |
 | `rustnmap-benchmarks` | Performance benchmarks | Complete | - |
 | `rustnmap-macros` | Procedural macros | Complete | - |
+
+### Planned Crates (2.0)
+
+| Crate | Description | Phase | Status |
+|-------|-------------|-------|--------|
+| `rustnmap-vuln` | Vulnerability intelligence (CVE/CPE, EPSS, KEV) | Phase 2 | Documented |
+| `rustnmap-api` | REST API / Daemon mode | Phase 5 | Documented |
+| `rustnmap-sdk` | Rust SDK (Builder API) | Phase 5 | Documented |
 
 ## Build and Test Commands
 
@@ -317,21 +338,44 @@ See `findings.md` for detailed security audit report.
 
 ## Reference Documentation
 
+### 1.0 Documentation
 - Nmap Source: `reference/nmap/` - Original C++ implementation
 - Deepseek Design: `reference/third_party_design/deepseek.md` - Architecture reference
 - Module Docs: `doc/modules/*.md` - Detailed design per module
 - Nmap Reference: `doc/appendix/nmap-*.md` - Data structures, functions, constants
 
+### 2.0 Documentation
+- **Roadmap**: `RETHINK.md` - RustNmap 2.0 evolution plan (12-week execution)
+- **Module Docs**: `doc/modules/vulnerability.md` - Vulnerability intelligence
+- **API Docs**: `doc/modules/rest-api.md` - REST API / Daemon mode
+- **SDK Docs**: `doc/modules/sdk.md` - Rust SDK Builder API
+- **Management**: `doc/modules/scan-management.md` - Scan management (SQLite, diff, profiles)
+- **Stateless**: `doc/modules/stateless-scan.md` - Stateless fast scanning
+- **Progress**: `doc/CHANGELOG.md` - 2.0 documentation changelog
+
 ## Progress Tracking
 
-Current progress is tracked in:
+### 1.0 Tracking
 - `progress.md` - Session-by-session progress log
 - `task_plan.md` - Detailed task breakdown
 - `findings.md` - Analysis and gap identification
 
+### 2.0 Tracking
+- `RETHINK.md` - 2.0 evolution roadmap (simplified historical doc)
+- `doc/CHANGELOG.md` - 2.0 documentation changelog
+- `doc/architecture.md` - Updated architecture with 2.0 crates
+- `doc/structure.md` - Updated crate structure (17 crates)
+
 ## Notes
 
+### 1.0 Notes
 - All development targets Linux x86_64 only (no cross-platform concerns)
 - Root privileges required for raw socket operations
 - Follow `rust-guidelines` for all Rust code patterns
 - Refer to Nmap source code when behavior is ambiguous
+
+### 2.0 Development Notes
+- See `RETHINK.md` for the complete 2.0 evolution plan
+- 2.0 adds 3 new crates: `rustnmap-vuln`, `rustnmap-api`, `rustnmap-sdk`
+- 2.0 modules are documented in `doc/modules/` (vulnerability, rest-api, sdk, etc.)
+- Phase 0 baseline fixes must be completed before Phase 1-5 features

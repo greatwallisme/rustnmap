@@ -1,5 +1,8 @@
 # RustNmap NSE Scripting Engine / NSE 脚本引擎
 
+> **版本**: 1.0.0
+> **状态**: 此文档描述 RustNmap 1.0.0 的 NSE 脚本引擎。2.0 版本开发中，详见 [CHANGELOG.md](../CHANGELOG.md)。
+
 > **Complete guide to NSE scripting in RustNmap** / RustNmap 中 NSE 脚本的完整指南
 
 ---

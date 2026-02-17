@@ -1,5 +1,8 @@
 # RustNmap Output Formats / 输出格式
 
+> **版本**: 1.0.0
+> **状态**: 此文档描述 RustNmap 1.0.0 的输出格式。2.0 版本开发中，详见 [CHANGELOG.md](../CHANGELOG.md)。
+
 > **Complete documentation for all output formats** / 所有输出格式的完整文档
 
 ---

@@ -1,5 +1,8 @@
 # RustNmap Quick Reference / 快速参考
 
+> **版本**: 1.0.0
+> **状态**: 此文档描述 RustNmap 1.0.0 的快速参考。2.0 版本开发中，详见 [CHANGELOG.md](../CHANGELOG.md)。
+
 > **One-page reference for common RustNmap tasks** / 常见 RustNmap 任务单页参考
 
 ---

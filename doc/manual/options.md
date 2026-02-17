@@ -1,5 +1,8 @@
 # RustNmap Command-Line Options / 命令行选项
 
+> **版本**: 1.0.0
+> **状态**: 此文档描述 RustNmap 1.0.0 的命令行选项。2.0 版本开发中，详见 [CHANGELOG.md](../CHANGELOG.md)。
+
 > **Complete reference for all RustNmap command-line options** / RustNmap 所有命令行选项的完整参考
 
 ---
