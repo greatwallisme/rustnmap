@@ -7,7 +7,7 @@ use crate::error::Result;
 use crate::models::EpssRecord;
 
 /// EPSS scoring utilities.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct EpssEngine;
 
 impl EpssEngine {
@@ -44,7 +44,7 @@ impl EpssEngine {
     ///
     /// Returns an error if the database query fails.
     pub fn get_score_or_default(db: &VulnDatabase, cve_id: &str) -> Result<f32> {
-        Ok(Self::get_score(db, cve_id)?.map(|r| r.epss_score).unwrap_or(0.0))
+        Ok(Self::get_score(db, cve_id)?.map_or(0.0, |r| r.epss_score))
     }
 
     /// Check if EPSS score is above a threshold.

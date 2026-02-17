@@ -7,7 +7,7 @@ use crate::error::Result;
 use crate::models::KevEntry;
 
 /// CISA KEV catalog utilities.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct KevEngine;
 
 impl KevEngine {

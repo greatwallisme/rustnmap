@@ -38,7 +38,7 @@ anyhow = { workspace = true }
 # Utilities
 url = "2.5"
 cpe = "0.1"
-lru = "0.12"
+dashmap = "6.1"
 
 # Logging
 tracing = { workspace = true }

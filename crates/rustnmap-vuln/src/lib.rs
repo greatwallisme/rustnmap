@@ -1,4 +1,4 @@
-//! Vulnerability intelligence for RustNmap.
+//! Vulnerability intelligence for `RustNmap`.
 //!
 //! This crate provides CVE/CPE correlation, EPSS scoring, and CISA KEV marking
 //! for vulnerability assessment and prioritization.

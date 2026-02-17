@@ -266,47 +266,61 @@ Max score: 100 (CVSS 10.0 + EPSS 1.0 + KEV)
 
 ---
 
-## Phase 0 Implementation Status
+## 后续工作
 
-| Task | Status | File | Lines |
-|------|--------|------|-------|
-| 0.1 Host Discovery | Pending | orchestrator.rs | 388-393 |
-| 0.2 scan_types routing | Pending | orchestrator.rs | 486-559 |
-| 0.3 Scan metadata | Pending | orchestrator.rs | 1141 |
-| 0.4 OutputSink impl | Pending | session.rs | 809-817 |
-| 0.5 ResumeStore | Pending | session.rs | 695-706 |
+### Phase 3 (Week 8-9): 扫描管理
+- [ ] SQLite 扫描结果持久化
+- [ ] 扫描 Diff 比较
+- [ ] YAML Profile 配置
+- [ ] --history 查询支持
 
----
+### Phase 4 (Week 10-11): 性能优化
+- [ ] 两阶段扫描
+- [ ] 自适应批量大小
+- [ ] 无状态快速扫描
 
-## Errors Encountered
-
-| Error | Attempt | Resolution |
-|-------|---------|------------|
-| None yet | - | - |
-
----
-
-## Files Modified
-
-| File | Change | Status |
-|------|--------|--------|
-| task_plan.md | Updated with 2.0 plan | Complete |
-| findings.md | Research findings | Complete |
-| phase0_findings.md | Phase 0 analysis | Complete |
-| progress.md | Session log | In Progress |
+### Phase 5 (Week 12): 平台化
+- [ ] REST API / Daemon 模式 (rustnmap-api)
+- [ ] Rust SDK Builder API (rustnmap-sdk)
 
 ---
 
-## Next Session
+## 错误日志
 
-**Focus**: Phase 0 Implementation Tasks 0.1-0.3 (orchestrator.rs fixes)
+| 错误 | 尝试 | 解决方案 |
+|------|------|---------|
+| SQLite 外键约束失败 | 1 | 测试中先插入 CVE 再插入 EPSS/KEV |
+| CPE 格式解析错误 | 1 | 确保 13 部分格式 |
+| rusqlite::Clone 不可用 | 1 | 使用引用传递代替 ownership |
 
-**Prerequisites**:
-- Read rustnmap-target/src/discover.rs for HostDiscoverer API
-- Read rustnmap-scan/src/scanner.rs for ScanExecutor API
-- Read rustnmap-output/src/formatter.rs for OutputFormatter API
+---
 
-**Estimated Tasks**:
-1. Fix Host Discovery (Task 0.1)
-2. Fix scan_types routing (Task 0.2)
-3. Fix Scan metadata (Task 0.3)
+## 2026-02-17 会话总结
+
+### 完成工作
+
+1. **Phase 0** - 执行正确性修复 (Host Discovery, scan_types 路由，元数据)
+2. **Phase 1** - 新增输出格式 (NDJSON, Markdown)
+3. **Phase 2** - 漏洞情报 crate (rustnmap-vuln)
+4. **VulnClient 异步重构** - 使用 `tokio::sync::RwLock` + `DashMap`
+5. **全工作空间 Clippy 修复** - 修复 rustnmap-core 中的 3 个警告
+
+### 代码统计更新
+
+| 指标 | 数值 |
+|------|------|
+| 总代码行数 | 35,356+ |
+| 工作区 Crate 数 | 15 (1.0: 14 + 2.0: 1) |
+| 通过测试数 | 140+ (core: 47 + output: 28 + vuln: 34 + fingerprint: 31) |
+| Clippy 状态 | ✅ 全工作空间 0 警告 |
+
+### 文件变更
+
+| 文件 | 变更类型 |
+|------|---------|
+| `crates/rustnmap-vuln/src/client.rs` | 异步 API 重构 |
+| `crates/rustnmap-core/src/orchestrator.rs` | Clippy 修复 |
+| `vuln_client_refactor.md` | 重构文档 |
+| `progress.md` | 进度更新 |
+| `findings.md` | 发现更新 |
+| `task_plan.md` | 任务更新

@@ -204,8 +204,72 @@ impl EpssEngine {
 
 ---
 
+## 发现 5: VulnClient 异步重构需求
+
+**问题**: 原始 `VulnClient` 使用 `&mut self` 方法签名，无法并发调用
+
+**解决方案**: 使用 `tokio::sync::RwLock` + `DashMap` 实现异步 API
+
+### 架构设计
+
+```rust
+pub struct VulnClient {
+    db: Arc<RwLock<VulnDatabase>>,  // tokio 异步锁
+    cache: DashMap<String, Vec<VulnInfo>>,  // 无锁并发缓存
+}
+```
+
+### 新增异步方法
+
+| 同步方法 | 异步方法 |
+|---------|---------|
+| `offline()` | `offline_async()` |
+| `in_memory()` | `in_memory_async()` |
+| `query_cpe()` | `query_cpe_async()` |
+| `batch_query()` | `batch_query_async()` |
+| `get_cve()` | `get_cve_async()` |
+| `get_stats()` | `get_stats_async()` |
+
+### 测试结果
+
+```
+running 34 tests
+test result: ok. 34 passed; 0 failed
+
+cargo clippy -p rustnmap-vuln -- -D warnings
+✅ Finished dev profile [unoptimized + debuginfo]
+```
+
+---
+
+## 发现 6: 全工作空间 Clippy 修复
+
+### 修复的 rustnmap-core 问题
+
+| 文件 | 行号 | 问题 | 修复方式 |
+|------|------|------|---------|
+| `orchestrator.rs` | 402 | `cast_possible_truncation` | 使用 `try_into().unwrap_or()` |
+| `orchestrator.rs` | 502 | `too_many_lines` | 添加 `#[allow]` + reason |
+| `orchestrator.rs` | 658 | `single_match_else` | 使用 `if let` |
+
+### 验证结果
+
+```bash
+cargo clippy --workspace -- -D warnings
+✅ Finished dev profile [unoptimized + debuginfo]
+```
+
+### 代码规范原则
+
+- 不使用 `#[allow(clippy::all)]` 等 blanket allow
+- 所有 `#[allow(...)]` 都有详细的 `reason` 说明
+- `arc_with_non_send_sync` 的 allow 添加到 `impl` 块级别，附带详细解释
+
+---
+
 ## 参考链接
 
 - [RETHINK.md](../RETHINK.md) - 2.0 路线图
 - [phase0_findings.md](../phase0_findings.md) - Phase 0 详细分析
 - [doc/modules/vulnerability.md](../doc/modules/vulnerability.md) - 漏洞情报设计
+- [vuln_client_refactor.md](../vuln_client_refactor.md) - VulnClient 重构报告

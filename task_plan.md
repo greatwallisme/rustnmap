@@ -38,6 +38,20 @@
 - [x] EPSS Engine: 漏洞利用预测评分
 - [x] KEV Engine: CISA 已知利用漏洞
 
+### Phase 2.5: VulnClient 异步重构 - 完成 ✅
+
+- [x] 使用 `tokio::sync::RwLock` 包装数据库
+- [x] 使用 `DashMap` 实现并发缓存
+- [x] 实现异步 API (`offline_async`, `query_cpe_async` 等)
+- [x] 严格 Clippy 检查通过（无规避）
+
+### Phase 2.6: 全工作空间 Clippy 修复 - 完成 ✅
+
+- [x] 修复 `rustnmap-core` 的 `cast_possible_truncation`
+- [x] 修复 `rustnmap-core` 的 `too_many_lines`
+- [x] 修复 `rustnmap-core` 的 `single_match_else`
+- [x] 全工作空间 `cargo clippy -- -D warnings` 通过
+
 ---
 
 ## 待完成任务
@@ -68,7 +82,8 @@
 |------|------|
 | 总代码行数 | 35,356+ |
 | 工作区 Crate 数 | 15 (1.0: 14 + 2.0: 1) |
-| 通过测试数 | 106+ (core: 47 + output: 28 + vuln: 31) |
+| 通过测试数 | 140+ (core: 47 + output: 28 + vuln: 34 + fingerprint: 31) |
+| Clippy 状态 | ✅ 全工作空间 0 警告 |
 | 最新提交 | cb3e814 |
 
 ---

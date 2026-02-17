@@ -1,4 +1,4 @@
-//! SQLite database operations for vulnerability intelligence.
+//! `SQLite` database operations for vulnerability intelligence.
 
 use chrono::{DateTime, Utc};
 use rusqlite::{Connection, params, OptionalExtension};
@@ -21,7 +21,7 @@ impl VulnDatabase {
     ///
     /// # Arguments
     ///
-    /// * `path` - Path to the SQLite database file.
+    /// * `path` - Path to the `SQLite` database file.
     ///
     /// # Errors
     ///
@@ -175,7 +175,7 @@ impl VulnDatabase {
                 cpe_match.version_end_excluding,
                 cpe_match.version_start_including,
                 cpe_match.version_end_including,
-                cpe_match.vulnerable as i32,
+                i32::from(cpe_match.vulnerable),
             ],
         ).map_err(|e| VulnError::database(format!("Failed to insert CPE match: {e}")))?;
 
@@ -226,6 +226,7 @@ impl VulnDatabase {
     /// # Errors
     ///
     /// Returns an error if the query fails.
+    #[allow(clippy::type_complexity, reason = "Complex tuple type is necessary for row mapping, extracting to struct would add unnecessary complexity")]
     pub fn get_cve(&self, cve_id: &str) -> Result<Option<CveEntry>> {
         // Query main CVE data
         let cve_data: Option<(String, String, Option<f32>, Option<String>, String, Option<String>)> =
@@ -269,7 +270,7 @@ impl VulnDatabase {
             params![cve_id],
             |row| row.get::<_, String>(0)
         ).map_err(|e| VulnError::database(format!("Failed to query references: {e}")))?
-            .filter_map(|r| r.ok()).collect();
+            .filter_map(std::result::Result::ok).collect();
 
         Ok(Some(CveEntry {
             id,
@@ -304,7 +305,7 @@ impl VulnDatabase {
                 version_end_including: row.get(5)?,
                 vulnerable: row.get::<_, i32>(6)? != 0,
             })
-        })?.filter_map(|r| r.ok()).collect();
+        })?.filter_map(std::result::Result::ok).collect();
 
         Ok(matches)
     }
@@ -399,13 +400,13 @@ impl VulnDatabase {
 
             let published = DateTime::parse_from_rfc3339(&published_at)
                 .map(|d| d.with_timezone(&Utc))
-                .map_err(|_| rusqlite::Error::InvalidColumnType(4, "published_at".to_string(), rusqlite::types::Type::Text))?;
+                .map_err(|_e| rusqlite::Error::InvalidColumnType(4, "published_at".to_string(), rusqlite::types::Type::Text))?;
 
             let modified = modified_at
                 .map(|s| DateTime::parse_from_rfc3339(&s)
                     .map(|d| d.with_timezone(&Utc)))
                 .transpose()
-                .map_err(|_| rusqlite::Error::InvalidColumnType(5, "modified_at".to_string(), rusqlite::types::Type::Text))?;
+                .map_err(|_e| rusqlite::Error::InvalidColumnType(5, "modified_at".to_string(), rusqlite::types::Type::Text))?;
 
             let cve = CveEntry {
                 id,
@@ -418,7 +419,7 @@ impl VulnDatabase {
             };
 
             Ok((cve, cpe_match))
-        })?.filter_map(|r| r.ok()).collect();
+        })?.filter_map(std::result::Result::ok).collect();
 
         Ok(results)
     }
@@ -428,6 +429,10 @@ impl VulnDatabase {
     /// # Errors
     ///
     /// Returns an error if the query fails.
+    #[allow(
+        clippy::cast_sign_loss,
+        reason = "COUNT(*) always returns non-negative i64, safe to cast to u64"
+    )]
     pub fn get_stats(&self) -> Result<DatabaseStats> {
         let cve_count: i64 = self.conn.query_row(
             "SELECT COUNT(*) FROM cve",
@@ -435,7 +440,7 @@ impl VulnDatabase {
             |row| row.get(0),
         )?;
 
-        let cpe_count: i64 = self.conn.query_row(
+        let cpe_match_count: i64 = self.conn.query_row(
             "SELECT COUNT(*) FROM cpe_match",
             [],
             |row| row.get(0),
@@ -455,7 +460,7 @@ impl VulnDatabase {
 
         Ok(DatabaseStats {
             cve_count: cve_count as u64,
-            cpe_count: cpe_count as u64,
+            cpe_count: cpe_match_count as u64,
             epss_count: epss_count as u64,
             kev_count: kev_count as u64,
         })

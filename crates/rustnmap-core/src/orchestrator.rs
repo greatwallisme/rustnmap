@@ -399,7 +399,12 @@ impl ScanOrchestrator {
                         max_rtt: std::time::Duration::from_secs(10),
                         initial_rtt: session.config.scan_delay.max(std::time::Duration::from_millis(100)),
                         max_retries: 2,
-                        host_timeout: session.config.host_timeout.as_millis() as u64,
+                        host_timeout: session
+                            .config
+                            .host_timeout
+                            .as_millis()
+                            .try_into()
+                            .unwrap_or(30000),
                         scan_delay: session.config.scan_delay,
                     };
                     let discovery = HostDiscovery::new(discovery_config);
@@ -499,6 +504,7 @@ impl ScanOrchestrator {
     }
 
     /// Scans a single port on a target.
+    #[allow(clippy::too_many_lines, reason = "Port scanning requires handling all scan types and protocols in one function for performance")]
     async fn scan_port(&self, target: &Target, port: u16) -> Result<PortResult> {
         use rustnmap_common::Ipv4Addr;
 
@@ -655,53 +661,50 @@ impl ScanOrchestrator {
         };
 
         // Process scan result
-        match scan_result {
-            Ok(state) => {
-                let (port_state, reason) = match state {
-                    rustnmap_common::PortState::Open => {
-                        (PortState::Open, "response-received".to_string())
-                    }
-                    rustnmap_common::PortState::Closed => {
-                        (PortState::Closed, "rst-received".to_string())
-                    }
-                    rustnmap_common::PortState::Filtered => {
-                        (PortState::Filtered, "no-response".to_string())
-                    }
-                    _ => (PortState::Filtered, "unknown".to_string()),
-                };
+        if let Ok(state) = scan_result {
+            let (port_state, reason) = match state {
+                rustnmap_common::PortState::Open => {
+                    (PortState::Open, "response-received".to_string())
+                }
+                rustnmap_common::PortState::Closed => {
+                    (PortState::Closed, "rst-received".to_string())
+                }
+                rustnmap_common::PortState::Filtered => {
+                    (PortState::Filtered, "no-response".to_string())
+                }
+                _ => (PortState::Filtered, "unknown".to_string()),
+            };
 
-                let protocol = match primary_scan_type {
-                    ScanType::Udp => rustnmap_output::models::Protocol::Udp,
-                    _ => rustnmap_output::models::Protocol::Tcp,
-                };
+            let protocol = match primary_scan_type {
+                ScanType::Udp => rustnmap_output::models::Protocol::Udp,
+                _ => rustnmap_output::models::Protocol::Tcp,
+            };
 
-                Ok(PortResult {
-                    number: port,
-                    protocol,
-                    state: port_state,
-                    state_reason: reason,
-                    state_ttl: None,
-                    service: None,
-                    scripts: Vec::new(),
-                })
-            }
-            Err(_) => {
-                let protocol = match primary_scan_type {
-                    ScanType::Udp => rustnmap_output::models::Protocol::Udp,
-                    _ => rustnmap_output::models::Protocol::Tcp,
-                };
-
-                Ok(PortResult {
-                    number: port,
-                    protocol,
-                    state: PortState::Filtered,
-                    state_reason: "scan-error".to_string(),
-                    state_ttl: None,
-                    service: None,
-                    scripts: Vec::new(),
-                })
-            }
+            return Ok(PortResult {
+                number: port,
+                protocol,
+                state: port_state,
+                state_reason: reason,
+                state_ttl: None,
+                service: None,
+                scripts: Vec::new(),
+            });
         }
+
+        let protocol = match primary_scan_type {
+            ScanType::Udp => rustnmap_output::models::Protocol::Udp,
+            _ => rustnmap_output::models::Protocol::Tcp,
+        };
+
+        Ok(PortResult {
+            number: port,
+            protocol,
+            state: PortState::Filtered,
+            state_reason: "scan-error".to_string(),
+            state_ttl: None,
+            service: None,
+            scripts: Vec::new(),
+        })
     }
 
     /// Scans a single port using TCP Connect (fallback when not root).

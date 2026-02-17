@@ -82,6 +82,7 @@ impl CpeMatcher {
     /// # Returns
     ///
     /// Match result with confidence and explanation.
+    #[must_use]
     pub fn matches(cpe: &CpeWrapper, pattern: &str) -> CpeMatchResult {
         let pattern_cpe = match Self::parse(pattern) {
             Ok(p) => p,
@@ -136,7 +137,9 @@ impl CpeMatcher {
         }
 
         let confidence = if total_fields > 0 {
-            matching_fields as f32 / total_fields as f32
+            #[allow(clippy::cast_precision_loss, reason = "f32 precision is sufficient for confidence score")]
+            let ratio = matching_fields as f32 / total_fields as f32;
+            ratio
         } else {
             0.0
         };
@@ -144,7 +147,7 @@ impl CpeMatcher {
         let matches = mismatches.is_empty();
 
         let reason = if matches {
-            format!("CPE matches with {} / {} fields", matching_fields, total_fields)
+            format!("CPE matches with {matching_fields} / {total_fields} fields")
         } else {
             format!("CPE mismatch: {}", mismatches.join(", "))
         };
