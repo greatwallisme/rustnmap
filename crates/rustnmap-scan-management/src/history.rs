@@ -1,0 +1,156 @@
+// rustnmap-scan-management
+// Copyright (C) 2026  greatwallisme
+
+//! Scan history management.
+
+use crate::database::ScanDatabase;
+use crate::error::Result;
+use crate::models::{ScanStatus, ScanSummary, StoredScan};
+use chrono::{DateTime, Utc};
+use rustnmap_output::ScanResult;
+use rustnmap_output::models::ScanType;
+
+/// Scan history manager for querying and managing historical scans.
+#[derive(Debug)]
+pub struct ScanHistory {
+    db: ScanDatabase,
+}
+
+impl ScanHistory {
+    /// Open or create the database.
+    pub fn open(db_path: &str) -> Result<Self> {
+        let config = crate::database::DbConfig {
+            path: db_path.to_string(),
+            ..Default::default()
+        };
+        let db = ScanDatabase::open(config)?;
+        Ok(Self { db })
+    }
+
+    /// Create from existing database.
+    pub fn from_database(db: ScanDatabase) -> Self {
+        Self { db }
+    }
+
+    /// Save scan result to history.
+    pub async fn save_scan(
+        &self,
+        result: &ScanResult,
+        target_spec: &str,
+        created_by: Option<&str>,
+    ) -> Result<String> {
+        self.db.save_scan(result, target_spec, created_by).await
+    }
+
+    /// List scans with optional filtering.
+    pub async fn list_scans(&self, filter: ScanFilter) -> Result<Vec<ScanSummary>> {
+        self.db.list_scans(&filter).await
+    }
+
+    /// Get scan details by ID.
+    pub async fn get_scan(&self, id: &str) -> Result<Option<StoredScan>> {
+        self.db.get_scan(id).await
+    }
+
+    /// Get target's scan history.
+    pub async fn get_target_history(&self, target: &str) -> Result<Vec<ScanSummary>> {
+        let filter = ScanFilter {
+            target: Some(target.to_string()),
+            ..Default::default()
+        };
+        self.db.list_scans(&filter).await
+    }
+
+    /// Delete old scans beyond retention period.
+    pub async fn prune_old_scans(&self, retention_days: u32) -> Result<usize> {
+        self.db.prune_old_scans(retention_days).await
+    }
+
+    /// Get the most recent scan for a target.
+    pub async fn get_latest_scan(&self, target: &str) -> Result<Option<StoredScan>> {
+        let filter = ScanFilter {
+            target: Some(target.to_string()),
+            limit: Some(1),
+            ..Default::default()
+        };
+        let summaries = self.db.list_scans(&filter).await?;
+        if let Some(summary) = summaries.first() {
+            self.db.get_scan(&summary.id).await
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Get scans by status.
+    pub async fn get_scans_by_status(&self, status: ScanStatus) -> Result<Vec<ScanSummary>> {
+        // For now, fetch all and filter (could be optimized)
+        let filter = ScanFilter::default();
+        let mut scans = self.db.list_scans(&filter).await?;
+        scans.retain(|s| s.status == status);
+        Ok(scans)
+    }
+}
+
+/// Filter for querying scans.
+#[derive(Debug, Clone, Default)]
+pub struct ScanFilter {
+    /// Start of time range.
+    pub since: Option<DateTime<Utc>>,
+    /// End of time range.
+    pub until: Option<DateTime<Utc>>,
+    /// Filter by target.
+    pub target: Option<String>,
+    /// Filter by scan type.
+    pub scan_type: Option<ScanType>,
+    /// Filter by status.
+    pub status: Option<ScanStatus>,
+    /// Limit results.
+    pub limit: Option<usize>,
+    /// Offset for pagination.
+    pub offset: Option<usize>,
+}
+
+impl ScanFilter {
+    /// Create a new filter with time range.
+    pub fn with_time_range(since: DateTime<Utc>, until: DateTime<Utc>) -> Self {
+        Self {
+            since: Some(since),
+            until: Some(until),
+            ..Default::default()
+        }
+    }
+
+    /// Create a filter for a specific target.
+    pub fn for_target(target: &str) -> Self {
+        Self {
+            target: Some(target.to_string()),
+            ..Default::default()
+        }
+    }
+
+    /// Set the limit.
+    pub fn with_limit(mut self, limit: usize) -> Self {
+        self.limit = Some(limit);
+        self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn create_temp_db() -> (ScanHistory, PathBuf) {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("test_scans.db");
+        let db_path_str = db_path.to_string_lossy().to_string();
+        let history = ScanHistory::open(&db_path_str).unwrap();
+        (history, db_path)
+    }
+
+    #[test]
+    fn test_open_database() {
+        let (_history, _db_path) = create_temp_db();
+        // Successfully opening the database is enough for this test
+    }
+}

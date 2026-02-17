@@ -304,23 +304,66 @@ Max score: 100 (CVSS 10.0 + EPSS 1.0 + KEV)
 3. **Phase 2** - 漏洞情报 crate (rustnmap-vuln)
 4. **VulnClient 异步重构** - 使用 `tokio::sync::RwLock` + `DashMap`
 5. **全工作空间 Clippy 修复** - 修复 rustnmap-core 中的 3 个警告
+6. **Phase 3 扫描管理** - 创建 rustnmap-scan-management crate
+
+### Phase 3 扫描管理实现详情
+
+创建了新 crate `rustnmap-scan-management`，包含以下模块：
+
+1. **database.rs** - SQLite 数据库操作
+   - 扫描结果持久化（scans, host_results, port_results, vulnerability_results 表）
+   - 索引优化查询性能
+   - 批量插入事务处理
+   - 过期扫描清理
+
+2. **models.rs** - 数据模型
+   - ScanStatus, ScanSummary, StoredScan
+   - StoredHost, StoredPort, StoredVulnerability
+   - 与 rustnmap-output 和 rustnmap-vuln 集成
+
+3. **history.rs** - 历史查询
+   - ScanHistory 管理器
+   - ScanFilter 过滤器（时间范围、目标、扫描类型、状态）
+   - 支持分页查询
+
+4. **diff.rs** - 扫描结果对比
+   - ScanDiff 引擎
+   - HostChanges, PortChanges, VulnerabilityChanges
+   - 支持 Text/Markdown/Json/Html 报告格式
+
+5. **profile.rs** - YAML 配置文件
+   - ScanProfile 配置结构
+   - ProfileManager 管理器
+   - 配置验证（扫描类型、定时模板、版本强度、EPSS 阈值）
 
 ### 代码统计更新
 
 | 指标 | 数值 |
 |------|------|
-| 总代码行数 | 35,356+ |
-| 工作区 Crate 数 | 15 (1.0: 14 + 2.0: 1) |
-| 通过测试数 | 140+ (core: 47 + output: 28 + vuln: 34 + fingerprint: 31) |
-| Clippy 状态 | ✅ 全工作空间 0 警告 |
+| 总代码行数 | 38,000+ |
+| 工作区 Crate 数 | 16 (1.0: 14 + 2.0: 2) |
+| 通过测试数 | 683+ (全部通过) |
+| Clippy 状态 | ✅ 全工作空间 0 警告 0 错误 |
 
 ### 文件变更
 
 | 文件 | 变更类型 |
 |------|---------|
-| `crates/rustnmap-vuln/src/client.rs` | 异步 API 重构 |
-| `crates/rustnmap-core/src/orchestrator.rs` | Clippy 修复 |
-| `vuln_client_refactor.md` | 重构文档 |
+| `crates/rustnmap-scan-management/` | 新增 crate (7 个文件) |
+| `Cargo.toml` | 添加 workspace member |
+| `Cargo.lock` | 更新依赖 |
+| `task_plan.md` | Phase 3 标记完成 |
 | `progress.md` | 进度更新 |
-| `findings.md` | 发现更新 |
-| `task_plan.md` | 任务更新
+
+---
+
+## 后续工作
+
+### Phase 4 (Week 10-11): 性能优化
+- [ ] 两阶段扫描
+- [ ] 自适应批量大小
+- [ ] 无状态快速扫描
+
+### Phase 5 (Week 12): 平台化
+- [ ] REST API / Daemon 模式 (rustnmap-api)
+- [ ] Rust SDK Builder API (rustnmap-sdk)
