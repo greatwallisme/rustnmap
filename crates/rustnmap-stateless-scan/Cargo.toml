@@ -25,6 +25,8 @@ getrandom = "0.2"
 
 # Async runtime
 tokio = { workspace = true }
+tokio-stream = "0.1"
+futures-util = "0.3"
 
 # Networking
 pnet = { workspace = true }
@@ -34,10 +36,12 @@ pnet_datalink = { workspace = true }
 bytes = { workspace = true }
 tracing = { workspace = true }
 thiserror = { workspace = true }
+libc = "0.2"
 
 [dev-dependencies]
 tokio-test = "0.4"
 tempfile = "3.0"
+async-trait = "0.1"
 
 [lints]
 workspace = true

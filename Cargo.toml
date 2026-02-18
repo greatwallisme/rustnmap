@@ -15,6 +15,7 @@ members = [
     "crates/rustnmap-benchmarks",
     "crates/rustnmap-vuln",
     "crates/rustnmap-scan-management",
+    "crates/rustnmap-stateless-scan",
 ]
 resolver = "2"
 

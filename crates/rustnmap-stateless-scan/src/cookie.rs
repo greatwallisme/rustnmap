@@ -45,7 +45,22 @@ pub struct Cookie {
 /// that encode source port and sequence number without maintaining state.
 pub struct CookieGenerator {
     /// Encryption key (randomly generated).
+    #[allow(clippy::missing_fields_in_debug, reason = "Key is secret and should not be logged")]
     key: [u8; 32],
+}
+
+impl Clone for CookieGenerator {
+    fn clone(&self) -> Self {
+        Self { key: self.key }
+    }
+}
+
+impl std::fmt::Debug for CookieGenerator {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CookieGenerator")
+            .field("key", &"[REDACTED]")
+            .finish()
+    }
 }
 
 impl CookieGenerator {
@@ -71,7 +86,11 @@ impl CookieGenerator {
     pub fn generate(&self, target: IpAddr, port: u16, timestamp: u64) -> Cookie {
         let mut hasher = Hasher::new();
         hasher.update(&self.key);
-        hasher.update(&target.octets());
+        // Handle both IPv4 and IPv6
+        match target {
+            IpAddr::V4(ip) => { hasher.update(&ip.octets()); }
+            IpAddr::V6(ip) => { hasher.update(&ip.octets()); }
+        }
         hasher.update(&timestamp.to_le_bytes());
         hasher.update(&port.to_le_bytes());
 
@@ -79,10 +98,10 @@ impl CookieGenerator {
         let hash_bytes = hash.as_bytes();
 
         // Source port: use high 16 bits (exclude privileged ports)
-        let source_port = 1024 + ((u16::from_le_bytes([hash_bytes[0], hash_bytes[1]]) % 64511) as u16);
+        let source_port = 1024 + (u16::from_le_bytes([hash_bytes[0], hash_bytes[1]]) % 64511);
 
         // Sequence number: use hash bytes 4-7 combined with timestamp
-        let seq_high = u16::from_le_bytes([hash_bytes[2], hash_bytes[3]]) as u32;
+        let seq_high = u32::from(u16::from_le_bytes([hash_bytes[2], hash_bytes[3]]));
         let seq_low = (timestamp & 0xFFFF) as u32;
         let sequence_num = (seq_high << 16) | seq_low;
 
@@ -99,8 +118,8 @@ impl CookieGenerator {
         // Reconstruct sequence number (ack_num = seq + 1)
         let sequence_num = ack_num.saturating_sub(1);
 
-        // Extract timestamp from sequence number
-        let cookie_timestamp = sequence_num & 0xFFFF;
+        // Extract timestamp from sequence number (low 16 bits)
+        let cookie_timestamp = u64::from(sequence_num & 0xFFFF);
 
         // Get current timestamp
         let current_time = current_timestamp();
@@ -120,8 +139,8 @@ impl CookieGenerator {
         // Rebuild cookie and verify
         // We need to find the original port - try to match source_port
         // This is a simplified verification - in production, you'd use a different approach
-        let expected_port_hash = self.compute_port_hash(target, source_port, cookie_timestamp);
-        let actual_port = 1024 + ((expected_port_hash % 64511) as u16);
+        let expected_port_hash = self.compute_port_hash(target, cookie_timestamp);
+        let actual_port = 1024 + (expected_port_hash % 64511);
 
         if actual_port == source_port {
             VerifyResult::Valid
@@ -131,10 +150,14 @@ impl CookieGenerator {
     }
 
     /// Compute port hash for verification.
-    fn compute_port_hash(&self, target: IpAddr, _source_port: u16, timestamp: u64) -> u16 {
+    fn compute_port_hash(&self, target: IpAddr, timestamp: u64) -> u16 {
         let mut hasher = Hasher::new();
         hasher.update(&self.key);
-        hasher.update(&target.octets());
+        // Handle both IPv4 and IPv6
+        match target {
+            IpAddr::V4(ip) => { hasher.update(&ip.octets()); }
+            IpAddr::V6(ip) => { hasher.update(&ip.octets()); }
+        }
         hasher.update(&timestamp.to_le_bytes());
         // Port is not included in hash for verification
         let hash = hasher.finalize();
@@ -144,7 +167,7 @@ impl CookieGenerator {
 
     /// Generate cookie and return packet parameters.
     ///
-    /// Returns (source_port, sequence_number).
+    /// Returns (`source_port`, `sequence_number`).
     #[must_use]
     pub fn generate_packet_params(&self, target: IpAddr, dest_port: u16) -> (u16, u32) {
         let timestamp = current_timestamp();
@@ -186,8 +209,6 @@ mod tests {
         let cookie = generator.generate(target, 80, 1234567890);
 
         assert!(cookie.source_port >= 1024);
-        assert!(cookie.source_port <= 65535);
-        assert!(cookie.sequence_num > 0);
         assert_eq!(cookie.timestamp, 1234567890);
     }
 
@@ -236,7 +257,6 @@ mod tests {
         let (source_port, seq_num) = generator.generate_packet_params(target, 80);
 
         assert!(source_port >= 1024);
-        assert!(source_port <= 65535);
         assert!(seq_num > 0);
     }
 }

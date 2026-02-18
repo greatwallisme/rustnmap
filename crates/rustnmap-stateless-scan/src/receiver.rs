@@ -12,7 +12,7 @@ use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
-use tokio_stream::StreamExt;
+use futures_util::StreamExt;
 use tracing::debug;
 
 /// Scan event from receiver.
@@ -42,6 +42,16 @@ pub struct StatelessReceiver {
     max_age: Duration,
 }
 
+impl std::fmt::Debug for StatelessReceiver {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StatelessReceiver")
+            .field("packet_engine", &"PacketEngine")
+            .field("cookie_gen", &self.cookie_gen)
+            .field("max_age", &self.max_age)
+            .finish_non_exhaustive()
+    }
+}
+
 impl StatelessReceiver {
     /// Create a new stateless receiver.
     pub fn new(
@@ -68,7 +78,7 @@ impl StatelessReceiver {
 
         while let Some(packet) = stream.next().await {
             // Parse packet
-            if let Some(event) = self.parse_packet(&packet) {
+            if let Some(event) = Self::parse_packet(&packet) {
                 // Verify cookie
                 match self.cookie_gen.verify(
                     event.target,
@@ -98,25 +108,63 @@ impl StatelessReceiver {
     }
 
     /// Parse TCP packet and extract SYN-ACK info.
-    fn parse_packet(&self, packet: &PacketBuffer) -> Option<ReceiveEvent> {
-        // Get packet data - assuming PacketBuffer has a way to access data
-        // This is a simplified implementation
-        // In production, you'd need to access the actual packet bytes
+    fn parse_packet(packet: &PacketBuffer) -> Option<ReceiveEvent> {
+        let data = packet.data();
 
-        // For now, return None as PacketBuffer internals need to be accessed
-        // through proper methods
-        None
+        // Minimum packet size: 20 bytes IP + 20 bytes TCP = 40 bytes
+        if data.len() < 40 {
+            return None;
+        }
+
+        // Parse IP header
+        let ip_header_len = ((data[0] & 0x0F) as usize) * 4;
+        if data.len() < ip_header_len + 20 {
+            return None;
+        }
+
+        // Extract source IP
+        let source_ip = IpAddr::V4(Ipv4Addr::new(data[12], data[13], data[14], data[15]));
+
+        // Parse TCP header (starts after IP header)
+        let tcp_start = ip_header_len;
+        if data.len() < tcp_start + 20 {
+            return None;
+        }
+
+        let source_port = u16::from_be_bytes([data[tcp_start], data[tcp_start + 1]]);
+        let dest_port = u16::from_be_bytes([data[tcp_start + 2], data[tcp_start + 3]]);
+        let _seq_num = u32::from_be_bytes([data[tcp_start + 4], data[tcp_start + 5], data[tcp_start + 6], data[tcp_start + 7]]);
+        let ack_num = u32::from_be_bytes([data[tcp_start + 8], data[tcp_start + 9], data[tcp_start + 10], data[tcp_start + 11]]);
+
+        // Check flags (byte 13 of TCP header)
+        let flags = data[tcp_start + 13];
+        let syn = (flags & 0x02) != 0;
+        let ack = (flags & 0x10) != 0;
+
+        // Only process SYN-ACK packets
+        if !syn || !ack {
+            return None;
+        }
+
+        Some(ReceiveEvent {
+            target: source_ip,
+            port: dest_port,
+            source_port,
+            ack_num,
+        })
     }
 
-    /// Convert receive event to HostResult.
+    /// Convert receive event to [`HostResult`].
     #[must_use]
     pub fn event_to_host_result(event: &ReceiveEvent) -> HostResult {
         let port_result = PortResult {
-            port: event.port,
+            number: event.port,
             protocol: Protocol::Tcp,
             state: PortState::Open,
-            reason: Some("syn-ack".to_string()),
+            state_reason: "syn-ack".to_string(),
+            state_ttl: None,
             service: None,
+            scripts: vec![],
         };
 
         HostResult {
@@ -124,9 +172,17 @@ impl StatelessReceiver {
             hostname: None,
             mac: None,
             status: rustnmap_output::models::HostStatus::Up,
+            status_reason: "user".to_string(),
+            latency: Duration::ZERO,
             ports: vec![port_result],
-            os_match: None,
+            os_matches: vec![],
             scripts: vec![],
+            traceroute: None,
+            times: rustnmap_output::models::HostTimes {
+                srtt: None,
+                rttvar: None,
+                timeout: None,
+            },
         }
     }
 }

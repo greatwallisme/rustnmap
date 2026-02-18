@@ -5,22 +5,11 @@
 
 use crate::cookie::{CookieGenerator, current_timestamp};
 use rustnmap_common::Result;
-use rustnmap_core::session::PacketEngine;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use rustnmap_core::session::{PacketEngine, PacketBuffer};
+use std::net::IpAddr;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::debug;
-
-/// Event for sending packets.
-#[derive(Debug, Clone)]
-pub struct SendEvent {
-    /// Target IP address.
-    pub target: IpAddr,
-    /// Target port.
-    pub port: u16,
-    /// Source IP (spoofed or real).
-    pub source_ip: IpAddr,
-}
 
 /// Stateless SYN packet sender.
 ///
@@ -35,6 +24,17 @@ pub struct StatelessSender {
     local_ip: IpAddr,
     /// Source port for RST packets.
     rst_source_port: u16,
+}
+
+impl std::fmt::Debug for StatelessSender {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StatelessSender")
+            .field("packet_engine", &"PacketEngine")
+            .field("cookie_gen", &self.cookie_gen)
+            .field("local_ip", &self.local_ip)
+            .field("rst_source_port", &self.rst_source_port)
+            .finish()
+    }
 }
 
 impl StatelessSender {
@@ -69,8 +69,8 @@ impl StatelessSender {
         // Build TCP SYN packet
         let packet = self.build_syn_packet(target, port, source_port, seq_num)?;
 
-        // Send packet
-        self.packet_engine.send(&packet).await?;
+        // Send packet - convert CoreError to rustnmap_common::Error
+        self.packet_engine.send_packet(packet).await.map_err(|e| rustnmap_common::Error::Other(e.to_string()))?;
 
         debug!("Sent SYN to {}:{} from {}:{}", target, port, self.local_ip, source_port);
 
@@ -81,7 +81,7 @@ impl StatelessSender {
     ///
     /// # Arguments
     ///
-    /// * `targets` - Slice of (target_ip, port) tuples
+    /// * `targets` - Slice of (`target_ip`, port) tuples
     ///
     /// # Returns
     ///
@@ -99,8 +99,8 @@ impl StatelessSender {
             packets.push(packet);
         }
 
-        // Send all packets
-        let sent = self.packet_engine.send_batch(&packets).await?;
+        // Send all packets - convert CoreError to rustnmap_common::Error
+        let sent = self.packet_engine.send_batch(&packets).await.map_err(|e| rustnmap_common::Error::Other(e.to_string()))?;
 
         debug!("Sent {} SYN packets in batch", sent);
 
@@ -111,7 +111,7 @@ impl StatelessSender {
     ///
     /// # Arguments
     ///
-    /// * `targets` - Slice of (target_ip, port) tuples
+    /// * `targets` - Slice of (`target_ip`, port) tuples
     /// * `rate_limiter` - Rate limiter channel
     ///
     /// # Returns
@@ -150,7 +150,7 @@ impl StatelessSender {
         }
 
         let packet = self.build_rst_packet(target, dest_port, self.rst_source_port, ack_num)?;
-        self.packet_engine.send(&packet).await?;
+        self.packet_engine.send_packet(packet).await.map_err(|e| rustnmap_common::Error::Other(e.to_string()))?;
 
         debug!("Sent RST to {}:{} seq={}", target, dest_port, ack_num);
 
@@ -158,7 +158,7 @@ impl StatelessSender {
     }
 
     /// Build TCP SYN packet.
-    fn build_syn_packet(&self, target: IpAddr, dest_port: u16, source_port: u16, seq: u32) -> Result<Vec<u8>> {
+    fn build_syn_packet(&self, target: IpAddr, dest_port: u16, source_port: u16, seq: u32) -> Result<PacketBuffer> {
         // Use pnet to build packet
         let mut packet = vec![0u8; 40]; // 20 bytes IP + 20 bytes TCP
 
@@ -166,19 +166,19 @@ impl StatelessSender {
         self.build_ip_header(&mut packet, target)?;
 
         // Build TCP header
-        self.build_tcp_header(&mut packet[20..], source_port, dest_port, seq, true, false)?;
+        Self::build_tcp_header(&mut packet[20..], source_port, dest_port, seq, true, false);
 
-        Ok(packet)
+        Ok(PacketBuffer::from_data(packet))
     }
 
     /// Build TCP RST packet.
-    fn build_rst_packet(&self, target: IpAddr, dest_port: u16, source_port: u16, seq: u32) -> Result<Vec<u8>> {
+    fn build_rst_packet(&self, target: IpAddr, dest_port: u16, source_port: u16, seq: u32) -> Result<PacketBuffer> {
         let mut packet = vec![0u8; 40];
 
         self.build_ip_header(&mut packet, target)?;
-        self.build_tcp_header(&mut packet[20..], source_port, dest_port, seq, false, true)?;
+        Self::build_tcp_header(&mut packet[20..], source_port, dest_port, seq, false, true);
 
-        Ok(packet)
+        Ok(PacketBuffer::from_data(packet))
     }
 
     /// Build IP header (simplified IPv4).
@@ -227,14 +227,13 @@ impl StatelessSender {
     /// * `syn` - SYN flag
     /// * `rst` - RST flag
     fn build_tcp_header(
-        &self,
         packet: &mut [u8],
         source_port: u16,
         dest_port: u16,
         seq: u32,
         syn: bool,
         rst: bool,
-    ) -> Result<()> {
+    ) {
         // Source port
         packet[0..2].copy_from_slice(&source_port.to_be_bytes());
         // Dest port
@@ -255,27 +254,22 @@ impl StatelessSender {
         packet[16..18].copy_from_slice(&[0, 0]);
         // Urgent pointer
         packet[18..20].copy_from_slice(&[0, 0]);
-
-        Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::net::Ipv4Addr;
-    use std::sync::Arc;
+    use std::pin::Pin;
+    use rustnmap_core::error::CoreError;
 
     struct MockPacketEngine;
 
     #[tokio::test]
     async fn test_mock_sender() {
-        let target = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1));
         let cookie_gen = CookieGenerator::default();
-        let local_ip = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 100));
+        let local_ip = IpAddr::V4(std::net::Ipv4Addr::new(192, 168, 1, 100));
 
-        // Note: This test would need a real PacketEngine implementation
-        // For now, just verify the sender can be created
         let _sender = StatelessSender::new(
             Arc::new(MockPacketEngine),
             cookie_gen,
@@ -283,21 +277,31 @@ mod tests {
         );
     }
 
+    #[async_trait::async_trait]
     impl PacketEngine for MockPacketEngine {
-        async fn send(&self, _packet: &[u8]) -> Result<usize> {
+        async fn send_packet(&self, _packet: PacketBuffer) -> std::result::Result<usize, CoreError> {
             Ok(0)
         }
 
-        async fn send_batch(&self, _packets: &[Vec<u8>]) -> Result<usize> {
+        async fn send_batch(&self, _packets: &[PacketBuffer]) -> std::result::Result<usize, CoreError> {
             Ok(0)
         }
 
-        async fn recv(&self, _buffer: &mut [u8]) -> Result<usize> {
-            Ok(0)
+        fn recv_stream(&self) -> Pin<Box<dyn futures_util::Stream<Item = PacketBuffer> + Send>> {
+            use futures_util::stream::empty;
+            Box::pin(empty())
         }
 
-        fn close(&self) -> Result<()> {
+        fn set_bpf(&self, _filter: &rustnmap_core::session::BpfProg) -> std::result::Result<(), CoreError> {
             Ok(())
+        }
+
+        fn local_mac(&self) -> Option<rustnmap_common::MacAddr> {
+            None
+        }
+
+        fn if_index(&self) -> libc::c_uint {
+            0
         }
     }
 }

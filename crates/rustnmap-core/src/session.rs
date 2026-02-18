@@ -16,7 +16,6 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use async_trait::async_trait;
-use bytes::Bytes;
 use rustnmap_common::{MacAddr, Port};
 use rustnmap_output::models::{HostResult, ScanResult};
 use rustnmap_scan::scanner::TimingTemplate;
@@ -46,38 +45,8 @@ unsafe impl Send for BpfProg {}
 // and is thread-safe when properly synchronized by the kernel
 unsafe impl Sync for BpfProg {}
 
-/// Packet buffer for zero-copy packet handling.
-#[derive(Debug, Clone)]
-pub struct PacketBuffer {
-    /// Packet data (zero-copy reference).
-    pub data: Bytes,
-    /// Length of valid data.
-    pub len: usize,
-    /// Timestamp when packet was received.
-    pub timestamp: std::time::Duration,
-    /// Protocol number (e.g., 6 for TCP, 17 for UDP).
-    pub protocol: u16,
-}
-
-impl PacketBuffer {
-    /// Creates a new packet buffer from bytes.
-    #[must_use]
-    pub fn new(data: Bytes, timestamp: std::time::Duration, protocol: u16) -> Self {
-        let len = data.len();
-        Self {
-            data,
-            len,
-            timestamp,
-            protocol,
-        }
-    }
-
-    /// Returns true if this buffer is empty.
-    #[must_use]
-    pub const fn is_empty(&self) -> bool {
-        self.len == 0
-    }
-}
+// Re-export PacketBuffer from rustnmap-packet
+pub use rustnmap_packet::PacketBuffer;
 
 /// Packet engine abstraction for dependency injection.
 ///
@@ -1087,11 +1056,10 @@ mod tests {
 
     #[test]
     fn test_packet_buffer() {
-        let data = Bytes::from_static(b"test packet");
-        let buffer = PacketBuffer::new(data, std::time::Duration::from_secs(0), 6);
-        assert_eq!(buffer.len, 11);
+        let data = vec![1u8, 2, 3, 4, 5];
+        let buffer = PacketBuffer::from_data(data);
+        assert_eq!(buffer.len(), 5);
         assert!(!buffer.is_empty());
-        assert_eq!(buffer.protocol, 6);
     }
 
     #[test]
