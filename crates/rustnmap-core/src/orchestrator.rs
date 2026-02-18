@@ -331,7 +331,12 @@ impl ScanOrchestrator {
                     }
                 }
                 ScanPhase::PortScanning => {
-                    host_results = self.run_port_scanning().await?;
+                    if self.session.config.two_phase_scan {
+                        // Two-phase scanning: fast discovery + deep scan
+                        host_results = self.run_two_phase_port_scanning().await?;
+                    } else {
+                        host_results = self.run_port_scanning().await?;
+                    }
                 }
                 ScanPhase::ServiceDetection => {
                     if self.pipeline.is_enabled(ScanPhase::ServiceDetection) {
@@ -500,6 +505,123 @@ impl ScanOrchestrator {
         }
 
         info!(hosts = host_results.len(), "Port scanning phase completed");
+        Ok(host_results)
+    }
+
+    /// Runs two-phase port scanning (fast discovery + deep scan).
+    ///
+    /// Phase 1: Quick scan of common ports to identify live hosts with open ports
+    /// Phase 2: Full port scan only on hosts that responded in Phase 1
+    async fn run_two_phase_port_scanning(&self) -> Result<Vec<HostResult>> {
+        info!("Starting two-phase port scanning");
+
+        let targets: Vec<Target> = self.session.target_set.targets().to_vec();
+        let mut host_results = Vec::new();
+        let mut phase1_hosts = Vec::new();
+
+        // ========== Phase 1: Fast Discovery ==========
+        info!("Phase 1: Fast discovery with common ports");
+        let first_phase_ports = if self.session.config.first_phase_ports.is_empty() {
+            // Default common ports for fast discovery
+            vec![22, 80, 443, 8080]
+        } else {
+            self.session.config.first_phase_ports.clone()
+        };
+
+        for target in &targets {
+            let mut phase1_port_results = Vec::new();
+            let mut has_open_port = false;
+
+            for port in &first_phase_ports {
+                let port_result = self.scan_port(target, *port).await?;
+                if port_result.state == PortState::Open {
+                    has_open_port = true;
+                    phase1_port_results.push(port_result);
+                    self.session.stats.record_open_port();
+                }
+                self.session.stats.record_packet_sent();
+            }
+
+            // Track hosts that responded with open ports in Phase 1
+            if has_open_port {
+                let open_port_count = phase1_port_results.len();
+                phase1_hosts.push((target.clone(), phase1_port_results));
+                info!("Phase 1: {} has {} open ports", target.ip, open_port_count);
+            }
+        }
+
+        info!("Phase 1 completed: {} hosts with open ports", phase1_hosts.len());
+
+        // ========== Phase 2: Deep Scan ==========
+        info!("Phase 2: Deep scan on {} hosts", phase1_hosts.len());
+
+        for (target, phase1_ports) in phase1_hosts {
+            let all_ports = self.get_ports_for_scan();
+            let mut phase2_port_results = phase1_ports;
+
+            // Only scan ports that weren't already scanned in Phase 1
+            for port in all_ports {
+                if !first_phase_ports.contains(&port) {
+                    let port_result = self.scan_port(&target, port).await?;
+                    if port_result.state != PortState::Closed {
+                        phase2_port_results.push(port_result);
+                        self.session.stats.record_open_port();
+                    }
+                    self.session.stats.record_packet_sent();
+                }
+            }
+
+            let host_result = HostResult {
+                ip: target.ip,
+                mac: None,
+                hostname: target.hostname.clone(),
+                status: HostStatus::Up,
+                status_reason: "syn-ack".to_string(),
+                latency: std::time::Duration::from_millis(1),
+                ports: phase2_port_results,
+                os_matches: Vec::new(),
+                scripts: Vec::new(),
+                traceroute: None,
+                times: rustnmap_output::models::HostTimes {
+                    srtt: None,
+                    rttvar: None,
+                    timeout: None,
+                },
+            };
+
+            host_results.push(host_result);
+            self.session
+                .output_sink
+                .output_host(host_results.last().unwrap())
+                .await?;
+        }
+
+        // Add hosts from Phase 1 that had no open ports (skip in Phase 2)
+        // These hosts are alive but have no open common ports
+        for target in &targets {
+            if !host_results.iter().any(|h| h.ip == target.ip) {
+                let host_result = HostResult {
+                    ip: target.ip,
+                    mac: None,
+                    hostname: target.hostname.clone(),
+                    status: HostStatus::Up,
+                    status_reason: "host-alive".to_string(),
+                    latency: std::time::Duration::from_millis(1),
+                    ports: vec![],
+                    os_matches: Vec::new(),
+                    scripts: Vec::new(),
+                    traceroute: None,
+                    times: rustnmap_output::models::HostTimes {
+                        srtt: None,
+                        rttvar: None,
+                        timeout: None,
+                    },
+                };
+                host_results.push(host_result);
+            }
+        }
+
+        info!(hosts = host_results.len(), "Two-phase port scanning completed");
         Ok(host_results)
     }
 

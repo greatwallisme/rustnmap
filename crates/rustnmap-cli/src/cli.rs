@@ -21,10 +21,10 @@
 use std::sync::Arc;
 
 use rustnmap_common::Result;
-use rustnmap_core::session::{PortSpec, ScanType};
+use rustnmap_core::session::{PortSpec, ScanType as CoreScanType};
 use rustnmap_core::{ScanConfig, ScanOrchestrator, ScanSession};
 use rustnmap_output::formatter::OutputFormatter;
-use rustnmap_output::models::{HostResult, PortResult, PortState, Protocol, ScanResult};
+use rustnmap_output::models::{HostResult, PortResult, PortState, Protocol, ScanResult, ScanType};
 use rustnmap_scan::scanner::TimingTemplate;
 use rustnmap_target::{Target, TargetGroup, TargetParser};
 use std::io::Write;
@@ -51,8 +51,389 @@ pub async fn run_scan(args: Args) -> Result<()> {
         )));
     }
 
+    // Handle scan management commands first
+    if args.history {
+        return handle_history_command(&args).await;
+    }
+
+    if args.list_profiles {
+        return handle_list_profiles_command(&args).await;
+    }
+
+    if let Some(ref profile_path) = args.validate_profile {
+        return handle_validate_profile_command(profile_path).await;
+    }
+
+    if args.generate_profile {
+        return handle_generate_profile_command().await;
+    }
+
+    if let Some(ref diff_files) = args.diff {
+        return handle_diff_command(&args, diff_files).await;
+    }
+
+    // Handle profile-based scanning
+    if let Some(ref profile_path) = args.profile {
+        return handle_profile_scan(&args, profile_path).await;
+    }
+
+    // Normal scan flow
+    run_normal_scan(&args).await
+}
+
+/// Handle --history command
+async fn handle_history_command(args: &Args) -> Result<()> {
+    use rustnmap_scan_management::{ScanHistory, ScanFilter};
+
+    let db_path = shellexpand::tilde(&args.db_path);
+
+    let history = ScanHistory::open(&db_path).map_err(|e| {
+        rustnmap_common::Error::Other(format!("Failed to open history database: {e}"))
+    })?;
+
+    // Build filter
+    let mut filter = ScanFilter::default();
+
+    if let Some(ref since) = args.since {
+        // Parse since date (simplified - accepts YYYY-MM-DD format)
+        if let Ok(date) = chrono::NaiveDate::parse_from_str(since, "%Y-%m-%d") {
+            filter.since = Some(
+                chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(
+                    date.and_time(chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap()),
+                    chrono::Utc,
+                )
+            );
+        }
+    }
+
+    if let Some(ref until) = args.until {
+        if let Ok(date) = chrono::NaiveDate::parse_from_str(until, "%Y-%m-%d") {
+            filter.until = Some(
+                chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(
+                    date.and_time(chrono::NaiveTime::from_hms_opt(23, 59, 59).unwrap()),
+                    chrono::Utc,
+                )
+            );
+        }
+    }
+
+    if let Some(ref target) = args.target {
+        filter.target = Some(target.clone());
+    }
+
+    if let Some(ref scan_type_str) = args.scan_type_filter {
+        filter.scan_type = Some(match scan_type_str.as_str() {
+            "syn" | "TcpSyn" => ScanType::TcpSyn,
+            "connect" | "TcpConnect" => ScanType::TcpConnect,
+            "udp" | "Udp" => ScanType::Udp,
+            "fin" | "TcpFin" => ScanType::TcpFin,
+            "null" | "TcpNull" => ScanType::TcpNull,
+            "xmas" | "TcpXmas" => ScanType::TcpXmas,
+            "maimon" | "TcpMaimon" => ScanType::TcpMaimon,
+            _ => ScanType::TcpSyn,
+        });
+    }
+
+    if let Some(limit) = args.limit {
+        filter.limit = Some(limit);
+    }
+
+    // Show specific scan details if --scan-id provided
+    if let Some(ref scan_id) = args.scan_id {
+        let scan_opt = history.get_scan(scan_id).await.map_err(|e| {
+            rustnmap_common::Error::Other(format!("Failed to get scan details: {e}"))
+        })?;
+        if let Some(scan) = scan_opt {
+            println!("Scan ID: {}", scan.id);
+            println!("  Target: {}", scan.target_spec);
+            println!("  Type: {:?}", scan.scan_type);
+            println!("  Status: {:?}", scan.status);
+            println!("  Started: {}", scan.started_at);
+            println!("  Completed: {:?}", scan.completed_at);
+        }
+        return Ok(());
+    }
+
+    // List scans
+    let scans = history.list_scans(filter).await.map_err(|e| {
+        rustnmap_common::Error::Other(format!("Failed to list scans: {e}"))
+    })?;
+
+    if scans.is_empty() {
+        println!("No scans found in history database.");
+        return Ok(());
+    }
+
+    println!("Scan History:");
+    println!("{:-<80}", "");
+    for scan in scans {
+        println!("ID: {:<36}  Status: {:<10}  Type: {:<8}",
+                 scan.id, format!("{:?}", scan.status), format!("{:?}", scan.scan_type));
+        println!("  Target: {}", scan.target_spec);
+        println!("  Started: {}  Hosts: {}", scan.started_at, scan.hosts_count);
+        println!("{:-<80}", "");
+    }
+
+    Ok(())
+}
+
+/// Handle --list-profiles command
+async fn handle_list_profiles_command(args: &Args) -> Result<()> {
+    use rustnmap_scan_management::ProfileManager;
+
+    let db_path = shellexpand::tilde(&args.db_path);
+    let db_dir = std::path::Path::new(db_path.as_ref())
+        .parent()
+        .unwrap_or(std::path::Path::new("."));
+    let profiles_dir = db_dir.join("profiles");
+
+    let manager = ProfileManager::from_directory(profiles_dir.to_str().unwrap_or(".")).map_err(|e| {
+        rustnmap_common::Error::Other(format!("Failed to load profiles: {e}"))
+    })?;
+
+    let profiles = manager.list_profiles();
+
+    if profiles.is_empty() {
+        println!("No profiles found. Use --generate-profile to create one.");
+        return Ok(());
+    }
+
+    println!("Available Profiles:");
+    println!("{:-<60}", "");
+    for profile in profiles {
+        println!("  {}", profile);
+    }
+
+    Ok(())
+}
+
+/// Handle --validate-profile command
+async fn handle_validate_profile_command(profile_path: &std::path::Path) -> Result<()> {
+    use rustnmap_scan_management::ScanProfile;
+
+    let profile = ScanProfile::from_file(profile_path).map_err(|e| {
+        rustnmap_common::Error::Other(format!("Failed to load profile: {e}"))
+    })?;
+
+    profile.validate().map_err(|e| {
+        rustnmap_common::Error::Other(format!("Profile validation failed: {e}"))
+    })?;
+
+    println!("Profile '{}' is valid.", profile.name);
+    println!("  Description: {:?}", profile.description);
+    println!("  Targets: {} specified", profile.targets.len());
+    println!("  Scan Type: {:?}", profile.scan.scan_type);
+    println!("  Ports: {:?}", profile.scan.ports);
+
+    Ok(())
+}
+
+/// Handle --generate-profile command
+async fn handle_generate_profile_command() -> Result<()> {
+    let profile_template = r#"# RustNmap Scan Profile
+name: "custom-scan"
+description: "Custom scan profile template"
+targets: []  # Specify targets here or via command line
+exclude: []  # Targets to exclude
+scan:
+  type: "syn"           # syn, connect, udp, fin, null, xmas, maimon
+  ports: "1-1000"       # Port range or comma-separated list
+  service_detection: true
+  os_detection: true
+  scripts: ["default"]  # NSE script categories
+  timing: "T3"          # T0 (slowest) to T5 (fastest)
+output:
+  formats: ["json", "normal"]  # Output formats
+  directory: "./reports"       # Output directory
+  save_to_history: true
+"#;
+
+    println!("{profile_template}");
+    Ok(())
+}
+
+/// Handle --diff command
+async fn handle_diff_command(args: &Args, diff_files: &[String]) -> Result<()> {
+    use rustnmap_scan_management::{ScanDiff, DiffFormat, ScanHistory};
+
+    // If --from-history is specified, load from database
+    if args.from_history.is_some() {
+        let db_path = shellexpand::tilde(&args.db_path);
+
+        let history = ScanHistory::open(&db_path).map_err(|e| {
+            rustnmap_common::Error::Other(format!("Failed to open history database: {e}"))
+        })?;
+
+        let scan_ids = args.from_history.as_ref().unwrap();
+
+        // Use from_history method which handles the conversion
+        let diff = ScanDiff::from_history(&history, &scan_ids[0], &scan_ids[1]).await.map_err(|e| {
+            rustnmap_common::Error::Other(format!("Failed to create diff from history: {e}"))
+        })?;
+
+        let format = match args.diff_format.as_str() {
+            "markdown" | "md" => DiffFormat::Markdown,
+            "json" => DiffFormat::Json,
+            "html" => DiffFormat::Html,
+            _ => DiffFormat::Text,
+        };
+
+        let report = diff.generate_report(format);
+        println!("{report}");
+        return Ok(());
+    }
+
+    // Load from files
+    println!("Comparing scans from files: {} vs {}", diff_files[0], diff_files[1]);
+    // TODO: Implement file-based diff loading
+    warn!("File-based diff comparison not yet implemented. Use --from-history for database scans.");
+
+    Ok(())
+}
+
+/// Handle profile-based scanning
+async fn handle_profile_scan(args: &Args, profile_path: &std::path::Path) -> Result<()> {
+    use rustnmap_scan_management::ScanProfile;
+
+    let profile = ScanProfile::from_file(profile_path).map_err(|e| {
+        rustnmap_common::Error::Other(format!("Failed to load profile: {e}"))
+    })?;
+
+    profile.validate().map_err(|e| {
+        rustnmap_common::Error::Other(format!("Profile validation failed: {e}"))
+    })?;
+
+    info!("Loaded profile: {}", profile.name);
+
+    // Merge profile settings with command-line args
+    // For now, use targets from command line or profile
+    let targets = if args.targets.is_empty() && !profile.targets.is_empty() {
+        parse_targets_from_list(&profile.targets)
+    } else {
+        parse_targets(args)
+    }?;
+
+    // Build scan config from profile
+    let config = build_scan_config_from_profile(&profile, args)?;
+
+    info!("Scan type: {:?}", config.scan_types);
+    info!("Timing template: {:?}", config.timing_template);
+
+    // Create scan session and run
+    let session = ScanSession::new(config, targets).map_err(|e| {
+        rustnmap_common::Error::Other(format!("Failed to create scan session: {e}"))
+    })?;
+    let session = Arc::new(session);
+
+    let orchestrator = ScanOrchestrator::new(session);
+
+    info!("Starting scan...");
+    let scan_result = orchestrator
+        .run()
+        .await
+        .map_err(|e| rustnmap_common::Error::Other(format!("Scan failed: {e}")))?;
+
+    output_results(args, &scan_result).await?;
+
+    info!("Scan completed successfully");
+    Ok(())
+}
+
+/// Parse targets from a string list
+fn parse_targets_from_list(target_list: &[String]) -> Result<TargetGroup> {
+    let parser = TargetParser::new();
+    let mut all_targets = Vec::new();
+
+    for target_spec in target_list {
+        match parser.parse(target_spec) {
+            Ok(group) => {
+                for target in group.targets {
+                    if !all_targets.iter().any(|t: &Target| t.ip == target.ip) {
+                        all_targets.push(target);
+                    }
+                }
+            }
+            Err(e) => {
+                warn!("Failed to parse target '{}': {}", target_spec, e);
+            }
+        }
+    }
+
+    Ok(TargetGroup::new(all_targets))
+}
+
+/// Build scan config from profile
+fn build_scan_config_from_profile(
+    profile: &rustnmap_scan_management::ScanProfile,
+    args: &Args,
+) -> Result<ScanConfig> {
+    let scan_types = vec![match profile.scan.scan_type.as_str() {
+        "syn" => rustnmap_core::session::ScanType::TcpSyn,
+        "connect" => rustnmap_core::session::ScanType::TcpConnect,
+        "udp" => rustnmap_core::session::ScanType::Udp,
+        "fin" => rustnmap_core::session::ScanType::TcpFin,
+        "null" => rustnmap_core::session::ScanType::TcpNull,
+        "xmas" => rustnmap_core::session::ScanType::TcpXmas,
+        "maimon" => rustnmap_core::session::ScanType::TcpMaimon,
+        _ => rustnmap_core::session::ScanType::TcpSyn,
+    }];
+
+    let port_spec = if let Some(ref ports) = profile.scan.ports {
+        parse_port_string(ports).unwrap_or(rustnmap_core::session::PortSpec::Range {
+            start: 1,
+            end: 1000,
+        })
+    } else {
+        rustnmap_core::session::PortSpec::Range { start: 1, end: 1000 }
+    };
+
+    let mut config = ScanConfig {
+        scan_types,
+        port_spec,
+        service_detection: profile.scan.service_detection,
+        os_detection: profile.scan.os_detection,
+        nse_scripts: !profile.scan.scripts.is_empty(),
+        nse_categories: profile.scan.scripts.clone(),
+        ..ScanConfig::default()
+    };
+
+    // Timing template from profile
+    config.timing_template = match profile.scan.timing.as_str() {
+        "T0" => TimingTemplate::Paranoid,
+        "T1" => TimingTemplate::Sneaky,
+        "T2" => TimingTemplate::Polite,
+        "T3" => TimingTemplate::Normal,
+        "T4" => TimingTemplate::Aggressive,
+        "T5" => TimingTemplate::Insane,
+        _ => TimingTemplate::Normal,
+    };
+
+    // Override with command-line args if specified
+    if args.service_detection {
+        config.service_detection = true;
+    }
+    if args.os_detection {
+        config.os_detection = true;
+    }
+    if let Some(timing) = args.timing {
+        config.timing_template = match timing {
+            0 => TimingTemplate::Paranoid,
+            1 => TimingTemplate::Sneaky,
+            2 => TimingTemplate::Polite,
+            3 => TimingTemplate::Normal,
+            4 => TimingTemplate::Aggressive,
+            5 => TimingTemplate::Insane,
+            _ => config.timing_template,
+        };
+    }
+
+    Ok(config)
+}
+
+/// Normal scan flow (original run_scan logic)
+async fn run_normal_scan(args: &Args) -> Result<()> {
     // Parse targets
-    let targets = parse_targets(&args)?;
+    let targets = parse_targets(args)?;
     if targets.is_empty() {
         error!("No valid targets specified");
         return Err(rustnmap_common::Error::Other(
@@ -71,7 +452,7 @@ pub async fn run_scan(args: Args) -> Result<()> {
     );
 
     // Build scan configuration from arguments
-    let config = build_scan_config(&args)?;
+    let config = build_scan_config(args)?;
     info!("Scan type: {:?}", config.scan_types);
     info!("Timing template: {:?}", config.timing_template);
 
@@ -91,7 +472,7 @@ pub async fn run_scan(args: Args) -> Result<()> {
         .map_err(|e| rustnmap_common::Error::Other(format!("Scan failed: {e}")))?;
 
     // Output results
-    output_results(&args, &scan_result).await?;
+    output_results(args, &scan_result).await?;
 
     info!("Scan completed successfully");
     Ok(())
@@ -392,15 +773,15 @@ fn parse_port_string(s: &str) -> Result<PortSpec> {
 }
 
 /// Maps CLI scan type to core scan type.
-const fn map_scan_type(scan_type: crate::args::ScanType) -> ScanType {
+const fn map_scan_type(scan_type: crate::args::ScanType) -> CoreScanType {
     match scan_type {
-        crate::args::ScanType::Syn => ScanType::TcpSyn,
-        crate::args::ScanType::Connect => ScanType::TcpConnect,
-        crate::args::ScanType::Udp => ScanType::Udp,
-        crate::args::ScanType::Fin => ScanType::TcpFin,
-        crate::args::ScanType::Null => ScanType::TcpNull,
-        crate::args::ScanType::Xmas => ScanType::TcpXmas,
-        crate::args::ScanType::Maimon => ScanType::TcpMaimon,
+        crate::args::ScanType::Syn => CoreScanType::TcpSyn,
+        crate::args::ScanType::Connect => CoreScanType::TcpConnect,
+        crate::args::ScanType::Udp => CoreScanType::Udp,
+        crate::args::ScanType::Fin => CoreScanType::TcpFin,
+        crate::args::ScanType::Null => CoreScanType::TcpNull,
+        crate::args::ScanType::Xmas => CoreScanType::TcpXmas,
+        crate::args::ScanType::Maimon => CoreScanType::TcpMaimon,
     }
 }
 
@@ -1097,15 +1478,15 @@ mod tests {
     fn test_map_scan_type() {
         assert!(matches!(
             map_scan_type(crate::args::ScanType::Syn),
-            ScanType::TcpSyn
+            CoreScanType::TcpSyn
         ));
         assert!(matches!(
             map_scan_type(crate::args::ScanType::Connect),
-            ScanType::TcpConnect
+            CoreScanType::TcpConnect
         ));
         assert!(matches!(
             map_scan_type(crate::args::ScanType::Udp),
-            ScanType::Udp
+            CoreScanType::Udp
         ));
     }
 

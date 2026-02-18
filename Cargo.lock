@@ -2254,6 +2254,7 @@ name = "rustnmap-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "clap",
  "console",
  "hex",
@@ -2266,7 +2267,10 @@ dependencies = [
  "rustnmap-nse",
  "rustnmap-output",
  "rustnmap-scan",
+ "rustnmap-scan-management",
  "rustnmap-target",
+ "rustnmap-vuln",
+ "shellexpand",
  "tokio",
  "tracing",
  "tracing-subscriber",

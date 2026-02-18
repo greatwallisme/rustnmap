@@ -503,6 +503,73 @@ pub struct Args {
     /// Print the interacted URLs
     #[arg(long, help_heading = "Misc")]
     pub print_urls: bool,
+
+    // ============================================
+    // Scan Management (Phase 3)
+    // ============================================
+    /// Query scan history
+    #[arg(long, help_heading = "Scan Management", conflicts_with_all = ["targets", "diff", "profile"])]
+    pub history: bool,
+
+    /// List available profiles
+    #[arg(long, help_heading = "Scan Management", conflicts_with_all = ["targets", "history", "diff"])]
+    pub list_profiles: bool,
+
+    /// Validate a profile file
+    #[arg(long, help_heading = "Scan Management", value_name = "FILE", conflicts_with_all = ["targets", "history", "list_profiles", "diff"])]
+    pub validate_profile: Option<PathBuf>,
+
+    /// Generate a profile template
+    #[arg(long, help_heading = "Scan Management", conflicts_with_all = ["targets", "history", "list_profiles", "validate_profile", "diff"])]
+    pub generate_profile: bool,
+
+    /// Use a scan profile
+    #[arg(long, help_heading = "Scan Management", value_name = "FILE", conflicts_with_all = ["history", "list_profiles", "validate_profile", "generate_profile", "diff"])]
+    pub profile: Option<PathBuf>,
+
+    /// Compare two scans
+    #[arg(long, help_heading = "Scan Management", value_name = "FILES", num_args = 2, conflicts_with_all = ["history", "list_profiles", "validate_profile", "generate_profile", "profile"])]
+    pub diff: Option<Vec<String>>,
+
+    /// Compare scans from history database
+    #[arg(long, help_heading = "Scan Management", value_name = "SCAN_IDS", num_args = 2, requires = "diff", conflicts_with_all = ["history", "list_profiles", "validate_profile", "generate_profile", "profile"])]
+    pub from_history: Option<Vec<String>>,
+
+    /// Diff output format
+    #[arg(long, help_heading = "Scan Management", value_name = "FORMAT", default_value = "text", requires = "diff")]
+    pub diff_format: String,
+
+    /// Show only vulnerability changes in diff
+    #[arg(long, help_heading = "Scan Management", requires = "diff")]
+    pub vulns_only: bool,
+
+    /// Filter history by time range (since)
+    #[arg(long, help_heading = "Scan Management", value_name = "DATE", requires = "history")]
+    pub since: Option<String>,
+
+    /// Filter history by time range (until)
+    #[arg(long, help_heading = "Scan Management", value_name = "DATE", requires = "history")]
+    pub until: Option<String>,
+
+    /// Filter history by target
+    #[arg(long, help_heading = "Scan Management", value_name = "TARGET", requires = "history")]
+    pub target: Option<String>,
+
+    /// Filter history by scan type
+    #[arg(long, help_heading = "Scan Management", value_name = "TYPE", requires = "history")]
+    pub scan_type_filter: Option<String>,
+
+    /// Limit history results
+    #[arg(long, help_heading = "Scan Management", value_name = "NUM", requires = "history")]
+    pub limit: Option<usize>,
+
+    /// Show scan details by ID
+    #[arg(long, help_heading = "Scan Management", value_name = "SCAN_ID", requires = "history")]
+    pub scan_id: Option<String>,
+
+    /// Database path for scan history
+    #[arg(long, help_heading = "Scan Management", value_name = "PATH", default_value = "~/.rustnmap/scans.db")]
+    pub db_path: String,
 }
 
 impl Args {

@@ -1,0 +1,43 @@
+[package]
+name = "rustnmap-stateless-scan"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+description = "Stateless high-speed scanning for RustNmap (masscan-like)"
+keywords = ["stateless", "scanner", "network", "security", "masscan"]
+categories = ["security", "network-programming"]
+
+[dependencies]
+# Workspace dependencies
+rustnmap-common = { path = "../rustnmap-common" }
+rustnmap-core = { path = "../rustnmap-core" }
+rustnmap-packet = { path = "../rustnmap-packet" }
+rustnmap-output = { path = "../rustnmap-output" }
+
+# Cryptography
+blake3 = "1.5"
+getrandom = "0.2"
+
+# Async runtime
+tokio = { workspace = true }
+
+# Networking
+pnet = { workspace = true }
+pnet_datalink = { workspace = true }
+
+# Utilities
+bytes = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tokio-test = "0.4"
+tempfile = "3.0"
+
+[lints]
+workspace = true

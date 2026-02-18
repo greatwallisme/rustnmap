@@ -299,6 +299,120 @@ impl CongestionController {
     pub fn recommended_batch_size(&self) -> usize {
         self.cwnd.load(Ordering::Relaxed)
     }
+
+    /// Returns the adaptive batch size based on RTT and network conditions.
+    ///
+    /// This implements Phase 4 adaptive batching:
+    /// - Low RTT (< 50ms): Increase batch size for throughput
+    /// - Medium RTT (50-200ms): Moderate batch size
+    /// - High RTT (> 200ms): Reduce batch size to avoid congestion
+    /// - High packet loss (> 20%): Significantly reduce batch size
+    #[must_use]
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "Batch size calculation uses floating point for smooth scaling"
+    )]
+    pub fn adaptive_batch_size(&self, base_batch_size: usize) -> usize {
+        let rtt = self.stats.rtt();
+        let loss_rate = self.stats.packet_loss_rate();
+        let current_cwnd = self.cwnd.load(Ordering::Relaxed);
+
+        // RTT-based scaling factor
+        let rtt_factor = {
+            let rtt_ms = rtt.as_secs_f64() * 1000.0;
+            if rtt_ms < 50.0 {
+                // Low latency: can use larger batches
+                2.0
+            } else if rtt_ms < 100.0 {
+                // Medium latency
+                1.5
+            } else if rtt_ms < 200.0 {
+                // Normal latency
+                1.0
+            } else if rtt_ms < 500.0 {
+                // High latency: reduce batch size
+                0.75
+            } else {
+                // Very high latency: minimal batch size
+                0.5
+            }
+        };
+
+        // Packet loss-based scaling factor
+        let loss_factor = if loss_rate < 0.05 {
+            // Less than 5% loss: no reduction
+            1.0
+        } else if loss_rate < 0.10 {
+            // 5-10% loss: slight reduction
+            0.8
+        } else if loss_rate < 0.20 {
+            // 10-20% loss: moderate reduction
+            0.6
+        } else {
+            // More than 20% loss: significant reduction
+            0.4
+        };
+
+        // Calculate adaptive batch size
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "Batch size factors are always positive and clamped to valid range"
+        )]
+        let adaptive_size = (base_batch_size as f64 * rtt_factor * loss_factor).round() as usize;
+
+        // Clamp between minimum of 1 and maximum of cwnd * 2
+        let max_batch = (current_cwnd * 2).max(1);
+        let min_batch = 1;
+
+        adaptive_size.clamp(min_batch, max_batch)
+    }
+
+    /// Adjusts the congestion window based on observed network conditions.
+    ///
+    /// This is called periodically to adapt to changing network conditions.
+    ///
+    /// # Arguments
+    ///
+    /// * `in_flight` - Number of packets currently in flight (sent but not acknowledged)
+    /// * `elapsed` - Time elapsed since last adjustment
+    pub fn adjust_to_network(&self, in_flight: usize, elapsed: Duration) {
+        let loss_rate = self.stats.packet_loss_rate();
+        let rtt = self.stats.rtt();
+
+        // If packet loss is high and we have many packets in flight, reduce window
+        if loss_rate > 0.15 && in_flight > self.cwnd.load(Ordering::Relaxed) / 2 {
+            self.on_packet_lost();
+            debug!(
+                "Network adjustment: reduced cwnd due to {}% packet loss",
+                loss_rate * 100.0
+            );
+            return;
+        }
+
+        // If RTT is stable and no loss, slowly increase window
+        if loss_rate < 0.02 && elapsed.as_secs() > 5 {
+            let current_cwnd = self.cwnd.load(Ordering::Relaxed);
+            let ssthresh = self.ssthresh.load(Ordering::Relaxed);
+
+            if current_cwnd < ssthresh {
+                // In slow start phase, can increase more aggressively
+                let new_cwnd = (current_cwnd + 2).min(self.max_cwnd);
+                self.cwnd.store(new_cwnd, Ordering::Relaxed);
+            } else {
+                // In congestion avoidance, increase slowly
+                let new_cwnd = (current_cwnd + 1).min(self.max_cwnd);
+                self.cwnd.store(new_cwnd, Ordering::Relaxed);
+            }
+
+            trace!(
+                "Network adjustment: increased cwnd to {} (RTT: {:.2}ms, loss: {:.1}%)",
+                self.cwnd.load(Ordering::Relaxed),
+                rtt.as_secs_f64() * 1000.0,
+                loss_rate * 100.0
+            );
+        }
+    }
 }
 
 /// Rate limiter for controlling scan rate.
@@ -664,5 +778,108 @@ mod tests {
         stats.update_rtt(Duration::from_millis(50));
         let new_timeout = stats.recommended_timeout();
         assert!(new_timeout > Duration::from_millis(50));
+    }
+
+    #[test]
+    fn test_adaptive_batch_size_low_rtt() {
+        let controller = CongestionController::new(TimingTemplate::Normal, 100);
+        let base_batch = 50;
+
+        // Simulate low RTT (10ms) - should increase batch size
+        controller.stats.update_rtt(Duration::from_millis(10));
+        let batch_size = controller.adaptive_batch_size(base_batch);
+
+        // With low RTT and no loss, batch size should be larger than base
+        assert!(batch_size >= base_batch);
+    }
+
+    #[test]
+    fn test_adaptive_batch_size_high_rtt() {
+        let controller = CongestionController::new(TimingTemplate::Normal, 100);
+        let base_batch = 50;
+
+        // Simulate high RTT (300ms) - should reduce batch size
+        controller.stats.update_rtt(Duration::from_millis(300));
+
+        // Update RTT multiple times to get stable high RTT reading
+        for _ in 0..10 {
+            controller.stats.update_rtt(Duration::from_millis(300));
+        }
+
+        let batch_size = controller.adaptive_batch_size(base_batch);
+
+        // With high RTT, batch size should be reduced (but clamped to cwnd * 2)
+        // The RTT factor for 300ms is 0.75, so 50 * 0.75 = 37.5
+        assert!(batch_size <= base_batch);
+        assert!(batch_size >= 1);
+    }
+
+    #[test]
+    fn test_adaptive_batch_size_high_loss() {
+        let controller = CongestionController::new(TimingTemplate::Normal, 100);
+        let base_batch = 50;
+
+        // Simulate high packet loss by recording many sent packets but few acked
+        for _ in 0..100 {
+            controller.stats.record_sent();
+        }
+        for _ in 0..20 {
+            controller.stats.record_acked();
+        }
+
+        let batch_size = controller.adaptive_batch_size(base_batch);
+
+        // With 80% packet loss, batch size should be significantly reduced
+        assert!(batch_size < base_batch);
+        assert!(batch_size >= 1);
+    }
+
+    #[test]
+    fn test_adaptive_batch_size_clamped() {
+        let controller = CongestionController::new(TimingTemplate::Normal, 10);
+        let base_batch = 100;
+
+        // Even with favorable conditions, batch size should be clamped
+        controller.stats.update_rtt(Duration::from_millis(10));
+        let batch_size = controller.adaptive_batch_size(base_batch);
+
+        // Should be clamped to reasonable maximum
+        assert!(batch_size <= controller.cwnd() * 2);
+    }
+
+    #[test]
+    fn test_adjust_to_network_no_loss() {
+        let controller = CongestionController::new(TimingTemplate::Normal, 100);
+        let initial_cwnd = controller.cwnd();
+
+        // Simulate good network conditions (low loss, stable RTT)
+        controller.stats.update_rtt(Duration::from_millis(50));
+
+        // After sufficient time with good conditions, cwnd should increase
+        controller.adjust_to_network(0, Duration::from_secs(10));
+
+        // Window should have increased or stayed same (depending on phase)
+        assert!(controller.cwnd() >= initial_cwnd);
+    }
+
+    #[test]
+    fn test_adjust_to_network_high_loss() {
+        let controller = CongestionController::new(TimingTemplate::Normal, 100);
+
+        // Simulate high packet loss
+        for _ in 0..100 {
+            controller.stats.record_sent();
+        }
+        for _ in 0..30 {
+            controller.stats.record_acked();
+        }
+
+        let cwnd_before = controller.cwnd();
+
+        // Adjust with high loss and many in-flight packets
+        controller.adjust_to_network(50, Duration::from_secs(1));
+
+        // Window should have been reduced due to loss
+        assert!(controller.cwnd() < cwnd_before);
     }
 }

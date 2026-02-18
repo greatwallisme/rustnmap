@@ -200,6 +200,10 @@ pub struct ScanConfig {
     pub data_payload: Option<Vec<u8>>,
     /// Evasion configuration for firewall/IDS evasion techniques.
     pub evasion_config: Option<rustnmap_evasion::EvasionConfig>,
+    /// Enable two-phase scanning (fast discovery followed by deep scan).
+    pub two_phase_scan: bool,
+    /// First phase port list for fast discovery (used in two-phase mode).
+    pub first_phase_ports: Vec<u16>,
 }
 
 impl Default for ScanConfig {
@@ -225,6 +229,8 @@ impl Default for ScanConfig {
             scan_delay: std::time::Duration::ZERO,
             data_payload: None,
             evasion_config: None,
+            two_phase_scan: false,
+            first_phase_ports: vec![21, 22, 23, 25, 80, 110, 143, 443, 993, 995, 3306, 3389, 5432, 8080],
         }
     }
 }

@@ -33,12 +33,16 @@ rustnmap-fingerprint = { path = "../rustnmap-fingerprint" }
 rustnmap-nse = { path = "../rustnmap-nse" }
 rustnmap-output = { path = "../rustnmap-output" }
 rustnmap-evasion = { path = "../rustnmap-evasion" }
+rustnmap-vuln = { path = "../rustnmap-vuln" }
+rustnmap-scan-management = { path = "../rustnmap-scan-management" }
 
 # Additional dependencies
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 anyhow = { workspace = true }
+chrono = { workspace = true }
+shellexpand = "3.1"
 
 [[bin]]
 name = "rustnmap"
