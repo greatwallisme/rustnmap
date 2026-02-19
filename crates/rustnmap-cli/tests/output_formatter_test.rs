@@ -115,7 +115,7 @@ fn test_scan_result_with_all_port_states() {
                 status_reason: "localhost".to_string(),
                 latency: Duration::default(),
                 ports: vec![PortResult {
-                    number: 1000 + i as u16,
+                    number: 1000 + u16::try_from(i).unwrap_or(0), // Unique port number for each state
                     protocol: Protocol::Tcp,
                     state: *state,
                     state_reason: "test".to_string(),

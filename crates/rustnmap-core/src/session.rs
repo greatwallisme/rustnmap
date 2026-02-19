@@ -565,7 +565,7 @@ impl FingerprintDatabase {
     /// # Errors
     ///
     /// Returns an error if the database file cannot be loaded.
-    pub async fn load_os_db(
+    pub fn load_os_db(
         &mut self,
         path: impl AsRef<std::path::Path>,
     ) -> crate::error::Result<()> {

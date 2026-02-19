@@ -563,7 +563,7 @@ mod tests {
 
     #[test]
     fn test_try_match() {
-        let detector = ServiceDetector::new(ProbeDatabase::empty());
+        let _detector = ServiceDetector::new(ProbeDatabase::empty());
         let regex = Regex::new(r"SSH-([\d.]+)-(.*)").unwrap();
 
         let text = "SSH-8.4-p1";
@@ -576,7 +576,7 @@ mod tests {
 
     #[test]
     fn test_try_match_no_match() {
-        let detector = ServiceDetector::new(ProbeDatabase::empty());
+        let _detector = ServiceDetector::new(ProbeDatabase::empty());
         let regex = Regex::new(r"SSH-([\d.]+)").unwrap();
 
         let text = "HTTP/1.1 200 OK";
@@ -586,7 +586,7 @@ mod tests {
 
     #[test]
     fn test_try_match_empty_captures() {
-        let detector = ServiceDetector::new(ProbeDatabase::empty());
+        let _detector = ServiceDetector::new(ProbeDatabase::empty());
         // Regex with optional group that doesn't match
         let regex = Regex::new(r"SSH(-[\d.]+)?").unwrap();
 
@@ -599,7 +599,7 @@ mod tests {
 
     #[test]
     fn test_try_match_with_optional_group_present() {
-        let detector = ServiceDetector::new(ProbeDatabase::empty());
+        let _detector = ServiceDetector::new(ProbeDatabase::empty());
         let regex = Regex::new(r"SSH(-[\d.]+)?").unwrap();
 
         let text = "SSH-2.0";
