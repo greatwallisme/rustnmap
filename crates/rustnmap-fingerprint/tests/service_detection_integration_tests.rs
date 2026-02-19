@@ -18,21 +18,21 @@ fn get_test_target() -> SocketAddr {
             return SocketAddr::new(ip.into(), 80);
         }
     }
-    SocketAddr::new(Ipv4Addr::new(127, 0, 0, 1).into(), 80)
+    SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 80)
 }
 
-/// Test creating a ServiceDetector with empty database.
+/// Test creating a `ServiceDetector` with empty database.
 #[test]
 fn test_service_detector_empty_database() {
     let db = ProbeDatabase::empty();
     let detector = ServiceDetector::new(db);
 
     // Should be able to create detector
-    let debug_str = format!("{:?}", detector);
+    let debug_str = format!("{detector:?}");
     assert!(debug_str.contains("ServiceDetector"));
 }
 
-/// Test ServiceDetector configuration.
+/// Test `ServiceDetector` configuration.
 #[test]
 fn test_service_detector_configuration() {
     let db = ProbeDatabase::empty();
@@ -63,7 +63,7 @@ fn test_service_detector_intensity_clamping() {
     assert!(debug_high.contains('9')); // Clamped to maximum
 }
 
-/// Test ProbeDatabase empty creation.
+/// Test `ProbeDatabase` empty creation.
 #[test]
 fn test_probe_database_empty() {
     let db = ProbeDatabase::empty();
@@ -73,7 +73,7 @@ fn test_probe_database_empty() {
     assert!(probes.is_empty());
 }
 
-/// Test ServiceInfo creation.
+/// Test `ServiceInfo` creation.
 #[test]
 fn test_service_info_creation() {
     let info = ServiceInfo::new("http");
@@ -84,7 +84,7 @@ fn test_service_info_creation() {
     assert!(info.version.is_none());
 }
 
-/// Test ServiceInfo with confidence.
+/// Test `ServiceInfo` with confidence.
 #[test]
 fn test_service_info_with_confidence() {
     let info = ServiceInfo::new("ssh").with_confidence(8);
@@ -93,7 +93,7 @@ fn test_service_info_with_confidence() {
     assert_eq!(info.confidence, 8);
 }
 
-/// Test ServiceInfo confidence clamping.
+/// Test `ServiceInfo` confidence clamping.
 #[test]
 fn test_service_info_confidence_clamping() {
     let info_high = ServiceInfo::new("ftp").with_confidence(15);
@@ -122,7 +122,7 @@ fn test_probe_definition_creation() {
     assert_eq!(probe.rarity, 5);
 }
 
-/// Test MatchRule creation.
+/// Test `MatchRule` creation.
 #[test]
 fn test_match_rule_creation() {
     let rule = MatchRule {
@@ -177,22 +177,19 @@ async fn test_service_detection_http() {
     let result = detector.detect_service(&target, target.port()).await;
 
     // Should either succeed with results or return unknown
-    match result {
-        Ok(services) => {
-            if !services.is_empty() {
-                // Got some results
-                assert!(
-                    services
-                        .iter()
-                        .any(|s| s.name == "http" || s.name == "unknown"),
-                    "Should detect http or unknown"
-                );
-            }
+    if let Ok(services) = result {
+        if !services.is_empty() {
+            // Got some results
+            assert!(
+                services
+                    .iter()
+                    .any(|s| s.name == "http" || s.name == "unknown"),
+                "Should detect http or unknown"
+            );
         }
-        Err(_) => {
-            // Connection refused or timeout is acceptable
-            // if no service is running
-        }
+    } else {
+        // Connection refused or timeout is acceptable
+        // if no service is running
     }
 }
 
@@ -265,7 +262,7 @@ fn test_probe_protocols() {
     assert_ne!(tcp_probe.protocol, udp_probe.protocol);
 }
 
-/// Test ServiceInfo from match result simulation.
+/// Test `ServiceInfo` from match result simulation.
 #[test]
 fn test_service_info_from_match() {
     // Simulate creating ServiceInfo from match result fields
@@ -317,20 +314,17 @@ async fn test_detection_timeout() {
     // Result should be either:
     // - Error (timeout or network unreachable)
     // - Ok with services (could be empty or contain unknown)
-    match result {
-        Ok(services) => {
-            // If we got results, they should be reasonable
-            for service in services {
-                assert!(!service.name.is_empty());
-            }
+    if let Ok(services) = result {
+        // If we got results, they should be reasonable
+        for service in services {
+            assert!(!service.name.is_empty());
         }
-        Err(_) => {
-            // Error is expected (timeout or unreachable)
-        }
+    } else {
+        // Error is expected (timeout or unreachable)
     }
 }
 
-/// Test ServiceDetector debug output.
+/// Test `ServiceDetector` debug output.
 #[test]
 fn test_detector_debug() {
     let db = ProbeDatabase::empty();
@@ -380,7 +374,7 @@ fn test_probe_definition_debug() {
 /// Test service detection against SSH port (if available).
 #[tokio::test]
 async fn test_service_detection_ssh() {
-    let ssh_target = SocketAddr::new(Ipv4Addr::new(127, 0, 0, 1).into(), 22);
+    let ssh_target = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 22);
 
     let db = ProbeDatabase::empty();
     let detector = ServiceDetector::new(db).with_timeout(Duration::from_secs(2));
@@ -388,17 +382,14 @@ async fn test_service_detection_ssh() {
     // Try to grab banner from SSH port
     let result = detector.grab_banner(&ssh_target, 22).await;
 
-    match result {
-        Ok(Some(banner)) => {
-            // SSH should send a banner like "SSH-2.0-..."
-            let banner_str = String::from_utf8_lossy(&banner);
-            if banner_str.starts_with("SSH-") {
-                assert!(banner_str.contains("SSH"));
-            }
+    if let Ok(Some(banner)) = result {
+        // SSH should send a banner like "SSH-2.0-..."
+        let banner_str = String::from_utf8_lossy(&banner);
+        if banner_str.starts_with("SSH-") {
+            assert!(banner_str.contains("SSH"));
         }
-        _ => {
-            // SSH not running or connection refused - acceptable
-        }
+    } else {
+        // SSH not running or connection refused - acceptable
     }
 }
 
@@ -468,7 +459,7 @@ fn test_match_rule_full() {
     assert!(!rule.soft);
 }
 
-/// Test MatchTemplate creation.
+/// Test `MatchTemplate` creation.
 #[test]
 fn test_match_template() {
     let template = MatchTemplate {
@@ -478,7 +469,7 @@ fn test_match_template() {
     assert_eq!(template.value, "$1/$2");
 }
 
-/// Test ProbeDefinition builder methods.
+/// Test `ProbeDefinition` builder methods.
 #[test]
 fn test_probe_definition_builder() {
     let mut probe =
@@ -492,7 +483,7 @@ fn test_probe_definition_builder() {
     assert!(!probe.matches_port(22));
 }
 
-/// Test ProbeDefinition UDP creation.
+/// Test `ProbeDefinition` UDP creation.
 #[test]
 fn test_probe_definition_udp() {
     let probe = ProbeDefinition::new_udp(
@@ -526,7 +517,7 @@ fn test_probe_add_match() {
     assert_eq!(probe.matches.len(), 1);
 }
 
-/// Test MatchRule regex compilation.
+/// Test `MatchRule` regex compilation.
 #[test]
 fn test_match_rule_compile_regex() {
     let rule = MatchRule {
@@ -639,9 +630,9 @@ async fn test_detection_scenarios() {
 
     // Test with localhost on various ports
     let targets = vec![
-        SocketAddr::new(Ipv4Addr::new(127, 0, 0, 1).into(), 80),
-        SocketAddr::new(Ipv4Addr::new(127, 0, 0, 1).into(), 443),
-        SocketAddr::new(Ipv4Addr::new(127, 0, 0, 1).into(), 8080),
+        SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 80),
+        SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 443),
+        SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 8080),
     ];
 
     for target in targets {

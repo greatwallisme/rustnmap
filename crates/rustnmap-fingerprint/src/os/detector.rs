@@ -544,6 +544,11 @@ impl OsDetector {
     }
 
     /// Calculate variance for u16 values.
+    #[allow(
+        clippy::cast_possible_wrap,
+        clippy::cast_sign_loss,
+        reason = "Mathematical calculation with verified ranges"
+    )]
     fn calculate_variance_u16(nums: &[u16]) -> u64 {
         if nums.len() < 2 {
             return 0;
@@ -629,14 +634,17 @@ impl OsDetector {
                     // TOS would need to be extracted from IP header
                 }
             }
-            Ok(_) => {}
-            Err(_) => {}
+            Ok(_) | Err(_) => {}
         }
 
         Ok(fp)
     }
 
     /// Recalculate TCP checksum after modifying flags.
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "Checksum calculation: sum is guaranteed to fit in u16 after reduction"
+    )]
     fn recalculate_tcp_checksum(packet: &[u8], ip_header_len: usize) -> u16 {
         let src_ip = Ipv4Addr::new(packet[12], packet[13], packet[14], packet[15]);
         let dst_ip = Ipv4Addr::new(packet[16], packet[17], packet[18], packet[19]);
@@ -768,8 +776,7 @@ impl OsDetector {
                         result.timestamp = response.options.timestamp;
                     }
                 }
-                Ok(_) => {}
-                Err(_) => {}
+                Ok(_) | Err(_) => {}
             }
 
             results.push(result);
@@ -830,8 +837,7 @@ impl OsDetector {
                     }
                 }
             }
-            Ok(_) => {}
-            Err(_) => {}
+            Ok(_) | Err(_) => {}
         }
 
         // Send second ICMP echo request with different payload
@@ -924,8 +930,7 @@ impl OsDetector {
                         .with_ip_fields(df, ttl, ip_id, total_len);
                 }
             }
-            Ok(_) => {}
-            Err(_) => {}
+            Ok(_) | Err(_) => {}
         }
 
         Ok(result)
@@ -934,6 +939,10 @@ impl OsDetector {
     /// Build TCP options for SEQ probes.
     ///
     /// Nmap uses: WScale=10, NOP, MSS=1460, Timestamp, SACK permitted
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "Byte extraction: shifting right and casting to u8 is intentional"
+    )]
     fn build_tcp_options_for_seq() -> Vec<u8> {
         // TSval (4 bytes) - use current time
         let tsval = u32::try_from(std::time::SystemTime::now()
@@ -973,11 +982,19 @@ impl OsDetector {
     }
 
     /// Generates a random source port.
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "Process ID modulo 20000 fits in u16 range"
+    )]
     fn generate_source_port() -> u16 {
         40000 + (std::process::id() % 20000) as u16
     }
 
     /// Generates a random initial sequence number.
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "Using lower 32 bits of nanosecond timestamp for sequence number"
+    )]
     fn generate_sequence_number() -> u32 {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

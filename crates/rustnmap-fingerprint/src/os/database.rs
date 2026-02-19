@@ -84,7 +84,7 @@ impl FingerprintDatabase {
     /// # Errors
     ///
     /// Returns an error if the file cannot be read or contains invalid OS fingerprint data.
-    pub async fn load_from_nmap_db(path: impl AsRef<Path>) -> Result<Self> {
+    pub fn load_from_nmap_db(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
 
         let content = fs::read_to_string(path).map_err(|e| FingerprintError::Io {

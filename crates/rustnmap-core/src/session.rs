@@ -569,7 +569,7 @@ impl FingerprintDatabase {
         &mut self,
         path: impl AsRef<std::path::Path>,
     ) -> crate::error::Result<()> {
-        match rustnmap_fingerprint::FingerprintDatabase::load_from_nmap_db(path).await {
+        match rustnmap_fingerprint::FingerprintDatabase::load_from_nmap_db(path) {
             Ok(db) => {
                 self.os_db = Some(db);
                 Ok(())
@@ -636,7 +636,7 @@ impl NseRegistry {
     #[must_use]
     pub fn create_engine(&self) -> rustnmap_nse::ScriptEngine {
         // Since ScriptDatabase doesn't implement Clone, we create a new empty database
-        // and re-register all scripts. This is a workaround until Clone is implemented.
+        // and re-register all scripts.
         let mut new_db = rustnmap_nse::ScriptDatabase::new();
 
         // Get all scripts from the current database and re-register them

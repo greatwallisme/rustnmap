@@ -53,6 +53,7 @@ struct VersionInfo {
 
 impl ProbeDatabase {
     /// Empty database with no probes.
+    #[must_use]
     pub fn empty() -> Self {
         Self {
             probes: HashMap::new(),
@@ -62,6 +63,10 @@ impl ProbeDatabase {
     }
 
     /// Load probes from nmap-service-probes database file.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file cannot be read or the database format is invalid.
     pub async fn load_from_nmap_db(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
 
@@ -87,6 +92,10 @@ impl ProbeDatabase {
     }
 
     /// Load probes from string content (for testing).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database format is invalid.
     pub fn parse(content: &str) -> Result<Self> {
         let mut db = Self::empty();
 
@@ -214,7 +223,7 @@ impl ProbeDatabase {
         }
 
         let payload_str = &after_delimiter[..payload_end];
-        let payload_bytes = Self::parse_payload(payload_str)?;
+        let payload_bytes = Self::parse_payload(payload_str);
 
         Ok(ProbeDefinition {
             name,
@@ -228,7 +237,7 @@ impl ProbeDatabase {
     }
 
     /// Parse payload string with escape sequences.
-    fn parse_payload(s: &str) -> Result<Vec<u8>> {
+    fn parse_payload(s: &str) -> Vec<u8> {
         let mut bytes = Vec::new();
         let mut chars = s.chars().peekable();
 
@@ -262,7 +271,7 @@ impl ProbeDatabase {
             }
         }
 
-        Ok(bytes)
+        bytes
     }
 
     /// Parse match rule directive.
@@ -313,7 +322,7 @@ impl ProbeDatabase {
         let full_pattern = Self::build_regex_pattern(&pattern, &flags);
 
         // Parse version info fields from remainder
-        let version_info = Self::parse_version_info(remainder)?;
+        let version_info = Self::parse_version_info(remainder);
 
         Ok(MatchRule {
             pattern: full_pattern,
@@ -417,7 +426,7 @@ impl ProbeDatabase {
     }
 
     /// Parse version info fields from remainder of match line.
-    fn parse_version_info(s: &str) -> Result<VersionInfo> {
+    fn parse_version_info(s: &str) -> VersionInfo {
         let mut info = VersionInfo {
             product: None,
             version: None,
@@ -437,7 +446,7 @@ impl ProbeDatabase {
             }
 
             // Try to extract each field type
-            if let Some((field, rest)) = Self::extract_version_field(remaining)? {
+            if let Some((field, rest)) = Self::extract_version_field(remaining) {
                 match field.0 {
                     'p' => info.product = Some(MatchTemplate { value: field.1 }),
                     'v' => info.version = Some(MatchTemplate { value: field.1 }),
@@ -459,15 +468,15 @@ impl ProbeDatabase {
             }
         }
 
-        Ok(info)
+        info
     }
 
     /// Extract a single version field (p/, v/, i/, h/, o/, d/, cpe/).
     /// Returns ((`field_type`, value), remaining) or None.
-    fn extract_version_field(s: &str) -> Result<Option<((char, String), &str)>> {
+    fn extract_version_field(s: &str) -> Option<((char, String), &str)> {
         let s = s.trim_start();
         if s.is_empty() {
-            return Ok(None);
+            return None;
         }
 
         // Check for field prefixes
@@ -478,10 +487,10 @@ impl ProbeDatabase {
             if "pvihod".contains(first) && s.len() > 1 && s.as_bytes()[1] == b'/' {
                 (first, &s[2..])
             } else {
-                return Ok(None);
+                return None;
             }
         } else {
-            return Ok(None);
+            return None;
         };
 
         // In nmap format, the delimiter is the character right after the field type
@@ -525,13 +534,13 @@ impl ProbeDatabase {
 
         if value_end == 0 && !found_delimiter {
             // Unclosed field, treat as empty
-            return Ok(None);
+            return None;
         }
 
         let value = after_delimiter[..value_end].to_string();
         let remaining = &after_delimiter[value_end + 1..];
 
-        Ok(Some(((field_type, value), remaining)))
+        Some(((field_type, value), remaining))
     }
 
     /// Parse port list from directive.
@@ -620,6 +629,7 @@ impl ProbeDatabase {
     }
 
     /// Get probes for a specific port.
+    #[must_use]
     pub fn probes_for_port(&self, port: u16) -> Vec<&ProbeDefinition> {
         let mut probe_names: Vec<String> =
             self.port_mapping.get(&port).cloned().unwrap_or_default();
@@ -636,27 +646,32 @@ impl ProbeDatabase {
     }
 
     /// Get probes for a specific intensity level (1-9).
+    #[must_use]
     pub fn probes_for_intensity(&self, intensity: u8) -> Vec<&ProbeDefinition> {
-        self.intensity_levels
+        let probe_names: &[String] = self
+            .intensity_levels
             .get(&intensity.clamp(1, 9))
-            .map(|v| v.as_slice())
-            .unwrap_or(&[])
+            .map_or(&[], |v| v.as_slice());
+        probe_names
             .iter()
             .filter_map(|name| self.probes.get(name))
             .collect()
     }
 
     /// Get all probe names in the database.
+    #[must_use]
     pub fn all_probe_names(&self) -> Vec<&str> {
-        self.probes.keys().map(|s| s.as_str()).collect()
+        self.probes.keys().map(String::as_str).collect()
     }
 
     /// Get probe by name.
+    #[must_use]
     pub fn get_probe(&self, name: &str) -> Option<&ProbeDefinition> {
         self.probes.get(name)
     }
 
     /// Get number of probes in database.
+    #[must_use]
     pub fn probe_count(&self) -> usize {
         self.probes.len()
     }
@@ -681,13 +696,13 @@ mod tests {
 
     #[test]
     fn test_parse_payload_simple() {
-        let payload = ProbeDatabase::parse_payload("Hello World").unwrap();
+        let payload = ProbeDatabase::parse_payload("Hello World");
         assert_eq!(payload, b"Hello World");
     }
 
     #[test]
     fn test_parse_payload_escapes() {
-        let payload = ProbeDatabase::parse_payload(r"Hello\r\nWorld\t\x00").unwrap();
+        let payload = ProbeDatabase::parse_payload(r"Hello\r\nWorld\t\x00");
         assert_eq!(payload, b"Hello\r\nWorld\t\x00");
     }
 
@@ -791,7 +806,7 @@ Match http m|^Server: ([\w/]+)| p/$1/
     #[test]
     fn test_parse_version_info_fields() {
         let remainder = " p/OpenSSH/ v/$1/ i/protocol 2.0/";
-        let info = ProbeDatabase::parse_version_info(remainder).unwrap();
+        let info = ProbeDatabase::parse_version_info(remainder);
 
         assert!(info.product.is_some());
         assert_eq!(info.product.as_ref().unwrap().value, "OpenSSH");
@@ -807,31 +822,23 @@ Match http m|^Server: ([\w/]+)| p/$1/
     fn test_extract_version_field() {
         // Test basic extraction first
         let result = ProbeDatabase::extract_version_field("p/OpenSSH/ rest");
-        println!("Result: {result:?}");
-        assert!(result.is_ok());
-        assert!(
-            result.as_ref().unwrap().is_some(),
-            "Expected Some but got None"
-        );
+        assert!(result.is_some(), "Expected Some but got None");
 
         // Test p/ field
-        let (field, rest) = result.unwrap().unwrap();
+        let (field, rest) = result.unwrap();
         assert_eq!(field.0, 'p');
         assert_eq!(field.1, "OpenSSH");
         assert_eq!(rest, " rest");
 
         // Test v/ field
-        let (field, rest) = ProbeDatabase::extract_version_field("v/$1/ rest")
-            .unwrap()
-            .unwrap();
+        let (field, rest) = ProbeDatabase::extract_version_field("v/$1/ rest").unwrap();
         assert_eq!(field.0, 'v');
         assert_eq!(field.1, "$1");
         assert_eq!(rest, " rest");
 
         // Test cpe:/ field
-        let (field, rest) = ProbeDatabase::extract_version_field("cpe:/a:openbsd:openssh:$1/ rest")
-            .unwrap()
-            .unwrap();
+        let (field, rest) =
+            ProbeDatabase::extract_version_field("cpe:/a:openbsd:openssh:$1/ rest").unwrap();
         assert_eq!(field.0, 'c');
         assert_eq!(field.1, "a:openbsd:openssh:$1");
         assert_eq!(rest, " rest");

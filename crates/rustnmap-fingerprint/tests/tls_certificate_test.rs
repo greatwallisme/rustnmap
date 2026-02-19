@@ -7,7 +7,7 @@ use std::time::{Duration, SystemTime};
 
 use rustnmap_fingerprint::tls::{CertificateInfo, TlsDetector, TlsInfo, TlsVersion};
 
-/// Test TLS version conversion from rustls ProtocolVersion.
+/// Test TLS version conversion from rustls `ProtocolVersion`.
 /// This tests the `From<rustls::ProtocolVersion>` implementation.
 #[test]
 fn test_tls_version_from_rustls() {
@@ -146,8 +146,7 @@ fn test_is_tls_port_comprehensive() {
     for port in &tls_ports {
         assert!(
             TlsDetector::is_tls_port(*port),
-            "Port {} should be a TLS port",
-            port
+            "Port {port} should be a TLS port"
         );
     }
 
@@ -157,8 +156,7 @@ fn test_is_tls_port_comprehensive() {
     for port in &non_tls_ports {
         assert!(
             !TlsDetector::is_tls_port(*port),
-            "Port {} should not be a TLS port",
-            port
+            "Port {port} should not be a TLS port"
         );
     }
 }
@@ -620,12 +618,9 @@ async fn test_real_certificate_expiry() {
     let result = detector.detect_tls(&target, Some("www.bing.com")).await;
 
     // Skip test if network is unavailable
-    let info = match result {
-        Ok(Some(info)) => info,
-        _ => {
-            eprintln!("Warning: Could not connect to test endpoint, skipping expiry test");
-            return;
-        }
+    let info = if let Ok(Some(info)) = result { info } else {
+        eprintln!("Warning: Could not connect to test endpoint, skipping expiry test");
+        return;
     };
 
     // Bing's certificate should not be expired
@@ -656,12 +651,9 @@ async fn test_real_certificate_not_self_signed() {
     let result = detector.detect_tls(&target, Some("www.bing.com")).await;
 
     // Skip test if network is unavailable
-    let info = match result {
-        Ok(Some(info)) => info,
-        _ => {
-            eprintln!("Warning: Could not connect to test endpoint, skipping self-signed test");
-            return;
-        }
+    let info = if let Ok(Some(info)) = result { info } else {
+        eprintln!("Warning: Could not connect to test endpoint, skipping self-signed test");
+        return;
     };
 
     // Bing's certificate should NOT be self-signed (it's issued by Microsoft/DigiCert)

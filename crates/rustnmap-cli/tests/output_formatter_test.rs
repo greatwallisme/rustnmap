@@ -12,7 +12,7 @@ use rustnmap_output::models::{
     ScanStatistics, ScanType, ServiceInfo,
 };
 
-/// Creates a mock ScanResult for testing output formatters.
+/// Creates a mock `ScanResult` for testing output formatters.
 fn create_mock_scan_result() -> ScanResult {
     ScanResult {
         metadata: ScanMetadata {
@@ -84,7 +84,7 @@ fn create_mock_scan_result() -> ScanResult {
     }
 }
 
-/// Test that ScanResult can be created with all port states.
+/// Test that `ScanResult` can be created with all port states.
 #[test]
 fn test_scan_result_with_all_port_states() {
     let states = [
@@ -108,7 +108,7 @@ fn test_scan_result_with_all_port_states() {
                 ..Default::default()
             },
             hosts: vec![HostResult {
-                ip: IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1)),
+                ip: IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
                 mac: None,
                 hostname: None,
                 status: HostStatus::Up,
@@ -137,9 +137,9 @@ fn test_scan_result_with_all_port_states() {
                 hosts_up: 1,
                 hosts_down: 0,
                 total_ports: 1,
-                open_ports: if *state == PortState::Open { 1 } else { 0 },
-                closed_ports: if *state == PortState::Closed { 1 } else { 0 },
-                filtered_ports: if *state == PortState::Filtered { 1 } else { 0 },
+                open_ports: u64::from(*state == PortState::Open),
+                closed_ports: u64::from(*state == PortState::Closed),
+                filtered_ports: u64::from(*state == PortState::Filtered),
                 bytes_sent: 0,
                 bytes_received: 0,
                 packets_sent: 0,
@@ -152,7 +152,7 @@ fn test_scan_result_with_all_port_states() {
     }
 }
 
-/// Test that ScanResult can be created with all protocols.
+/// Test that `ScanResult` can be created with all protocols.
 #[test]
 fn test_scan_result_with_all_protocols() {
     let protocols = [Protocol::Tcp, Protocol::Udp, Protocol::Sctp];
@@ -165,7 +165,7 @@ fn test_scan_result_with_all_protocols() {
                 ..Default::default()
             },
             hosts: vec![HostResult {
-                ip: IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1)),
+                ip: IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
                 mac: None,
                 hostname: None,
                 status: HostStatus::Up,
@@ -209,7 +209,7 @@ fn test_scan_result_with_all_protocols() {
     }
 }
 
-/// Test that ScanResult can be created with all host statuses.
+/// Test that `ScanResult` can be created with all host statuses.
 #[test]
 fn test_scan_result_with_all_host_statuses() {
     let statuses = vec![HostStatus::Up, HostStatus::Down, HostStatus::Unknown];
@@ -218,7 +218,7 @@ fn test_scan_result_with_all_host_statuses() {
         let result = ScanResult {
             metadata: ScanMetadata::default(),
             hosts: vec![HostResult {
-                ip: IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1)),
+                ip: IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
                 mac: None,
                 hostname: None,
                 status: *status,
@@ -236,8 +236,8 @@ fn test_scan_result_with_all_host_statuses() {
             }],
             statistics: ScanStatistics {
                 total_hosts: 1,
-                hosts_up: if *status == HostStatus::Up { 1 } else { 0 },
-                hosts_down: if *status == HostStatus::Down { 1 } else { 0 },
+                hosts_up: usize::from(*status == HostStatus::Up),
+                hosts_down: usize::from(*status == HostStatus::Down),
                 total_ports: 0,
                 open_ports: 0,
                 closed_ports: 0,
@@ -254,13 +254,13 @@ fn test_scan_result_with_all_host_statuses() {
     }
 }
 
-/// Test ScanResult with IPv6 addresses.
+/// Test `ScanResult` with IPv6 addresses.
 #[test]
 fn test_scan_result_with_ipv6() {
     let result = ScanResult {
         metadata: ScanMetadata::default(),
         hosts: vec![HostResult {
-            ip: IpAddr::V6(std::net::Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1)),
+            ip: IpAddr::V6(std::net::Ipv6Addr::LOCALHOST),
             mac: None,
             hostname: Some("localhost".to_string()),
             status: HostStatus::Up,
@@ -315,7 +315,7 @@ fn test_scan_result_with_ipv6() {
     assert_eq!(result.hosts[0].ip.to_string(), "::1");
 }
 
-/// Test empty ScanResult (edge case).
+/// Test empty `ScanResult` (edge case).
 #[test]
 fn test_empty_scan_result() {
     let result = ScanResult {
@@ -345,7 +345,7 @@ fn test_empty_scan_result() {
     assert_eq!(result.statistics.total_hosts, 0);
 }
 
-/// Test ScanResult with MAC address.
+/// Test `ScanResult` with MAC address.
 #[test]
 fn test_scan_result_with_mac_address() {
     use rustnmap_output::models::MacAddress;
@@ -394,7 +394,7 @@ fn test_scan_result_with_mac_address() {
     assert_eq!(mac.vendor.as_ref().unwrap(), "TestVendor");
 }
 
-/// Test ScanResult with service information.
+/// Test `ScanResult` with service information.
 #[test]
 fn test_scan_result_with_service_info() {
     let result = create_mock_scan_result();
@@ -409,7 +409,7 @@ fn test_scan_result_with_service_info() {
     assert_eq!(service.confidence, 10);
 }
 
-/// Test Args validation with output file options.
+/// Test `Args` validation with output file options.
 #[test]
 fn test_cli_args_output_options() {
     // Test with output file
@@ -446,7 +446,7 @@ fn test_cli_args_output_options() {
     assert!(args.validate().is_ok());
 }
 
-/// Test Args validation with append option.
+/// Test `Args` validation with append option.
 #[test]
 fn test_cli_args_append_option() {
     let args = Args {
@@ -459,7 +459,7 @@ fn test_cli_args_append_option() {
     assert!(args.append_output);
 }
 
-/// Test ScanMetadata default values.
+/// Test `ScanMetadata` default values.
 #[test]
 fn test_scan_metadata_defaults() {
     let metadata = ScanMetadata::default();
@@ -469,7 +469,7 @@ fn test_scan_metadata_defaults() {
     assert_eq!(metadata.protocol, Protocol::Tcp);
 }
 
-/// Test HostTimes struct.
+/// Test `HostTimes` struct.
 #[test]
 fn test_host_times() {
     let times = HostTimes {
@@ -482,7 +482,7 @@ fn test_host_times() {
     assert_eq!(times.timeout, Some(2000));
 }
 
-/// Test ScanResult with traceroute information.
+/// Test `ScanResult` with traceroute information.
 #[test]
 fn test_scan_result_with_traceroute() {
     use rustnmap_output::models::{TracerouteHop, TracerouteResult};
@@ -544,7 +544,7 @@ fn test_scan_result_with_traceroute() {
     assert_eq!(traceroute.hops[0].ttl, 1);
 }
 
-/// Helper function to test output formatting via Args validation.
+/// Helper function to test output formatting via `Args` validation.
 #[test]
 fn test_output_args_combinations() {
     // Test all output formats together
@@ -568,7 +568,7 @@ fn test_output_args_combinations() {
     assert_eq!(args.verbose, 4);
 }
 
-/// Test ScanResult with OS matches.
+/// Test `ScanResult` with OS matches.
 #[test]
 fn test_scan_result_with_os_matches() {
     use rustnmap_output::models::OsMatch;
@@ -631,7 +631,7 @@ fn test_scan_result_with_os_matches() {
     assert_eq!(result.hosts[0].os_matches[0].accuracy, 95);
 }
 
-/// Test ScanStatistics default values.
+/// Test `ScanStatistics` default values.
 #[test]
 fn test_scan_statistics_default() {
     let stats = ScanStatistics::default();
@@ -649,7 +649,7 @@ fn test_scan_statistics_default() {
     assert_eq!(stats.packets_received, 0);
 }
 
-/// Test ServiceInfo struct.
+/// Test `ServiceInfo` struct.
 #[test]
 fn test_service_info() {
     let service = ServiceInfo {
@@ -699,7 +699,7 @@ fn test_all_scan_types() {
     }
 }
 
-/// Test ScanResult serialization roundtrip.
+/// Test `ScanResult` serialization roundtrip.
 #[test]
 fn test_scan_result_serialization() {
     let result = create_mock_scan_result();
@@ -712,7 +712,7 @@ fn test_scan_result_serialization() {
     assert!(json_result.is_ok());
 }
 
-/// Test empty Args - validates that empty targets is handled.
+/// Test empty `Args` - validates that empty targets is handled.
 #[test]
 fn test_cli_args_empty_targets() {
     let args = Args {
@@ -725,7 +725,7 @@ fn test_cli_args_empty_targets() {
     assert!(args.targets.is_empty());
 }
 
-/// Test Args with multiple targets.
+/// Test `Args` with multiple targets.
 #[test]
 fn test_cli_args_multiple_targets() {
     let args = Args {

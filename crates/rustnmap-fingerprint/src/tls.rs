@@ -129,6 +129,7 @@ pub struct CertificateInfo {
 
 impl TlsInfo {
     /// Create empty TLS info.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             version: TlsVersion::Unknown,
@@ -144,18 +145,21 @@ impl TlsInfo {
     }
 
     /// Set TLS version.
+    #[must_use]
     pub fn with_version(mut self, version: TlsVersion) -> Self {
         self.version = version;
         self
     }
 
     /// Set cipher suite.
+    #[must_use]
     pub fn with_cipher_suite(mut self, cipher: impl Into<String>) -> Self {
         self.cipher_suite = cipher.into();
         self
     }
 
     /// Set certificate info.
+    #[must_use]
     pub fn with_certificate(mut self, cert: CertificateInfo) -> Self {
         self.certificate = Some(cert);
         self
@@ -180,6 +184,7 @@ pub struct TlsDetector {
 
 impl TlsDetector {
     /// Create a new TLS detector.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             timeout: Duration::from_secs(10),
@@ -188,18 +193,23 @@ impl TlsDetector {
     }
 
     /// Set connection timeout.
+    #[must_use]
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
         self
     }
 
     /// Set certificate verification.
+    #[must_use]
     pub fn with_verify_certificates(mut self, verify: bool) -> Self {
         self.verify_certificates = verify;
         self
     }
 
     /// Detect TLS on a target address.
+    ///
+    /// # Errors
+    /// Returns error if TLS handshake fails or server name cannot be created.
     pub async fn detect_tls(
         &self,
         target: &SocketAddr,
@@ -222,7 +232,7 @@ impl TlsDetector {
         };
 
         // Configure TLS client
-        let config = self.build_tls_config()?;
+        let config = Self::build_tls_config();
         let connector = TlsConnector::from(Arc::new(config));
 
         // Create server name for SNI
@@ -232,10 +242,10 @@ impl TlsDetector {
             target.ip().to_string()
         };
 
-        let rustls_server_name = match rustls::pki_types::ServerName::try_from(server_name.clone())
-        {
-            Ok(name) => name,
-            Err(_) => {
+        let rustls_server_name =
+            if let Ok(name) = rustls::pki_types::ServerName::try_from(server_name.clone()) {
+                name
+            } else {
                 // If the server name is not a valid DNS name (e.g., an IP address),
                 // try to use it as-is without SNI
                 trace!("Invalid server name for SNI: {}", server_name);
@@ -244,8 +254,7 @@ impl TlsDetector {
                         context: "failed to create server name".to_string(),
                     }
                 })?
-            }
-        };
+            };
 
         // Perform TLS handshake
         let tls_stream = match tokio::time::timeout(
@@ -266,34 +275,30 @@ impl TlsDetector {
         };
 
         // Extract TLS information
-        let info = self.extract_tls_info(&tls_stream, &server_name).await?;
+        let info = Self::extract_tls_info(&tls_stream, &server_name);
 
         Ok(Some(info))
     }
 
     /// Build TLS client configuration.
-    fn build_tls_config(&self) -> Result<rustls::ClientConfig> {
-        let config = rustls::ClientConfig::builder()
+    fn build_tls_config() -> rustls::ClientConfig {
+        rustls::ClientConfig::builder()
             .dangerous()
             .with_custom_certificate_verifier(Arc::new(NoCertificateVerification))
-            .with_no_client_auth();
-
-        Ok(config)
+            .with_no_client_auth()
     }
 
     /// Extract TLS information from established connection.
-    async fn extract_tls_info(
-        &self,
+    fn extract_tls_info(
         stream: &TlsStream<TcpStream>,
         server_name: &str,
-    ) -> Result<TlsInfo> {
+    ) -> TlsInfo {
         let (_, conn) = stream.get_ref();
 
         // Get negotiated version
         let version = conn
             .protocol_version()
-            .map(TlsVersion::from)
-            .unwrap_or(TlsVersion::Unknown);
+            .map_or(TlsVersion::Unknown, TlsVersion::from);
 
         // Get cipher suite
         let cipher_suite = conn
@@ -308,25 +313,11 @@ impl TlsDetector {
 
         // Get peer certificates
         let certificates = conn.peer_certificates();
-        let chain_depth = certificates.map(|c| c.len()).unwrap_or(0);
+        let chain_depth = certificates.map_or(0, <[tokio_rustls::rustls::pki_types::CertificateDer]>::len);
 
         // Parse certificate info if available
-        let certificate: Option<CertificateInfo> = if let Some(certs) = certificates {
-            if let Some(first_cert) = certs.first() {
-                match self.parse_certificate(first_cert) {
-                    Ok(Some(cert)) => Some(cert),
-                    Ok(None) => None,
-                    Err(e) => {
-                        debug!("Certificate parsing failed: {}", e);
-                        None
-                    }
-                }
-            } else {
-                None
-            }
-        } else {
-            None
-        };
+        let certificate: Option<CertificateInfo> =
+            certificates.and_then(|certs| certs.first().and_then(Self::parse_certificate));
 
         // Check if self-signed and expiry
         let (is_self_signed, is_expired, days_until_expiry) = if let Some(ref cert) = certificate {
@@ -335,6 +326,7 @@ impl TlsDetector {
             let is_self_signed = cert.subject == cert.issuer;
 
             let days_until = if is_expired {
+                #[allow(clippy::cast_possible_wrap)] // Duration in secs fits in i64 for valid certs
                 Some(
                     -(now
                         .duration_since(cert.not_after)
@@ -343,6 +335,7 @@ impl TlsDetector {
                         / 86400,
                 )
             } else {
+                #[allow(clippy::cast_possible_wrap)] // Duration in secs fits in i64 for valid certs
                 Some(
                     (cert
                         .not_after
@@ -358,7 +351,7 @@ impl TlsDetector {
             (false, false, None)
         };
 
-        Ok(TlsInfo {
+        TlsInfo {
             version,
             cipher_suite,
             certificate,
@@ -368,14 +361,11 @@ impl TlsDetector {
             is_self_signed,
             is_expired,
             days_until_expiry,
-        })
+        }
     }
 
     /// Parse X.509 certificate.
-    fn parse_certificate(
-        &self,
-        cert: &rustls::pki_types::CertificateDer<'_>,
-    ) -> Result<Option<CertificateInfo>> {
+    fn parse_certificate(cert: &rustls::pki_types::CertificateDer<'_>) -> Option<CertificateInfo> {
         match X509Certificate::from_der(cert.as_ref()) {
             Ok((_, cert)) => {
                 // Extract subject
@@ -394,7 +384,7 @@ impl TlsDetector {
                         for name in &san.general_names {
                             match name {
                                 GeneralName::DNSName(dns) => {
-                                    subject_alt_names.push(dns.to_string());
+                                    subject_alt_names.push((*dns).to_string());
                                 }
                                 GeneralName::IPAddress(ip) => {
                                     subject_alt_names.push(format!("{ip:?}"));
@@ -406,8 +396,10 @@ impl TlsDetector {
                 }
 
                 // Extract validity
+                #[allow(clippy::cast_sign_loss)] // Certificate timestamps are always positive
                 let not_before = SystemTime::UNIX_EPOCH
                     + Duration::from_secs(cert.validity.not_before.timestamp() as u64);
+                #[allow(clippy::cast_sign_loss)] // Certificate timestamps are always positive
                 let not_after = SystemTime::UNIX_EPOCH
                     + Duration::from_secs(cert.validity.not_after.timestamp() as u64);
 
@@ -418,9 +410,9 @@ impl TlsDetector {
                 let public_key_info = format!("{:?}", cert.public_key().algorithm);
 
                 // Calculate fingerprint
-                let fingerprint_sha256 = self.calculate_fingerprint(cert.as_ref());
+                let fingerprint_sha256 = Self::calculate_fingerprint(cert.as_ref());
 
-                Ok(Some(CertificateInfo {
+                Some(CertificateInfo {
                     subject,
                     issuer,
                     serial_number,
@@ -430,17 +422,17 @@ impl TlsDetector {
                     signature_algorithm,
                     public_key_info,
                     fingerprint_sha256,
-                }))
+                })
             }
             Err(e) => {
                 debug!("Failed to parse certificate: {}", e);
-                Ok(None)
+                None
             }
         }
     }
 
     /// Calculate SHA-256 fingerprint of certificate.
-    fn calculate_fingerprint(&self, cert_der: &[u8]) -> String {
+    fn calculate_fingerprint(cert_der: &[u8]) -> String {
         use std::fmt::Write;
 
         let hash = ring::digest::digest(&ring::digest::SHA256, cert_der);
@@ -455,6 +447,7 @@ impl TlsDetector {
     }
 
     /// Check if a port commonly uses TLS/SSL.
+    #[must_use]
     pub fn is_tls_port(port: u16) -> bool {
         matches!(
             port,

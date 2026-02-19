@@ -66,12 +66,14 @@ impl ServiceInfo {
     }
 
     /// Set confidence score (clamped to 0-10).
+    #[must_use]
     pub fn with_confidence(mut self, confidence: u8) -> Self {
         self.confidence = confidence.min(10);
         self
     }
 
     /// Create service info from a match result.
+    #[must_use]
     pub fn from_match(result: MatchResult) -> Self {
         Self {
             name: result.service,
@@ -129,6 +131,9 @@ impl ServiceDetector {
     }
 
     /// Detect service on a specific port.
+    ///
+    /// # Errors
+    /// Returns error if network operation fails or fingerprint matching fails.
     pub async fn detect_service(&self, target: &SocketAddr, port: u16) -> Result<Vec<ServiceInfo>> {
         info!("Starting service detection on {}:{}", target.ip(), port);
 
@@ -142,7 +147,7 @@ impl ServiceDetector {
                 // Try to match banner against all probe rules (treat as GenericLines response)
                 let probes = self.select_probes(port);
                 for probe in &probes {
-                    let matches = self.match_response(probe, &banner)?;
+                    let matches = Self::match_response(probe, &banner)?;
                     for match_result in matches {
                         results.push(ServiceInfo::from_match(match_result));
                     }
@@ -181,7 +186,7 @@ impl ServiceDetector {
                     trace!("Got response: {} bytes", response.len());
 
                     // Match response against all rules
-                    let matches = self.match_response(probe, &response)?;
+                    let matches = Self::match_response(probe, &response)?;
 
                     for match_result in matches {
                         results.push(ServiceInfo::from_match(match_result));
@@ -208,6 +213,9 @@ impl ServiceDetector {
     ///
     /// Some services (SSH, FTP, SMTP) send a banner immediately upon connection.
     /// This method connects and reads the initial response without sending anything.
+    ///
+    /// # Errors
+    /// Returns error if connection times out or network operation fails.
     pub async fn grab_banner(&self, target: &SocketAddr, port: u16) -> Result<Option<Vec<u8>>> {
         use tokio::io::AsyncReadExt;
         use tokio::net::TcpStream;
@@ -276,7 +284,6 @@ impl ServiceDetector {
             0 => 3,
             1..=3 => 5,
             4..=6 => 7,
-            7..=9 => 9,
             _ => 9,
         }
     }
@@ -387,13 +394,13 @@ impl ServiceDetector {
     }
 
     /// Match response against probe rules.
-    fn match_response(&self, probe: &ProbeDefinition, response: &[u8]) -> Result<Vec<MatchResult>> {
+    fn match_response(probe: &ProbeDefinition, response: &[u8]) -> Result<Vec<MatchResult>> {
         let response_str = String::from_utf8_lossy(response);
         let mut results = Vec::new();
 
         for rule in &probe.matches {
             let regex = rule.compile_regex()?;
-            if let Some(captures) = self.try_match(&regex, &response_str) {
+            if let Some(captures) = Self::try_match(&regex, &response_str) {
                 let match_result = rule.apply(&captures);
                 debug!(
                     "Match rule '{}' with confidence {}",
@@ -407,7 +414,7 @@ impl ServiceDetector {
     }
 
     /// Try to match regex and extract capture groups.
-    fn try_match(&self, regex: &Regex, text: &str) -> Option<HashMap<usize, String>> {
+    fn try_match(regex: &Regex, text: &str) -> Option<HashMap<usize, String>> {
         let captures = regex.captures(text)?;
         let mut map = HashMap::new();
 
@@ -560,7 +567,7 @@ mod tests {
         let regex = Regex::new(r"SSH-([\d.]+)-(.*)").unwrap();
 
         let text = "SSH-8.4-p1";
-        let captures = detector.try_match(&regex, text).unwrap();
+        let captures = ServiceDetector::try_match(&regex, text).unwrap();
 
         assert_eq!(captures.get(&0), Some(&"SSH-8.4-p1".to_string())); // Full match
         assert_eq!(captures.get(&1), Some(&"8.4".to_string()));
@@ -573,7 +580,7 @@ mod tests {
         let regex = Regex::new(r"SSH-([\d.]+)").unwrap();
 
         let text = "HTTP/1.1 200 OK";
-        let result = detector.try_match(&regex, text);
+        let result = ServiceDetector::try_match(&regex, text);
         assert!(result.is_none());
     }
 
@@ -584,7 +591,7 @@ mod tests {
         let regex = Regex::new(r"SSH(-[\d.]+)?").unwrap();
 
         let text = "SSH";
-        let captures = detector.try_match(&regex, text).unwrap();
+        let captures = ServiceDetector::try_match(&regex, text).unwrap();
         assert_eq!(captures.get(&0), Some(&"SSH".to_string()));
         // Group 1 doesn't exist in this match because optional part not present
         assert_eq!(captures.get(&1), None);
@@ -596,7 +603,7 @@ mod tests {
         let regex = Regex::new(r"SSH(-[\d.]+)?").unwrap();
 
         let text = "SSH-2.0";
-        let captures = detector.try_match(&regex, text).unwrap();
+        let captures = ServiceDetector::try_match(&regex, text).unwrap();
         assert_eq!(captures.get(&0), Some(&"SSH-2.0".to_string()));
         assert_eq!(captures.get(&1), Some(&"-2.0".to_string()));
     }
@@ -623,9 +630,8 @@ mod tests {
             soft: false,
         });
 
-        let detector = ServiceDetector::new(ProbeDatabase::empty());
         let response = b"SSH-2.0-OpenSSH_8.4p1";
-        let results = detector.match_response(&probe, response).unwrap();
+        let results = ServiceDetector::match_response(&probe, response).unwrap();
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].service, "ssh");
@@ -651,9 +657,8 @@ mod tests {
             soft: true,
         });
 
-        let detector = ServiceDetector::new(ProbeDatabase::empty());
         let response = b"SSH-2.0-OpenSSH_8.4";
-        let results = detector.match_response(&probe, response).unwrap();
+        let results = ServiceDetector::match_response(&probe, response).unwrap();
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].service, "ssh");
@@ -676,9 +681,8 @@ mod tests {
             soft: false,
         });
 
-        let detector = ServiceDetector::new(ProbeDatabase::empty());
         let response = b"HTTP/1.1 200 OK";
-        let results = detector.match_response(&probe, response).unwrap();
+        let results = ServiceDetector::match_response(&probe, response).unwrap();
 
         assert!(results.is_empty());
     }
@@ -711,15 +715,13 @@ mod tests {
             soft: false,
         });
 
-        let detector = ServiceDetector::new(ProbeDatabase::empty());
-
         // Test SSH match
-        let results = detector.match_response(&probe, b"SSH-2.0-OpenSSH").unwrap();
+        let results = ServiceDetector::match_response(&probe, b"SSH-2.0-OpenSSH").unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].service, "ssh");
 
         // Test HTTP match
-        let results = detector.match_response(&probe, b"HTTP/1.1 200 OK").unwrap();
+        let results = ServiceDetector::match_response(&probe, b"HTTP/1.1 200 OK").unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].service, "http");
     }
@@ -740,9 +742,8 @@ mod tests {
             soft: false,
         });
 
-        let detector = ServiceDetector::new(ProbeDatabase::empty());
         let response = b"test";
-        let result = detector.match_response(&probe, response);
+        let result = ServiceDetector::match_response(&probe, response);
 
         assert!(result.is_err());
         assert!(matches!(
@@ -767,9 +768,8 @@ mod tests {
             soft: false,
         });
 
-        let detector = ServiceDetector::new(ProbeDatabase::empty());
         let response = vec![0x00, 0x01, 0x02, 0x03];
-        let results = detector.match_response(&probe, &response).unwrap();
+        let results = ServiceDetector::match_response(&probe, &response).unwrap();
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].service, "binary");

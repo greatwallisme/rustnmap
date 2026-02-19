@@ -7,7 +7,7 @@ use rustnmap_fingerprint::database::{
     CustomUrls, DatabaseUpdateDetail, DatabaseUpdater, UpdateOptions, UpdateResult,
 };
 
-/// Test UpdateOptions default values.
+/// Test `UpdateOptions` default values.
 #[test]
 fn test_update_options_default() {
     let _opts = UpdateOptions::default();
@@ -17,7 +17,7 @@ fn test_update_options_default() {
     // Default custom_urls should be None
 }
 
-/// Test UpdateOptions builder pattern with all fields.
+/// Test `UpdateOptions` builder pattern with all fields.
 #[test]
 fn test_update_options_builder_complete() {
     let custom_urls = CustomUrls {
@@ -34,7 +34,7 @@ fn test_update_options_builder_complete() {
     // Verify builder methods compile and run
 }
 
-/// Test UpdateOptions builder with backup only.
+/// Test `UpdateOptions` builder with backup only.
 #[test]
 fn test_update_options_builder_backup() {
     let _opts = UpdateOptions::default().backup(false);
@@ -44,7 +44,7 @@ fn test_update_options_builder_backup() {
     // Verify backup can be set to true
 }
 
-/// Test UpdateOptions builder with verify_checksums only.
+/// Test `UpdateOptions` builder with `verify_checksums` only.
 #[test]
 fn test_update_options_builder_verify() {
     let _opts = UpdateOptions::default().verify_checksums(true);
@@ -54,7 +54,7 @@ fn test_update_options_builder_verify() {
     // Verify verify_checksums can be toggled
 }
 
-/// Test UpdateOptions builder chaining.
+/// Test `UpdateOptions` builder chaining.
 #[test]
 fn test_update_options_builder_chaining() {
     let _opts = UpdateOptions::new()
@@ -66,7 +66,7 @@ fn test_update_options_builder_chaining() {
     // Multiple chained calls should work
 }
 
-/// Test CustomUrls struct creation with all fields.
+/// Test `CustomUrls` struct creation with all fields.
 #[test]
 fn test_custom_urls_all_fields() {
     let urls = CustomUrls {
@@ -85,7 +85,7 @@ fn test_custom_urls_all_fields() {
     );
 }
 
-/// Test CustomUrls struct creation with partial fields.
+/// Test `CustomUrls` struct creation with partial fields.
 #[test]
 fn test_custom_urls_partial() {
     let urls = CustomUrls {
@@ -99,7 +99,7 @@ fn test_custom_urls_partial() {
     assert!(urls.mac_prefixes.is_none());
 }
 
-/// Test CustomUrls struct creation with all None.
+/// Test `CustomUrls` struct creation with all None.
 #[test]
 fn test_custom_urls_all_none() {
     let urls = CustomUrls {
@@ -113,7 +113,7 @@ fn test_custom_urls_all_none() {
     assert!(urls.mac_prefixes.is_none());
 }
 
-/// Test CustomUrls clone.
+/// Test `CustomUrls` clone.
 #[test]
 fn test_custom_urls_clone() {
     let urls = CustomUrls {
@@ -126,7 +126,7 @@ fn test_custom_urls_clone() {
     assert_eq!(urls.service_probes, cloned.service_probes);
 }
 
-/// Test UpdateOptions with custom URLs.
+/// Test `UpdateOptions` with custom URLs.
 #[test]
 fn test_update_options_with_custom_urls() {
     let custom_urls = CustomUrls {
@@ -140,7 +140,7 @@ fn test_update_options_with_custom_urls() {
     // Verify custom_urls can be set
 }
 
-/// Test DatabaseUpdater creation.
+/// Test `DatabaseUpdater` creation.
 #[test]
 fn test_database_updater_new() {
     let _updater = DatabaseUpdater::new();
@@ -148,7 +148,7 @@ fn test_database_updater_new() {
     // Verify updater was created successfully
 }
 
-/// Test DatabaseUpdater default.
+/// Test `DatabaseUpdater` default.
 #[test]
 fn test_database_updater_default() {
     let _updater: DatabaseUpdater = Default::default();
@@ -156,7 +156,7 @@ fn test_database_updater_default() {
     // Verify default creation works
 }
 
-/// Test DatabaseUpdater clone.
+/// Test `DatabaseUpdater` clone.
 #[test]
 fn test_database_updater_clone() {
     let updater = DatabaseUpdater::new();
@@ -165,7 +165,7 @@ fn test_database_updater_clone() {
     // Verify clone works (DatabaseUpdater derives Clone)
 }
 
-/// Test UpdateResult creation with success.
+/// Test `UpdateResult` creation with success.
 #[test]
 fn test_update_result_success() {
     let result = UpdateResult {
@@ -206,7 +206,7 @@ fn test_update_result_success() {
     assert_eq!(result.details.len(), 3);
 }
 
-/// Test UpdateResult creation with partial success.
+/// Test `UpdateResult` creation with partial success.
 #[test]
 fn test_update_result_partial() {
     let result = UpdateResult {
@@ -247,7 +247,7 @@ fn test_update_result_partial() {
     assert_eq!(result.details.len(), 3);
 }
 
-/// Test UpdateResult creation with all failures.
+/// Test `UpdateResult` creation with all failures.
 #[test]
 fn test_update_result_all_failures() {
     let result = UpdateResult {
@@ -287,7 +287,7 @@ fn test_update_result_all_failures() {
     assert_eq!(result.failed_count, 3);
 }
 
-/// Test DatabaseUpdateDetail creation for successful update.
+/// Test `DatabaseUpdateDetail` creation for successful update.
 #[test]
 fn test_update_detail_success() {
     let detail = DatabaseUpdateDetail {
@@ -307,7 +307,7 @@ fn test_update_detail_success() {
     assert!(detail.backup_created);
 }
 
-/// Test DatabaseUpdateDetail creation for failed update.
+/// Test `DatabaseUpdateDetail` creation for failed update.
 #[test]
 fn test_update_detail_failure() {
     let detail = DatabaseUpdateDetail {
@@ -327,7 +327,7 @@ fn test_update_detail_failure() {
     assert!(!detail.backup_created);
 }
 
-/// Test DatabaseUpdateDetail creation for unchanged database.
+/// Test `DatabaseUpdateDetail` creation for unchanged database.
 #[test]
 fn test_update_detail_unchanged() {
     let detail = DatabaseUpdateDetail {
@@ -343,7 +343,7 @@ fn test_update_detail_unchanged() {
     assert_eq!(detail.previous_version, detail.new_version);
 }
 
-/// Test DatabaseUpdateDetail with no previous version (new install).
+/// Test `DatabaseUpdateDetail` with no previous version (new install).
 #[test]
 fn test_update_detail_new_install() {
     let detail = DatabaseUpdateDetail {
@@ -360,7 +360,7 @@ fn test_update_detail_new_install() {
     assert!(detail.new_version.is_some());
 }
 
-/// Test UpdateResult clone.
+/// Test `UpdateResult` clone.
 #[test]
 fn test_update_result_clone() {
     let result = UpdateResult {
@@ -382,7 +382,7 @@ fn test_update_result_clone() {
     assert_eq!(result.details.len(), cloned.details.len());
 }
 
-/// Test DatabaseUpdateDetail clone.
+/// Test `DatabaseUpdateDetail` clone.
 #[test]
 fn test_update_detail_clone() {
     let detail = DatabaseUpdateDetail {
@@ -403,7 +403,7 @@ fn test_update_detail_clone() {
     assert_eq!(detail.backup_created, cloned.backup_created);
 }
 
-/// Test UpdateResult debug formatting.
+/// Test `UpdateResult` debug formatting.
 #[test]
 fn test_update_result_debug() {
     let result = UpdateResult {
@@ -418,7 +418,7 @@ fn test_update_result_debug() {
     assert!(debug_str.contains("updated_count"));
 }
 
-/// Test DatabaseUpdateDetail debug formatting.
+/// Test `DatabaseUpdateDetail` debug formatting.
 #[test]
 fn test_update_detail_debug() {
     let detail = DatabaseUpdateDetail {
@@ -435,7 +435,7 @@ fn test_update_detail_debug() {
     assert!(debug_str.contains("test-db"));
 }
 
-/// Test UpdateOptions debug formatting.
+/// Test `UpdateOptions` debug formatting.
 #[test]
 fn test_update_options_debug() {
     let opts = UpdateOptions::default();
@@ -443,7 +443,7 @@ fn test_update_options_debug() {
     assert!(debug_str.contains("UpdateOptions"));
 }
 
-/// Test CustomUrls debug formatting.
+/// Test `CustomUrls` debug formatting.
 #[test]
 fn test_custom_urls_debug() {
     let urls = CustomUrls {
@@ -456,7 +456,7 @@ fn test_custom_urls_debug() {
     assert!(debug_str.contains("CustomUrls"));
 }
 
-/// Test DatabaseUpdater debug formatting.
+/// Test `DatabaseUpdater` debug formatting.
 #[test]
 fn test_database_updater_debug() {
     let updater = DatabaseUpdater::new();
@@ -464,7 +464,7 @@ fn test_database_updater_debug() {
     assert!(debug_str.contains("DatabaseUpdater"));
 }
 
-/// Test empty UpdateResult.
+/// Test empty `UpdateResult`.
 #[test]
 fn test_update_result_empty() {
     let result = UpdateResult {
@@ -480,7 +480,7 @@ fn test_update_result_empty() {
     assert!(result.details.is_empty());
 }
 
-/// Test UpdateResult with many details.
+/// Test `UpdateResult` with many details.
 #[test]
 fn test_update_result_many_details() {
     let details: Vec<_> = (0..10)
@@ -508,7 +508,7 @@ fn test_update_result_many_details() {
     assert_eq!(result.details.len(), 10);
 }
 
-/// Test UpdateOptions with empty custom URLs.
+/// Test `UpdateOptions` with empty custom URLs.
 #[test]
 fn test_update_options_empty_custom_urls() {
     let urls = CustomUrls {
@@ -521,7 +521,7 @@ fn test_update_options_empty_custom_urls() {
     // Should compile and run without error
 }
 
-/// Test all UpdateOptions builder combinations.
+/// Test all `UpdateOptions` builder combinations.
 #[test]
 fn test_update_options_all_combinations() {
     // All defaults

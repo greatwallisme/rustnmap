@@ -24,14 +24,14 @@
 //! use std::net::SocketAddr;
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-//! let db = ProbeDatabase::load_from_nmap_db("nmap-service-probes").await?;
+//! let db = ProbeDatabase::load_from_nmap_db("nmap-service-probes")?;
 //! let detector = ServiceDetector::new(db);
 //!
 //! let target: SocketAddr = "127.0.0.1:80".parse().unwrap();
 //! let results = detector.detect_service(&target, 80).await?;
 //!
 //! if let Some(service) = results.first() {
-//!     println!("Service: {} {}", service.name, service.version.as_ref().unwrap_or(&"?".into()));
+//!     tracing::info!("Service: {} {}", service.name, service.version.as_ref().unwrap_or(&"?".into()));
 //! }
 //! # Ok(())
 //! # }
@@ -51,14 +51,14 @@
 //! use std::net::{Ipv4Addr, SocketAddr};
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-//! let db = FingerprintDatabase::load_from_nmap_db("nmap-os-db").await?;
+//! let db = FingerprintDatabase::load_from_nmap_db("nmap-os-db")?;
 //! let local_addr = Ipv4Addr::new(192, 168, 1, 100);
 //! let detector = OsDetector::new(db, local_addr);
 //!
 //! let target: SocketAddr = "127.0.0.1:80".parse().unwrap();
 //! let matches = detector.detect_os(&target).await?;
 //! for os_match in matches.iter().take(3) {
-//!     println!("{}: {}%", os_match.name, os_match.accuracy);
+//!     tracing::info!("{}: {}%", os_match.name, os_match.accuracy);
 //! }
 //! # Ok(())
 //! # }

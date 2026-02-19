@@ -95,7 +95,7 @@ pub struct MatchRule {
 /// Template for extracting structured data from regex matches.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MatchTemplate {
-    /// Template string with variable placeholders.
+    /// Template string with variable substitution markers.
     pub value: String,
 }
 
@@ -132,6 +132,7 @@ pub struct MatchResult {
 
 impl ProbeDefinition {
     /// Create a new TCP probe with specified payload.
+    #[must_use]
     pub fn new_tcp(name: String, payload: Vec<u8>) -> Self {
         Self {
             name,
@@ -145,6 +146,7 @@ impl ProbeDefinition {
     }
 
     /// Create a new UDP probe with specified payload.
+    #[must_use]
     pub fn new_udp(name: String, payload: Vec<u8>) -> Self {
         Self {
             name,
@@ -176,6 +178,7 @@ impl ProbeDefinition {
     }
 
     /// Check if this probe should run on a specific port.
+    #[must_use]
     pub fn matches_port(&self, port: u16) -> bool {
         self.ports.is_empty() || self.ports.contains(&port)
     }
@@ -183,6 +186,9 @@ impl ProbeDefinition {
 
 impl MatchRule {
     /// Compile the regex pattern for matching.
+    ///
+    /// # Errors
+    /// Returns error if the regex pattern is invalid.
     pub fn compile_regex(&self) -> Result<Regex> {
         Regex::new(&self.pattern).map_err(|e| crate::error::FingerprintError::InvalidRegex {
             pattern: self.pattern.clone(),
@@ -191,28 +197,29 @@ impl MatchRule {
     }
 
     /// Apply this match rule to a response with captured groups.
+    #[must_use]
     pub fn apply(&self, captures: &HashMap<usize, String>) -> MatchResult {
         let confidence = if self.soft { 5 } else { 8 };
 
         MatchResult {
             service: self.service.clone(),
-            product: Self::resolve_template(&self.product_template, captures),
-            version: Self::resolve_template(&self.version_template, captures),
-            info: Self::resolve_template(&self.info_template, captures),
-            hostname: Self::resolve_template(&self.hostname_template, captures),
-            os_type: Self::resolve_template(&self.os_type_template, captures),
-            device_type: Self::resolve_template(&self.device_type_template, captures),
-            cpe: Self::resolve_template(&self.cpe_template, captures),
+            product: Self::resolve_template(self.product_template.as_ref(), captures),
+            version: Self::resolve_template(self.version_template.as_ref(), captures),
+            info: Self::resolve_template(self.info_template.as_ref(), captures),
+            hostname: Self::resolve_template(self.hostname_template.as_ref(), captures),
+            os_type: Self::resolve_template(self.os_type_template.as_ref(), captures),
+            device_type: Self::resolve_template(self.device_type_template.as_ref(), captures),
+            cpe: Self::resolve_template(self.cpe_template.as_ref(), captures),
             confidence,
         }
     }
 
     /// Resolve a template variable using capture group values.
     fn resolve_template(
-        template: &Option<MatchTemplate>,
+        template: Option<&MatchTemplate>,
         captures: &HashMap<usize, String>,
     ) -> Option<String> {
-        let template = template.as_ref()?.value.clone();
+        let template = template?.value.clone();
         Some(Self::substitute_template_vars(&template, captures))
     }
 

@@ -17,7 +17,7 @@ use rustnmap_fingerprint::os::{FingerprintDatabase, OsDetector};
 #[test]
 fn test_os_detector_default_creation() {
     let db = FingerprintDatabase::empty();
-    let local_addr = Ipv4Addr::new(127, 0, 0, 1);
+    let local_addr = Ipv4Addr::LOCALHOST;
     let _detector = OsDetector::new(db, local_addr);
 
     // Just verify detector was created successfully
@@ -41,7 +41,7 @@ fn test_os_detector_with_seq_count() {
 #[test]
 fn test_os_detector_with_timeout() {
     let db = FingerprintDatabase::empty();
-    let local_addr = Ipv4Addr::new(127, 0, 0, 1);
+    let local_addr = Ipv4Addr::LOCALHOST;
     let _detector = OsDetector::new(db, local_addr).with_timeout(Duration::from_secs(5));
 
     // Verify detector was created
@@ -73,9 +73,9 @@ fn test_fingerprint_database_empty() {
 }
 
 /// Test fingerprint database loading from invalid path.
-#[tokio::test]
-async fn test_fingerprint_database_load_invalid_path() {
-    let result = FingerprintDatabase::load_from_nmap_db("/nonexistent/path/nmap-os-db").await;
+#[test]
+fn test_fingerprint_database_load_invalid_path() {
+    let result = FingerprintDatabase::load_from_nmap_db("/nonexistent/path/nmap-os-db");
     assert!(result.is_err());
 }
 
@@ -91,7 +91,7 @@ async fn test_fingerprint_database_load_invalid_path() {
 #[tokio::test]
 async fn test_os_detection_localhost() {
     let db = FingerprintDatabase::empty();
-    let local_addr = Ipv4Addr::new(127, 0, 0, 1);
+    let local_addr = Ipv4Addr::LOCALHOST;
     let detector = OsDetector::new(db, local_addr)
         .with_open_port(80)
         .with_closed_port(443)
@@ -108,29 +108,26 @@ async fn test_os_detection_localhost() {
     assert!(matches.is_empty());
 }
 
-/// Test OS detection with TEST_TARGET_IP from environment.
+/// Test OS detection with `TEST_TARGET_IP` from environment.
 ///
 /// This test requires:
-/// - Root privileges (CAP_NET_RAW)
-/// - TEST_TARGET_IP set in .env file
+/// - Root privileges (`CAP_NET_RAW`)
+/// - `TEST_TARGET_IP` set in .env file
 /// - Target host responding to OS detection probes
 #[tokio::test]
 async fn test_os_detection_with_target_ip() {
     let db = FingerprintDatabase::empty();
 
     // Get local address
-    let local_addr = Ipv4Addr::new(127, 0, 0, 1);
+    let local_addr = Ipv4Addr::LOCALHOST;
 
     // Get target from environment or skip
-    let target_ip = match std::env::var("TEST_TARGET_IP") {
-        Ok(ip) => ip
-            .parse::<Ipv4Addr>()
-            .unwrap_or(Ipv4Addr::new(127, 0, 0, 1)),
-        Err(_) => {
-            // Skip test if no target IP configured
-            eprintln!("Skipping test: TEST_TARGET_IP not set");
-            return;
-        }
+    let target_ip = if let Ok(ip) = std::env::var("TEST_TARGET_IP") { ip
+    .parse::<Ipv4Addr>()
+    .unwrap_or(Ipv4Addr::LOCALHOST) } else {
+        // Skip test if no target IP configured
+        eprintln!("Skipping test: TEST_TARGET_IP not set");
+        return;
     };
 
     let detector = OsDetector::new(db, local_addr)
@@ -159,7 +156,7 @@ async fn test_os_detection_with_target_ip() {
 #[tokio::test]
 async fn test_os_detection_timeout() {
     let db = FingerprintDatabase::empty();
-    let local_addr = Ipv4Addr::new(127, 0, 0, 1);
+    let local_addr = Ipv4Addr::LOCALHOST;
 
     // Use a very short timeout
     let detector = OsDetector::new(db, local_addr).with_timeout(Duration::from_millis(100));
@@ -280,7 +277,7 @@ fn test_ip_id_classification_random() {
         let sum_sq_diff: u64 = ip_ids
             .iter()
             .map(|&n| {
-                let diff = n as i64 - mean as i64;
+                let diff = i64::from(n) - mean as i64;
                 (diff * diff) as u64
             })
             .sum();
@@ -489,7 +486,7 @@ fn test_os_fingerprint_seq_only() {
 #[tokio::test]
 async fn test_os_detection_invalid_target() {
     let db = FingerprintDatabase::empty();
-    let local_addr = Ipv4Addr::new(127, 0, 0, 1);
+    let local_addr = Ipv4Addr::LOCALHOST;
     let detector = OsDetector::new(db, local_addr);
 
     // Test with IPv6 target (not supported)
@@ -504,7 +501,7 @@ async fn test_os_detection_invalid_target() {
 #[tokio::test]
 async fn test_os_detection_unreachable_target() {
     let db = FingerprintDatabase::empty();
-    let local_addr = Ipv4Addr::new(127, 0, 0, 1);
+    let local_addr = Ipv4Addr::LOCALHOST;
     let detector = OsDetector::new(db, local_addr).with_timeout(Duration::from_millis(100));
 
     // Use RFC 5737 documentation range (should be unreachable)
