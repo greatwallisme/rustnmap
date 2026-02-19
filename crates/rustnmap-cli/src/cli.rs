@@ -57,15 +57,16 @@ pub async fn run_scan(args: Args) -> Result<()> {
     }
 
     if args.list_profiles {
-        return handle_list_profiles_command(&args).await;
+        return handle_list_profiles_command(&args);
     }
 
     if let Some(ref profile_path) = args.validate_profile {
-        return handle_validate_profile_command(profile_path).await;
+        return handle_validate_profile_command(profile_path);
     }
 
     if args.generate_profile {
-        return handle_generate_profile_command().await;
+        handle_generate_profile_command();
+        return Ok(());
     }
 
     if let Some(ref diff_files) = args.diff {
@@ -83,7 +84,7 @@ pub async fn run_scan(args: Args) -> Result<()> {
 
 /// Handle --history command
 async fn handle_history_command(args: &Args) -> Result<()> {
-    use rustnmap_scan_management::{ScanHistory, ScanFilter};
+    use rustnmap_scan_management::{ScanFilter, ScanHistory};
 
     let db_path = shellexpand::tilde(&args.db_path);
 
@@ -97,23 +98,19 @@ async fn handle_history_command(args: &Args) -> Result<()> {
     if let Some(ref since) = args.since {
         // Parse since date (simplified - accepts YYYY-MM-DD format)
         if let Ok(date) = chrono::NaiveDate::parse_from_str(since, "%Y-%m-%d") {
-            filter.since = Some(
-                chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(
-                    date.and_time(chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap()),
-                    chrono::Utc,
-                )
-            );
+            filter.since = Some(chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(
+                date.and_time(chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap()),
+                chrono::Utc,
+            ));
         }
     }
 
     if let Some(ref until) = args.until {
         if let Ok(date) = chrono::NaiveDate::parse_from_str(until, "%Y-%m-%d") {
-            filter.until = Some(
-                chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(
-                    date.and_time(chrono::NaiveTime::from_hms_opt(23, 59, 59).unwrap()),
-                    chrono::Utc,
-                )
-            );
+            filter.until = Some(chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(
+                date.and_time(chrono::NaiveTime::from_hms_opt(23, 59, 59).unwrap()),
+                chrono::Utc,
+            ));
         }
     }
 
@@ -154,9 +151,10 @@ async fn handle_history_command(args: &Args) -> Result<()> {
     }
 
     // List scans
-    let scans = history.list_scans(filter).await.map_err(|e| {
-        rustnmap_common::Error::Other(format!("Failed to list scans: {e}"))
-    })?;
+    let scans = history
+        .list_scans(filter)
+        .await
+        .map_err(|e| rustnmap_common::Error::Other(format!("Failed to list scans: {e}")))?;
 
     if scans.is_empty() {
         println!("No scans found in history database.");
@@ -166,10 +164,17 @@ async fn handle_history_command(args: &Args) -> Result<()> {
     println!("Scan History:");
     println!("{:-<80}", "");
     for scan in scans {
-        println!("ID: {:<36}  Status: {:<10}  Type: {:<8}",
-                 scan.id, format!("{:?}", scan.status), format!("{:?}", scan.scan_type));
+        println!(
+            "ID: {:<36}  Status: {:<10}  Type: {:<8}",
+            scan.id,
+            format!("{:?}", scan.status),
+            format!("{:?}", scan.scan_type)
+        );
         println!("  Target: {}", scan.target_spec);
-        println!("  Started: {}  Hosts: {}", scan.started_at, scan.hosts_count);
+        println!(
+            "  Started: {}  Hosts: {}",
+            scan.started_at, scan.hosts_count
+        );
         println!("{:-<80}", "");
     }
 
@@ -177,7 +182,7 @@ async fn handle_history_command(args: &Args) -> Result<()> {
 }
 
 /// Handle --list-profiles command
-async fn handle_list_profiles_command(args: &Args) -> Result<()> {
+fn handle_list_profiles_command(args: &Args) -> Result<()> {
     use rustnmap_scan_management::ProfileManager;
 
     let db_path = shellexpand::tilde(&args.db_path);
@@ -186,9 +191,8 @@ async fn handle_list_profiles_command(args: &Args) -> Result<()> {
         .unwrap_or(std::path::Path::new("."));
     let profiles_dir = db_dir.join("profiles");
 
-    let manager = ProfileManager::from_directory(profiles_dir.to_str().unwrap_or(".")).map_err(|e| {
-        rustnmap_common::Error::Other(format!("Failed to load profiles: {e}"))
-    })?;
+    let manager = ProfileManager::from_directory(profiles_dir.to_str().unwrap_or("."))
+        .map_err(|e| rustnmap_common::Error::Other(format!("Failed to load profiles: {e}")))?;
 
     let profiles = manager.list_profiles();
 
@@ -207,16 +211,15 @@ async fn handle_list_profiles_command(args: &Args) -> Result<()> {
 }
 
 /// Handle --validate-profile command
-async fn handle_validate_profile_command(profile_path: &std::path::Path) -> Result<()> {
+fn handle_validate_profile_command(profile_path: &std::path::Path) -> Result<()> {
     use rustnmap_scan_management::ScanProfile;
 
-    let profile = ScanProfile::from_file(profile_path).map_err(|e| {
-        rustnmap_common::Error::Other(format!("Failed to load profile: {e}"))
-    })?;
+    let profile = ScanProfile::from_file(profile_path)
+        .map_err(|e| rustnmap_common::Error::Other(format!("Failed to load profile: {e}")))?;
 
-    profile.validate().map_err(|e| {
-        rustnmap_common::Error::Other(format!("Profile validation failed: {e}"))
-    })?;
+    profile
+        .validate()
+        .map_err(|e| rustnmap_common::Error::Other(format!("Profile validation failed: {e}")))?;
 
     println!("Profile '{}' is valid.", profile.name);
     println!("  Description: {:?}", profile.description);
@@ -228,7 +231,7 @@ async fn handle_validate_profile_command(profile_path: &std::path::Path) -> Resu
 }
 
 /// Handle --generate-profile command
-async fn handle_generate_profile_command() -> Result<()> {
+fn handle_generate_profile_command() {
     let profile_template = r#"# RustNmap Scan Profile
 name: "custom-scan"
 description: "Custom scan profile template"
@@ -248,12 +251,11 @@ output:
 "#;
 
     println!("{profile_template}");
-    Ok(())
 }
 
 /// Handle --diff command
 async fn handle_diff_command(args: &Args, diff_files: &[String]) -> Result<()> {
-    use rustnmap_scan_management::{ScanDiff, DiffFormat, ScanHistory};
+    use rustnmap_scan_management::{DiffFormat, ScanDiff, ScanHistory};
 
     // If --from-history is specified, load from database
     if args.from_history.is_some() {
@@ -266,9 +268,11 @@ async fn handle_diff_command(args: &Args, diff_files: &[String]) -> Result<()> {
         let scan_ids = args.from_history.as_ref().unwrap();
 
         // Use from_history method which handles the conversion
-        let diff = ScanDiff::from_history(&history, &scan_ids[0], &scan_ids[1]).await.map_err(|e| {
-            rustnmap_common::Error::Other(format!("Failed to create diff from history: {e}"))
-        })?;
+        let diff = ScanDiff::from_history(&history, &scan_ids[0], &scan_ids[1])
+            .await
+            .map_err(|e| {
+                rustnmap_common::Error::Other(format!("Failed to create diff from history: {e}"))
+            })?;
 
         let format = match args.diff_format.as_str() {
             "markdown" | "md" => DiffFormat::Markdown,
@@ -283,7 +287,10 @@ async fn handle_diff_command(args: &Args, diff_files: &[String]) -> Result<()> {
     }
 
     // Load from files
-    println!("Comparing scans from files: {} vs {}", diff_files[0], diff_files[1]);
+    println!(
+        "Comparing scans from files: {} vs {}",
+        diff_files[0], diff_files[1]
+    );
     // TODO: Implement file-based diff loading
     warn!("File-based diff comparison not yet implemented. Use --from-history for database scans.");
 
@@ -294,26 +301,25 @@ async fn handle_diff_command(args: &Args, diff_files: &[String]) -> Result<()> {
 async fn handle_profile_scan(args: &Args, profile_path: &std::path::Path) -> Result<()> {
     use rustnmap_scan_management::ScanProfile;
 
-    let profile = ScanProfile::from_file(profile_path).map_err(|e| {
-        rustnmap_common::Error::Other(format!("Failed to load profile: {e}"))
-    })?;
+    let profile = ScanProfile::from_file(profile_path)
+        .map_err(|e| rustnmap_common::Error::Other(format!("Failed to load profile: {e}")))?;
 
-    profile.validate().map_err(|e| {
-        rustnmap_common::Error::Other(format!("Profile validation failed: {e}"))
-    })?;
+    profile
+        .validate()
+        .map_err(|e| rustnmap_common::Error::Other(format!("Profile validation failed: {e}")))?;
 
     info!("Loaded profile: {}", profile.name);
 
     // Merge profile settings with command-line args
     // For now, use targets from command line or profile
     let targets = if args.targets.is_empty() && !profile.targets.is_empty() {
-        parse_targets_from_list(&profile.targets)
+        Ok(parse_targets_from_list(&profile.targets))
     } else {
         parse_targets(args)
     }?;
 
     // Build scan config from profile
-    let config = build_scan_config_from_profile(&profile, args)?;
+    let config = build_scan_config_from_profile(&profile, args);
 
     info!("Scan type: {:?}", config.scan_types);
     info!("Timing template: {:?}", config.timing_template);
@@ -332,14 +338,14 @@ async fn handle_profile_scan(args: &Args, profile_path: &std::path::Path) -> Res
         .await
         .map_err(|e| rustnmap_common::Error::Other(format!("Scan failed: {e}")))?;
 
-    output_results(args, &scan_result).await?;
+    output_results(args, &scan_result)?;
 
     info!("Scan completed successfully");
     Ok(())
 }
 
 /// Parse targets from a string list
-fn parse_targets_from_list(target_list: &[String]) -> Result<TargetGroup> {
+fn parse_targets_from_list(target_list: &[String]) -> TargetGroup {
     let parser = TargetParser::new();
     let mut all_targets = Vec::new();
 
@@ -358,16 +364,15 @@ fn parse_targets_from_list(target_list: &[String]) -> Result<TargetGroup> {
         }
     }
 
-    Ok(TargetGroup::new(all_targets))
+    TargetGroup::new(all_targets)
 }
 
 /// Build scan config from profile
 fn build_scan_config_from_profile(
     profile: &rustnmap_scan_management::ScanProfile,
     args: &Args,
-) -> Result<ScanConfig> {
+) -> ScanConfig {
     let scan_types = vec![match profile.scan.scan_type.as_str() {
-        "syn" => rustnmap_core::session::ScanType::TcpSyn,
         "connect" => rustnmap_core::session::ScanType::TcpConnect,
         "udp" => rustnmap_core::session::ScanType::Udp,
         "fin" => rustnmap_core::session::ScanType::TcpFin,
@@ -383,7 +388,10 @@ fn build_scan_config_from_profile(
             end: 1000,
         })
     } else {
-        rustnmap_core::session::PortSpec::Range { start: 1, end: 1000 }
+        rustnmap_core::session::PortSpec::Range {
+            start: 1,
+            end: 1000,
+        }
     };
 
     let mut config = ScanConfig {
@@ -401,7 +409,6 @@ fn build_scan_config_from_profile(
         "T0" => TimingTemplate::Paranoid,
         "T1" => TimingTemplate::Sneaky,
         "T2" => TimingTemplate::Polite,
-        "T3" => TimingTemplate::Normal,
         "T4" => TimingTemplate::Aggressive,
         "T5" => TimingTemplate::Insane,
         _ => TimingTemplate::Normal,
@@ -426,7 +433,7 @@ fn build_scan_config_from_profile(
         };
     }
 
-    Ok(config)
+    config
 }
 
 /// Normal scan flow (original `run_scan` logic)
@@ -471,7 +478,7 @@ async fn run_normal_scan(args: &Args) -> Result<()> {
         .map_err(|e| rustnmap_common::Error::Other(format!("Scan failed: {e}")))?;
 
     // Output results
-    output_results(args, &scan_result).await?;
+    output_results(args, &scan_result)?;
 
     info!("Scan completed successfully");
     Ok(())
@@ -548,7 +555,6 @@ fn build_scan_config(args: &Args) -> Result<ScanConfig> {
             0 => TimingTemplate::Paranoid,
             1 => TimingTemplate::Sneaky,
             2 => TimingTemplate::Polite,
-            3 => TimingTemplate::Normal,
             4 => TimingTemplate::Aggressive,
             5 => TimingTemplate::Insane,
             _ => TimingTemplate::Normal,
@@ -715,6 +721,7 @@ fn parse_data_payload(args: &Args) -> Result<Option<Vec<u8>>> {
         Ok(Some(string_data.as_bytes().to_vec()))
     } else if let Some(length) = args.data_length {
         // Generate random padding of specified length
+        #[allow(clippy::cast_possible_truncation)]
         let padding: Vec<u8> = (0..length).map(|i| (i % 256) as u8).collect();
         Ok(Some(padding))
     } else {
@@ -784,7 +791,7 @@ const fn map_scan_type(scan_type: crate::args::ScanType) -> CoreScanType {
 }
 
 /// Outputs scan results based on command-line arguments.
-async fn output_results(args: &Args, result: &ScanResult) -> Result<()> {
+fn output_results(args: &Args, result: &ScanResult) -> Result<()> {
     // Handle quiet mode
     if args.quiet || args.no_output {
         return Ok(());
@@ -799,25 +806,25 @@ async fn output_results(args: &Args, result: &ScanResult) -> Result<()> {
 
     // Write to output files if specified
     if let Some(basename) = &args.output_all {
-        write_all_formats(result, basename, args.append_output).await?;
+        write_all_formats(result, basename, args.append_output)?;
     } else {
         if let Some(path) = &args.output_normal {
-            write_normal_output(result, path, args.append_output).await?;
+            write_normal_output(result, path, args.append_output)?;
         }
         if let Some(path) = &args.output_xml {
-            write_xml_output(result, path, args.append_output).await?;
+            write_xml_output(result, path, args.append_output)?;
         }
         if let Some(path) = &args.output_json {
-            write_json_output(result, path, args.append_output).await?;
+            write_json_output(result, path, args.append_output)?;
         }
         if let Some(path) = &args.output_ndjson {
-            write_ndjson_output(result, path, args.append_output).await?;
+            write_ndjson_output(result, path, args.append_output)?;
         }
         if let Some(path) = &args.output_grepable {
-            write_grepable_output(result, path, args.append_output).await?;
+            write_grepable_output(result, path, args.append_output)?;
         }
         if let Some(path) = &args.output_markdown {
-            write_markdown_output(result, path, args.append_output).await?;
+            write_markdown_output(result, path, args.append_output)?;
         }
     }
 
@@ -984,11 +991,7 @@ fn print_script_kiddie_output(result: &ScanResult) {
 }
 
 /// Writes output in all formats.
-async fn write_all_formats(
-    result: &ScanResult,
-    basename: &std::path::Path,
-    append: bool,
-) -> Result<()> {
+fn write_all_formats(result: &ScanResult, basename: &std::path::Path, append: bool) -> Result<()> {
     let normal_path = basename.with_extension("nmap");
     let xml_path = basename.with_extension("xml");
     let grepable_path = basename.with_extension("gnmap");
@@ -996,22 +999,18 @@ async fn write_all_formats(
     let ndjson_path = basename.with_extension("ndjson");
     let md_path = basename.with_extension("md");
 
-    write_normal_output(result, &normal_path, append).await?;
-    write_xml_output(result, &xml_path, append).await?;
-    write_grepable_output(result, &grepable_path, append).await?;
-    write_json_output(result, &json_path, append).await?;
-    write_ndjson_output(result, &ndjson_path, append).await?;
-    write_markdown_output(result, &md_path, append).await?;
+    write_normal_output(result, &normal_path, append)?;
+    write_xml_output(result, &xml_path, append)?;
+    write_grepable_output(result, &grepable_path, append)?;
+    write_json_output(result, &json_path, append)?;
+    write_ndjson_output(result, &ndjson_path, append)?;
+    write_markdown_output(result, &md_path, append)?;
 
     Ok(())
 }
 
 /// Writes normal format output to file.
-async fn write_normal_output(
-    result: &ScanResult,
-    path: &std::path::Path,
-    append: bool,
-) -> Result<()> {
+fn write_normal_output(result: &ScanResult, path: &std::path::Path, append: bool) -> Result<()> {
     use std::io::Write;
 
     let mut file = if append {
@@ -1093,7 +1092,7 @@ async fn write_normal_output(
 }
 
 /// Writes XML format output to file.
-async fn write_xml_output(result: &ScanResult, path: &std::path::Path, append: bool) -> Result<()> {
+fn write_xml_output(result: &ScanResult, path: &std::path::Path, append: bool) -> Result<()> {
     use std::io::Write;
 
     let mut file = if append {
@@ -1175,11 +1174,7 @@ async fn write_xml_output(result: &ScanResult, path: &std::path::Path, append: b
 }
 
 /// Writes grepable format output to file.
-async fn write_grepable_output(
-    result: &ScanResult,
-    path: &std::path::Path,
-    append: bool,
-) -> Result<()> {
+fn write_grepable_output(result: &ScanResult, path: &std::path::Path, append: bool) -> Result<()> {
     use std::io::Write;
 
     let mut file = if append {
@@ -1228,18 +1223,14 @@ async fn write_grepable_output(
 }
 
 /// Writes NDJSON format output to file.
-async fn write_ndjson_output(
-    result: &ScanResult,
-    path: &std::path::Path,
-    append: bool,
-) -> Result<()> {
+fn write_ndjson_output(result: &ScanResult, path: &std::path::Path, append: bool) -> Result<()> {
     use rustnmap_output::NdjsonFormatter;
     use std::io::Write;
 
     let formatter = NdjsonFormatter::new();
-    let output = formatter.format_scan_result(result).map_err(|e| {
-        rustnmap_common::Error::Other(format!("Failed to format NDJSON: {e}"))
-    })?;
+    let output = formatter
+        .format_scan_result(result)
+        .map_err(|e| rustnmap_common::Error::Other(format!("Failed to format NDJSON: {e}")))?;
 
     let mut file = if append {
         std::fs::OpenOptions::new()
@@ -1255,26 +1246,21 @@ async fn write_ndjson_output(
         })?
     };
 
-    file.write_all(output.as_bytes()).map_err(|e| {
-        rustnmap_common::Error::Other(format!("Write error: {e}"))
-    })?;
+    file.write_all(output.as_bytes())
+        .map_err(|e| rustnmap_common::Error::Other(format!("Write error: {e}")))?;
 
     Ok(())
 }
 
 /// Writes Markdown format output to file.
-async fn write_markdown_output(
-    result: &ScanResult,
-    path: &std::path::Path,
-    append: bool,
-) -> Result<()> {
+fn write_markdown_output(result: &ScanResult, path: &std::path::Path, append: bool) -> Result<()> {
     use rustnmap_output::MarkdownFormatter;
     use std::io::Write;
 
     let formatter = MarkdownFormatter::new();
-    let output = formatter.format_scan_result(result).map_err(|e| {
-        rustnmap_common::Error::Other(format!("Failed to format Markdown: {e}"))
-    })?;
+    let output = formatter
+        .format_scan_result(result)
+        .map_err(|e| rustnmap_common::Error::Other(format!("Failed to format Markdown: {e}")))?;
 
     let mut file = if append {
         std::fs::OpenOptions::new()
@@ -1290,19 +1276,14 @@ async fn write_markdown_output(
         })?
     };
 
-    file.write_all(output.as_bytes()).map_err(|e| {
-        rustnmap_common::Error::Other(format!("Write error: {e}"))
-    })?;
+    file.write_all(output.as_bytes())
+        .map_err(|e| rustnmap_common::Error::Other(format!("Write error: {e}")))?;
 
     Ok(())
 }
 
 /// Writes JSON format output to file.
-async fn write_json_output(
-    result: &ScanResult,
-    path: &std::path::Path,
-    append: bool,
-) -> Result<()> {
+fn write_json_output(result: &ScanResult, path: &std::path::Path, append: bool) -> Result<()> {
     use std::io::Write;
 
     let mut file = if append {
@@ -1341,7 +1322,7 @@ async fn write_json_output(
         let status = match host.status {
             rustnmap_output::models::HostStatus::Up => "up",
             rustnmap_output::models::HostStatus::Down => "down",
-            _ => "unknown",
+            rustnmap_output::models::HostStatus::Unknown => "unknown",
         };
         writeln!(file, "      \"status\": \"{status}\",")
             .map_err(|e| rustnmap_common::Error::Other(format!("Write error: {e}")))?;
@@ -1431,8 +1412,8 @@ mod tests {
             Ok(_) => {
                 panic!("Expected PortSpec::List");
             }
-            Err(_) => {
-                panic!("Parse failed");
+            Err(ref e) => {
+                panic!("Parse failed: {e}");
             }
         };
         assert_eq!(ports, vec![80]);
@@ -1447,8 +1428,8 @@ mod tests {
             Ok(_) => {
                 panic!("Expected PortSpec::List");
             }
-            Err(_) => {
-                panic!("Parse failed");
+            Err(ref e) => {
+                panic!("Parse failed: {e}");
             }
         };
         assert_eq!(ports, vec![22, 80, 443]);
@@ -1463,8 +1444,8 @@ mod tests {
             Ok(_) => {
                 panic!("Expected PortSpec::Range");
             }
-            Err(_) => {
-                panic!("Parse failed");
+            Err(ref e) => {
+                panic!("Parse failed: {e}");
             }
         };
         assert_eq!(start, 1);

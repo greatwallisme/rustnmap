@@ -5,8 +5,8 @@
 
 use crate::error::{Result, ScanManagementError};
 use chrono::Utc;
-use rustnmap_output::{HostResult, PortResult, ScanResult};
 use rustnmap_output::models::HostStatus;
+use rustnmap_output::{HostResult, PortResult, ScanResult};
 use std::collections::HashMap;
 use std::net::IpAddr;
 
@@ -53,13 +53,13 @@ impl ScanDiff {
             .await?
             .ok_or_else(|| ScanManagementError::ScanNotFound(after_id.to_string()))?;
 
-        let before_result = before_scan.results.ok_or_else(|| {
-            ScanManagementError::ScanNotFound("Scan has no results".to_string())
-        })?;
+        let before_result = before_scan
+            .results
+            .ok_or_else(|| ScanManagementError::ScanNotFound("Scan has no results".to_string()))?;
 
-        let after_result = after_scan.results.ok_or_else(|| {
-            ScanManagementError::ScanNotFound("Scan has no results".to_string())
-        })?;
+        let after_result = after_scan
+            .results
+            .ok_or_else(|| ScanManagementError::ScanNotFound("Scan has no results".to_string()))?;
 
         Ok(Self::new(before_result, after_result))
     }
@@ -119,20 +119,32 @@ impl ScanDiff {
         }
 
         // Find all hosts - simplified approach
-        let before_ips: std::collections::HashSet<_> = self.before.hosts.iter().map(|h| h.ip).collect();
-        let after_ips: std::collections::HashSet<_> = self.after.hosts.iter().map(|h| h.ip).collect();
+        let before_ips: std::collections::HashSet<_> =
+            self.before.hosts.iter().map(|h| h.ip).collect();
+        let after_ips: std::collections::HashSet<_> =
+            self.after.hosts.iter().map(|h| h.ip).collect();
 
         for ip in before_ips.union(&after_ips) {
             let before_host = self.before.hosts.iter().find(|h| h.ip == *ip);
             let after_host = self.after.hosts.iter().find(|h| h.ip == *ip);
 
-            let before_ports: HashMap<(u16, &str), &PortResult> = before_host.map(|h| {
-                h.ports.iter().map(|p| ((p.number, protocol_str(p.protocol)), p)).collect()
-            }).unwrap_or_default();
+            let before_ports: HashMap<(u16, &str), &PortResult> = before_host
+                .map(|h| {
+                    h.ports
+                        .iter()
+                        .map(|p| ((p.number, protocol_str(p.protocol)), p))
+                        .collect()
+                })
+                .unwrap_or_default();
 
-            let after_ports: HashMap<(u16, &str), &PortResult> = after_host.map(|h| {
-                h.ports.iter().map(|p| ((p.number, protocol_str(p.protocol)), p)).collect()
-            }).unwrap_or_default();
+            let after_ports: HashMap<(u16, &str), &PortResult> = after_host
+                .map(|h| {
+                    h.ports
+                        .iter()
+                        .map(|p| ((p.number, protocol_str(p.protocol)), p))
+                        .collect()
+                })
+                .unwrap_or_default();
 
             let mut added = Vec::new();
             let mut removed = Vec::new();
@@ -205,12 +217,18 @@ impl ScanDiff {
         let vuln_changes = self.vulnerability_changes();
 
         match format {
-            DiffFormat::Text => self.generate_text_report(&host_changes, &port_changes, &vuln_changes),
+            DiffFormat::Text => {
+                self.generate_text_report(&host_changes, &port_changes, &vuln_changes)
+            }
             DiffFormat::Markdown => {
                 self.generate_markdown_report(&host_changes, &port_changes, &vuln_changes)
             }
-            DiffFormat::Json => self.generate_json_report(&host_changes, &port_changes, &vuln_changes),
-            DiffFormat::Html => self.generate_html_report(&host_changes, &port_changes, &vuln_changes),
+            DiffFormat::Json => {
+                self.generate_json_report(&host_changes, &port_changes, &vuln_changes)
+            }
+            DiffFormat::Html => {
+                self.generate_html_report(&host_changes, &port_changes, &vuln_changes)
+            }
         }
     }
 
@@ -235,15 +253,24 @@ impl ScanDiff {
             report.push_str(&format!("    - {}\n", ip));
         }
 
-        report.push_str(&format!("  Status Changed: {} hosts\n", hosts.status_changed.len()));
+        report.push_str(&format!(
+            "  Status Changed: {} hosts\n",
+            hosts.status_changed.len()
+        ));
 
         report.push_str("\n## Port Changes\n");
         for (ip, changes) in &ports.by_host {
             report.push_str(&format!("  {}:\n", ip));
             report.push_str(&format!("    Added: {}\n", changes.added.len()));
             report.push_str(&format!("    Removed: {}\n", changes.removed.len()));
-            report.push_str(&format!("    State Changed: {}\n", changes.state_changed.len()));
-            report.push_str(&format!("    Service Changed: {}\n", changes.service_changed.len()));
+            report.push_str(&format!(
+                "    State Changed: {}\n",
+                changes.state_changed.len()
+            ));
+            report.push_str(&format!(
+                "    Service Changed: {}\n",
+                changes.service_changed.len()
+            ));
         }
 
         report.push_str("\n## Vulnerability Changes\n");
@@ -263,7 +290,10 @@ impl ScanDiff {
         let mut report = String::new();
 
         report.push_str("# 扫描结果对比报告\n\n");
-        report.push_str(&format!("**生成时间**: {}\n\n", chrono::Utc::now().format("%Y-%m-%d %H:%M:%S")));
+        report.push_str(&format!(
+            "**生成时间**: {}\n\n",
+            chrono::Utc::now().format("%Y-%m-%d %H:%M:%S")
+        ));
 
         report.push_str("## 主机变化\n\n");
 
@@ -293,13 +323,21 @@ impl ScanDiff {
             if !changes.added.is_empty() {
                 report.push_str("**新增端口:**\n");
                 for port in &changes.added {
-                    report.push_str(&format!("- {}/{} ({})\n", port.port, port.protocol, port.state));
+                    report.push_str(&format!(
+                        "- {}/{} ({})\n",
+                        port.port, port.protocol, port.state
+                    ));
                 }
             }
             if !changes.removed.is_empty() {
                 report.push_str("**关闭端口:**\n");
                 for port in &changes.removed {
-                    report.push_str(&format!("- {}/{} ({})\n", port.port, port.protocol, port.previous_state.as_ref().unwrap_or(&port.state)));
+                    report.push_str(&format!(
+                        "- {}/{} ({})\n",
+                        port.port,
+                        port.protocol,
+                        port.previous_state.as_ref().unwrap_or(&port.state)
+                    ));
                 }
             }
             if !changes.service_changed.is_empty() {
@@ -309,7 +347,9 @@ impl ScanDiff {
                         "- {}/{} ({} -> {})\n",
                         port.port,
                         port.protocol,
-                        port.previous_service.as_ref().unwrap_or(&String::from("unknown")),
+                        port.previous_service
+                            .as_ref()
+                            .unwrap_or(&String::from("unknown")),
                         port.service.as_ref().unwrap_or(&String::from("unknown"))
                     ));
                 }
@@ -472,20 +512,20 @@ impl ScanDiff {
             .collect();
 
         let report = DiffReport {
-            before_scan: self
-                .before
-                .metadata
-                .command_line
-                .clone(),
-            after_scan: self
-                .after
-                .metadata
-                .command_line
-                .clone(),
+            before_scan: self.before.metadata.command_line.clone(),
+            after_scan: self.after.metadata.command_line.clone(),
             generated_at: Utc::now().to_rfc3339(),
             host_changes: HostChangesSerde {
-                added: hosts.added.iter().map(std::string::ToString::to_string).collect(),
-                removed: hosts.removed.iter().map(std::string::ToString::to_string).collect(),
+                added: hosts
+                    .added
+                    .iter()
+                    .map(std::string::ToString::to_string)
+                    .collect(),
+                removed: hosts
+                    .removed
+                    .iter()
+                    .map(std::string::ToString::to_string)
+                    .collect(),
                 status_changed: hosts
                     .status_changed
                     .iter()

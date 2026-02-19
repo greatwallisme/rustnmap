@@ -131,7 +131,7 @@ fn test_tls_detector_builder() {
 #[test]
 fn test_tls_detector_default() {
     // Verify default creation works
-    let _detector: TlsDetector = Default::default();
+    let _detector = TlsDetector::default();
 
     // Since fields are private, we verify the detector was created successfully
     // The actual behavior is tested through integration tests
@@ -338,8 +338,8 @@ fn test_tls_info_complete() {
         issuer: "CN=Complete CA".to_string(),
         serial_number: "COMPLETE123".to_string(),
         subject_alt_names: vec!["complete.example.com".to_string()],
-        not_before: SystemTime::UNIX_EPOCH + Duration::from_secs(1609459200),
-        not_after: SystemTime::UNIX_EPOCH + Duration::from_secs(1893456000),
+        not_before: SystemTime::UNIX_EPOCH + Duration::from_secs(1_609_459_200),
+        not_after: SystemTime::UNIX_EPOCH + Duration::from_secs(1_893_456_000),
         signature_algorithm: "sha256WithRSAEncryption".to_string(),
         public_key_info: "RSA 4096".to_string(),
         fingerprint_sha256: "COMPLETE".to_string(),
@@ -458,7 +458,9 @@ fn test_days_until_expiry_calculation() {
         fingerprint_sha256: "AA".to_string(),
     };
 
-    let days_remaining = cert.not_after.duration_since(now).unwrap().as_secs() as i64 / 86400;
+    let days_remaining = i64::try_from(cert.not_after.duration_since(now).unwrap().as_secs())
+        .unwrap_or(i64::MAX)
+        / 86_400;
 
     assert!((29..=30).contains(&days_remaining));
 }
@@ -597,9 +599,7 @@ async fn test_tls_detection_real_bing() {
 
     // If we get here, all endpoints failed - this is a network issue, not a code issue
     // Skip the test rather than fail in CI environments without internet
-    eprintln!(
-        "Warning: Could not connect to any Bing endpoint. Last error: {last_error:?}"
-    );
+    eprintln!("Warning: Could not connect to any Bing endpoint. Last error: {last_error:?}");
     // Test passes if we can't connect (network unavailable)
     // This prevents flaky tests in CI environments
 }
@@ -618,7 +618,7 @@ async fn test_real_certificate_expiry() {
     let result = detector.detect_tls(&target, Some("www.bing.com")).await;
 
     // Skip test if network is unavailable
-    let info = if let Ok(Some(info)) = result { info } else {
+    let Ok(Some(info)) = result else {
         eprintln!("Warning: Could not connect to test endpoint, skipping expiry test");
         return;
     };
@@ -651,7 +651,7 @@ async fn test_real_certificate_not_self_signed() {
     let result = detector.detect_tls(&target, Some("www.bing.com")).await;
 
     // Skip test if network is unavailable
-    let info = if let Ok(Some(info)) = result { info } else {
+    let Ok(Some(info)) = result else {
         eprintln!("Warning: Could not connect to test endpoint, skipping self-signed test");
         return;
     };

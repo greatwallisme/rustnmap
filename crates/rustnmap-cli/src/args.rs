@@ -68,7 +68,10 @@ use std::path::PathBuf;
     max_term_width = 100,
     args_override_self = true
 )]
-#[allow(clippy::struct_excessive_bools, reason = "Args is a CLI argument struct with independent boolean flags")]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "Args is a CLI argument struct with independent boolean flags"
+)]
 pub struct Args {
     /// Target hosts to scan
     #[arg(
@@ -537,7 +540,13 @@ pub struct Args {
     pub from_history: Option<Vec<String>>,
 
     /// Diff output format
-    #[arg(long, help_heading = "Scan Management", value_name = "FORMAT", default_value = "text", requires = "diff")]
+    #[arg(
+        long,
+        help_heading = "Scan Management",
+        value_name = "FORMAT",
+        default_value = "text",
+        requires = "diff"
+    )]
     pub diff_format: String,
 
     /// Show only vulnerability changes in diff
@@ -545,31 +554,66 @@ pub struct Args {
     pub vulns_only: bool,
 
     /// Filter history by time range (since)
-    #[arg(long, help_heading = "Scan Management", value_name = "DATE", requires = "history")]
+    #[arg(
+        long,
+        help_heading = "Scan Management",
+        value_name = "DATE",
+        requires = "history"
+    )]
     pub since: Option<String>,
 
     /// Filter history by time range (until)
-    #[arg(long, help_heading = "Scan Management", value_name = "DATE", requires = "history")]
+    #[arg(
+        long,
+        help_heading = "Scan Management",
+        value_name = "DATE",
+        requires = "history"
+    )]
     pub until: Option<String>,
 
     /// Filter history by target
-    #[arg(long, help_heading = "Scan Management", value_name = "TARGET", requires = "history")]
+    #[arg(
+        long,
+        help_heading = "Scan Management",
+        value_name = "TARGET",
+        requires = "history"
+    )]
     pub target: Option<String>,
 
     /// Filter history by scan type
-    #[arg(long, help_heading = "Scan Management", value_name = "TYPE", requires = "history")]
+    #[arg(
+        long,
+        help_heading = "Scan Management",
+        value_name = "TYPE",
+        requires = "history"
+    )]
     pub scan_type_filter: Option<String>,
 
     /// Limit history results
-    #[arg(long, help_heading = "Scan Management", value_name = "NUM", requires = "history")]
+    #[arg(
+        long,
+        help_heading = "Scan Management",
+        value_name = "NUM",
+        requires = "history"
+    )]
     pub limit: Option<usize>,
 
     /// Show scan details by ID
-    #[arg(long, help_heading = "Scan Management", value_name = "SCAN_ID", requires = "history")]
+    #[arg(
+        long,
+        help_heading = "Scan Management",
+        value_name = "SCAN_ID",
+        requires = "history"
+    )]
     pub scan_id: Option<String>,
 
     /// Database path for scan history
-    #[arg(long, help_heading = "Scan Management", value_name = "PATH", default_value = "~/.rustnmap/scans.db")]
+    #[arg(
+        long,
+        help_heading = "Scan Management",
+        value_name = "PATH",
+        default_value = "~/.rustnmap/scans.db"
+    )]
     pub db_path: String,
 }
 

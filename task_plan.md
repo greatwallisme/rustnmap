@@ -1,7 +1,7 @@
 # Task Plan: 修复测试和 Clippy 警告
 
 **Created**: 2026-02-18
-**Last Updated**: 2026-02-18
+**Last Updated**: 2026-02-19
 **Goal**: 修复项目中所有失败的测试和 clippy pedantic 警告，保持零警告标准
 
 ## Phases
@@ -10,8 +10,8 @@
 |-------|--------|-------------|
 | 1. 诊断问题 | COMPLETE | 运行测试和 clippy 获取所有错误和警告 |
 | 2. 修复测试 | COMPLETE | 所有测试通过 (700+ 测试，2 个需要 root 权限的测试除外) |
-| 3. 修复 Clippy | COMPLETE | 修复 187 个警告，剩余 209 个 pedantic 样式警告 |
-| 4. 验证结果 | COMPLETE | 运行完整验证确保零错误 |
+| 3. 修复 Clippy | COMPLETE | 修复所有基本和 pedantic 警告 |
+| 4. 验证结果 | COMPLETE | 零警告零错误验证通过 |
 
 ## 错误记录
 
@@ -21,36 +21,27 @@
 
 ### Clippy 警告修复进度
 
-**初始警告**: 396 个
-**已修复**: 187 个
-**剩余**: 209 个 (均为 pedantic 级别)
+**最终状态**: ✅ 零警告零错误
 
-剩余警告类型（均为 pedantic 级别，不影响代码正确性）：
-- `must_use_candidate` - 缺少 #[must_use] 属性（26 个）
-- `return_self_not_must_use` - Builder 方法缺少 must_use（15 个）
-- `missing_errors_doc` - 缺少 # Errors 文档（20 个）
-- `cast_lossless` - 可使用 From trait 代替 as 转换（14 个）
-- `unnecessary_wraps` - 返回 Result 但总是 Ok（13 个）
-- `match_same_arms` - match 分支相同（13 个）
-- `uninlined_format_args` - format! 参数未内联（11 个）
-- `doc_markdown` - 文档中缺少反引号（12 个）
-- `unused_async` - 未使用的 async（14 个）
-- `unused_self` - 未使用的 self 参数（7 个）
+**基本 clippy**: 0 警告
+**pedantic clippy**: 0 警告
 
-已修复的问题：
-- ✅ 所有编译错误
-- ✅ wildcard_imports - 通配符导入
-- ✅ write_with_newline - 使用 writeln! 代替 write!+换行
-- ✅ map_unwrap_or - 使用 map_or 代替 map+unwrap_or
-- ✅ redundant_closure_for_method_calls - 冗余闭包
-- ✅ single_char_pattern - 单字符字符串模式（部分）
-- ✅ format_push_string - 使用 write! 代替 format!+push_str（部分）
-- ✅ unused_self - 转换为关联函数
-- ✅ unused_async - 移除未使用的 async
-- ✅ missing_errors_doc - 添加#Errors 文档（部分）
-- ✅ must_use_candidate - 添加#[must_use] 属性（部分）
+**本次修复的问题**：
+- ✅ 编译错误: 不必要的 .await 调用 (cli.rs)
+- ✅ `strict_comparison_of_floats` - 浮点数严格比较 (database.rs)
+- ✅ `long_literal_without_separators` - 数字字面量分隔符 (tls_certificate_test.rs)
+- ✅ `default_trait_access` - 使用 Type::default() (database_updater_test.rs, tls_certificate_test.rs)
+- ✅ `used_underscore_binding` - 移除 underscore 前缀绑定 (database_updater_test.rs)
+- ✅ `match_same_arms` - 合并相同 match 分支 (service_detection_integration_tests.rs)
+- ✅ `unused_async` - 移除未使用的 async (cli.rs: write_all_formats, output_results)
+- ✅ `unnecessary_wraps` - 移除不必要的 Result 返回 (cli.rs: handle_generate_profile_command)
+- ✅ `cast_possible_truncation` / `cast_sign_loss` - 类型转换安全修复 (os_detection*.rs)
+- ✅ `manual_abs_diff` - 使用 abs_diff() 方法 (os_detection*.rs)
+- ✅ `match_wild_err_arm` - 使用 Err(ref e) 代替 Err(_) (cli.rs)
+- ✅ `single_match_else` - 使用 if let 代替 match (service_detection_integration_tests.rs)
 
 ## 关键决策
 
 - ✅ 不允许修改 Cargo.toml 放宽 clippy 标准
 - ✅ 所有修复都是代码改进，不是简单 suppress 警告
+- ✅ 保持测试代码同样符合 clippy 标准

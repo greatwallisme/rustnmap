@@ -35,41 +35,41 @@ impl Default for ApiConfig {
 
 impl ApiConfig {
     /// Create new config with default values
-    #[must_use] 
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Set API keys
-    #[must_use] 
+    #[must_use]
     pub fn with_api_keys(mut self, keys: Vec<String>) -> Self {
         self.api_keys = keys;
         self
     }
 
     /// Set max concurrent scans
-    #[must_use] 
+    #[must_use]
     pub fn with_max_concurrent_scans(mut self, max: usize) -> Self {
         self.max_concurrent_scans = max;
         self
     }
 
     /// Set listen address
-    #[must_use] 
+    #[must_use]
     pub fn with_listen_addr(mut self, addr: String) -> Self {
         self.listen_addr = addr;
         self
     }
 
     /// Check if an API key is valid
-    #[must_use] 
+    #[must_use]
     pub fn is_valid_key(&self, key: &str) -> bool {
         self.api_keys.iter().any(|k| k == key)
     }
 }
 
 /// Generate a random API key
-#[must_use] 
+#[must_use]
 pub fn generate_api_key() -> String {
     use rand::Rng;
     let bytes: [u8; 32] = rand::rng().random();

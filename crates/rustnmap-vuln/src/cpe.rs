@@ -137,7 +137,10 @@ impl CpeMatcher {
         }
 
         let confidence = if total_fields > 0 {
-            #[allow(clippy::cast_precision_loss, reason = "f32 precision is sufficient for confidence score")]
+            #[allow(
+                clippy::cast_precision_loss,
+                reason = "f32 precision is sufficient for confidence score"
+            )]
             let ratio = matching_fields as f32 / total_fields as f32;
             ratio
         } else {
@@ -266,7 +269,10 @@ mod tests {
     fn test_parse_invalid_cpe() {
         let result = CpeMatcher::parse("invalid-cpe");
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Invalid CPE format"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid CPE format"));
     }
 
     #[test]
@@ -283,7 +289,11 @@ mod tests {
         // Pattern with wildcard version should match any version (13 parts required)
         let result = CpeMatcher::matches(&cpe, "cpe:2.3:a:apache:http_server:*:*:*:*:*:*:*:*");
         // Wildcard in version field matches any version
-        assert!(result.matches, "Expected wildcard match, got: {}", result.reason);
+        assert!(
+            result.matches,
+            "Expected wildcard match, got: {}",
+            result.reason
+        );
     }
 
     #[test]

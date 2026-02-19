@@ -38,28 +38,30 @@ pub enum ApiError {
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let (status, message) = match &self {
-            ApiError::ScanNotFound(id) => {
-                (StatusCode::NOT_FOUND, format!("Scan not found: {id}"))
-            }
+            ApiError::ScanNotFound(id) => (StatusCode::NOT_FOUND, format!("Scan not found: {id}")),
             ApiError::ScanAlreadyExists(id) => {
                 (StatusCode::CONFLICT, format!("Scan already exists: {id}"))
             }
             ApiError::InvalidRequest(msg) => {
                 (StatusCode::BAD_REQUEST, format!("Invalid request: {msg}"))
             }
-            ApiError::AuthenticationFailed(msg) => {
-                (StatusCode::UNAUTHORIZED, format!("Authentication failed: {msg}"))
-            }
-            ApiError::ScanCancelled(id) => {
-                (StatusCode::OK, format!("Scan cancelled: {id}"))
-            }
-            ApiError::ScanFailed(msg) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Scan failed: {msg}")),
-            ApiError::InternalError(err) => {
-                (StatusCode::INTERNAL_SERVER_ERROR, format!("Internal error: {err}"))
-            }
-            ApiError::IoError(err) => {
-                (StatusCode::INTERNAL_SERVER_ERROR, format!("IO error: {err}"))
-            }
+            ApiError::AuthenticationFailed(msg) => (
+                StatusCode::UNAUTHORIZED,
+                format!("Authentication failed: {msg}"),
+            ),
+            ApiError::ScanCancelled(id) => (StatusCode::OK, format!("Scan cancelled: {id}")),
+            ApiError::ScanFailed(msg) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Scan failed: {msg}"),
+            ),
+            ApiError::InternalError(err) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Internal error: {err}"),
+            ),
+            ApiError::IoError(err) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("IO error: {err}"),
+            ),
         };
 
         let body = Json(json!({

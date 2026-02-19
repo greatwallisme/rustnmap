@@ -205,17 +205,12 @@ async fn test_banner_grabbing() {
     let result = detector.grab_banner(&target, target.port()).await;
 
     // Result can be Ok(Some), Ok(None), or Err
-    match result {
-        Ok(Some(banner)) => {
-            // Got a banner
-            assert!(!banner.is_empty());
-        }
-        Ok(None) => {
-            // No banner received (service doesn't send immediate banner)
-        }
-        Err(_) => {
-            // Connection refused or timeout is acceptable
-        }
+    if let Ok(Some(banner)) = result {
+        // Got a banner
+        assert!(!banner.is_empty());
+    } else {
+        // No banner received (service doesn't send immediate banner)
+        // Or connection refused or timeout is acceptable
     }
 }
 

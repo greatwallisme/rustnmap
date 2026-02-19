@@ -42,5 +42,5 @@ pub mod models;
 
 pub use client::VulnClient;
 pub use database::VulnDatabase;
-pub use error::{VulnError, Result};
+pub use error::{Result, VulnError};
 pub use models::VulnInfo;

@@ -100,7 +100,9 @@ mod tests {
         };
         db.insert_epss(&epss).unwrap();
 
-        let result = EpssEngine::get_score(&db, "CVE-2024-1234").unwrap().unwrap();
+        let result = EpssEngine::get_score(&db, "CVE-2024-1234")
+            .unwrap()
+            .unwrap();
         assert!((result.epss_score - 0.85).abs() < f32::EPSILON);
     }
 

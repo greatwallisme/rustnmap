@@ -4,8 +4,8 @@
 //! Main stateless scanner implementation.
 
 use crate::cookie::CookieGenerator;
+use crate::receiver::{ReceiveEvent, StatelessReceiver};
 use crate::sender::StatelessSender;
-use crate::receiver::{StatelessReceiver, ReceiveEvent};
 use rustnmap_common::Result;
 use rustnmap_core::session::PacketEngine;
 use rustnmap_output::models::ScanResult;
@@ -13,7 +13,7 @@ use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use tokio::sync::{mpsc, Mutex};
-use tracing::{info, error};
+use tracing::{error, info};
 
 /// Scan event for streaming results.
 #[derive(Debug, Clone)]
@@ -149,9 +149,7 @@ impl StatelessScanner {
         );
 
         // Start receiver task
-        let recv_handle = tokio::spawn(async move {
-            receiver.recv_loop().await
-        });
+        let recv_handle = tokio::spawn(async move { receiver.recv_loop().await });
 
         // Send SYN packets in batches
         let mut hosts_scanned = 0;
@@ -163,10 +161,12 @@ impl StatelessScanner {
                     hosts_scanned += sent;
 
                     // Send progress event
-                    let _ = event_tx.send(ScanEvent::Progress {
-                        hosts_scanned,
-                        ports_open,
-                    }).await;
+                    let _ = event_tx
+                        .send(ScanEvent::Progress {
+                            hosts_scanned,
+                            ports_open,
+                        })
+                        .await;
                 }
                 Err(e) => {
                     error!("Failed to send batch: {}", e);
@@ -204,12 +204,17 @@ impl StatelessScanner {
         recv_handle.abort();
 
         // Send completion event
-        let _ = event_tx.send(ScanEvent::Completed {
-            hosts_scanned,
-            ports_open,
-        }).await;
+        let _ = event_tx
+            .send(ScanEvent::Completed {
+                hosts_scanned,
+                ports_open,
+            })
+            .await;
 
-        info!("Stateless scan completed: {} hosts, {} open ports", hosts_scanned, ports_open);
+        info!(
+            "Stateless scan completed: {} hosts, {} open ports",
+            hosts_scanned, ports_open
+        );
 
         // Convert results to ScanResult
         Ok(Self::build_scan_result(&results))
@@ -239,7 +244,10 @@ impl StatelessScanner {
         info!("Starting rate-limited stateless scan at {} pps", rate_limit);
 
         // Create rate limiter channel
-        #[allow(clippy::cast_precision_loss, reason = "Rate limit is controlled by user, precision loss is acceptable")]
+        #[allow(
+            clippy::cast_precision_loss,
+            reason = "Rate limit is controlled by user, precision loss is acceptable"
+        )]
         let interval = Duration::from_secs_f64(1.0 / rate_limit as f64);
         let (rate_tx, _rate_rx) = mpsc::channel::<()>(100);
 
@@ -264,12 +272,15 @@ impl StatelessScanner {
 
     /// Build scan result from receive events.
     fn build_scan_result(events: &[ReceiveEvent]) -> ScanResult {
-        use rustnmap_output::models::{HostResult, HostTimes, PortResult, PortState, Protocol, ScanMetadata, ScanStatistics};
+        use rustnmap_output::models::{
+            HostResult, HostTimes, PortResult, PortState, Protocol, ScanMetadata, ScanStatistics,
+        };
 
         let mut hosts: Vec<HostResult> = Vec::new();
 
         // Group events by IP
-        let mut host_map: std::collections::HashMap<IpAddr, Vec<u16>> = std::collections::HashMap::new();
+        let mut host_map: std::collections::HashMap<IpAddr, Vec<u16>> =
+            std::collections::HashMap::new();
 
         for event in events {
             host_map.entry(event.target).or_default().push(event.port);
@@ -277,15 +288,18 @@ impl StatelessScanner {
 
         // Convert to HostResult
         for (ip, ports) in host_map {
-            let port_results: Vec<PortResult> = ports.iter().map(|&port| PortResult {
-                number: port,
-                protocol: Protocol::Tcp,
-                state: PortState::Open,
-                state_reason: "syn-ack".to_string(),
-                state_ttl: None,
-                service: None,
-                scripts: vec![],
-            }).collect();
+            let port_results: Vec<PortResult> = ports
+                .iter()
+                .map(|&port| PortResult {
+                    number: port,
+                    protocol: Protocol::Tcp,
+                    state: PortState::Open,
+                    state_reason: "syn-ack".to_string(),
+                    state_ttl: None,
+                    service: None,
+                    scripts: vec![],
+                })
+                .collect();
 
             hosts.push(HostResult {
                 ip,
@@ -340,8 +354,8 @@ impl StatelessScanner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::pin::Pin;
     use rustnmap_core::error::CoreError;
+    use std::pin::Pin;
 
     #[test]
     fn test_config_default() {
@@ -362,20 +376,32 @@ mod tests {
 
     #[async_trait::async_trait]
     impl rustnmap_core::session::PacketEngine for MockPacketEngine {
-        async fn send_packet(&self, _packet: rustnmap_packet::PacketBuffer) -> std::result::Result<usize, CoreError> {
+        async fn send_packet(
+            &self,
+            _packet: rustnmap_packet::PacketBuffer,
+        ) -> std::result::Result<usize, CoreError> {
             Ok(0)
         }
 
-        async fn send_batch(&self, _packets: &[rustnmap_packet::PacketBuffer]) -> std::result::Result<usize, CoreError> {
+        async fn send_batch(
+            &self,
+            _packets: &[rustnmap_packet::PacketBuffer],
+        ) -> std::result::Result<usize, CoreError> {
             Ok(0)
         }
 
-        fn recv_stream(&self) -> Pin<Box<dyn futures_util::Stream<Item = rustnmap_packet::PacketBuffer> + Send>> {
+        fn recv_stream(
+            &self,
+        ) -> Pin<Box<dyn futures_util::Stream<Item = rustnmap_packet::PacketBuffer> + Send>>
+        {
             use futures_util::stream::empty;
             Box::pin(empty())
         }
 
-        fn set_bpf(&self, _filter: &rustnmap_core::session::BpfProg) -> std::result::Result<(), CoreError> {
+        fn set_bpf(
+            &self,
+            _filter: &rustnmap_core::session::BpfProg,
+        ) -> std::result::Result<(), CoreError> {
             Ok(())
         }
 

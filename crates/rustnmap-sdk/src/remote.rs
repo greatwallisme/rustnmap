@@ -25,7 +25,7 @@ impl ApiConfig {
     }
 
     /// Create from environment variables
-    #[must_use] 
+    #[must_use]
     pub fn from_env() -> Option<Self> {
         let base_url = std::env::var("RUSTNMAP_API_URL").ok()?;
         let api_key = std::env::var("RUSTNMAP_API_KEY").ok()?;
@@ -65,7 +65,7 @@ impl RemoteScanner {
     }
 
     /// Create a scan task
-    #[must_use] 
+    #[must_use]
     pub fn create_scan(&self) -> RemoteScanBuilder<'_> {
         RemoteScanBuilder::new(self)
     }
@@ -97,7 +97,9 @@ impl RemoteScanner {
             .await
             .map_err(|e| ScanError::ApiError(format!("Failed to parse response: {e}")))?;
 
-        result.data.ok_or_else(|| ScanError::ApiError("No data in response".to_string()))
+        result
+            .data
+            .ok_or_else(|| ScanError::ApiError("No data in response".to_string()))
     }
 
     /// Get scan results
@@ -127,7 +129,9 @@ impl RemoteScanner {
             .await
             .map_err(|e| ScanError::ApiError(format!("Failed to parse response: {e}")))?;
 
-        result.data.ok_or_else(|| ScanError::ApiError("No data in response".to_string()))
+        result
+            .data
+            .ok_or_else(|| ScanError::ApiError("No data in response".to_string()))
     }
 
     /// Cancel a scan
@@ -233,21 +237,21 @@ impl<'a> RemoteScanBuilder<'a> {
     }
 
     /// Enable service detection
-    #[must_use] 
+    #[must_use]
     pub fn service_detection(mut self, enable: bool) -> Self {
         self.service_detection = enable;
         self
     }
 
     /// Enable OS detection
-    #[must_use] 
+    #[must_use]
     pub fn os_detection(mut self, enable: bool) -> Self {
         self.os_detection = enable;
         self
     }
 
     /// Enable vulnerability scanning
-    #[must_use] 
+    #[must_use]
     pub fn vulnerability_scan(mut self, enable: bool) -> Self {
         self.vulnerability_scan = enable;
         self
@@ -294,7 +298,9 @@ impl<'a> RemoteScanBuilder<'a> {
             .await
             .map_err(|e| ScanError::ApiError(format!("Failed to parse response: {e}")))?;
 
-        result.data.ok_or_else(|| ScanError::ApiError("No data in response".to_string()))
+        result
+            .data
+            .ok_or_else(|| ScanError::ApiError("No data in response".to_string()))
     }
 }
 

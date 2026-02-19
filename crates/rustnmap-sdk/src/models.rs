@@ -27,7 +27,7 @@ pub struct ScanOutput {
 
 impl ScanOutput {
     /// Get all open ports across all hosts
-    #[must_use] 
+    #[must_use]
     pub fn all_open_ports(&self) -> Vec<(&HostResult, &PortResult)> {
         self.hosts
             .iter()
@@ -41,7 +41,7 @@ impl ScanOutput {
     }
 
     /// Get high-risk hosts (hosts with KEV vulnerabilities or CVSS >= 7.0)
-    #[must_use] 
+    #[must_use]
     pub fn high_risk_hosts(&self) -> Vec<&HostResult> {
         self.hosts
             .iter()
@@ -50,7 +50,7 @@ impl ScanOutput {
     }
 
     /// Get hosts with a specific service
-    #[must_use] 
+    #[must_use]
     pub fn hosts_with_service(&self, service: &str) -> Vec<&HostResult> {
         self.hosts
             .iter()
@@ -148,7 +148,7 @@ pub struct HostResult {
 
 impl HostResult {
     /// Get open ports
-    #[must_use] 
+    #[must_use]
     pub fn open_ports(&self) -> Vec<&PortResult> {
         self.ports
             .iter()
@@ -157,7 +157,7 @@ impl HostResult {
     }
 
     /// Get high-risk vulnerabilities
-    #[must_use] 
+    #[must_use]
     pub fn high_risk_vulnerabilities(&self) -> Vec<&VulnInfo> {
         self.vulnerabilities
             .iter()
@@ -166,19 +166,17 @@ impl HostResult {
     }
 
     /// Check if host has high-risk vulnerabilities
-    #[must_use] 
+    #[must_use]
     pub fn has_high_risk_vulnerabilities(&self) -> bool {
         self.vulnerabilities.iter().any(VulnInfo::is_high_risk)
     }
 
     /// Check if host has a specific service
-    #[must_use] 
+    #[must_use]
     pub fn has_service(&self, service: &str) -> bool {
-        self.ports.iter().any(|p| {
-            p.service
-                .as_ref()
-                .is_some_and(|s| s.name == service)
-        })
+        self.ports
+            .iter()
+            .any(|p| p.service.as_ref().is_some_and(|s| s.name == service))
     }
 }
 
@@ -267,7 +265,7 @@ pub struct VulnInfo {
 
 impl VulnInfo {
     /// Check if vulnerability is high risk (CVSS >= 7.0 or in KEV)
-    #[must_use] 
+    #[must_use]
     pub fn is_high_risk(&self) -> bool {
         self.cvss_v3 >= 7.0 || self.is_kev
     }

@@ -13,13 +13,13 @@ use std::sync::Arc;
 use rustnmap_common::ScanConfig as ScannerConfig;
 use rustnmap_output::models::PortState;
 use rustnmap_output::models::{HostResult, HostStatus, PortResult, ScanResult, ScanStatistics};
-use rustnmap_scan::scanner::PortScanner;
-use rustnmap_scan::syn_scan::TcpSynScanner;
 use rustnmap_scan::connect_scan::TcpConnectScanner;
+use rustnmap_scan::scanner::PortScanner;
 use rustnmap_scan::stealth_scans::{
-    TcpFinScanner, TcpNullScanner, TcpXmasScanner, TcpAckScanner, TcpMaimonScanner,
-    TcpWindowScanner,
+    TcpAckScanner, TcpFinScanner, TcpMaimonScanner, TcpNullScanner, TcpWindowScanner,
+    TcpXmasScanner,
 };
+use rustnmap_scan::syn_scan::TcpSynScanner;
 use rustnmap_scan::udp_scan::UdpScanner;
 use rustnmap_target::discovery::{HostDiscovery, HostState as DiscoveryHostState};
 use rustnmap_target::Target;
@@ -402,7 +402,10 @@ impl ScanOrchestrator {
                     let discovery_config = rustnmap_common::ScanConfig {
                         min_rtt: std::time::Duration::from_millis(50),
                         max_rtt: std::time::Duration::from_secs(10),
-                        initial_rtt: session.config.scan_delay.max(std::time::Duration::from_millis(100)),
+                        initial_rtt: session
+                            .config
+                            .scan_delay
+                            .max(std::time::Duration::from_millis(100)),
                         max_retries: 2,
                         host_timeout: session
                             .config
@@ -550,7 +553,10 @@ impl ScanOrchestrator {
             }
         }
 
-        info!("Phase 1 completed: {} hosts with open ports", phase1_hosts.len());
+        info!(
+            "Phase 1 completed: {} hosts with open ports",
+            phase1_hosts.len()
+        );
 
         // ========== Phase 2: Deep Scan ==========
         info!("Phase 2: Deep scan on {} hosts", phase1_hosts.len());
@@ -621,17 +627,29 @@ impl ScanOrchestrator {
             }
         }
 
-        info!(hosts = host_results.len(), "Two-phase port scanning completed");
+        info!(
+            hosts = host_results.len(),
+            "Two-phase port scanning completed"
+        );
         Ok(host_results)
     }
 
     /// Scans a single port on a target.
-    #[allow(clippy::too_many_lines, reason = "Port scanning requires handling all scan types and protocols in one function for performance")]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Port scanning requires handling all scan types and protocols in one function for performance"
+    )]
     async fn scan_port(&self, target: &Target, port: u16) -> Result<PortResult> {
         use rustnmap_common::Ipv4Addr;
 
         // Get the primary scan type from config
-        let primary_scan_type = self.session.config.scan_types.first().copied().unwrap_or(ScanType::TcpSyn);
+        let primary_scan_type = self
+            .session
+            .config
+            .scan_types
+            .first()
+            .copied()
+            .unwrap_or(ScanType::TcpSyn);
 
         // Create scanner configuration from session config
         let scanner_config = ScannerConfig {
@@ -683,104 +701,93 @@ impl ScanOrchestrator {
         };
 
         // Route to appropriate scanner based on scan type
-        let scan_result: std::result::Result<rustnmap_common::PortState, _> = match primary_scan_type {
-            ScanType::TcpSyn => {
-                match TcpSynScanner::new(local_addr, scanner_config) {
-                    Ok(scanner) => {
-                        scanner.scan_port(&common_target, port, rustnmap_common::Protocol::Tcp)
-                    }
-                    Err(_) => {
-                        // Raw socket creation failed (not root), use TCP Connect fallback
-                        return self.scan_port_connect(target, port).await;
+        let scan_result: std::result::Result<rustnmap_common::PortState, _> =
+            match primary_scan_type {
+                ScanType::TcpSyn => {
+                    match TcpSynScanner::new(local_addr, scanner_config) {
+                        Ok(scanner) => {
+                            scanner.scan_port(&common_target, port, rustnmap_common::Protocol::Tcp)
+                        }
+                        Err(_) => {
+                            // Raw socket creation failed (not root), use TCP Connect fallback
+                            return self.scan_port_connect(target, port).await;
+                        }
                     }
                 }
-            }
-            ScanType::TcpConnect => {
-                // TCP Connect doesn't need root, use it directly
-                let connect_scanner = TcpConnectScanner::new(Some(local_addr), scanner_config);
-                connect_scanner.scan_port(&common_target, port, rustnmap_common::Protocol::Tcp)
-            }
-            ScanType::TcpFin => {
-                match TcpFinScanner::new(local_addr, scanner_config) {
-                    Ok(scanner) => {
-                        scanner.scan_port(&common_target, port, rustnmap_common::Protocol::Tcp)
-                    }
-                    Err(_) => return self.scan_port_connect(target, port).await,
+                ScanType::TcpConnect => {
+                    // TCP Connect doesn't need root, use it directly
+                    let connect_scanner = TcpConnectScanner::new(Some(local_addr), scanner_config);
+                    connect_scanner.scan_port(&common_target, port, rustnmap_common::Protocol::Tcp)
                 }
-            }
-            ScanType::TcpNull => {
-                match TcpNullScanner::new(local_addr, scanner_config) {
+                ScanType::TcpFin => match TcpFinScanner::new(local_addr, scanner_config) {
                     Ok(scanner) => {
                         scanner.scan_port(&common_target, port, rustnmap_common::Protocol::Tcp)
                     }
                     Err(_) => return self.scan_port_connect(target, port).await,
-                }
-            }
-            ScanType::TcpXmas => {
-                match TcpXmasScanner::new(local_addr, scanner_config) {
+                },
+                ScanType::TcpNull => match TcpNullScanner::new(local_addr, scanner_config) {
                     Ok(scanner) => {
                         scanner.scan_port(&common_target, port, rustnmap_common::Protocol::Tcp)
                     }
                     Err(_) => return self.scan_port_connect(target, port).await,
-                }
-            }
-            ScanType::TcpAck => {
-                match TcpAckScanner::new(local_addr, scanner_config) {
+                },
+                ScanType::TcpXmas => match TcpXmasScanner::new(local_addr, scanner_config) {
                     Ok(scanner) => {
                         scanner.scan_port(&common_target, port, rustnmap_common::Protocol::Tcp)
                     }
                     Err(_) => return self.scan_port_connect(target, port).await,
-                }
-            }
-            ScanType::TcpWindow => {
-                match TcpWindowScanner::new(local_addr, scanner_config) {
+                },
+                ScanType::TcpAck => match TcpAckScanner::new(local_addr, scanner_config) {
                     Ok(scanner) => {
                         scanner.scan_port(&common_target, port, rustnmap_common::Protocol::Tcp)
                     }
                     Err(_) => return self.scan_port_connect(target, port).await,
-                }
-            }
-            ScanType::TcpMaimon => {
-                match TcpMaimonScanner::new(local_addr, scanner_config) {
+                },
+                ScanType::TcpWindow => match TcpWindowScanner::new(local_addr, scanner_config) {
                     Ok(scanner) => {
                         scanner.scan_port(&common_target, port, rustnmap_common::Protocol::Tcp)
                     }
                     Err(_) => return self.scan_port_connect(target, port).await,
-                }
-            }
-            ScanType::Udp => {
-                match UdpScanner::new(local_addr, scanner_config) {
+                },
+                ScanType::TcpMaimon => match TcpMaimonScanner::new(local_addr, scanner_config) {
                     Ok(scanner) => {
-                        scanner.scan_port(&common_target, port, rustnmap_common::Protocol::Udp)
+                        scanner.scan_port(&common_target, port, rustnmap_common::Protocol::Tcp)
                     }
-                    Err(_) => {
-                        // UDP requires root, return filtered on error
-                        return Ok(PortResult {
-                            number: port,
-                            protocol: rustnmap_output::models::Protocol::Udp,
-                            state: PortState::Filtered,
-                            state_reason: "udp-scan-error".to_string(),
-                            state_ttl: None,
-                            service: None,
-                            scripts: Vec::new(),
-                        });
+                    Err(_) => return self.scan_port_connect(target, port).await,
+                },
+                ScanType::Udp => {
+                    match UdpScanner::new(local_addr, scanner_config) {
+                        Ok(scanner) => {
+                            scanner.scan_port(&common_target, port, rustnmap_common::Protocol::Udp)
+                        }
+                        Err(_) => {
+                            // UDP requires root, return filtered on error
+                            return Ok(PortResult {
+                                number: port,
+                                protocol: rustnmap_output::models::Protocol::Udp,
+                                state: PortState::Filtered,
+                                state_reason: "udp-scan-error".to_string(),
+                                state_ttl: None,
+                                service: None,
+                                scripts: Vec::new(),
+                            });
+                        }
                     }
                 }
-            }
-            ScanType::SctpInit | ScanType::IpProtocol => {
-                // SCTP and IP protocol scans not yet implemented
-                // Return filtered as placeholder
-                return Ok(PortResult {
-                    number: port,
-                    protocol: rustnmap_output::models::Protocol::Tcp,
-                    state: PortState::Filtered,
-                    state_reason: "scan-type-not-implemented".to_string(),
-                    state_ttl: None,
-                    service: None,
-                    scripts: Vec::new(),
-                });
-            }
-        };
+                ScanType::SctpInit | ScanType::IpProtocol => {
+                    // SCTP and IP protocol scans not yet implemented
+                    // Return filtered as placeholder
+                    return Ok(PortResult {
+                        number: port,
+                        protocol: rustnmap_output::models::Protocol::Tcp,
+                        state: PortState::Filtered,
+                        state_reason: "scan-type-not-implemented".to_string(),
+                        state_ttl: None,
+                        service: None,
+                        scripts: Vec::new(),
+                    });
+                }
+            };
 
         // Process scan result
         if let Ok(state) = scan_result {
@@ -1402,19 +1409,58 @@ impl ScanOrchestrator {
         };
 
         // Derive scan type and protocol from config
-        let primary_scan_type = self.session.config.scan_types.first().copied().unwrap_or(ScanType::TcpSyn);
+        let primary_scan_type = self
+            .session
+            .config
+            .scan_types
+            .first()
+            .copied()
+            .unwrap_or(ScanType::TcpSyn);
         let (output_scan_type, output_protocol) = match primary_scan_type {
-            ScanType::TcpSyn => (rustnmap_output::models::ScanType::TcpSyn, rustnmap_output::models::Protocol::Tcp),
-            ScanType::TcpConnect => (rustnmap_output::models::ScanType::TcpConnect, rustnmap_output::models::Protocol::Tcp),
-            ScanType::TcpFin => (rustnmap_output::models::ScanType::TcpFin, rustnmap_output::models::Protocol::Tcp),
-            ScanType::TcpNull => (rustnmap_output::models::ScanType::TcpNull, rustnmap_output::models::Protocol::Tcp),
-            ScanType::TcpXmas => (rustnmap_output::models::ScanType::TcpXmas, rustnmap_output::models::Protocol::Tcp),
-            ScanType::TcpAck => (rustnmap_output::models::ScanType::TcpAck, rustnmap_output::models::Protocol::Tcp),
-            ScanType::TcpWindow => (rustnmap_output::models::ScanType::TcpWindow, rustnmap_output::models::Protocol::Tcp),
-            ScanType::TcpMaimon => (rustnmap_output::models::ScanType::TcpMaimon, rustnmap_output::models::Protocol::Tcp),
-            ScanType::Udp => (rustnmap_output::models::ScanType::Udp, rustnmap_output::models::Protocol::Udp),
-            ScanType::SctpInit => (rustnmap_output::models::ScanType::SctpInit, rustnmap_output::models::Protocol::Sctp),
-            ScanType::IpProtocol => (rustnmap_output::models::ScanType::IpProtocol, rustnmap_output::models::Protocol::Tcp), // IP protocol uses generic protocol field
+            ScanType::TcpSyn => (
+                rustnmap_output::models::ScanType::TcpSyn,
+                rustnmap_output::models::Protocol::Tcp,
+            ),
+            ScanType::TcpConnect => (
+                rustnmap_output::models::ScanType::TcpConnect,
+                rustnmap_output::models::Protocol::Tcp,
+            ),
+            ScanType::TcpFin => (
+                rustnmap_output::models::ScanType::TcpFin,
+                rustnmap_output::models::Protocol::Tcp,
+            ),
+            ScanType::TcpNull => (
+                rustnmap_output::models::ScanType::TcpNull,
+                rustnmap_output::models::Protocol::Tcp,
+            ),
+            ScanType::TcpXmas => (
+                rustnmap_output::models::ScanType::TcpXmas,
+                rustnmap_output::models::Protocol::Tcp,
+            ),
+            ScanType::TcpAck => (
+                rustnmap_output::models::ScanType::TcpAck,
+                rustnmap_output::models::Protocol::Tcp,
+            ),
+            ScanType::TcpWindow => (
+                rustnmap_output::models::ScanType::TcpWindow,
+                rustnmap_output::models::Protocol::Tcp,
+            ),
+            ScanType::TcpMaimon => (
+                rustnmap_output::models::ScanType::TcpMaimon,
+                rustnmap_output::models::Protocol::Tcp,
+            ),
+            ScanType::Udp => (
+                rustnmap_output::models::ScanType::Udp,
+                rustnmap_output::models::Protocol::Udp,
+            ),
+            ScanType::SctpInit => (
+                rustnmap_output::models::ScanType::SctpInit,
+                rustnmap_output::models::Protocol::Sctp,
+            ),
+            ScanType::IpProtocol => (
+                rustnmap_output::models::ScanType::IpProtocol,
+                rustnmap_output::models::Protocol::Tcp,
+            ), // IP protocol uses generic protocol field
         };
 
         let metadata = rustnmap_output::models::ScanMetadata {

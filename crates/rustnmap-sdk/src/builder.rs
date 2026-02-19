@@ -2,8 +2,8 @@
 
 use std::time::Duration;
 
-use rustnmap_core::session::{ScanConfig, ScanType, PortSpec};
 use rustnmap_common::scan::TimingTemplate;
+use rustnmap_core::session::{PortSpec, ScanConfig, ScanType};
 use rustnmap_evasion::TimingTemplate as EvasionTiming;
 
 use crate::error::{ScanError, ScanResult};
@@ -13,7 +13,10 @@ use crate::profile::ScanProfile;
 /// Main scanner entry point
 #[derive(Debug)]
 pub struct Scanner {
-    #[allow(dead_code, reason = "Config field used when scan execution is implemented")]
+    #[allow(
+        dead_code,
+        reason = "Config field used when scan execution is implemented"
+    )]
     config: ScanConfig,
 }
 
@@ -40,7 +43,7 @@ impl Scanner {
     }
 
     /// Create a scanner builder for fluent API
-    #[must_use] 
+    #[must_use]
     pub fn builder() -> ScannerBuilder {
         ScannerBuilder::new()
     }
@@ -54,12 +57,15 @@ impl Scanner {
     /// # Note
     ///
     //TODO: This function awaits the scan execution capability and returns an error pending full integration.
-    #[allow(clippy::unused_async, reason = "Async for future scan execution implementation")]
+    #[allow(
+        clippy::unused_async,
+        reason = "Async for future scan execution implementation"
+    )]
     pub async fn run(&self) -> ScanResult<ScanOutput> {
         // Integration with rustnmap-core for scan execution pending
-        Err(ScanError::InternalError(
-            anyhow::anyhow!("Scan execution pending - requires root privileges and network access"),
-        ))
+        Err(ScanError::InternalError(anyhow::anyhow!(
+            "Scan execution pending - requires root privileges and network access"
+        )))
     }
 
     /// Check if the scanner has required privileges for raw socket operations
@@ -71,7 +77,7 @@ impl Scanner {
     /// # Returns
     ///
     /// Returns `true` if running with root privileges (Unix) or admin privileges (Windows).
-    #[must_use] 
+    #[must_use]
     pub fn has_required_privileges() -> bool {
         // Check for root privileges (Unix) or admin privileges (Windows)
         #[cfg(unix)]
@@ -101,7 +107,7 @@ pub struct ScannerBuilder {
 
 impl ScannerBuilder {
     /// Create a new builder with default configuration
-    #[must_use] 
+    #[must_use]
     pub fn new() -> Self {
         Self {
             config: ScanConfig::default(),
@@ -109,7 +115,7 @@ impl ScannerBuilder {
     }
 
     /// Set scan targets
-    //TODO: 
+    //TODO:
     #[must_use]
     pub fn targets<T: IntoIterator<Item = S>, S: Into<String>>(self, _targets: T) -> Self {
         // Note: ScanConfig doesn't have a targets field, targets are passed separately when running
@@ -135,7 +141,10 @@ impl ScannerBuilder {
 
         // For simplicity, use Top(N) for the count or build ranges
         if ports.len() == 1 {
-            self.config.port_spec = PortSpec::Range { start: ports[0], end: ports[0] };
+            self.config.port_spec = PortSpec::Range {
+                start: ports[0],
+                end: ports[0],
+            };
         } else {
             // Use Top(N) based on port count as a reasonable default
             self.config.port_spec = PortSpec::Top(ports.len());
@@ -161,7 +170,10 @@ fn parse_port_spec(spec: &str) -> Option<PortSpec> {
             } else {
                 // Single port
                 let port: u16 = s.parse().ok()?;
-                Some(PortSpec::Range { start: port, end: port })
+                Some(PortSpec::Range {
+                    start: port,
+                    end: port,
+                })
             }
         }
     }
@@ -169,84 +181,84 @@ fn parse_port_spec(spec: &str) -> Option<PortSpec> {
 
 impl ScannerBuilder {
     /// SYN scan (requires root)
-    #[must_use] 
+    #[must_use]
     pub fn syn_scan(mut self) -> Self {
         self.config.scan_types = vec![ScanType::TcpSyn];
         self
     }
 
     /// Connect scan (no root required)
-    #[must_use] 
+    #[must_use]
     pub fn connect_scan(mut self) -> Self {
         self.config.scan_types = vec![ScanType::TcpConnect];
         self
     }
 
     /// FIN scan
-    #[must_use] 
+    #[must_use]
     pub fn fin_scan(mut self) -> Self {
         self.config.scan_types = vec![ScanType::TcpFin];
         self
     }
 
     /// NULL scan
-    #[must_use] 
+    #[must_use]
     pub fn null_scan(mut self) -> Self {
         self.config.scan_types = vec![ScanType::TcpNull];
         self
     }
 
     /// XMAS scan
-    #[must_use] 
+    #[must_use]
     pub fn xmas_scan(mut self) -> Self {
         self.config.scan_types = vec![ScanType::TcpXmas];
         self
     }
 
     /// ACK scan
-    #[must_use] 
+    #[must_use]
     pub fn ack_scan(mut self) -> Self {
         self.config.scan_types = vec![ScanType::TcpAck];
         self
     }
 
     /// Window scan
-    #[must_use] 
+    #[must_use]
     pub fn window_scan(mut self) -> Self {
         self.config.scan_types = vec![ScanType::TcpWindow];
         self
     }
 
     /// Maimon scan
-    #[must_use] 
+    #[must_use]
     pub fn maimon_scan(mut self) -> Self {
         self.config.scan_types = vec![ScanType::TcpMaimon];
         self
     }
 
     /// UDP scan
-    #[must_use] 
+    #[must_use]
     pub fn udp_scan(mut self) -> Self {
         self.config.scan_types = vec![ScanType::Udp];
         self
     }
 
     /// Enable service detection
-    #[must_use] 
+    #[must_use]
     pub fn service_detection(mut self, enable: bool) -> Self {
         self.config.service_detection = enable;
         self
     }
 
     /// Enable OS detection
-    #[must_use] 
+    #[must_use]
     pub fn os_detection(mut self, enable: bool) -> Self {
         self.config.os_detection = enable;
         self
     }
 
     /// Enable vulnerability scanning
-    #[must_use] 
+    #[must_use]
     pub fn vulnerability_scan(self, enable: bool) -> Self {
         // Note: vulnerability_scan is not a direct field in ScanConfig
         // It would be handled by the rustnmap-vuln crate integration
@@ -255,7 +267,7 @@ impl ScannerBuilder {
     }
 
     /// Set timing template
-    #[must_use] 
+    #[must_use]
     pub fn timing(mut self, timing: EvasionTiming) -> Self {
         // Convert EvasionTiming to common TimingTemplate
         self.config.timing_template = match timing {
@@ -270,7 +282,7 @@ impl ScannerBuilder {
     }
 
     /// Set custom timeout
-    #[must_use] 
+    #[must_use]
     pub fn timeout(mut self, duration: Duration) -> Self {
         self.config.host_timeout = duration;
         self
@@ -282,7 +294,9 @@ impl ScannerBuilder {
     ///
     /// Returns an error if the scan fails due to network issues or invalid configuration.
     pub async fn run(self) -> ScanResult<ScanOutput> {
-        let scanner = Scanner { config: self.config };
+        let scanner = Scanner {
+            config: self.config,
+        };
         scanner.run().await
     }
 }
@@ -305,7 +319,10 @@ mod tests {
             .syn_scan();
 
         assert_eq!(builder.config.scan_types, vec![ScanType::TcpSyn]);
-        assert!(matches!(builder.config.port_spec, PortSpec::Range { start: 22, end: 80 }));
+        assert!(matches!(
+            builder.config.port_spec,
+            PortSpec::Range { start: 22, end: 80 }
+        ));
     }
 
     #[test]

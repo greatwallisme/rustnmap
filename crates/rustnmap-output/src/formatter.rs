@@ -46,9 +46,8 @@ impl OutputFormatter for NdjsonFormatter {
 
         // Output each host as a separate JSON object
         for host in &result.hosts {
-            let host_json = serde_json::to_string(&host).map_err(|e| {
-                OutputError::InvalidData(format!("Failed to serialize host: {e}"))
-            })?;
+            let host_json = serde_json::to_string(&host)
+                .map_err(|e| OutputError::InvalidData(format!("Failed to serialize host: {e}")))?;
             output.push_str(&host_json);
             output.push('\n');
         }
@@ -105,23 +104,55 @@ impl OutputFormatter for MarkdownFormatter {
 
         // Metadata
         output.push_str("## Scan Information\n\n");
-        let _ = writeln!(output, "- **Scanner Version**: {}", result.metadata.scanner_version);
+        let _ = writeln!(
+            output,
+            "- **Scanner Version**: {}",
+            result.metadata.scanner_version
+        );
         let _ = writeln!(output, "- **Scan Type**: {:?}", result.metadata.scan_type);
         let _ = writeln!(output, "- **Protocol**: {:?}", result.metadata.protocol);
         let _ = writeln!(output, "- **Start Time**: {}", result.metadata.start_time);
         let _ = writeln!(output, "- **End Time**: {}", result.metadata.end_time);
-        let _ = writeln!(output, "- **Elapsed Time**: {:.2}s", result.metadata.elapsed.as_secs_f64());
+        let _ = writeln!(
+            output,
+            "- **Elapsed Time**: {:.2}s",
+            result.metadata.elapsed.as_secs_f64()
+        );
         output.push('\n');
 
         // Statistics
         output.push_str("## Statistics\n\n");
-        let _ = writeln!(output, "- **Total Hosts**: {}", result.statistics.total_hosts);
+        let _ = writeln!(
+            output,
+            "- **Total Hosts**: {}",
+            result.statistics.total_hosts
+        );
         let _ = writeln!(output, "- **Hosts Up**: {}", result.statistics.hosts_up);
-        let _ = writeln!(output, "- **Total Open Ports**: {}", result.statistics.open_ports);
-        let _ = writeln!(output, "- **Total Closed Ports**: {}", result.statistics.closed_ports);
-        let _ = writeln!(output, "- **Total Filtered Ports**: {}", result.statistics.filtered_ports);
-        let _ = writeln!(output, "- **Packets Sent**: {}", result.statistics.packets_sent);
-        let _ = writeln!(output, "- **Packets Received**: {}", result.statistics.packets_received);
+        let _ = writeln!(
+            output,
+            "- **Total Open Ports**: {}",
+            result.statistics.open_ports
+        );
+        let _ = writeln!(
+            output,
+            "- **Total Closed Ports**: {}",
+            result.statistics.closed_ports
+        );
+        let _ = writeln!(
+            output,
+            "- **Total Filtered Ports**: {}",
+            result.statistics.filtered_ports
+        );
+        let _ = writeln!(
+            output,
+            "- **Packets Sent**: {}",
+            result.statistics.packets_sent
+        );
+        let _ = writeln!(
+            output,
+            "- **Packets Received**: {}",
+            result.statistics.packets_received
+        );
         output.push('\n');
 
         // Hosts
@@ -157,7 +188,11 @@ impl OutputFormatter for MarkdownFormatter {
 
             for port in &host.ports {
                 let service_name = port.service.as_ref().map_or("", |s| s.name.as_str());
-                let service_version = port.service.as_ref().and_then(|s| s.version.as_ref()).map_or("", |v| v.as_str());
+                let service_version = port
+                    .service
+                    .as_ref()
+                    .and_then(|s| s.version.as_ref())
+                    .map_or("", |v| v.as_str());
 
                 let _ = writeln!(
                     output,
@@ -194,8 +229,16 @@ impl OutputFormatter for MarkdownFormatter {
     }
 
     fn format_port(&self, port: &PortResult) -> Result<String> {
-        let service_info = port.service.as_ref()
-            .map(|s| format!("{} {}", s.name, s.version.as_ref().unwrap_or(&String::new()).trim()))
+        let service_info = port
+            .service
+            .as_ref()
+            .map(|s| {
+                format!(
+                    "{} {}",
+                    s.name,
+                    s.version.as_ref().unwrap_or(&String::new()).trim()
+                )
+            })
             .unwrap_or_default();
 
         Ok(format!(
@@ -419,8 +462,10 @@ impl OutputFormatter for NormalFormatter {
             );
             output.push_str("HOP RTT     ADDRESS\n");
             for hop in &trace.hops {
-                let rtt = hop
-                    .rtt.map_or_else(|| "--".to_string(), |d| format!("{:.2} ms", d.as_secs_f64() * 1000.0));
+                let rtt = hop.rtt.map_or_else(
+                    || "--".to_string(),
+                    |d| format!("{:.2} ms", d.as_secs_f64() * 1000.0),
+                );
                 let _ = writeln!(output, "{}   {}  {}", hop.ttl, rtt, hop.ip);
             }
         }
@@ -449,7 +494,8 @@ impl OutputFormatter for NormalFormatter {
 
         let service = port
             .service
-            .as_ref().map_or_else(|| "unknown".to_string(), |s| s.name.clone());
+            .as_ref()
+            .map_or_else(|| "unknown".to_string(), |s| s.name.clone());
 
         Ok(format!(
             "{}/{}  {:7} {}\n",
@@ -745,10 +791,7 @@ impl XmlFormatter {
         Ok(())
     }
 
-    fn write_service<W: IoWrite>(
-        writer: &mut Writer<W>,
-        service: &ServiceInfo,
-    ) -> Result<()> {
+    fn write_service<W: IoWrite>(writer: &mut Writer<W>, service: &ServiceInfo) -> Result<()> {
         let mut service_start = BytesStart::new("service");
         service_start.push_attribute(("name", service.name.as_str()));
         service_start.push_attribute(("method", service.method.as_str()));
@@ -774,10 +817,7 @@ impl XmlFormatter {
         Ok(())
     }
 
-    fn write_script<W: IoWrite>(
-        writer: &mut Writer<W>,
-        script: &ScriptResult,
-    ) -> Result<()> {
+    fn write_script<W: IoWrite>(writer: &mut Writer<W>, script: &ScriptResult) -> Result<()> {
         let mut script_start = BytesStart::new("script");
         script_start.push_attribute(("id", script.id.as_str()));
 
@@ -970,7 +1010,8 @@ impl OutputFormatter for GrepableFormatter {
 
         let service = port
             .service
-            .as_ref().map_or_else(|| "unknown".to_string(), |s| s.name.clone());
+            .as_ref()
+            .map_or_else(|| "unknown".to_string(), |s| s.name.clone());
 
         let version = port
             .service
@@ -1051,7 +1092,8 @@ impl OutputFormatter for ScriptKiddieFormatter {
 
         let service = port
             .service
-            .as_ref().map_or_else(|| "?".to_string(), |s| s.name.clone());
+            .as_ref()
+            .map_or_else(|| "?".to_string(), |s| s.name.clone());
 
         Ok(format!("  | {} | {} | {}\n", port.number, state, service))
     }

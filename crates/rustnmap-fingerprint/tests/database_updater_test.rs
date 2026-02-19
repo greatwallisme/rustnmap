@@ -37,20 +37,20 @@ fn test_update_options_builder_complete() {
 /// Test `UpdateOptions` builder with backup only.
 #[test]
 fn test_update_options_builder_backup() {
-    let _opts = UpdateOptions::default().backup(false);
+    let opts = UpdateOptions::default().backup(false);
 
     // Verify backup can be set to false
-    let _opts = _opts.backup(true);
+    let _opts = opts.backup(true);
     // Verify backup can be set to true
 }
 
 /// Test `UpdateOptions` builder with `verify_checksums` only.
 #[test]
 fn test_update_options_builder_verify() {
-    let _opts = UpdateOptions::default().verify_checksums(true);
+    let opts = UpdateOptions::default().verify_checksums(true);
 
     // Verify verify_checksums can be set
-    let _opts = _opts.verify_checksums(false);
+    let _opts = opts.verify_checksums(false);
     // Verify verify_checksums can be toggled
 }
 
@@ -151,7 +151,7 @@ fn test_database_updater_new() {
 /// Test `DatabaseUpdater` default.
 #[test]
 fn test_database_updater_default() {
-    let _updater: DatabaseUpdater = Default::default();
+    let _updater = DatabaseUpdater::default();
 
     // Verify default creation works
 }

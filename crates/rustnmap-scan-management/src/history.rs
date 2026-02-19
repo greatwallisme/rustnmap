@@ -7,8 +7,8 @@ use crate::database::ScanDatabase;
 use crate::error::Result;
 use crate::models::{ScanStatus, ScanSummary, StoredScan};
 use chrono::{DateTime, Utc};
-use rustnmap_output::ScanResult;
 use rustnmap_output::models::ScanType;
+use rustnmap_output::ScanResult;
 
 /// Scan history manager for querying and managing historical scans.
 #[derive(Debug)]

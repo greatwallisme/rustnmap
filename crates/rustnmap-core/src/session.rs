@@ -199,7 +199,9 @@ impl Default for ScanConfig {
             data_payload: None,
             evasion_config: None,
             two_phase_scan: false,
-            first_phase_ports: vec![21, 22, 23, 25, 80, 110, 143, 443, 993, 995, 3306, 3389, 5432, 8080],
+            first_phase_ports: vec![
+                21, 22, 23, 25, 80, 110, 143, 443, 993, 995, 3306, 3389, 5432, 8080,
+            ],
         }
     }
 }
@@ -565,10 +567,7 @@ impl FingerprintDatabase {
     /// # Errors
     ///
     /// Returns an error if the database file cannot be loaded.
-    pub fn load_os_db(
-        &mut self,
-        path: impl AsRef<std::path::Path>,
-    ) -> crate::error::Result<()> {
+    pub fn load_os_db(&mut self, path: impl AsRef<std::path::Path>) -> crate::error::Result<()> {
         match rustnmap_fingerprint::FingerprintDatabase::load_from_nmap_db(path) {
             Ok(db) => {
                 self.os_db = Some(db);
@@ -709,12 +708,10 @@ impl ResumeStore {
     ///
     /// Returns an error if the state cannot be serialized or written.
     pub fn save(&self, state: &ResumeState) -> Result<()> {
-        let json = serde_json::to_string_pretty(state).map_err(|e| {
-            CoreError::config(format!("Failed to serialize resume state: {e}"))
-        })?;
-        std::fs::write(&self.path, &json).map_err(|e| {
-            CoreError::config(format!("Failed to write resume file: {e}"))
-        })?;
+        let json = serde_json::to_string_pretty(state)
+            .map_err(|e| CoreError::config(format!("Failed to serialize resume state: {e}")))?;
+        std::fs::write(&self.path, &json)
+            .map_err(|e| CoreError::config(format!("Failed to write resume file: {e}")))?;
         Ok(())
     }
 
@@ -727,12 +724,10 @@ impl ResumeStore {
         if !self.path.exists() {
             return Ok(None);
         }
-        let json = std::fs::read_to_string(&self.path).map_err(|e| {
-            CoreError::config(format!("Failed to read resume file: {e}"))
-        })?;
-        let state = serde_json::from_str(&json).map_err(|e| {
-            CoreError::config(format!("Failed to deserialize resume state: {e}"))
-        })?;
+        let json = std::fs::read_to_string(&self.path)
+            .map_err(|e| CoreError::config(format!("Failed to read resume file: {e}")))?;
+        let state = serde_json::from_str(&json)
+            .map_err(|e| CoreError::config(format!("Failed to deserialize resume state: {e}")))?;
         Ok(Some(state))
     }
 
@@ -743,9 +738,8 @@ impl ResumeStore {
     /// Returns an error if the file cannot be removed.
     pub fn cleanup(&self) -> Result<()> {
         if self.path.exists() {
-            std::fs::remove_file(&self.path).map_err(|e| {
-                CoreError::config(format!("Failed to remove resume file: {e}"))
-            })?;
+            std::fs::remove_file(&self.path)
+                .map_err(|e| CoreError::config(format!("Failed to remove resume file: {e}")))?;
         }
         Ok(())
     }
@@ -873,9 +867,9 @@ impl OutputSink for DefaultOutputSink {
         match self.formatter.format_host(result) {
             Ok(formatted) => {
                 print!("{formatted}");
-                std::io::stdout().flush().map_err(|e| {
-                    CoreError::config(format!("Failed to flush output: {e}"))
-                })?;
+                std::io::stdout()
+                    .flush()
+                    .map_err(|e| CoreError::config(format!("Failed to flush output: {e}")))?;
             }
             Err(e) => {
                 warn!("Failed to format host result: {e}");
@@ -889,9 +883,9 @@ impl OutputSink for DefaultOutputSink {
         match self.formatter.format_scan_result(result) {
             Ok(formatted) => {
                 print!("{formatted}");
-                std::io::stdout().flush().map_err(|e| {
-                    CoreError::config(format!("Failed to flush output: {e}"))
-                })?;
+                std::io::stdout()
+                    .flush()
+                    .map_err(|e| CoreError::config(format!("Failed to flush output: {e}")))?;
             }
             Err(e) => {
                 warn!("Failed to format scan result: {e}");
@@ -901,9 +895,9 @@ impl OutputSink for DefaultOutputSink {
     }
 
     async fn flush(&self) -> Result<()> {
-        std::io::stdout().flush().map_err(|e| {
-            CoreError::config(format!("Failed to flush output: {e}"))
-        })?;
+        std::io::stdout()
+            .flush()
+            .map_err(|e| CoreError::config(format!("Failed to flush output: {e}")))?;
         Ok(())
     }
 }

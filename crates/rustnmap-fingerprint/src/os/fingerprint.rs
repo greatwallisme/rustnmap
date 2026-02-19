@@ -187,7 +187,10 @@ pub struct EcnFingerprint {
 
 /// Result of a single OS detection test.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[allow(clippy::struct_excessive_bools, reason = "TestResult is a data structure with independent boolean flags for OS fingerprinting")]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "TestResult is a data structure with independent boolean flags for OS fingerprinting"
+)]
 pub struct TestResult {
     /// Test name (T1, T2, etc.).
     pub name: String,
@@ -250,7 +253,10 @@ pub struct UdpTestResult {
 
 /// IE (ICMP Echo) test result.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[allow(clippy::struct_excessive_bools, reason = "IcmpTestResult is a data structure with independent boolean flags for OS fingerprinting")]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "IcmpTestResult is a data structure with independent boolean flags for OS fingerprinting"
+)]
 pub struct IcmpTestResult {
     /// Response to first ICMP echo (R flag).
     pub responded1: bool,

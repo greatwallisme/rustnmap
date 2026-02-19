@@ -455,7 +455,10 @@ impl DatabaseUpdater {
     }
 
     /// Internal method to update a single database file.
-    #[allow(clippy::too_many_lines, reason = "Complex update logic with multiple steps")]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Complex update logic with multiple steps"
+    )]
     async fn update_database_file(
         &self,
         url: &str,

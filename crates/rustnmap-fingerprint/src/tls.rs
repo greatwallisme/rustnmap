@@ -289,10 +289,7 @@ impl TlsDetector {
     }
 
     /// Extract TLS information from established connection.
-    fn extract_tls_info(
-        stream: &TlsStream<TcpStream>,
-        server_name: &str,
-    ) -> TlsInfo {
+    fn extract_tls_info(stream: &TlsStream<TcpStream>, server_name: &str) -> TlsInfo {
         let (_, conn) = stream.get_ref();
 
         // Get negotiated version
@@ -313,7 +310,8 @@ impl TlsDetector {
 
         // Get peer certificates
         let certificates = conn.peer_certificates();
-        let chain_depth = certificates.map_or(0, <[tokio_rustls::rustls::pki_types::CertificateDer]>::len);
+        let chain_depth =
+            certificates.map_or(0, <[tokio_rustls::rustls::pki_types::CertificateDer]>::len);
 
         // Parse certificate info if available
         let certificate: Option<CertificateInfo> =

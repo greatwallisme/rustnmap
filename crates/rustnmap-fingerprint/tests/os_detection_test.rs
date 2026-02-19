@@ -59,7 +59,9 @@ async fn test_os_detection_localhost() {
 #[test]
 fn test_seq_analysis_incremental() {
     // Simulate incremental ISN pattern (Linux-like)
-    let isns: Vec<u32> = vec![1_000_000, 2_000_000, 3_000_000, 4_000_000, 5_000_000, 6_000_000];
+    let isns: Vec<u32> = vec![
+        1_000_000, 2_000_000, 3_000_000, 4_000_000, 5_000_000, 6_000_000,
+    ];
 
     // Calculate GCD
     let diffs: Vec<u32> = isns.windows(2).map(|w| w[1].wrapping_sub(w[0])).collect();
@@ -97,14 +99,14 @@ fn test_ip_id_classification() {
     assert!(all_same);
 
     // Random sequence (high variance)
-    let ip_ids = [100, 5000, 200, 60000, 1000];
+    let ip_ids: [u64; 5] = [100, 5000, 200, 60000, 1000];
     let variance = {
-        let mean = ip_ids.iter().map(|&n| n as u64).sum::<u64>() / ip_ids.len() as u64;
+        let mean: u64 = ip_ids.iter().sum::<u64>() / ip_ids.len() as u64;
         let sum_sq_diff: u64 = ip_ids
             .iter()
             .map(|&n| {
-                let diff = i64::from(n) - mean as i64;
-                (diff * diff) as u64
+                let diff = n.abs_diff(mean);
+                diff * diff
             })
             .sum();
         sum_sq_diff / ip_ids.len() as u64

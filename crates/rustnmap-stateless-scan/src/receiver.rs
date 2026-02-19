@@ -4,6 +4,7 @@
 //! Stateless response receiver.
 
 use crate::cookie::{CookieGenerator, VerifyResult};
+use futures_util::StreamExt;
 use rustnmap_common::Result;
 use rustnmap_core::session::PacketEngine;
 use rustnmap_output::models::{HostResult, PortResult, PortState, Protocol};
@@ -12,7 +13,6 @@ use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
-use futures_util::StreamExt;
 use tracing::debug;
 
 /// Scan event from receiver.
@@ -133,8 +133,18 @@ impl StatelessReceiver {
 
         let source_port = u16::from_be_bytes([data[tcp_start], data[tcp_start + 1]]);
         let dest_port = u16::from_be_bytes([data[tcp_start + 2], data[tcp_start + 3]]);
-        let _seq_num = u32::from_be_bytes([data[tcp_start + 4], data[tcp_start + 5], data[tcp_start + 6], data[tcp_start + 7]]);
-        let ack_num = u32::from_be_bytes([data[tcp_start + 8], data[tcp_start + 9], data[tcp_start + 10], data[tcp_start + 11]]);
+        let _seq_num = u32::from_be_bytes([
+            data[tcp_start + 4],
+            data[tcp_start + 5],
+            data[tcp_start + 6],
+            data[tcp_start + 7],
+        ]);
+        let ack_num = u32::from_be_bytes([
+            data[tcp_start + 8],
+            data[tcp_start + 9],
+            data[tcp_start + 10],
+            data[tcp_start + 11],
+        ]);
 
         // Check flags (byte 13 of TCP header)
         let flags = data[tcp_start + 13];

@@ -2,11 +2,11 @@
 //!
 //! This module provides the primary API for querying vulnerability information.
 
+use dashmap::DashMap;
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
-use std::collections::HashMap;
 use tokio::sync::RwLock;
-use dashmap::DashMap;
 
 use crate::cpe::CpeMatcher;
 use crate::database::VulnDatabase;
@@ -72,9 +72,15 @@ const DEFAULT_SHARD_COUNT: usize = 8;
 #[derive(Debug)]
 pub struct VulnClient {
     db: Arc<RwLock<VulnDatabase>>,
-    #[allow(dead_code, reason = "EpssEngine is stateless, methods take db as parameter")]
+    #[allow(
+        dead_code,
+        reason = "EpssEngine is stateless, methods take db as parameter"
+    )]
     epss: EpssEngine,
-    #[allow(dead_code, reason = "KevEngine is stateless, methods take db as parameter")]
+    #[allow(
+        dead_code,
+        reason = "KevEngine is stateless, methods take db as parameter"
+    )]
     kev: KevEngine,
     cache: DashMap<String, Vec<VulnInfo>>,
 }
@@ -102,8 +108,9 @@ impl VulnClient {
         // Run blocking I/O in a blocking task pool
         let db = tokio::task::spawn_blocking(move || VulnDatabase::open(&db_path))
             .await
-            .map_err(|e| crate::error::VulnError::database(format!("Database open failed: {e}")))?
-            ?;
+            .map_err(|e| {
+                crate::error::VulnError::database(format!("Database open failed: {e}"))
+            })??;
 
         Ok(Self {
             db: Arc::new(RwLock::new(db)),
@@ -143,8 +150,9 @@ impl VulnClient {
     pub async fn in_memory_async() -> Result<Self> {
         let db = tokio::task::spawn_blocking(VulnDatabase::open_in_memory)
             .await
-            .map_err(|e| crate::error::VulnError::database(format!("Database in_memory failed: {e}")))?
-            ?;
+            .map_err(|e| {
+                crate::error::VulnError::database(format!("Database in_memory failed: {e}"))
+            })??;
 
         Ok(Self {
             db: Arc::new(RwLock::new(db)),
@@ -193,10 +201,9 @@ impl VulnClient {
         let _cpe_wrapper = CpeMatcher::parse(cpe)?;
 
         // Acquire read lock synchronously
-        let db = self
-            .db
-            .try_read()
-            .map_err(|_err| crate::error::VulnError::database("Database lock is held by another operation"))?;
+        let db = self.db.try_read().map_err(|_err| {
+            crate::error::VulnError::database("Database lock is held by another operation")
+        })?;
 
         // Query database for matching CVEs
         let matches = db.get_matches_by_cpe(cpe)?;
@@ -210,19 +217,17 @@ impl VulnClient {
         for (cve, cpe_match) in matches {
             // Get EPSS score
             let epss = {
-                let db = self
-                    .db
-                    .try_read()
-                    .map_err(|_err| crate::error::VulnError::database("Database lock is held by another operation"))?;
+                let db = self.db.try_read().map_err(|_err| {
+                    crate::error::VulnError::database("Database lock is held by another operation")
+                })?;
                 EpssEngine::get_score(&db, &cve.id)?
             };
 
             // Get KEV status
             let kev = {
-                let db = self
-                    .db
-                    .try_read()
-                    .map_err(|_err| crate::error::VulnError::database("Database lock is held by another operation"))?;
+                let db = self.db.try_read().map_err(|_err| {
+                    crate::error::VulnError::database("Database lock is held by another operation")
+                })?;
                 KevEngine::get_entry(&db, &cve.id)?
             };
 
@@ -397,10 +402,9 @@ impl VulnClient {
     ///
     /// Returns an error if the query fails.
     pub fn get_cve(&self, cve_id: &str) -> Result<Option<VulnInfo>> {
-        let db = self
-            .db
-            .try_read()
-            .map_err(|_err| crate::error::VulnError::database("Database lock is held by another operation"))?;
+        let db = self.db.try_read().map_err(|_err| {
+            crate::error::VulnError::database("Database lock is held by another operation")
+        })?;
 
         let cve = db.get_cve(cve_id)?;
         drop(db);
@@ -408,18 +412,20 @@ impl VulnClient {
         match cve {
             Some(cve_entry) => {
                 let epss = {
-                    let db = self
-                        .db
-                        .try_read()
-                        .map_err(|_err| crate::error::VulnError::database("Database lock is held by another operation"))?;
+                    let db = self.db.try_read().map_err(|_err| {
+                        crate::error::VulnError::database(
+                            "Database lock is held by another operation",
+                        )
+                    })?;
                     EpssEngine::get_score(&db, cve_id)?
                 };
 
                 let kev = {
-                    let db = self
-                        .db
-                        .try_read()
-                        .map_err(|_err| crate::error::VulnError::database("Database lock is held by another operation"))?;
+                    let db = self.db.try_read().map_err(|_err| {
+                        crate::error::VulnError::database(
+                            "Database lock is held by another operation",
+                        )
+                    })?;
                     KevEngine::get_entry(&db, cve_id)?
                 };
 
@@ -508,10 +514,9 @@ impl VulnClient {
     ///
     /// Returns an error if the query fails.
     pub fn get_stats(&self) -> Result<crate::database::DatabaseStats> {
-        let db = self
-            .db
-            .try_read()
-            .map_err(|_err| crate::error::VulnError::database("Database lock is held by another operation"))?;
+        let db = self.db.try_read().map_err(|_err| {
+            crate::error::VulnError::database("Database lock is held by another operation")
+        })?;
         db.get_stats()
     }
 
@@ -551,7 +556,9 @@ mod tests {
     #[test]
     fn test_vuln_client_query_empty() {
         let client = VulnClient::in_memory().unwrap();
-        let vulns = client.query_cpe("cpe:2.3:a:test:app:1.0:*:*:*:*:*:*:*").unwrap();
+        let vulns = client
+            .query_cpe("cpe:2.3:a:test:app:1.0:*:*:*:*:*:*:*")
+            .unwrap();
         assert!(vulns.is_empty());
     }
 
@@ -569,7 +576,9 @@ mod tests {
     #[test]
     fn test_vuln_client_cache() {
         let client = VulnClient::in_memory().unwrap();
-        let _ = client.query_cpe("cpe:2.3:a:test:app:1.0:*:*:*:*:*:*:*").unwrap();
+        let _ = client
+            .query_cpe("cpe:2.3:a:test:app:1.0:*:*:*:*:*:*:*")
+            .unwrap();
         client.clear_cache();
     }
 

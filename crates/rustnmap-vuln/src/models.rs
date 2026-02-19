@@ -67,7 +67,11 @@ impl VulnInfo {
     ///
     /// Risk priority score from 0 (lowest) to 100 (highest).
     #[must_use]
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, reason = "Score is clamped to 0-100 range, u8 is sufficient")]
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "Score is clamped to 0-100 range, u8 is sufficient"
+    )]
     pub fn risk_priority(&self) -> u8 {
         let cvss_weight = self.cvss_v3 * 5.0; // Max 50
         let epss_weight = self.epss_score * 30.0; // Max 30

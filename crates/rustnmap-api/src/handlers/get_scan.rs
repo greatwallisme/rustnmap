@@ -2,10 +2,7 @@
 
 use axum::extract::{Path, State};
 
-use crate::{
-    error::ApiResult,
-    ScanDetail,
-};
+use crate::{error::ApiResult, ScanDetail};
 
 /// Handler for GET /api/v1/scans/{id}
 ///

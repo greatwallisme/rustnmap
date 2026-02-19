@@ -122,9 +122,9 @@ async fn test_os_detection_with_target_ip() {
     let local_addr = Ipv4Addr::LOCALHOST;
 
     // Get target from environment or skip
-    let target_ip = if let Ok(ip) = std::env::var("TEST_TARGET_IP") { ip
-    .parse::<Ipv4Addr>()
-    .unwrap_or(Ipv4Addr::LOCALHOST) } else {
+    let target_ip = if let Ok(ip) = std::env::var("TEST_TARGET_IP") {
+        ip.parse::<Ipv4Addr>().unwrap_or(Ipv4Addr::LOCALHOST)
+    } else {
         // Skip test if no target IP configured
         eprintln!("Skipping test: TEST_TARGET_IP not set");
         return;
@@ -184,7 +184,9 @@ async fn test_os_detection_timeout() {
 #[test]
 fn test_seq_analysis_incremental() {
     // Simulate incremental ISN pattern (Linux-like)
-    let isns: Vec<u32> = vec![1_000_000, 2_000_000, 3_000_000, 4_000_000, 5_000_000, 6_000_000];
+    let isns: Vec<u32> = vec![
+        1_000_000, 2_000_000, 3_000_000, 4_000_000, 5_000_000, 6_000_000,
+    ];
 
     // Calculate GCD
     let diffs: Vec<u32> = isns.windows(2).map(|w| w[1].wrapping_sub(w[0])).collect();
@@ -212,7 +214,9 @@ fn test_seq_analysis_incremental() {
 #[test]
 fn test_seq_analysis_random() {
     // Simulate random ISN pattern
-    let isns: Vec<u32> = vec![1_234_567, 9_876_543, 5_555_555, 3_333_333, 7_777_777, 1_111_111];
+    let isns: Vec<u32> = vec![
+        1_234_567, 9_876_543, 5_555_555, 3_333_333, 7_777_777, 1_111_111,
+    ];
 
     // Calculate differences
     let diffs: Vec<u32> = isns.windows(2).map(|w| w[1].wrapping_sub(w[0])).collect();
@@ -232,8 +236,8 @@ fn test_seq_analysis_time_dependent() {
     let base_time = 1_000_000_u64;
     let isns: Vec<u32> = (0..6)
         .map(|i| {
-            let time_offset = i as u64 * 10_000; // 10ms increments
-            ((base_time + time_offset) * 250) as u32 // 250 ticks per microsecond
+            let time_offset = u64::try_from(i).unwrap_or(0) * 10_000; // 10ms increments
+            u32::try_from((base_time + time_offset) * 250).unwrap_or(u32::MAX) // 250 ticks per microsecond
         })
         .collect();
 
@@ -271,14 +275,14 @@ fn test_ip_id_classification_fixed() {
 #[test]
 fn test_ip_id_classification_random() {
     // Random sequence (OpenBSD, etc)
-    let ip_ids = [100, 5000, 200, 60000, 1000, 30000];
+    let ip_ids: [u64; 6] = [100, 5000, 200, 60000, 1000, 30000];
     let variance = {
-        let mean = ip_ids.iter().map(|&n| n as u64).sum::<u64>() / ip_ids.len() as u64;
+        let mean: u64 = ip_ids.iter().sum::<u64>() / ip_ids.len() as u64;
         let sum_sq_diff: u64 = ip_ids
             .iter()
             .map(|&n| {
-                let diff = i64::from(n) - mean as i64;
-                (diff * diff) as u64
+                let diff = n.abs_diff(mean);
+                diff * diff
             })
             .sum();
         sum_sq_diff / ip_ids.len() as u64

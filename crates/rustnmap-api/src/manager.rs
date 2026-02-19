@@ -1,8 +1,8 @@
 //! Scan task manager for in-memory scan orchestration
 
-use std::sync::Arc;
-use dashmap::DashMap;
 use chrono::{DateTime, Utc};
+use dashmap::DashMap;
+use std::sync::Arc;
 
 use crate::config::ApiConfig;
 use crate::error::{ApiError, ApiResult};
@@ -22,7 +22,7 @@ pub struct ScanTask {
 }
 
 impl ScanTask {
-    #[must_use] 
+    #[must_use]
     pub fn new(id: String, targets: Vec<String>, scan_type: String) -> Self {
         Self {
             id,
@@ -54,7 +54,7 @@ pub struct ScanManager {
 
 impl ScanManager {
     /// Create a new scan manager
-    #[must_use] 
+    #[must_use]
     pub fn new(config: ApiConfig) -> Self {
         Self {
             tasks: Arc::new(DashMap::new()),
@@ -78,29 +78,44 @@ impl ScanManager {
     }
 
     /// Get scan summary
-    #[must_use] 
+    #[must_use]
     pub fn get_scan_summary(&self, id: &str) -> Option<ScanTask> {
         self.tasks.get(id).map(|r| r.clone())
     }
 
-    #[allow(clippy::missing_errors_doc, reason = "Internal API, errors are self-explanatory")]
+    #[allow(
+        clippy::missing_errors_doc,
+        reason = "Internal API, errors are self-explanatory"
+    )]
     /// Update scan status
     pub fn update_status(&self, id: &str, status: ScanStatus) -> ApiResult<()> {
-        let mut task = self.tasks.get_mut(id).ok_or_else(|| ApiError::ScanNotFound(id.to_string()))?;
+        let mut task = self
+            .tasks
+            .get_mut(id)
+            .ok_or_else(|| ApiError::ScanNotFound(id.to_string()))?;
         task.status = status;
         if matches!(task.status, ScanStatus::Running) && task.started_at.is_none() {
             task.started_at = Some(Utc::now());
         }
-        if matches!(task.status, ScanStatus::Completed | ScanStatus::Cancelled | ScanStatus::Failed) {
+        if matches!(
+            task.status,
+            ScanStatus::Completed | ScanStatus::Cancelled | ScanStatus::Failed
+        ) {
             task.completed_at = Some(Utc::now());
         }
         Ok(())
     }
 
-    #[allow(clippy::missing_errors_doc, reason = "Internal API, errors are self-explanatory")]
+    #[allow(
+        clippy::missing_errors_doc,
+        reason = "Internal API, errors are self-explanatory"
+    )]
     /// Update scan progress
     pub fn update_progress(&self, id: &str, progress: ScanProgress) -> ApiResult<()> {
-        let mut task = self.tasks.get_mut(id).ok_or_else(|| ApiError::ScanNotFound(id.to_string()))?;
+        let mut task = self
+            .tasks
+            .get_mut(id)
+            .ok_or_else(|| ApiError::ScanNotFound(id.to_string()))?;
         task.progress = progress;
         Ok(())
     }
@@ -115,21 +130,27 @@ impl ScanManager {
     }
 
     /// List all scans
-    #[must_use] 
+    #[must_use]
     pub fn list_scans(&self) -> Vec<ScanTask> {
         self.tasks.iter().map(|r| r.clone()).collect()
     }
 
     /// Get active scan count
-    #[must_use] 
+    #[must_use]
     pub fn active_count(&self) -> usize {
-        self.tasks.iter().filter(|r| matches!(r.status, ScanStatus::Running)).count()
+        self.tasks
+            .iter()
+            .filter(|r| matches!(r.status, ScanStatus::Running))
+            .count()
     }
 
     /// Get queued scan count
-    #[must_use] 
+    #[must_use]
     pub fn queued_count(&self) -> usize {
-        self.tasks.iter().filter(|r| matches!(r.status, ScanStatus::Queued)).count()
+        self.tasks
+            .iter()
+            .filter(|r| matches!(r.status, ScanStatus::Queued))
+            .count()
     }
 }
 

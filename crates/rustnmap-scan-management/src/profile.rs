@@ -144,55 +144,64 @@ impl ScanProfile {
     pub fn validate(&self) -> Result<()> {
         // Validate scan type
         let scan_type_lower = self.scan.scan_type.to_lowercase();
-        let valid_types = ["syn", "connect", "fin", "null", "xmas", "maimon", "udp", "ack", "window"];
+        let valid_types = [
+            "syn", "connect", "fin", "null", "xmas", "maimon", "udp", "ack", "window",
+        ];
         if !valid_types.contains(&scan_type_lower.as_str()) {
-            return Err(ScanManagementError::ProfileValidation(
-                format!("Invalid scan type: {}. Valid types: {:?}", self.scan.scan_type, valid_types)
-            ));
+            return Err(ScanManagementError::ProfileValidation(format!(
+                "Invalid scan type: {}. Valid types: {:?}",
+                self.scan.scan_type, valid_types
+            )));
         }
 
         // Validate timing
         let timing = self.scan.timing.to_uppercase();
         if !timing.starts_with('T') {
-            return Err(ScanManagementError::ProfileValidation(
-                format!("Invalid timing: {}. Must be T0-T5", self.scan.timing)
-            ));
+            return Err(ScanManagementError::ProfileValidation(format!(
+                "Invalid timing: {}. Must be T0-T5",
+                self.scan.timing
+            )));
         }
 
         // Check that the digit is between 0 and 5
         if let Some(digit_char) = timing.chars().nth(1) {
             if let Some(digit) = digit_char.to_digit(10) {
                 if digit > 5 {
-                    return Err(ScanManagementError::ProfileValidation(
-                        format!("Invalid timing: {}. Must be T0-T5", self.scan.timing)
-                    ));
+                    return Err(ScanManagementError::ProfileValidation(format!(
+                        "Invalid timing: {}. Must be T0-T5",
+                        self.scan.timing
+                    )));
                 }
             } else {
-                return Err(ScanManagementError::ProfileValidation(
-                    format!("Invalid timing: {}. Must be T0-T5", self.scan.timing)
-                ));
+                return Err(ScanManagementError::ProfileValidation(format!(
+                    "Invalid timing: {}. Must be T0-T5",
+                    self.scan.timing
+                )));
             }
         } else {
-            return Err(ScanManagementError::ProfileValidation(
-                format!("Invalid timing: {}. Must be T0-T5", self.scan.timing)
-            ));
+            return Err(ScanManagementError::ProfileValidation(format!(
+                "Invalid timing: {}. Must be T0-T5",
+                self.scan.timing
+            )));
         }
 
         // Validate version intensity
         if let Some(intensity) = self.scan.version_intensity {
             if intensity > 9 {
-                return Err(ScanManagementError::ProfileValidation(
-                    format!("Invalid version_intensity: {}. Must be 0-9", intensity)
-                ));
+                return Err(ScanManagementError::ProfileValidation(format!(
+                    "Invalid version_intensity: {}. Must be 0-9",
+                    intensity
+                )));
             }
         }
 
         // Validate EPSS threshold
         if let Some(threshold) = self.scan.epss_threshold {
             if threshold < 0.0 || threshold > 1.0 {
-                return Err(ScanManagementError::ProfileValidation(
-                    format!("Invalid epss_threshold: {}. Must be 0.0-1.0", threshold)
-                ));
+                return Err(ScanManagementError::ProfileValidation(format!(
+                    "Invalid epss_threshold: {}. Must be 0.0-1.0",
+                    threshold
+                )));
             }
         }
 
@@ -237,7 +246,10 @@ impl ProfileManager {
             for entry in fs::read_dir(dir_path)? {
                 let entry = entry?;
                 let path = entry.path();
-                if path.extension().is_some_and(|ext| ext == "yaml" || ext == "yml") {
+                if path
+                    .extension()
+                    .is_some_and(|ext| ext == "yaml" || ext == "yml")
+                {
                     if let Ok(profile) = ScanProfile::from_file(&path) {
                         manager.profiles.insert(profile.name.clone(), profile);
                     }
@@ -260,7 +272,10 @@ impl ProfileManager {
 
     /// List all profiles.
     pub fn list_profiles(&self) -> Vec<&str> {
-        self.profiles.keys().map(std::string::String::as_str).collect()
+        self.profiles
+            .keys()
+            .map(std::string::String::as_str)
+            .collect()
     }
 
     /// Validate all profiles.
@@ -306,7 +321,8 @@ output:
     - "html"
   directory: "/var/lib/rustnmap/reports/"
   save_to_history: true
-"#.to_string()
+"#
+        .to_string()
     }
 }
 

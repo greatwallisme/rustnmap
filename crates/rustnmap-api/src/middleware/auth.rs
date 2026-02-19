@@ -11,12 +11,15 @@ use http::header::{HeaderMap, AUTHORIZATION};
 /// Authentication middleware layer
 #[derive(Clone, Debug)]
 pub struct AuthMiddleware {
-    #[allow(dead_code, reason = "State field reserved for future middleware functionality")]
+    #[allow(
+        dead_code,
+        reason = "State field reserved for future middleware functionality"
+    )]
     state: crate::server::ApiState,
 }
 
 impl AuthMiddleware {
-    #[must_use] 
+    #[must_use]
     pub fn new(state: crate::server::ApiState) -> Self {
         Self { state }
     }

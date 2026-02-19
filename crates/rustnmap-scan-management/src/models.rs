@@ -4,7 +4,7 @@
 //! Data models for scan management.
 
 use chrono::{DateTime, Utc};
-use rustnmap_output::models::{ScanType, Protocol, HostStatus};
+use rustnmap_output::models::{HostStatus, Protocol, ScanType};
 use rustnmap_output::ScanResult;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -86,7 +86,11 @@ pub struct StoredScan {
 
 impl StoredScan {
     /// Create a new stored scan from a `ScanResult`.
-    pub fn from_scan_result(result: &ScanResult, target_spec: &str, created_by: Option<&str>) -> Self {
+    pub fn from_scan_result(
+        result: &ScanResult,
+        target_spec: &str,
+        created_by: Option<&str>,
+    ) -> Self {
         let options_json = serde_json::to_string(&result.metadata).unwrap_or_default();
 
         Self {
@@ -105,7 +109,12 @@ impl StoredScan {
     }
 
     /// Convert to `ScanSummary`.
-    pub fn to_summary(&self, hosts_up: usize, ports_open: usize, vulns_count: usize) -> ScanSummary {
+    pub fn to_summary(
+        &self,
+        hosts_up: usize,
+        ports_open: usize,
+        vulns_count: usize,
+    ) -> ScanSummary {
         ScanSummary {
             id: self.id.clone(),
             started_at: self.started_at,
@@ -161,7 +170,11 @@ impl StoredHost {
         let os_match = host.os_matches.first().map(|os| os.name.clone());
         let os_accuracy = host.os_matches.first().map(|os| i32::from(os.accuracy));
 
-        let ports = host.ports.iter().map(StoredPort::from_port_result).collect();
+        let ports = host
+            .ports
+            .iter()
+            .map(StoredPort::from_port_result)
+            .collect();
 
         Self {
             id: None,

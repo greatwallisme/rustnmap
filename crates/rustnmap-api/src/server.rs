@@ -117,7 +117,7 @@ impl ApiServer {
     }
 
     /// Get the config
-    #[must_use] 
+    #[must_use]
     pub fn config(&self) -> &ApiConfig {
         &self.config
     }

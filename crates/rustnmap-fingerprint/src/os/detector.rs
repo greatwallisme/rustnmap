@@ -230,7 +230,10 @@ impl OsDetector {
     /// Send SEQ probes to analyze TCP ISN generation.
     ///
     /// Sends 6 TCP SYN probes to an open port with 100ms intervals.
-    #[allow(clippy::cast_possible_truncation, reason = "i is bounded by seq_count which is small")]
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "i is bounded by seq_count which is small"
+    )]
     async fn send_seq_probes(&self, target: Ipv4Addr) -> Result<Vec<SeqProbeResponse>> {
         use rustnmap_net::raw_socket::{parse_tcp_response_full, RawSocket, TcpPacketBuilder};
 
@@ -317,7 +320,10 @@ impl OsDetector {
     }
 
     /// Analyze SEQ probe responses to determine ISN characteristics.
-    #[allow(clippy::unused_self, reason = "Intentional: API consistency for potential future instance-based analysis")]
+    #[allow(
+        clippy::unused_self,
+        reason = "Intentional: API consistency for potential future instance-based analysis"
+    )]
     fn analyze_seq_responses(&self, responses: &[SeqProbeResponse]) -> SeqFingerprint {
         let mut fp = SeqFingerprint::new();
 
@@ -385,7 +391,10 @@ impl OsDetector {
     }
 
     /// Classify ISN generation pattern.
-    #[allow(clippy::cast_lossless, reason = "u32 to u64 is always safe, no precision loss")]
+    #[allow(
+        clippy::cast_lossless,
+        reason = "u32 to u64 is always safe, no precision loss"
+    )]
     fn classify_isn_pattern(_isns: &[u32], diffs: &[u32], gcd: u32) -> IsnClass {
         // Check for zero differences (all same ISN)
         if diffs.iter().all(|&d| d == 0) {
@@ -476,7 +485,10 @@ impl OsDetector {
     }
 
     /// Classify timestamp rate.
-    #[allow(clippy::unnecessary_wraps, reason = "API consistency with fingerprint structure")]
+    #[allow(
+        clippy::unnecessary_wraps,
+        reason = "API consistency with fingerprint structure"
+    )]
     fn classify_timestamp_rate(timestamps: &[u32]) -> Option<TimestampRate> {
         if timestamps.len() < 2 {
             return Some(TimestampRate::None);
@@ -945,10 +957,13 @@ impl OsDetector {
     )]
     fn build_tcp_options_for_seq() -> Vec<u8> {
         // TSval (4 bytes) - use current time
-        let tsval = u32::try_from(std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs()).unwrap_or(0);
+        let tsval = u32::try_from(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+        )
+        .unwrap_or(0);
 
         vec![
             // Window Scale (kind=3, len=3, value=10)

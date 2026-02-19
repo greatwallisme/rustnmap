@@ -193,7 +193,10 @@ impl FingerprintDatabase {
     }
 
     /// Calculate difference score between two fingerprints.
-    #[allow(clippy::unused_self, reason = "API consistency with potential future instance-based scoring")]
+    #[allow(
+        clippy::unused_self,
+        reason = "API consistency with potential future instance-based scoring"
+    )]
     fn calculate_match_score(&self, fp1: &OsFingerprint, fp2: &OsFingerprint) -> f64 {
         let mut diff = 0.0;
 
@@ -279,7 +282,12 @@ impl FingerprintDatabase {
     }
 
     /// Convert difference score to accuracy percentage.
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, clippy::unused_self, reason = "score is clamped to 0-100 range, u8 is appropriate")]
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::unused_self,
+        reason = "score is clamped to 0-100 range, u8 is appropriate"
+    )]
     fn score_to_accuracy(&self, score: f64) -> u8 {
         // Lower score = higher accuracy
         // Score of 0 = 100% accuracy
@@ -348,7 +356,10 @@ impl NmapOsFingerprint {
     }
 
     /// Parse Class line format: "Class vendor | family | gen | type"
-    #[allow(clippy::unnecessary_wraps, reason = "Internal API matches signature pattern")]
+    #[allow(
+        clippy::unnecessary_wraps,
+        reason = "Internal API matches signature pattern"
+    )]
     fn parse_class_line(&mut self, line: &str) -> Result<()> {
         // Format: "Class Microsoft | Windows | 10 | general purpose"
         // or: "Class Linux | Linux | 5.X | general purpose"
@@ -369,7 +380,10 @@ impl NmapOsFingerprint {
     }
 
     /// Parse test line format: "TEST(values)"
-    #[allow(clippy::unnecessary_wraps, reason = "Internal API matches signature pattern")]
+    #[allow(
+        clippy::unnecessary_wraps,
+        reason = "Internal API matches signature pattern"
+    )]
     fn parse_test_line(&mut self, line: &str) -> Result<()> {
         // Test lines look like: "SEQ(SP=101-105%GCD=1%ISR=107)"
         // or: "OPS(O1=M5B4ST11NW2%O2=M5B4ST11NW2)"
@@ -381,7 +395,10 @@ impl NmapOsFingerprint {
     }
 
     /// Convert parsed fingerprint to `OsReference`.
-    #[allow(clippy::unnecessary_wraps, reason = "API consistency for potential future error cases")]
+    #[allow(
+        clippy::unnecessary_wraps,
+        reason = "API consistency for potential future error cases"
+    )]
     fn into_os_reference(self) -> Result<OsReference> {
         let family = self.family.as_deref().unwrap_or("Unknown");
         let family_lower = family.to_lowercase();
@@ -515,7 +532,10 @@ impl NmapOsFingerprint {
     }
 
     /// Parse IP ID class from string.
-    #[allow(clippy::match_same_arms, reason = "Intentional: RI and I both map to Incremental per Nmap spec")]
+    #[allow(
+        clippy::match_same_arms,
+        reason = "Intentional: RI and I both map to Incremental per Nmap spec"
+    )]
     fn parse_ip_id_class(value: &str) -> IpIdSeqClass {
         match value {
             "Z" => IpIdSeqClass::Fixed,
@@ -580,7 +600,10 @@ impl NmapOsFingerprint {
     /// Parse a single OPS value string.
     ///
     /// Format: M5B4ST11NW2 (MSS=1460, Window Scale, Timestamp, NOP, Window)
-    #[allow(clippy::unnecessary_wraps, reason = "Intentional: returns None for empty/invalid input")]
+    #[allow(
+        clippy::unnecessary_wraps,
+        reason = "Intentional: returns None for empty/invalid input"
+    )]
     fn parse_ops_value(value: &str) -> Option<OpsFingerprint> {
         let mut ops = OpsFingerprint::new();
 
@@ -680,7 +703,10 @@ impl NmapOsFingerprint {
     /// Parse ECN test values into `EcnFingerprint`.
     ///
     /// Format: ECN(R=Y%DF=Y%T=FA%TG=FF%W=FFFF%O=M5B4NNSW2%CC=N%Q=)
-    #[allow(clippy::unnecessary_wraps, reason = "Intentional: returns None for empty/invalid input")]
+    #[allow(
+        clippy::unnecessary_wraps,
+        reason = "Intentional: returns None for empty/invalid input"
+    )]
     fn parse_ecn(values: &str) -> Option<EcnFingerprint> {
         let mut ecn = EcnFingerprint::new();
         let params = Self::parse_params(values);
@@ -710,7 +736,11 @@ impl NmapOsFingerprint {
     /// Parse T1-T7 test values into `TestResult`.
     ///
     /// Format: T1(R=Y%DF=Y%T=FA%TG=FF%S=O%A=S+%F=AS%RD=0%Q=)
-    #[allow(clippy::match_same_arms, clippy::unnecessary_wraps, reason = "Intentional: empty arms for fields handled elsewhere, None for empty input")]
+    #[allow(
+        clippy::match_same_arms,
+        clippy::unnecessary_wraps,
+        reason = "Intentional: empty arms for fields handled elsewhere, None for empty input"
+    )]
     fn parse_test(name: &str, values: &str) -> Option<super::fingerprint::TestResult> {
         let mut test = super::fingerprint::TestResult::new(name);
         let params = Self::parse_params(values);
@@ -781,7 +811,10 @@ impl NmapOsFingerprint {
     /// Parse U1 (UDP) test values into `UdpTestResult`.
     ///
     /// Format: U1(DF=N%T=FA%TG=FF%IPL=164%UN=0%RIPL=G%RID=G%RIPCK=G%RUCK=G%RUD=G)
-    #[allow(clippy::unnecessary_wraps, reason = "Intentional: returns None for empty/invalid input")]
+    #[allow(
+        clippy::unnecessary_wraps,
+        reason = "Intentional: returns None for empty/invalid input"
+    )]
     fn parse_u1(values: &str) -> Option<super::fingerprint::UdpTestResult> {
         let mut u1 = super::fingerprint::UdpTestResult::new();
         let params = Self::parse_params(values);
@@ -821,7 +854,10 @@ impl NmapOsFingerprint {
     /// Parse IE (ICMP Echo) test values into `IcmpTestResult`.
     ///
     /// Format: IE(DFI=N%T=FA%TG=FF%CD=S)
-    #[allow(clippy::unnecessary_wraps, reason = "Intentional: returns None for empty/invalid input")]
+    #[allow(
+        clippy::unnecessary_wraps,
+        reason = "Intentional: returns None for empty/invalid input"
+    )]
     fn parse_ie(values: &str) -> Option<super::fingerprint::IcmpTestResult> {
         let mut ie = super::fingerprint::IcmpTestResult::new();
         let params = Self::parse_params(values);
@@ -922,7 +958,7 @@ mod tests {
 
         // Same class = 0.0 diff
         let diff = FingerprintDatabase::compare_seq(Some(&seq1), Some(&seq1));
-        assert_eq!(diff, 0.0);
+        assert!((diff - 0.0).abs() < f64::EPSILON);
     }
 
     #[test]

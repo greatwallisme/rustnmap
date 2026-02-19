@@ -55,7 +55,7 @@ impl Default for OutputManager {
 
 impl OutputManager {
     /// Create a new output manager.
-    #[must_use] 
+    #[must_use]
     pub fn new() -> Self {
         Self {
             formatters: Vec::new(),
@@ -91,7 +91,7 @@ impl OutputManager {
     }
 
     /// Get current verbosity level.
-    #[must_use] 
+    #[must_use]
     pub fn verbosity(&self) -> VerbosityLevel {
         self.verbosity
     }
@@ -132,10 +132,7 @@ impl OutputManager {
     }
 
     /// Write formatted output to a destination.
-    fn write_to_destination(
-        destination: &OutputDestination,
-        data: &str,
-    ) -> Result<()> {
+    fn write_to_destination(destination: &OutputDestination, data: &str) -> Result<()> {
         match destination {
             OutputDestination::Stdout => {
                 print!("{data}");

@@ -319,8 +319,7 @@ fn bench_script_batch_operations(c: &mut Criterion) {
     group.bench_function("lookup_100_scripts", |b| {
         let mut db = ScriptDatabase::new();
         for i in 0..100 {
-            let script =
-                create_test_script(&format!("lookup-script-{i}"), ScriptCategory::Default);
+            let script = create_test_script(&format!("lookup-script-{i}"), ScriptCategory::Default);
             db.register_script(&script);
         }
 

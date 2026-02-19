@@ -7,8 +7,8 @@ use crate::error::{Result, ScanManagementError};
 use crate::models::{ScanStatus, ScanSummary, StoredHost, StoredScan};
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection, OpenFlags};
-use rustnmap_output::ScanResult;
 use rustnmap_output::models::ScanType;
+use rustnmap_output::ScanResult;
 use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -73,7 +73,10 @@ impl ScanDatabase {
         }
 
         // Set journal mode
-        conn.execute_batch(&format!("PRAGMA journal_mode = {}", self.config.journal_mode))?;
+        conn.execute_batch(&format!(
+            "PRAGMA journal_mode = {}",
+            self.config.journal_mode
+        ))?;
 
         // Create scans table
         conn.execute(
@@ -173,7 +176,12 @@ impl ScanDatabase {
     }
 
     /// Save scan results to the database.
-    pub async fn save_scan(&self, result: &ScanResult, target_spec: &str, created_by: Option<&str>) -> Result<String> {
+    pub async fn save_scan(
+        &self,
+        result: &ScanResult,
+        target_spec: &str,
+        created_by: Option<&str>,
+    ) -> Result<String> {
         let stored_scan = StoredScan::from_scan_result(result, target_spec, created_by);
 
         let mut conn = self.conn.lock().await;
@@ -259,21 +267,49 @@ impl ScanDatabase {
 
             let started_dt = DateTime::parse_from_rfc3339(&started_at)
                 .map(|dt| dt.with_timezone(&Utc))
-                .map_err(|e| rusqlite::Error::FromSqlConversionFailure(1, rusqlite::types::Type::Text, Box::new(e)))?;
+                .map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        1,
+                        rusqlite::types::Type::Text,
+                        Box::new(e),
+                    )
+                })?;
 
             let completed_dt = completed_at
                 .map(|s| {
                     DateTime::parse_from_rfc3339(&s)
                         .map(|dt| dt.with_timezone(&Utc))
-                        .map_err(|e| rusqlite::Error::FromSqlConversionFailure(2, rusqlite::types::Type::Text, Box::new(e)))
+                        .map_err(|e| {
+                            rusqlite::Error::FromSqlConversionFailure(
+                                2,
+                                rusqlite::types::Type::Text,
+                                Box::new(e),
+                            )
+                        })
                 })
                 .transpose()?;
 
-            let parsed_scan_type = parse_scan_type(&scan_type)
-                .map_err(|e| rusqlite::Error::FromSqlConversionFailure(5, rusqlite::types::Type::Text, Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))))?;
+            let parsed_scan_type = parse_scan_type(&scan_type).map_err(|e| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    5,
+                    rusqlite::types::Type::Text,
+                    Box::new(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        e.to_string(),
+                    )),
+                )
+            })?;
 
-            let parsed_status = parse_scan_status(&status)
-                .map_err(|e| rusqlite::Error::FromSqlConversionFailure(7, rusqlite::types::Type::Text, Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))))?;
+            let parsed_status = parse_scan_status(&status).map_err(|e| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    7,
+                    rusqlite::types::Type::Text,
+                    Box::new(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        e.to_string(),
+                    )),
+                )
+            })?;
 
             Ok(StoredScan {
                 id: row.get(0)?,
@@ -314,7 +350,7 @@ impl ScanDatabase {
              LEFT JOIN host_results h ON s.id = h.scan_id
              LEFT JOIN port_results p ON h.id = p.host_id
              LEFT JOIN vulnerability_results v ON h.id = v.host_id
-             WHERE 1=1"
+             WHERE 1=1",
         );
 
         let mut params: Vec<String> = Vec::new();
@@ -347,44 +383,75 @@ impl ScanDatabase {
         }
 
         let mut stmt = conn.prepare(&query)?;
-        let rows = stmt.query_map(rusqlite::params_from_iter(params.iter().map(std::string::String::as_str)), |row| {
-            let started_at: String = row.get(1)?;
-            let completed_at: Option<String> = row.get(2)?;
-            let scan_type: String = row.get(4)?;
-            let status: String = row.get(5)?;
+        let rows = stmt.query_map(
+            rusqlite::params_from_iter(params.iter().map(std::string::String::as_str)),
+            |row| {
+                let started_at: String = row.get(1)?;
+                let completed_at: Option<String> = row.get(2)?;
+                let scan_type: String = row.get(4)?;
+                let status: String = row.get(5)?;
 
-            let started_dt = DateTime::parse_from_rfc3339(&started_at)
-                .map(|dt| dt.with_timezone(&Utc))
-                .map_err(|e| rusqlite::Error::FromSqlConversionFailure(1, rusqlite::types::Type::Text, Box::new(e)))?;
+                let started_dt = DateTime::parse_from_rfc3339(&started_at)
+                    .map(|dt| dt.with_timezone(&Utc))
+                    .map_err(|e| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            1,
+                            rusqlite::types::Type::Text,
+                            Box::new(e),
+                        )
+                    })?;
 
-            let completed_dt = completed_at
-                .map(|s| {
-                    DateTime::parse_from_rfc3339(&s)
-                        .map(|dt| dt.with_timezone(&Utc))
-                        .map_err(|e| rusqlite::Error::FromSqlConversionFailure(2, rusqlite::types::Type::Text, Box::new(e)))
+                let completed_dt = completed_at
+                    .map(|s| {
+                        DateTime::parse_from_rfc3339(&s)
+                            .map(|dt| dt.with_timezone(&Utc))
+                            .map_err(|e| {
+                                rusqlite::Error::FromSqlConversionFailure(
+                                    2,
+                                    rusqlite::types::Type::Text,
+                                    Box::new(e),
+                                )
+                            })
+                    })
+                    .transpose()?;
+
+                let parsed_scan_type = parse_scan_type(&scan_type).map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        4,
+                        rusqlite::types::Type::Text,
+                        Box::new(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            e.to_string(),
+                        )),
+                    )
+                })?;
+
+                let parsed_status = parse_scan_status(&status).map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        5,
+                        rusqlite::types::Type::Text,
+                        Box::new(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            e.to_string(),
+                        )),
+                    )
+                })?;
+
+                Ok(ScanSummary {
+                    id: row.get(0)?,
+                    started_at: started_dt,
+                    completed_at: completed_dt,
+                    target_spec: row.get(3)?,
+                    scan_type: parsed_scan_type,
+                    status: parsed_status,
+                    hosts_count: row.get(6)?,
+                    hosts_up: row.get(7)?,
+                    ports_open: row.get(8)?,
+                    vulnerabilities_count: row.get(9)?,
+                    profile_name: None,
                 })
-                .transpose()?;
-
-            let parsed_scan_type = parse_scan_type(&scan_type)
-                .map_err(|e| rusqlite::Error::FromSqlConversionFailure(4, rusqlite::types::Type::Text, Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))))?;
-
-            let parsed_status = parse_scan_status(&status)
-                .map_err(|e| rusqlite::Error::FromSqlConversionFailure(5, rusqlite::types::Type::Text, Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))))?;
-
-            Ok(ScanSummary {
-                id: row.get(0)?,
-                started_at: started_dt,
-                completed_at: completed_dt,
-                target_spec: row.get(3)?,
-                scan_type: parsed_scan_type,
-                status: parsed_status,
-                hosts_count: row.get(6)?,
-                hosts_up: row.get(7)?,
-                ports_open: row.get(8)?,
-                vulnerabilities_count: row.get(9)?,
-                profile_name: None,
-            })
-        })?;
+            },
+        )?;
 
         let mut summaries = Vec::new();
         for row in rows {
@@ -432,7 +499,10 @@ fn parse_scan_type(s: &str) -> Result<ScanType> {
         "ping" => Ok(ScanType::Ping),
         "tcpack" | "tcp_ack" | "ack" => Ok(ScanType::TcpAck),
         "tcpwindow" | "tcp_window" | "window" => Ok(ScanType::TcpWindow),
-        _ => Err(ScanManagementError::InvalidStatus(format!("Invalid scan type: {}", s))),
+        _ => Err(ScanManagementError::InvalidStatus(format!(
+            "Invalid scan type: {}",
+            s
+        ))),
     }
 }
 
@@ -442,6 +512,9 @@ fn parse_scan_status(s: &str) -> Result<ScanStatus> {
         "completed" => Ok(ScanStatus::Completed),
         "failed" => Ok(ScanStatus::Failed),
         "cancelled" => Ok(ScanStatus::Cancelled),
-        _ => Err(ScanManagementError::InvalidStatus(format!("Invalid scan status: {}", s))),
+        _ => Err(ScanManagementError::InvalidStatus(format!(
+            "Invalid scan status: {}",
+            s
+        ))),
     }
 }

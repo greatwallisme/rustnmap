@@ -6,7 +6,7 @@
 use blake3::Hasher;
 use getrandom::getrandom;
 use std::net::IpAddr;
-use std::time::{SystemTime, UNIX_EPOCH, Duration};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 
 /// Cookie generation error.
@@ -45,7 +45,10 @@ pub struct Cookie {
 /// that encode source port and sequence number without maintaining state.
 pub struct CookieGenerator {
     /// Encryption key (randomly generated).
-    #[allow(clippy::missing_fields_in_debug, reason = "Key is secret and should not be logged")]
+    #[allow(
+        clippy::missing_fields_in_debug,
+        reason = "Key is secret and should not be logged"
+    )]
     key: [u8; 32],
 }
 
@@ -88,8 +91,12 @@ impl CookieGenerator {
         hasher.update(&self.key);
         // Handle both IPv4 and IPv6
         match target {
-            IpAddr::V4(ip) => { hasher.update(&ip.octets()); }
-            IpAddr::V6(ip) => { hasher.update(&ip.octets()); }
+            IpAddr::V4(ip) => {
+                hasher.update(&ip.octets());
+            }
+            IpAddr::V6(ip) => {
+                hasher.update(&ip.octets());
+            }
         }
         hasher.update(&timestamp.to_le_bytes());
         hasher.update(&port.to_le_bytes());
@@ -114,7 +121,13 @@ impl CookieGenerator {
 
     /// Verify a received response.
     #[must_use]
-    pub fn verify(&self, target: IpAddr, source_port: u16, ack_num: u32, max_age: Duration) -> VerifyResult {
+    pub fn verify(
+        &self,
+        target: IpAddr,
+        source_port: u16,
+        ack_num: u32,
+        max_age: Duration,
+    ) -> VerifyResult {
         // Reconstruct sequence number (ack_num = seq + 1)
         let sequence_num = ack_num.saturating_sub(1);
 
@@ -156,8 +169,12 @@ impl CookieGenerator {
         hasher.update(&self.key);
         // Handle both IPv4 and IPv6
         match target {
-            IpAddr::V4(ip) => { hasher.update(&ip.octets()); }
-            IpAddr::V6(ip) => { hasher.update(&ip.octets()); }
+            IpAddr::V4(ip) => {
+                hasher.update(&ip.octets());
+            }
+            IpAddr::V6(ip) => {
+                hasher.update(&ip.octets());
+            }
         }
         hasher.update(&timestamp.to_le_bytes());
         // Port is not included in hash for verification

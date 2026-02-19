@@ -261,7 +261,9 @@ impl MacPrefixDatabase {
 
         let is_private = vendor.to_lowercase().contains("private")
             || oui == "000000"
-            || oui.starts_with('0') && oui.len() > 1 && matches!(oui.chars().nth(1), Some('2' | '6' | 'A' | 'E'));
+            || oui.starts_with('0')
+                && oui.len() > 1
+                && matches!(oui.chars().nth(1), Some('2' | '6' | 'A' | 'E'));
 
         Some(MacVendorInfo {
             vendor: vendor.clone(),

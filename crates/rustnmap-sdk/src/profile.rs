@@ -37,7 +37,10 @@ pub struct ScanProfile {
 
 /// Scan settings
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(clippy::struct_excessive_bools, reason = "ScanSettings is a configuration struct where bool fields represent independent feature flags")]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "ScanSettings is a configuration struct where bool fields represent independent feature flags"
+)]
 pub struct ScanSettings {
     /// Scan type
     #[serde(default = "default_scan_type")]
@@ -137,11 +140,10 @@ impl ScanProfile {
     ///
     /// Returns an error if the file cannot be written or the profile cannot be serialized.
     pub fn to_file<P: AsRef<Path>>(&self, path: P) -> ScanResult<()> {
-        let content = serde_yaml::to_string(self)
-            .map_err(|e| ScanError::InternalError(e.into()))?;
+        let content =
+            serde_yaml::to_string(self).map_err(|e| ScanError::InternalError(e.into()))?;
 
-        std::fs::write(path.as_ref(), content)
-            .map_err(|e| ScanError::InternalError(e.into()))?;
+        std::fs::write(path.as_ref(), content).map_err(|e| ScanError::InternalError(e.into()))?;
 
         Ok(())
     }
@@ -172,7 +174,10 @@ impl ScanProfile {
                     } else {
                         // Single port
                         let port: u16 = s.parse().unwrap_or(1000);
-                        rustnmap_core::session::PortSpec::Range { start: port, end: port }
+                        rustnmap_core::session::PortSpec::Range {
+                            start: port,
+                            end: port,
+                        }
                     }
                 }
             };
@@ -213,7 +218,7 @@ pub struct ProfileManager {
 
 impl ProfileManager {
     /// Create a new profile manager
-    #[must_use] 
+    #[must_use]
     pub fn new() -> Self {
         Self { profile_dir: None }
     }
@@ -236,8 +241,7 @@ impl ProfileManager {
         } else {
             // Default profile locations
             let system_dir = std::path::Path::new("/etc/rustnmap/profiles");
-            let home_dir = dirs::home_dir()
-                .map(|h| h.join(".config/rustnmap/profiles"));
+            let home_dir = dirs::home_dir().map(|h| h.join(".config/rustnmap/profiles"));
 
             // Try system directory first, then home directory
             if system_dir.exists() {
@@ -245,13 +249,16 @@ impl ProfileManager {
             } else if let Some(hd) = &home_dir {
                 hd.join(format!("{name}.yaml"))
             } else {
-                return Err(ScanError::InvalidRequest("Profile directory not configured and no default found".to_string()));
+                return Err(ScanError::InvalidRequest(
+                    "Profile directory not configured and no default found".to_string(),
+                ));
             }
         };
 
         if !path.exists() {
             return Err(ScanError::InvalidRequest(format!(
-                "Profile '{name}' not found at {}", path.display()
+                "Profile '{name}' not found at {}",
+                path.display()
             )));
         }
 
