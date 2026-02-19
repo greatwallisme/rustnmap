@@ -707,7 +707,7 @@ fn test_scan_result_serialization() {
     // Test that ScanResult can be serialized (it implements Serialize)
     let json_result = std::panic::catch_unwind(|| {
         // This will work if serde is properly set up
-        let _ = format!("{:?}", result);
+        let _ = format!("{result:?}");
     });
     assert!(json_result.is_ok());
 }

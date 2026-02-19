@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Command-line interface for RustNmap network scanner.
+//! Command-line interface for `RustNmap` network scanner.
 //!
 //! This crate provides the main `rustnmap` binary that integrates
 //! all scanning modules into a unified Nmap-compatible CLI.

@@ -80,6 +80,7 @@ mod tcp_flags {
 
 impl OsDetector {
     /// Create new OS detector.
+    #[must_use]
     pub fn new(db: FingerprintDatabase, local_addr: Ipv4Addr) -> Self {
         Self {
             db,
@@ -95,6 +96,7 @@ impl OsDetector {
 
     /// Create new OS detector with a reference to the database.
     #[cfg(test)]
+    #[must_use]
     pub fn new_with_ref(db: &FingerprintDatabase, local_addr: Ipv4Addr) -> Self {
         Self {
             db: db.clone(),
@@ -109,36 +111,45 @@ impl OsDetector {
     }
 
     /// Set number of sequence probes for ISN analysis.
+    #[must_use]
     pub fn with_seq_count(mut self, count: usize) -> Self {
         self.seq_count = count.clamp(1, 20);
         self
     }
 
     /// Set the open port for probes that need it.
+    #[must_use]
     pub fn with_open_port(mut self, port: u16) -> Self {
         self.open_port = port;
         self
     }
 
     /// Set the closed TCP port for probes that need it.
+    #[must_use]
     pub fn with_closed_port(mut self, port: u16) -> Self {
         self.closed_port = port;
         self
     }
 
     /// Set the closed UDP port for U1 probe.
+    #[must_use]
     pub fn with_closed_udp_port(mut self, port: u16) -> Self {
         self.closed_udp_port = port;
         self
     }
 
     /// Set probe timeout.
+    #[must_use]
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
         self
     }
 
     /// Detect OS for a target host.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if network operations fail or no OS matches are found.
     pub async fn detect_os(&self, target: &SocketAddr) -> Result<Vec<OsMatch>> {
         info!("Starting OS detection for {}", target);
 
@@ -210,7 +221,7 @@ impl OsDetector {
         fingerprint.u1 = Some(u1_fp);
 
         // Analyze IP ID patterns from SEQ responses
-        let ip_id_pattern = self.analyze_ip_id_patterns(&seq_responses);
+        let ip_id_pattern = Self::analyze_ip_id_patterns(&seq_responses);
         fingerprint.ip_id = Some(ip_id_pattern);
 
         Ok(fingerprint)
@@ -219,6 +230,7 @@ impl OsDetector {
     /// Send SEQ probes to analyze TCP ISN generation.
     ///
     /// Sends 6 TCP SYN probes to an open port with 100ms intervals.
+    #[allow(clippy::cast_possible_truncation, reason = "i is bounded by seq_count which is small")]
     async fn send_seq_probes(&self, target: Ipv4Addr) -> Result<Vec<SeqProbeResponse>> {
         use rustnmap_net::raw_socket::{parse_tcp_response_full, RawSocket, TcpPacketBuilder};
 
@@ -305,6 +317,7 @@ impl OsDetector {
     }
 
     /// Analyze SEQ probe responses to determine ISN characteristics.
+    #[allow(clippy::unused_self, reason = "Intentional: API consistency for potential future instance-based analysis")]
     fn analyze_seq_responses(&self, responses: &[SeqProbeResponse]) -> SeqFingerprint {
         let mut fp = SeqFingerprint::new();
 
@@ -333,7 +346,7 @@ impl OsDetector {
 
         // Analyze timestamps
         let timestamps: Vec<u32> = responses.iter().filter_map(|r| r.timestamp).collect();
-        fp.timestamps = timestamps.clone();
+        fp.timestamps.clone_from(&timestamps);
 
         if !timestamps.is_empty() {
             fp.timestamp = true;
@@ -372,6 +385,7 @@ impl OsDetector {
     }
 
     /// Classify ISN generation pattern.
+    #[allow(clippy::cast_lossless, reason = "u32 to u64 is always safe, no precision loss")]
     fn classify_isn_pattern(_isns: &[u32], diffs: &[u32], gcd: u32) -> IsnClass {
         // Check for zero differences (all same ISN)
         if diffs.iter().all(|&d| d == 0) {
@@ -387,7 +401,8 @@ impl OsDetector {
         }
 
         // Check for time-based (large differences)
-        let avg_diff = diffs.iter().map(|&d| d as u64).sum::<u64>() / diffs.len() as u64;
+        #[allow(clippy::cast_possible_truncation)]
+        let avg_diff = diffs.iter().map(|&d| u64::from(d)).sum::<u64>() / diffs.len() as u64;
         if avg_diff > 10_000_000 {
             return IsnClass::Time;
         }
@@ -407,15 +422,21 @@ impl OsDetector {
     }
 
     /// Calculate variance of a slice of numbers.
+    #[allow(
+        clippy::cast_lossless,
+        clippy::cast_possible_wrap,
+        clippy::cast_sign_loss,
+        reason = "Mathematical calculations with verified ranges"
+    )]
     fn calculate_variance(nums: &[u32]) -> u64 {
         if nums.len() < 2 {
             return 0;
         }
-        let mean = nums.iter().map(|&n| n as u64).sum::<u64>() / nums.len() as u64;
+        let mean = nums.iter().map(|&n| u64::from(n)).sum::<u64>() / nums.len() as u64;
         let sum_sq_diff: u64 = nums
             .iter()
             .map(|&n| {
-                let diff = n as i64 - mean as i64;
+                let diff = i64::from(n) - mean as i64;
                 (diff * diff) as u64
             })
             .sum();
@@ -423,11 +444,18 @@ impl OsDetector {
     }
 
     /// Calculate ISR (ISN Rate).
+    #[allow(
+        clippy::cast_lossless,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::cast_precision_loss,
+        reason = "ISR calculation with clamp ensures valid range"
+    )]
     fn calculate_isr(diffs: &[u32]) -> u8 {
         if diffs.is_empty() {
             return 0;
         }
-        let avg_diff = diffs.iter().map(|&d| d as u64).sum::<u64>() / diffs.len() as u64;
+        let avg_diff = diffs.iter().map(|&d| u64::from(d)).sum::<u64>() / diffs.len() as u64;
         // ISR is approximately log2(avg_diff) scaled
         (avg_diff as f64).log2().clamp(0.0, 255.0) as u8
     }
@@ -441,13 +469,14 @@ impl OsDetector {
         // SP is based on how predictable the sequence is
         // Lower variance = higher predictability = lower SP
         let variance = Self::calculate_variance(diffs);
-        let max_variance = (u32::MAX as u64).pow(2);
+        let max_variance = u64::from(u32::MAX).pow(2);
 
         // SP = 100 - (variance / max_variance * 100)
-        100u8.saturating_sub(((variance * 100) / max_variance) as u8)
+        100u8.saturating_sub(u8::try_from(variance * 100 / max_variance).unwrap_or(100))
     }
 
     /// Classify timestamp rate.
+    #[allow(clippy::unnecessary_wraps, reason = "API consistency with fingerprint structure")]
     fn classify_timestamp_rate(timestamps: &[u32]) -> Option<TimestampRate> {
         if timestamps.len() < 2 {
             return Some(TimestampRate::None);
@@ -458,7 +487,7 @@ impl OsDetector {
             .windows(2)
             .map(|w| w[1].wrapping_sub(w[0]))
             .collect();
-        let avg_diff = diffs.iter().map(|&d| d as u64).sum::<u64>() / diffs.len() as u64;
+        let avg_diff = diffs.iter().map(|&d| u64::from(d)).sum::<u64>() / diffs.len() as u64;
 
         // Typical rates:
         // 2 Hz = ~20 increments per 100ms (if in 10ms units)
@@ -486,7 +515,7 @@ impl OsDetector {
         // Calculate differences
         let diffs: Vec<i32> = ip_ids
             .windows(2)
-            .map(|w| w[1] as i32 - w[0] as i32)
+            .map(|w| i32::from(w[1]) - i32::from(w[0]))
             .collect();
 
         // Check for incremental by 1
@@ -519,11 +548,11 @@ impl OsDetector {
         if nums.len() < 2 {
             return 0;
         }
-        let mean = nums.iter().map(|&n| n as u64).sum::<u64>() / nums.len() as u64;
+        let mean = nums.iter().map(|&n| u64::from(n)).sum::<u64>() / nums.len() as u64;
         let sum_sq_diff: u64 = nums
             .iter()
             .map(|&n| {
-                let diff = n as i64 - mean as i64;
+                let diff = i64::from(n) - mean as i64;
                 (diff * diff) as u64
             })
             .sum();
@@ -531,7 +560,7 @@ impl OsDetector {
     }
 
     /// Analyze IP ID patterns from SEQ responses.
-    fn analyze_ip_id_patterns(&self, responses: &[SeqProbeResponse]) -> IpIdPattern {
+    fn analyze_ip_id_patterns(responses: &[SeqProbeResponse]) -> IpIdPattern {
         let ip_ids: Vec<u16> = responses.iter().map(|r| r.ip_id).collect();
 
         IpIdPattern {
@@ -544,6 +573,7 @@ impl OsDetector {
     /// Send ECN probe.
     ///
     /// Sends a TCP SYN packet with ECN flags (ECE and CWR) set.
+    #[allow(clippy::unused_async, clippy::match_same_arms)]
     async fn send_ecn_probe(&self, target: Ipv4Addr) -> Result<EcnFingerprint> {
         use rustnmap_net::raw_socket::{parse_tcp_response_full, RawSocket, TcpPacketBuilder};
 
@@ -653,6 +683,7 @@ impl OsDetector {
     /// T5: SYN to closed port
     /// T6: ACK to closed port
     /// T7: FIN+PSH+URG to closed port
+    #[allow(clippy::unused_async)]
     async fn send_tcp_tests(&self, target: Ipv4Addr) -> Result<Vec<TestResult>> {
         use rustnmap_net::raw_socket::{parse_tcp_response_full, RawSocket, TcpPacketBuilder};
 
@@ -714,7 +745,7 @@ impl OsDetector {
 
             socket.send_packet(&packet, &dst_sockaddr).map_err(|e| {
                 crate::FingerprintError::Network {
-                    operation: format!("send {} probe", name),
+                    operation: format!("send {name} probe"),
                     reason: e.to_string(),
                 }
             })?;
@@ -750,6 +781,7 @@ impl OsDetector {
     /// Send IE (ICMP Echo) probes.
     ///
     /// Sends 2 ICMP echo requests with different IP options.
+    #[allow(clippy::unused_async)]
     async fn send_icmp_probes(&self, target: Ipv4Addr) -> Result<IcmpTestResult> {
         use rustnmap_net::raw_socket::{IcmpPacketBuilder, RawSocket};
 
@@ -834,8 +866,7 @@ impl OsDetector {
                     }
                 }
             }
-            Ok(_) => {}
-            Err(_) => {}
+            Ok(_) | Err(_) => {}
         }
 
         Ok(result)
@@ -844,6 +875,7 @@ impl OsDetector {
     /// Send U1 UDP probe.
     ///
     /// Sends a UDP packet to a closed port and analyzes the ICMP response.
+    #[allow(clippy::unused_async)]
     async fn send_udp_probe(&self, target: Ipv4Addr) -> Result<UdpTestResult> {
         use rustnmap_net::raw_socket::{RawSocket, UdpPacketBuilder};
 
@@ -904,10 +936,10 @@ impl OsDetector {
     /// Nmap uses: WScale=10, NOP, MSS=1460, Timestamp, SACK permitted
     fn build_tcp_options_for_seq() -> Vec<u8> {
         // TSval (4 bytes) - use current time
-        let tsval = std::time::SystemTime::now()
+        let tsval = u32::try_from(std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
-            .as_secs() as u32;
+            .as_secs()).unwrap_or(0);
 
         vec![
             // Window Scale (kind=3, len=3, value=10)
@@ -962,7 +994,7 @@ mod tests {
     #[test]
     fn test_detector_new() {
         let db = FingerprintDatabase::empty();
-        let local_addr = Ipv4Addr::new(127, 0, 0, 1);
+        let local_addr = Ipv4Addr::LOCALHOST;
         let detector = OsDetector::new(db, local_addr);
 
         assert_eq!(detector.seq_count, 6);
@@ -971,7 +1003,7 @@ mod tests {
     #[test]
     fn test_with_seq_count() {
         let db = FingerprintDatabase::empty();
-        let local_addr = Ipv4Addr::new(127, 0, 0, 1);
+        let local_addr = Ipv4Addr::LOCALHOST;
         let detector = OsDetector::new_with_ref(&db, local_addr).with_seq_count(15);
 
         assert_eq!(detector.seq_count, 15);
@@ -980,7 +1012,7 @@ mod tests {
     #[test]
     fn test_seq_count_clamp() {
         let db = FingerprintDatabase::empty();
-        let local_addr = Ipv4Addr::new(127, 0, 0, 1);
+        let local_addr = Ipv4Addr::LOCALHOST;
         let detector = OsDetector::new_with_ref(&db, local_addr).with_seq_count(30);
 
         assert_eq!(detector.seq_count, 20); // Clamped to max

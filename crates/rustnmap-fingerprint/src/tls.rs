@@ -397,7 +397,7 @@ impl TlsDetector {
                                     subject_alt_names.push(dns.to_string());
                                 }
                                 GeneralName::IPAddress(ip) => {
-                                    subject_alt_names.push(format!("{:?}", ip));
+                                    subject_alt_names.push(format!("{ip:?}"));
                                 }
                                 _ => {}
                             }
@@ -449,7 +449,7 @@ impl TlsDetector {
             if i > 0 {
                 result.push(':');
             }
-            write!(&mut result, "{:02X}", byte).unwrap();
+            write!(&mut result, "{byte:02X}").unwrap();
         }
         result
     }

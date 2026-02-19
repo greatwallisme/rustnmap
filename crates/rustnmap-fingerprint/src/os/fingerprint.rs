@@ -292,6 +292,7 @@ pub struct IcmpTestResult {
 
 impl OsFingerprint {
     /// Create empty fingerprint.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             seq: None,
@@ -306,48 +307,56 @@ impl OsFingerprint {
     }
 
     /// Set SEQ fingerprint.
+    #[must_use]
     pub fn with_seq(mut self, seq: SeqFingerprint) -> Self {
         self.seq = Some(seq);
         self
     }
 
     /// Set IP ID pattern.
+    #[must_use]
     pub fn with_ip_id(mut self, ip_id: IpIdPattern) -> Self {
         self.ip_id = Some(ip_id);
         self
     }
 
     /// Add TCP options for a test.
+    #[must_use]
     pub fn with_ops(mut self, test: String, ops: OpsFingerprint) -> Self {
         self.ops.insert(test, ops);
         self
     }
 
     /// Set window size for a test.
+    #[must_use]
     pub fn with_win(mut self, test: String, window: u16) -> Self {
         self.win.insert(test, window);
         self
     }
 
     /// Set ECN fingerprint.
+    #[must_use]
     pub fn with_ecn(mut self, ecn: EcnFingerprint) -> Self {
         self.ecn = Some(ecn);
         self
     }
 
     /// Add test result.
+    #[must_use]
     pub fn with_test(mut self, result: TestResult) -> Self {
         self.tests.insert(result.name.clone(), result);
         self
     }
 
     /// Set U1 (UDP) test result.
+    #[must_use]
     pub fn with_u1(mut self, u1: UdpTestResult) -> Self {
         self.u1 = Some(u1);
         self
     }
 
     /// Set IE (ICMP Echo) test result.
+    #[must_use]
     pub fn with_ie(mut self, ie: IcmpTestResult) -> Self {
         self.ie = Some(ie);
         self
@@ -368,6 +377,7 @@ impl Default for OpsFingerprint {
 
 impl OpsFingerprint {
     /// Create empty TCP options fingerprint.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             mss: None,
@@ -388,6 +398,7 @@ impl Default for EcnFingerprint {
 
 impl EcnFingerprint {
     /// Create empty ECN fingerprint.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             ece: false,
@@ -400,6 +411,7 @@ impl EcnFingerprint {
 
 impl SeqFingerprint {
     /// Create a new SEQ fingerprint with unknown class.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             class: IsnClass::Unknown,
@@ -425,6 +437,7 @@ impl Default for SeqFingerprint {
 
 impl TestResult {
     /// Create a new test result with the given name.
+    #[must_use]
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -442,6 +455,7 @@ impl TestResult {
     }
 
     /// Set the response flags.
+    #[must_use]
     pub fn with_flags(mut self, flags: u8) -> Self {
         self.flags = flags;
         self.responded = true;
@@ -449,12 +463,14 @@ impl TestResult {
     }
 
     /// Set the window size.
+    #[must_use]
     pub fn with_window(mut self, window: u16) -> Self {
         self.window = Some(window);
         self
     }
 
     /// Set TCP options.
+    #[must_use]
     pub fn with_options(mut self, options: &OpsFingerprint) -> Self {
         self.mss = options.mss;
         self.wscale = options.wscale;
@@ -464,6 +480,7 @@ impl TestResult {
     }
 
     /// Set IP header fields.
+    #[must_use]
     pub fn with_ip_fields(mut self, df: bool, ttl: u8, ip_id: u16) -> Self {
         self.df = df;
         self.ttl = Some(ttl);
@@ -480,6 +497,7 @@ impl Default for TestResult {
 
 impl UdpTestResult {
     /// Create a new empty U1 test result.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             responded: false,
@@ -493,6 +511,7 @@ impl UdpTestResult {
     }
 
     /// Mark as responded with ICMP unreachable.
+    #[must_use]
     pub fn with_icmp_response(mut self, code: u8) -> Self {
         self.responded = true;
         self.icmp_code = Some(code);
@@ -500,6 +519,7 @@ impl UdpTestResult {
     }
 
     /// Set IP header fields.
+    #[must_use]
     pub fn with_ip_fields(mut self, df: bool, ttl: u8, ip_id: u16, ip_len: u16) -> Self {
         self.df = df;
         self.ttl = Some(ttl);
@@ -517,6 +537,7 @@ impl Default for UdpTestResult {
 
 impl IcmpTestResult {
     /// Create a new empty IE test result.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             responded1: false,
@@ -536,6 +557,7 @@ impl IcmpTestResult {
     }
 
     /// Set first response fields.
+    #[must_use]
     pub fn with_response1(mut self, df: bool, ttl: u8, ip_id: u16, tos: u8, data: u16) -> Self {
         self.responded1 = true;
         self.df1 = df;
@@ -547,6 +569,7 @@ impl IcmpTestResult {
     }
 
     /// Set second response fields.
+    #[must_use]
     pub fn with_response2(mut self, df: bool, ttl: u8, ip_id: u16, tos: u8, data: u16) -> Self {
         self.responded2 = true;
         self.df2 = df;

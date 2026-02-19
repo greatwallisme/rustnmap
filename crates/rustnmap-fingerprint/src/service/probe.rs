@@ -10,7 +10,7 @@ use crate::Result;
 /// Service probe definition from nmap-service-probes database.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProbeDefinition {
-    /// Probe name (e.g., "GenericLines", "GetRequest", "SSH").
+    /// Probe name (e.g., "`GenericLines`", "`GetRequest`", "`SSH`").
     pub name: String,
 
     /// Protocol: TCP or UDP.

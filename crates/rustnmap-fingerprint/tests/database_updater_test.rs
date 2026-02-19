@@ -413,7 +413,7 @@ fn test_update_result_debug() {
         details: vec![],
     };
 
-    let debug_str = format!("{:?}", result);
+    let debug_str = format!("{result:?}");
     assert!(debug_str.contains("UpdateResult"));
     assert!(debug_str.contains("updated_count"));
 }
@@ -430,7 +430,7 @@ fn test_update_detail_debug() {
         backup_created: false,
     };
 
-    let debug_str = format!("{:?}", detail);
+    let debug_str = format!("{detail:?}");
     assert!(debug_str.contains("DatabaseUpdateDetail"));
     assert!(debug_str.contains("test-db"));
 }
@@ -439,7 +439,7 @@ fn test_update_detail_debug() {
 #[test]
 fn test_update_options_debug() {
     let opts = UpdateOptions::default();
-    let debug_str = format!("{:?}", opts);
+    let debug_str = format!("{opts:?}");
     assert!(debug_str.contains("UpdateOptions"));
 }
 
@@ -452,7 +452,7 @@ fn test_custom_urls_debug() {
         mac_prefixes: None,
     };
 
-    let debug_str = format!("{:?}", urls);
+    let debug_str = format!("{urls:?}");
     assert!(debug_str.contains("CustomUrls"));
 }
 
@@ -460,7 +460,7 @@ fn test_custom_urls_debug() {
 #[test]
 fn test_database_updater_debug() {
     let updater = DatabaseUpdater::new();
-    let debug_str = format!("{:?}", updater);
+    let debug_str = format!("{updater:?}");
     assert!(debug_str.contains("DatabaseUpdater"));
 }
 
@@ -485,9 +485,9 @@ fn test_update_result_empty() {
 fn test_update_result_many_details() {
     let details: Vec<_> = (0..10)
         .map(|i| DatabaseUpdateDetail {
-            name: format!("db-{}", i),
+            name: format!("db-{i}"),
             success: i % 2 == 0,
-            previous_version: Some(format!("v{}", i)),
+            previous_version: Some(format!("v{i}")),
             new_version: Some(format!("v{}", i + 1)),
             error: if i % 2 == 0 {
                 None
@@ -594,7 +594,7 @@ async fn test_real_download_service_probes() {
 
     // Verify it starts with the expected Nmap header
     assert!(
-        content.starts_with("#") || content.contains("Probe") || content.contains("Exclude"),
+        content.starts_with('#') || content.contains("Probe") || content.contains("Exclude"),
         "File should contain Nmap service probe content"
     );
 }
@@ -666,7 +666,7 @@ async fn test_real_download_mac_prefixes() {
 
     // Verify it contains MAC vendor mappings
     assert!(
-        content.contains(":") || content.contains("Cisco") || content.contains("Intel"),
+        content.contains(':') || content.contains("Cisco") || content.contains("Intel"),
         "File should contain MAC vendor content"
     );
 }

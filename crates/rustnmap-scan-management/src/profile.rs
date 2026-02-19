@@ -361,7 +361,7 @@ output:
 "#;
 
         let profile = ScanProfile::from_yaml(yaml).unwrap();
-        assert!(profile.validate().is_ok());
+        profile.validate().unwrap();
     }
 
     #[test]

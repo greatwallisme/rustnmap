@@ -55,6 +55,7 @@ impl Default for OutputManager {
 
 impl OutputManager {
     /// Create a new output manager.
+    #[must_use] 
     pub fn new() -> Self {
         Self {
             formatters: Vec::new(),
@@ -90,6 +91,7 @@ impl OutputManager {
     }
 
     /// Get current verbosity level.
+    #[must_use] 
     pub fn verbosity(&self) -> VerbosityLevel {
         self.verbosity
     }
@@ -105,7 +107,13 @@ impl OutputManager {
     }
 
     /// Output the current scan result to all destinations.
-    pub async fn output_scan_result(&mut self, result: &ScanResult) -> Result<()> {
+    ///
+    /// # Errors
+    ///
+    /// Returns `OutputError::InvalidData` if no formatters are registered.
+    /// Returns `OutputError::FileWrite` if writing to file destination fails.
+    /// Returns `std::io::Error` if flushing stdout fails.
+    pub fn output_scan_result(&mut self, result: &ScanResult) -> Result<()> {
         if self.formatters.is_empty() {
             return Err(OutputError::InvalidData(
                 "No formatters registered".to_string(),
@@ -116,7 +124,7 @@ impl OutputManager {
             let formatted = formatter.format_scan_result(result)?;
 
             for destination in &self.destinations {
-                self.write_to_destination(destination, &formatted).await?;
+                Self::write_to_destination(destination, &formatted)?;
             }
         }
 
@@ -124,8 +132,7 @@ impl OutputManager {
     }
 
     /// Write formatted output to a destination.
-    async fn write_to_destination(
-        &self,
+    fn write_to_destination(
         destination: &OutputDestination,
         data: &str,
     ) -> Result<()> {
@@ -135,7 +142,7 @@ impl OutputManager {
                 io::stdout().flush().map_err(OutputError::from)?;
             }
             OutputDestination::File(path) => {
-                self.write_to_file(path, data)?;
+                Self::write_to_file(path, data)?;
             }
             OutputDestination::Memory(_dest) => {
                 // Memory buffering handled by caller
@@ -145,7 +152,7 @@ impl OutputManager {
     }
 
     /// Write data to a file.
-    fn write_to_file(&self, path: &Path, data: &str) -> Result<()> {
+    fn write_to_file(path: &Path, data: &str) -> Result<()> {
         // Ensure parent directory exists
         if let Some(parent) = path.parent() {
             if !parent.as_os_str().is_empty() {
@@ -173,6 +180,10 @@ impl OutputManager {
     }
 
     /// Flush all output buffers.
+    ///
+    /// # Errors
+    ///
+    /// Returns `std::io::Error` if flushing stdout fails.
     pub fn flush(&mut self) -> Result<()> {
         // For stdout
         io::stdout().flush().map_err(OutputError::from)?;
@@ -248,12 +259,12 @@ mod tests {
         assert!(manager.current_result.is_some());
     }
 
-    #[tokio::test]
-    async fn test_output_scan_result_no_formatters() {
+    #[test]
+    fn test_output_scan_result_no_formatters() {
         let mut manager = OutputManager::new();
         let result = ScanResult::default();
 
-        let err = manager.output_scan_result(&result).await.unwrap_err();
+        let err = manager.output_scan_result(&result).unwrap_err();
         assert!(matches!(err, OutputError::InvalidData(_)));
     }
 }

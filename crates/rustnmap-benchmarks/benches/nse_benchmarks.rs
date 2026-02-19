@@ -308,7 +308,7 @@ fn bench_script_batch_operations(c: &mut Criterion) {
             let mut db = ScriptDatabase::new();
             for i in 0..100 {
                 let script =
-                    create_test_script(&format!("batch-script-{}", i), ScriptCategory::Default);
+                    create_test_script(&format!("batch-script-{i}"), ScriptCategory::Default);
                 db.register_script(&script);
             }
             black_box(db);
@@ -320,13 +320,13 @@ fn bench_script_batch_operations(c: &mut Criterion) {
         let mut db = ScriptDatabase::new();
         for i in 0..100 {
             let script =
-                create_test_script(&format!("lookup-script-{}", i), ScriptCategory::Default);
+                create_test_script(&format!("lookup-script-{i}"), ScriptCategory::Default);
             db.register_script(&script);
         }
 
         b.iter(|| {
             for i in 0..100 {
-                let _ = db.get(&format!("lookup-script-{}", i));
+                let _ = db.get(&format!("lookup-script-{i}"));
             }
         });
     });
@@ -338,7 +338,7 @@ fn bench_script_batch_operations(c: &mut Criterion) {
 fn create_test_script(id: &str, _category: ScriptCategory) -> rustnmap_nse::NseScript {
     rustnmap_nse::NseScript::new(
         id,
-        std::path::PathBuf::from(format!("/test/{}.nse", id)),
+        std::path::PathBuf::from(format!("/test/{id}.nse")),
         String::new(),
     )
 }
@@ -347,7 +347,7 @@ fn create_test_script(id: &str, _category: ScriptCategory) -> rustnmap_nse::NseS
 fn create_script_with_source(id: &str, source: &str) -> rustnmap_nse::NseScript {
     rustnmap_nse::NseScript::new(
         id,
-        std::path::PathBuf::from(format!("/test/{}.nse", id)),
+        std::path::PathBuf::from(format!("/test/{id}.nse")),
         source.to_string(),
     )
 }
@@ -366,7 +366,7 @@ fn create_populated_database(count: usize) -> ScriptDatabase {
 
     for i in 0..count {
         let category = categories[i % categories.len()];
-        let script = create_test_script(&format!("test-script-{}", i), category);
+        let script = create_test_script(&format!("test-script-{i}"), category);
         db.register_script(&script);
     }
 

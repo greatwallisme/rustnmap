@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Command-line argument parsing for RustNmap.
+//! Command-line argument parsing for `RustNmap`.
 //!
 //! This module provides comprehensive Nmap-compatible argument parsing
 //! using clap's derive API.
@@ -21,9 +21,9 @@
 use clap::Parser;
 use std::path::PathBuf;
 
-/// RustNmap - Modern, high-performance network scanner written in Rust.
+/// `RustNmap` - Modern, high-performance network scanner written in Rust.
 ///
-/// RustNmap provides 100% functional parity with Nmap while leveraging
+/// `RustNmap` provides 100% functional parity with Nmap while leveraging
 /// Rust's safety guarantees and asynchronous capabilities for improved performance.
 ///
 /// # Target Specification

@@ -209,7 +209,7 @@ impl ProbeDatabase {
         if payload_end == 0 && !after_delimiter.contains(delimiter) {
             return Err(FingerprintError::ParseError {
                 line: line_num,
-                content: format!("Unclosed payload delimiter '{}'", delimiter),
+                content: format!("Unclosed payload delimiter '{delimiter}'"),
             });
         }
 
@@ -371,7 +371,7 @@ impl ProbeDatabase {
         if pattern_end == 0 && !after_delimiter.contains(delimiter) {
             return Err(FingerprintError::ParseError {
                 line: line_num,
-                content: format!("Unclosed pattern delimiter '{}'", delimiter),
+                content: format!("Unclosed pattern delimiter '{delimiter}'"),
             });
         }
 
@@ -463,7 +463,7 @@ impl ProbeDatabase {
     }
 
     /// Extract a single version field (p/, v/, i/, h/, o/, d/, cpe/).
-    /// Returns ((field_type, value), remaining) or None.
+    /// Returns ((`field_type`, value), remaining) or None.
     fn extract_version_field(s: &str) -> Result<Option<((char, String), &str)>> {
         let s = s.trim_start();
         if s.is_empty() {
@@ -537,32 +537,32 @@ impl ProbeDatabase {
     /// Parse port list from directive.
     fn parse_ports(s: &str) -> Result<Vec<u16>> {
         let mut ports = Vec::new();
-        let parts: Vec<&str> = s.split(',').collect();
+        let split_parts: Vec<&str> = s.split(',').collect();
 
-        for part in parts {
-            let part = part.trim();
-            if let Some(range_idx) = part.find('-') {
+        for part in split_parts {
+            let trimmed = part.trim();
+            if let Some(range_idx) = trimmed.find('-') {
                 // Range: "80-85"
                 let start: u16 =
-                    part[..range_idx]
+                    trimmed[..range_idx]
                         .parse()
                         .map_err(|_| FingerprintError::ParseError {
                             line: 0,
-                            content: format!("Invalid port range start: {part}"),
+                            content: format!("Invalid port range start: {trimmed}"),
                         })?;
                 let end: u16 =
-                    part[range_idx + 1..]
+                    trimmed[range_idx + 1..]
                         .parse()
                         .map_err(|_| FingerprintError::ParseError {
                             line: 0,
-                            content: format!("Invalid port range end: {part}"),
+                            content: format!("Invalid port range end: {trimmed}"),
                         })?;
                 ports.extend(start..=end);
             } else {
                 // Single port
-                let port: u16 = part.parse().map_err(|_| FingerprintError::ParseError {
+                let port: u16 = trimmed.parse().map_err(|_| FingerprintError::ParseError {
                     line: 0,
-                    content: format!("Invalid port: {part}"),
+                    content: format!("Invalid port: {trimmed}"),
                 })?;
                 ports.push(port);
             }
@@ -733,7 +733,7 @@ mod tests {
 
     #[test]
     fn test_simple_database_parse() {
-        let content = r#"
+        let content = r"
 # Test service probe database
 Probe TCP GenericLines q|\r\n\r\n|
 rarity 1
@@ -744,7 +744,7 @@ Probe TCP HTTP q|GET / HTTP/1.0\r\n\r\n|
 rarity 3
 Ports 80,8080
 Match http m|^Server: ([\w/]+)| p/$1/
-"#;
+";
         let db = ProbeDatabase::parse(content).unwrap();
 
         assert_eq!(db.probe_count(), 2);
@@ -807,7 +807,7 @@ Match http m|^Server: ([\w/]+)| p/$1/
     fn test_extract_version_field() {
         // Test basic extraction first
         let result = ProbeDatabase::extract_version_field("p/OpenSSH/ rest");
-        println!("Result: {:?}", result);
+        println!("Result: {result:?}");
         assert!(result.is_ok());
         assert!(
             result.as_ref().unwrap().is_some(),

@@ -138,7 +138,8 @@ impl CookieGenerator {
 
         // Rebuild cookie and verify
         // We need to find the original port - try to match source_port
-        // This is a simplified verification - in production, you'd use a different approach
+        // Verify by recomputing the expected port from the target and timestamp
+        //TODO: This is a simplified verification - in production, you'd use a different approach
         let expected_port_hash = self.compute_port_hash(target, cookie_timestamp);
         let actual_port = 1024 + (expected_port_hash % 64511);
 
@@ -198,18 +199,17 @@ mod tests {
 
     #[test]
     fn test_cookie_generator_creation() {
-        let result = CookieGenerator::new();
-        assert!(result.is_ok());
+        CookieGenerator::new().unwrap();
     }
 
     #[test]
     fn test_cookie_generation() {
         let generator = CookieGenerator::default();
         let target = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1));
-        let cookie = generator.generate(target, 80, 1234567890);
+        let cookie = generator.generate(target, 80, 1_234_567_890);
 
         assert!(cookie.source_port >= 1024);
-        assert_eq!(cookie.timestamp, 1234567890);
+        assert_eq!(cookie.timestamp, 1_234_567_890);
     }
 
     #[test]
@@ -218,8 +218,8 @@ mod tests {
         let generator = CookieGenerator::with_key(key);
         let target = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1));
 
-        let cookie1 = generator.generate(target, 80, 1234567890);
-        let cookie2 = generator.generate(target, 80, 1234567890);
+        let cookie1 = generator.generate(target, 80, 1_234_567_890);
+        let cookie2 = generator.generate(target, 80, 1_234_567_890);
 
         assert_eq!(cookie1.source_port, cookie2.source_port);
         assert_eq!(cookie1.sequence_num, cookie2.sequence_num);
@@ -231,8 +231,8 @@ mod tests {
         let target1 = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1));
         let target2 = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 2));
 
-        let cookie1 = generator.generate(target1, 80, 1234567890);
-        let cookie2 = generator.generate(target2, 80, 1234567890);
+        let cookie1 = generator.generate(target1, 80, 1_234_567_890);
+        let cookie2 = generator.generate(target2, 80, 1_234_567_890);
 
         assert_ne!(cookie1.source_port, cookie2.source_port);
         assert_ne!(cookie1.sequence_num, cookie2.sequence_num);
@@ -243,8 +243,8 @@ mod tests {
         let generator = CookieGenerator::default();
         let target = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1));
 
-        let cookie1 = generator.generate(target, 80, 1234567890);
-        let cookie2 = generator.generate(target, 443, 1234567890);
+        let cookie1 = generator.generate(target, 80, 1_234_567_890);
+        let cookie2 = generator.generate(target, 443, 1_234_567_890);
 
         assert_ne!(cookie1.source_port, cookie2.source_port);
     }

@@ -10,7 +10,7 @@ use rustnmap_fingerprint::os::{FingerprintDatabase, OsDetector};
 #[test]
 fn test_os_detector_creation() {
     let db = FingerprintDatabase::empty();
-    let local_addr = Ipv4Addr::new(127, 0, 0, 1);
+    let local_addr = Ipv4Addr::LOCALHOST;
     let _detector = OsDetector::new(db, local_addr);
 
     // Just verify it was created successfully
@@ -59,7 +59,7 @@ async fn test_os_detection_localhost() {
 #[test]
 fn test_seq_analysis_incremental() {
     // Simulate incremental ISN pattern (Linux-like)
-    let isns: Vec<u32> = vec![1000000, 2000000, 3000000, 4000000, 5000000, 6000000];
+    let isns: Vec<u32> = vec![1_000_000, 2_000_000, 3_000_000, 4_000_000, 5_000_000, 6_000_000];
 
     // Calculate GCD
     let diffs: Vec<u32> = isns.windows(2).map(|w| w[1].wrapping_sub(w[0])).collect();
@@ -79,8 +79,8 @@ fn test_seq_analysis_incremental() {
         .unwrap_or(0);
 
     // All differences should be 1000000
-    assert!(diffs.iter().all(|&d| d == 1000000));
-    assert_eq!(gcd, 1000000);
+    assert!(diffs.iter().all(|&d| d == 1_000_000));
+    assert_eq!(gcd, 1_000_000);
 }
 
 /// Test IP ID sequence classification.

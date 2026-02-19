@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Output formatters for RustNmap network scanner.
+//! Output formatters for `RustNmap` network scanner.
 //!
 //! This crate provides multiple output format implementations compatible with Nmap:
 //! - Normal format (human-readable text output)

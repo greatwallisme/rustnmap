@@ -111,6 +111,7 @@ impl Default for UpdateOptions {
 
 impl UpdateOptions {
     /// Create new update options with defaults.
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -124,6 +125,7 @@ impl UpdateOptions {
     ///
     /// let options = UpdateOptions::default().backup(true);
     /// ```
+    #[must_use]
     pub fn backup(mut self, backup: bool) -> Self {
         self.backup = backup;
         self
@@ -138,6 +140,7 @@ impl UpdateOptions {
     ///
     /// let options = UpdateOptions::default().verify_checksums(true);
     /// ```
+    #[must_use]
     pub fn verify_checksums(mut self, verify: bool) -> Self {
         self.verify_checksums = verify;
         self
@@ -157,6 +160,7 @@ impl UpdateOptions {
     /// };
     /// let options = UpdateOptions::default().custom_urls(custom);
     /// ```
+    #[must_use]
     pub fn custom_urls(mut self, urls: CustomUrls) -> Self {
         self.custom_urls = Some(urls);
         self
@@ -176,6 +180,11 @@ impl DatabaseUpdater {
     ///
     /// let updater = DatabaseUpdater::new();
     /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if the HTTP client fails to build.
+    #[must_use]
     pub fn new() -> Self {
         let client = Client::builder()
             .timeout(DOWNLOAD_TIMEOUT)
@@ -232,10 +241,10 @@ impl DatabaseUpdater {
         match self.update_service_probes(target_dir, options).await {
             Ok(detail) => {
                 if detail.success {
-                    if detail.previous_version != detail.new_version {
-                        updated += 1;
-                    } else {
+                    if detail.previous_version == detail.new_version {
                         unchanged += 1;
+                    } else {
+                        updated += 1;
                     }
                 } else {
                     failed += 1;
@@ -259,10 +268,10 @@ impl DatabaseUpdater {
         match self.update_os_db(target_dir, options).await {
             Ok(detail) => {
                 if detail.success {
-                    if detail.previous_version != detail.new_version {
-                        updated += 1;
-                    } else {
+                    if detail.previous_version == detail.new_version {
                         unchanged += 1;
+                    } else {
+                        updated += 1;
                     }
                 } else {
                     failed += 1;
@@ -286,10 +295,10 @@ impl DatabaseUpdater {
         match self.update_mac_prefixes(target_dir, options).await {
             Ok(detail) => {
                 if detail.success {
-                    if detail.previous_version != detail.new_version {
-                        updated += 1;
-                    } else {
+                    if detail.previous_version == detail.new_version {
                         unchanged += 1;
+                    } else {
+                        updated += 1;
                     }
                 } else {
                     failed += 1;
@@ -446,6 +455,7 @@ impl DatabaseUpdater {
     }
 
     /// Internal method to update a single database file.
+    #[allow(clippy::too_many_lines, reason = "Complex update logic with multiple steps")]
     async fn update_database_file(
         &self,
         url: &str,
@@ -482,7 +492,7 @@ impl DatabaseUpdater {
                     success: false,
                     previous_version: previous_version.clone(),
                     new_version: None,
-                    error: Some(format!("Download failed: {}", e)),
+                    error: Some(format!("Download failed: {e}")),
                     backup_created,
                 });
             }
@@ -508,7 +518,7 @@ impl DatabaseUpdater {
                     success: false,
                     previous_version: previous_version.clone(),
                     new_version: None,
-                    error: Some(format!("Failed to read response: {}", e)),
+                    error: Some(format!("Failed to read response: {e}")),
                     backup_created,
                 });
             }
@@ -534,7 +544,7 @@ impl DatabaseUpdater {
                 success: false,
                 previous_version: previous_version.clone(),
                 new_version: None,
-                error: Some(format!("Failed to write temp file: {}", e)),
+                error: Some(format!("Failed to write temp file: {e}")),
                 backup_created,
             });
         }
@@ -548,7 +558,7 @@ impl DatabaseUpdater {
                 success: false,
                 previous_version: previous_version.clone(),
                 new_version: None,
-                error: Some(format!("Failed to replace file: {}", e)),
+                error: Some(format!("Failed to replace file: {e}")),
                 backup_created,
             });
         }
@@ -585,7 +595,7 @@ impl DatabaseUpdater {
                 // Look for version info in comments
                 for line in content.lines().take(20) {
                     let line = line.trim();
-                    if line.starts_with("#") {
+                    if line.starts_with('#') {
                         // Try to find date patterns like "# Date: 2024-01-15" or similar
                         if let Some(date) = line.strip_prefix("# Date:") {
                             return Some(date.trim().to_string());

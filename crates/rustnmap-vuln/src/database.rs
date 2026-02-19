@@ -549,7 +549,7 @@ mod tests {
         db.insert_epss(&epss).unwrap();
 
         let result = db.get_epss("CVE-2024-1234").unwrap().unwrap();
-        assert_eq!(result.epss_score, 0.85);
+        assert!((result.epss_score - 0.85).abs() < f32::EPSILON);
     }
 
     #[test]

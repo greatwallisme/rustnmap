@@ -105,6 +105,7 @@ pub struct ServiceDetector {
 
 impl ServiceDetector {
     /// Create new detector with probe database.
+    #[must_use]
     pub fn new(db: ProbeDatabase) -> Self {
         Self {
             db,
@@ -114,12 +115,14 @@ impl ServiceDetector {
     }
 
     /// Set default probe response timeout.
+    #[must_use]
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.default_timeout = timeout;
         self
     }
 
     /// Set version detection intensity (1-9).
+    #[must_use]
     pub fn with_intensity(mut self, intensity: u8) -> Self {
         self.intensity = intensity.clamp(1, 9);
         self
@@ -782,7 +785,7 @@ mod tests {
 
     #[test]
     fn test_select_probes_filters_by_rarity_via_parse() {
-        let content = r#"
+        let content = r"
 Probe TCP Common q|probe1|
 rarity 1
 Ports 80
@@ -794,7 +797,7 @@ Ports 80
 Probe TCP Rare q|probe3|
 rarity 9
 Ports 80
-"#;
+";
         let db = ProbeDatabase::parse(content).unwrap();
 
         // Test with intensity 3 (max rarity 5)
@@ -811,7 +814,7 @@ Ports 80
 
     #[test]
     fn test_select_probes_sorts_by_rarity_via_parse() {
-        let content = r#"
+        let content = r"
 Probe TCP Zebra q|probe1|
 rarity 5
 Ports 80
@@ -823,7 +826,7 @@ Ports 80
 Probe TCP Beta q|probe3|
 rarity 3
 Ports 80
-"#;
+";
         let db = ProbeDatabase::parse(content).unwrap();
 
         let detector = ServiceDetector::new(db).with_intensity(9);
@@ -837,7 +840,7 @@ Ports 80
 
     #[test]
     fn test_select_probes_sorts_by_name_for_same_rarity_via_parse() {
-        let content = r#"
+        let content = r"
 Probe TCP Zebra q|probe1|
 rarity 3
 Ports 80
@@ -845,7 +848,7 @@ Ports 80
 Probe TCP Alpha q|probe2|
 rarity 3
 Ports 80
-"#;
+";
         let db = ProbeDatabase::parse(content).unwrap();
 
         let detector = ServiceDetector::new(db).with_intensity(9);

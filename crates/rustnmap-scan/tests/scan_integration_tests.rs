@@ -339,12 +339,11 @@ fn test_connect_scanner_requires_no_root() {
 fn test_syn_scanner_reports_requires_root() {
     let config = test_config();
 
-    if let Ok(scanner) = rustnmap_scan::syn_scan::TcpSynScanner::new(Ipv4Addr::UNSPECIFIED, config)
-    {
+    if let Ok(scanner) = rustnmap_scan::syn_scan::TcpSynScanner::new(Ipv4Addr::UNSPECIFIED, config) {
         assert!(
             scanner.requires_root(),
             "SYN scanner should report requiring root"
-        )
+        );
     } else {
         // If we can't create it due to permissions, that's expected without root
     }

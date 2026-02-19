@@ -9,6 +9,10 @@
 
 ---
 
+## Most Important
+- Pay Attention to Code Quality Hook Error Messages. **Do not** attempt to bypass or disable the Hook
+- **Zero warning**, **Zero error**. **NEVER** allow any warning or error by relaxing clippy standards in configuration 
+
 ## Project Overview
 
 RustNmap is a modern, high-performance network scanning tool written in Rust, designed to provide 100% functional parity with Nmap while leveraging Rust's safety guarantees and asynchronous capabilities for improved performance.
@@ -80,7 +84,6 @@ rust-nmap/
 
 ## Development Principles
 
-### 0. Pay Attention to Code Quality Hook Error Messages. Do not attempt to bypass or disable the Hook
 
 ### 1. No Simplification
 
@@ -373,6 +376,128 @@ See `findings.md` for detailed security audit report.
 - Root privileges required for raw socket operations
 - Follow `rust-guidelines` for all Rust code patterns
 - Refer to Nmap source code when behavior is ambiguous
+
+### Rust Code Standards (Mandatory)
+
+**ALL code MUST follow these rules. Violations will be rejected:**
+
+#### 1. Documentation Requirements
+- **Type names in docs MUST use backticks**: `OsReference`, `HashMap`, etc.
+- **Functions returning Result MUST have `# Errors` section**
+- **Functions that may panic MUST have `# Panics` section**
+- Example:
+```rust
+/// Load database from file.
+///
+/// # Errors
+/// Returns error if file not found or invalid format.
+///
+/// # Panics
+/// Panics if config is not initialized.
+pub fn load(path: &str) -> Result<Self> { ... }
+```
+
+#### 2. Builder Pattern Methods MUST have `#[must_use]`
+```rust
+#[must_use]
+pub fn with_timeout(mut self, timeout: Duration) -> Self {
+    self.timeout = timeout;
+    self
+}
+```
+
+#### 3. Numeric Literals MUST Use Separators
+```rust
+// Bad
+let timeout = 1000000;
+
+// Good
+let timeout = 1_000_000;
+```
+
+#### 4. Use Well-Known Constants Instead of Hard-coded Values
+```rust
+// Bad
+let addr = Ipv4Addr::new(127, 0, 0, 1);
+
+// Good
+let addr = Ipv4Addr::LOCALHOST;
+```
+
+#### 5. Casts MUST Be Explicit and Safe
+```rust
+// Bad - lossy cast
+let val = x as u64;
+
+// Good - explicit conversion
+let val = u64::from(x);
+
+// Or with allow attribute if intentional
+#[allow(clippy::cast_possible_truncation)]
+let val = x as u8;  // Safe because we know x < 256
+```
+
+#### 6. Format Strings MUST Be Inlined
+```rust
+// Bad
+format!("{}", var)
+format!("Error: {}", e)
+
+// Good
+format!("{var}")
+format!("Error: {e}")
+```
+
+#### 7. Match Arms MUST NOT Have Identical Bodies
+```rust
+// Bad
+match x {
+    "A" => result,
+    "B" => result,  // Same as above
+    _ => default,
+}
+
+// Good
+match x {
+    "A" | "B" => result,
+    _ => default,
+}
+```
+
+#### 8. Functions MUST NOT Return Unnecessary Result/Option
+```rust
+// Bad - never returns Err
+fn get_value() -> Result<i32> {
+    Ok(42)
+}
+
+// Good
+fn get_value() -> i32 {
+    42
+}
+```
+
+#### 9. Async Functions MUST Use await
+```rust
+// Bad - no await, should be sync
+async fn get_data() -> i32 {
+    42
+}
+
+// Good - either add await or make sync
+fn get_data() -> i32 {
+    42
+}
+```
+
+#### 10. Clone Assignments MUST Use clone_from
+```rust
+// Bad
+dest = source.clone();
+
+// Good
+dest.clone_from(&source);
+```
 
 ### 2.0 Development Notes
 - See `RETHINK.md` for the complete 2.0 evolution plan

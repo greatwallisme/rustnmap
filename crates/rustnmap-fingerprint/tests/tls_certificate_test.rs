@@ -75,8 +75,8 @@ fn test_tls_info_builder_complete() {
             "test.example.com".to_string(),
             "www.test.example.com".to_string(),
         ],
-        not_before: SystemTime::UNIX_EPOCH + Duration::from_secs(1609459200), // 2021-01-01
-        not_after: SystemTime::UNIX_EPOCH + Duration::from_secs(1893456000),  // 2030-01-01
+        not_before: SystemTime::UNIX_EPOCH + Duration::from_secs(1_609_459_200), // 2021-01-01
+        not_after: SystemTime::UNIX_EPOCH + Duration::from_secs(1_893_456_000),  // 2030-01-01
         signature_algorithm: "sha256WithRSAEncryption".to_string(),
         public_key_info: "RSA 2048".to_string(),
         fingerprint_sha256: "AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99".to_string(),
@@ -285,7 +285,7 @@ fn test_certificate_empty_san() {
         serial_number: "00".to_string(),
         subject_alt_names: vec![],
         not_before: SystemTime::UNIX_EPOCH,
-        not_after: SystemTime::UNIX_EPOCH + Duration::from_secs(1000000),
+        not_after: SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000),
         signature_algorithm: "sha256WithRSAEncryption".to_string(),
         public_key_info: "RSA 2048".to_string(),
         fingerprint_sha256: "00:00".to_string(),
@@ -303,7 +303,7 @@ fn test_certificate_with_ipv4_san() {
         serial_number: "01".to_string(),
         subject_alt_names: vec!["192.168.1.1".to_string(), "test.local".to_string()],
         not_before: SystemTime::UNIX_EPOCH,
-        not_after: SystemTime::UNIX_EPOCH + Duration::from_secs(1000000),
+        not_after: SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000),
         signature_algorithm: "sha256WithRSAEncryption".to_string(),
         public_key_info: "RSA 2048".to_string(),
         fingerprint_sha256: "01:02:03".to_string(),
@@ -322,7 +322,7 @@ fn test_certificate_with_ipv6_san() {
         serial_number: "01".to_string(),
         subject_alt_names: vec!["::1".to_string(), "localhost".to_string()],
         not_before: SystemTime::UNIX_EPOCH,
-        not_after: SystemTime::UNIX_EPOCH + Duration::from_secs(1000000),
+        not_after: SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000),
         signature_algorithm: "sha256WithRSAEncryption".to_string(),
         public_key_info: "RSA 2048".to_string(),
         fingerprint_sha256: "01:02:03".to_string(),
@@ -474,7 +474,7 @@ fn test_certificate_with_wildcard_san() {
         serial_number: "WILD123".to_string(),
         subject_alt_names: vec!["*.example.com".to_string(), "example.com".to_string()],
         not_before: SystemTime::UNIX_EPOCH,
-        not_after: SystemTime::UNIX_EPOCH + Duration::from_secs(1000000),
+        not_after: SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000),
         signature_algorithm: "sha256WithRSAEncryption".to_string(),
         public_key_info: "RSA 2048".to_string(),
         fingerprint_sha256: "WILD".to_string(),
@@ -490,7 +490,7 @@ fn test_certificate_with_wildcard_san() {
 fn test_tls_info_debug() {
     let info = TlsInfo::new().with_version(TlsVersion::Tls1_2);
 
-    let debug_str = format!("{:?}", info);
+    let debug_str = format!("{info:?}");
     assert!(debug_str.contains("TlsInfo"));
     assert!(debug_str.contains("Tls1_2"));
 }
@@ -512,7 +512,7 @@ fn test_certificate_info_debug() {
         fingerprint_sha256: "AA".to_string(),
     };
 
-    let debug_str = format!("{:?}", cert);
+    let debug_str = format!("{cert:?}");
     assert!(debug_str.contains("CertificateInfo"));
     assert!(debug_str.contains("CN=test"));
 }
@@ -600,8 +600,7 @@ async fn test_tls_detection_real_bing() {
     // If we get here, all endpoints failed - this is a network issue, not a code issue
     // Skip the test rather than fail in CI environments without internet
     eprintln!(
-        "Warning: Could not connect to any Bing endpoint. Last error: {:?}",
-        last_error
+        "Warning: Could not connect to any Bing endpoint. Last error: {last_error:?}"
     );
     // Test passes if we can't connect (network unavailable)
     // This prevents flaky tests in CI environments

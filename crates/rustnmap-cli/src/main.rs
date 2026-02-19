@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Main entry point for RustNmap CLI.
+//! Main entry point for `RustNmap` CLI.
 //!
 //! This is the binary entry point that parses command-line arguments
 //! and coordinates the scanning workflow using the orchestrator library.
@@ -34,7 +34,7 @@ async fn main() -> Result<()> {
 
     // Handle result
     match result {
-        Ok(_) => {
+        Ok(()) => {
             info!("Scan completed successfully");
         }
         Err(e) => {

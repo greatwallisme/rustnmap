@@ -1,6 +1,6 @@
-//! RustNmap Performance Benchmarks
+//! `RustNmap` Performance Benchmarks
 //!
-//! This crate contains comprehensive performance benchmarks for the RustNmap
+//! This crate contains comprehensive performance benchmarks for the `RustNmap`
 //! project, measuring scanning performance, packet I/O, fingerprinting, and
 //! NSE script execution.
 //!

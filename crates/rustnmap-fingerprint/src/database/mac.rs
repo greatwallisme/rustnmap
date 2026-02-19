@@ -62,6 +62,7 @@ impl MacPrefixDatabase {
     /// let db = MacPrefixDatabase::empty();
     /// assert!(db.lookup("00:00:00:00:00:00").is_none());
     /// ```
+    #[must_use]
     pub fn empty() -> Self {
         Self {
             prefixes: HashMap::new(),
@@ -165,7 +166,7 @@ impl MacPrefixDatabase {
             if oui.len() != 6 || !oui.chars().all(|c| c.is_ascii_hexdigit()) {
                 return Err(FingerprintError::ParseError {
                     line: line_num,
-                    content: format!("Invalid OUI format: {}", oui),
+                    content: format!("Invalid OUI format: {oui}"),
                 });
             }
 
@@ -219,9 +220,10 @@ impl MacPrefixDatabase {
     /// # Ok(())
     /// # }
     /// ```
+    #[must_use]
     pub fn lookup(&self, mac: &str) -> Option<&str> {
         let oui = Self::extract_oui(mac)?;
-        self.prefixes.get(&oui).map(|s| s.as_str())
+        self.prefixes.get(&oui).map(String::as_str)
     }
 
     /// Lookup vendor with detailed information.
@@ -252,17 +254,14 @@ impl MacPrefixDatabase {
     /// # Ok(())
     /// # }
     /// ```
+    #[must_use]
     pub fn lookup_detail(&self, mac: &str) -> Option<MacVendorInfo> {
         let oui = Self::extract_oui(mac)?;
         let vendor = self.prefixes.get(&oui)?;
 
         let is_private = vendor.to_lowercase().contains("private")
             || oui == "000000"
-            || oui.starts_with("X")
-            || oui.starts_with("02")
-            || oui.starts_with("06")
-            || oui.starts_with("0A")
-            || oui.starts_with("0E");
+            || oui.starts_with('0') && oui.len() > 1 && matches!(oui.chars().nth(1), Some('2' | '6' | 'A' | 'E'));
 
         Some(MacVendorInfo {
             vendor: vendor.clone(),
@@ -291,8 +290,8 @@ impl MacPrefixDatabase {
     /// Removes all separators (colon, hyphen, dot) and returns
     /// uppercase hex digits.
     fn normalize_mac(mac: &str) -> Option<String> {
-        // Remove common separators and whitespace
-        let cleaned: String = mac.chars().filter(|c| c.is_ascii_hexdigit()).collect();
+        // Remove all separators and whitespace
+        let cleaned: String = mac.chars().filter(char::is_ascii_hexdigit).collect();
 
         // Validate length (should be 12 hex digits for a full MAC)
         if cleaned.len() != 12 {
@@ -317,6 +316,7 @@ impl MacPrefixDatabase {
     /// let db = MacPrefixDatabase::empty();
     /// assert_eq!(db.len(), 0);
     /// ```
+    #[must_use]
     pub fn len(&self) -> usize {
         self.prefixes.len()
     }
@@ -331,6 +331,7 @@ impl MacPrefixDatabase {
     /// let db = MacPrefixDatabase::empty();
     /// assert!(db.is_empty());
     /// ```
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.prefixes.is_empty()
     }
@@ -351,6 +352,7 @@ impl MacPrefixDatabase {
     /// // Universal MAC (bit 1 clear)
     /// assert!(!MacPrefixDatabase::is_locally_administered("00:00:00:00:00:00"));
     /// ```
+    #[must_use]
     pub fn is_locally_administered(mac: &str) -> bool {
         let normalized = Self::normalize_mac(mac);
         if let Some(norm) = normalized {
@@ -378,6 +380,7 @@ impl MacPrefixDatabase {
     /// // Unicast MAC (bit 0 clear)
     /// assert!(!MacPrefixDatabase::is_multicast("00:00:00:00:00:00"));
     /// ```
+    #[must_use]
     pub fn is_multicast(mac: &str) -> bool {
         let normalized = Self::normalize_mac(mac);
         if let Some(norm) = normalized {
@@ -410,13 +413,13 @@ mod tests {
 
     #[test]
     fn test_parse_simple() {
-        let content = r#"
+        let content = r"
 # Comment line
 000000    Private
 00000C    Cisco
 00000E    Fujitsu
 001B11    Intel Corporate
-"#;
+";
 
         let db = MacPrefixDatabase::parse(content).unwrap();
         assert_eq!(db.len(), 4);

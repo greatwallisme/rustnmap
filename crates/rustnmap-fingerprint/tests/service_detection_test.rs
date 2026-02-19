@@ -11,7 +11,7 @@ use rustnmap_fingerprint::service::{ProbeDatabase, ServiceDetector};
 /// Test probe database parsing and probe selection.
 #[test]
 fn test_probe_database_parsing() {
-    let content = r#"
+    let content = r"
 # Test service probe database
 Probe TCP GenericLines q|\r\n\r\n|
 rarity 1
@@ -29,7 +29,7 @@ Probe UDP DNS q|\x00\x00\x10\x00\x00\x01\x00\x00\x00\x00\x00\x00\x07version\x04b
 rarity 2
 Ports 53
 Match dns m|^\x00\x00\x81\x80| p/BIND DNS/
-"#;
+";
 
     let db = ProbeDatabase::parse(content).expect("Failed to parse probe database");
 
@@ -50,10 +50,10 @@ Match dns m|^\x00\x00\x81\x80| p/BIND DNS/
 /// Test match rule parsing with all version info fields.
 #[test]
 fn test_match_rule_parsing() {
-    let content = r#"
+    let content = r"
 Probe TCP Test q|test|
 Match test m|^Test (\d+) (\w+)| p/Product/ v/$1/ i/$2/ h/$1.test.com/ o/Linux/ d/router/ cpe:/a:vendor:product:$1/
-"#;
+";
 
     let db = ProbeDatabase::parse(content).expect("Failed to parse database");
     let probe = db.get_probe("Test").expect("Test probe not found");
@@ -93,10 +93,10 @@ Match test m|^Test (\d+) (\w+)| p/Product/ v/$1/ i/$2/ h/$1.test.com/ o/Linux/ d
 /// Test softmatch directive parsing.
 #[test]
 fn test_softmatch_parsing() {
-    let content = r#"
+    let content = r"
 Probe TCP Test q|test|
 softmatch fingerprint m|^Fingerprint|
-"#;
+";
 
     let db = ProbeDatabase::parse(content).expect("Failed to parse database");
     let probe = db.get_probe("Test").expect("Test probe not found");
@@ -285,10 +285,10 @@ async fn test_database_load_from_file() {
     let temp_dir = std::env::temp_dir();
     let probe_file = temp_dir.join("test-service-probes.txt");
 
-    let content = r#"
+    let content = r"
 Probe TCP Test q|test|
 Match test m|^Test|
-"#;
+";
 
     tokio::fs::write(&probe_file, content)
         .await
@@ -316,7 +316,7 @@ async fn test_database_load_error() {
 /// Test port range parsing in probe definitions.
 #[test]
 fn test_port_range_parsing() {
-    let content = r#"
+    let content = r"
 Probe TCP Single q|single|
 Ports 22
 Match single m|^Single|
@@ -328,7 +328,7 @@ Match range m|^Range|
 Probe TCP Mixed q|mixed|
 Ports 443,8080-8082,9000
 Match mixed m|^Mixed|
-"#;
+";
 
     let db = ProbeDatabase::parse(content).expect("Failed to parse database");
 

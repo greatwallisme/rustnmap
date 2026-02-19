@@ -47,6 +47,6 @@ mod tests {
     fn test_cve_engine_creation() {
         let db = VulnDatabase::open_in_memory().unwrap();
         let engine = CveEngine::new(db);
-        assert!(engine.database().get_stats().is_ok());
+        engine.database().get_stats().unwrap();
     }
 }

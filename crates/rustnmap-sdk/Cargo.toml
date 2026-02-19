@@ -1,0 +1,48 @@
+[package]
+name = "rustnmap-sdk"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+description = "Rust SDK Builder API for RustNmap"
+keywords = ["nmap", "scanner", "network", "sdk", "builder"]
+categories = ["network-programming", "development-tools"]
+
+[dependencies]
+# Async
+tokio = { workspace = true }
+futures-util = "0.3"
+async-stream = "0.3"
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = "0.9"
+
+# Utilities
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+chrono = { workspace = true }
+uuid = { version = "1", features = ["v4"] }
+tracing = { workspace = true }
+dirs = "5.0"
+libc = "0.2"
+
+# Internal dependencies
+rustnmap-core = { path = "../rustnmap-core" }
+rustnmap-output = { path = "../rustnmap-output" }
+rustnmap-evasion = { path = "../rustnmap-evasion" }
+rustnmap-common = { path = "../rustnmap-common" }
+
+# HTTP client for remote scanning
+reqwest = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+
+[lints]
+workspace = true

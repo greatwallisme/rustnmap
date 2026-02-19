@@ -16,7 +16,10 @@
 //! Output formatter implementations for different output formats.
 
 use crate::error::{OutputError, Result};
-use crate::models::*;
+use crate::models::{
+    HostResult, HostStatus, OsMatch, PortResult, PortState, Protocol, ScanResult, ScanType,
+    ScriptElement, ScriptResult, ServiceInfo,
+};
 use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
 use quick_xml::writer::Writer;
 use std::fmt::Write;
@@ -31,6 +34,7 @@ pub struct NdjsonFormatter;
 
 impl NdjsonFormatter {
     /// Create new NDJSON formatter.
+    #[must_use]
     pub fn new() -> Self {
         Self
     }
@@ -68,11 +72,11 @@ impl OutputFormatter for NdjsonFormatter {
             .map_err(|e| OutputError::InvalidData(format!("Failed to serialize script: {e}")))
     }
 
-    fn file_extension(&self) -> &str {
+    fn file_extension(&self) -> &'static str {
         "ndjson"
     }
 
-    fn format_name(&self) -> &str {
+    fn format_name(&self) -> &'static str {
         "NDJSON"
     }
 }
@@ -86,6 +90,7 @@ pub struct MarkdownFormatter;
 
 impl MarkdownFormatter {
     /// Create new Markdown formatter.
+    #[must_use]
     pub fn new() -> Self {
         Self
     }
@@ -100,23 +105,23 @@ impl OutputFormatter for MarkdownFormatter {
 
         // Metadata
         output.push_str("## Scan Information\n\n");
-        output.push_str(&format!("- **Scanner Version**: {}\n", result.metadata.scanner_version));
-        output.push_str(&format!("- **Scan Type**: {:?}\n", result.metadata.scan_type));
-        output.push_str(&format!("- **Protocol**: {:?}\n", result.metadata.protocol));
-        output.push_str(&format!("- **Start Time**: {}\n", result.metadata.start_time));
-        output.push_str(&format!("- **End Time**: {}\n", result.metadata.end_time));
-        output.push_str(&format!("- **Elapsed Time**: {:.2}s\n", result.metadata.elapsed.as_secs_f64()));
+        let _ = writeln!(output, "- **Scanner Version**: {}", result.metadata.scanner_version);
+        let _ = writeln!(output, "- **Scan Type**: {:?}", result.metadata.scan_type);
+        let _ = writeln!(output, "- **Protocol**: {:?}", result.metadata.protocol);
+        let _ = writeln!(output, "- **Start Time**: {}", result.metadata.start_time);
+        let _ = writeln!(output, "- **End Time**: {}", result.metadata.end_time);
+        let _ = writeln!(output, "- **Elapsed Time**: {:.2}s", result.metadata.elapsed.as_secs_f64());
         output.push('\n');
 
         // Statistics
         output.push_str("## Statistics\n\n");
-        output.push_str(&format!("- **Total Hosts**: {}\n", result.statistics.total_hosts));
-        output.push_str(&format!("- **Hosts Up**: {}\n", result.statistics.hosts_up));
-        output.push_str(&format!("- **Total Open Ports**: {}\n", result.statistics.open_ports));
-        output.push_str(&format!("- **Total Closed Ports**: {}\n", result.statistics.closed_ports));
-        output.push_str(&format!("- **Total Filtered Ports**: {}\n", result.statistics.filtered_ports));
-        output.push_str(&format!("- **Packets Sent**: {}\n", result.statistics.packets_sent));
-        output.push_str(&format!("- **Packets Received**: {}\n", result.statistics.packets_received));
+        let _ = writeln!(output, "- **Total Hosts**: {}", result.statistics.total_hosts);
+        let _ = writeln!(output, "- **Hosts Up**: {}", result.statistics.hosts_up);
+        let _ = writeln!(output, "- **Total Open Ports**: {}", result.statistics.open_ports);
+        let _ = writeln!(output, "- **Total Closed Ports**: {}", result.statistics.closed_ports);
+        let _ = writeln!(output, "- **Total Filtered Ports**: {}", result.statistics.filtered_ports);
+        let _ = writeln!(output, "- **Packets Sent**: {}", result.statistics.packets_sent);
+        let _ = writeln!(output, "- **Packets Received**: {}", result.statistics.packets_received);
         output.push('\n');
 
         // Hosts
@@ -134,14 +139,14 @@ impl OutputFormatter for MarkdownFormatter {
         let mut output = String::new();
 
         // Host header
-        output.push_str(&format!("### {}\n\n", host.ip));
+        let _ = write!(output, "### {}\n\n", host.ip);
 
         if let Some(ref hostname) = host.hostname {
-            output.push_str(&format!("- **Hostname**: {}\n", hostname));
+            let _ = writeln!(output, "- **Hostname**: {hostname}");
         }
-        output.push_str(&format!("- **Status**: {:?}\n", host.status));
-        output.push_str(&format!("- **Reason**: {}\n", host.status_reason));
-        output.push_str(&format!("- **Latency**: {:.2?}\n", host.latency));
+        let _ = writeln!(output, "- **Status**: {:?}", host.status);
+        let _ = writeln!(output, "- **Reason**: {}", host.status_reason);
+        let _ = writeln!(output, "- **Latency**: {:.2?}", host.latency);
         output.push('\n');
 
         // Ports table
@@ -151,22 +156,18 @@ impl OutputFormatter for MarkdownFormatter {
             output.push_str("|------|----------|-------|---------|---------|\n");
 
             for port in &host.ports {
-                let service_name = port.service.as_ref()
-                    .map(|s| s.name.as_str())
-                    .unwrap_or("");
-                let service_version = port.service.as_ref()
-                    .and_then(|s| s.version.as_ref())
-                    .map(|v| v.as_str())
-                    .unwrap_or("");
+                let service_name = port.service.as_ref().map_or("", |s| s.name.as_str());
+                let service_version = port.service.as_ref().and_then(|s| s.version.as_ref()).map_or("", |v| v.as_str());
 
-                output.push_str(&format!(
-                    "| {} | {} | {:?} | {} | {} |\n",
+                let _ = writeln!(
+                    output,
+                    "| {} | {} | {:?} | {} | {} |",
                     port.number,
                     format!("{:?}", port.protocol).to_lowercase(),
                     port.state,
                     service_name,
                     service_version
-                ));
+                );
             }
             output.push('\n');
         }
@@ -175,8 +176,8 @@ impl OutputFormatter for MarkdownFormatter {
         if !host.scripts.is_empty() {
             output.push_str("#### Scripts\n\n");
             for script in &host.scripts {
-                output.push_str(&format!("**{}**\n\n", script.id));
-                output.push_str(&format!("```\n{}\n```\n\n", script.output));
+                let _ = write!(output, "**{}**\n\n", script.id);
+                let _ = write!(output, "```\n{}\n```\n\n", script.output);
             }
         }
 
@@ -184,7 +185,7 @@ impl OutputFormatter for MarkdownFormatter {
         if !host.os_matches.is_empty() {
             output.push_str("#### OS Matches\n\n");
             for os in &host.os_matches {
-                output.push_str(&format!("- {} (accuracy: {}%)\n", os.name, os.accuracy));
+                let _ = writeln!(output, "- {} (accuracy: {}%)", os.name, os.accuracy);
             }
             output.push('\n');
         }
@@ -207,11 +208,11 @@ impl OutputFormatter for MarkdownFormatter {
         Ok(format!("**{}**\n\n{}\n", script.id, script.output))
     }
 
-    fn file_extension(&self) -> &str {
+    fn file_extension(&self) -> &'static str {
         "md"
     }
 
-    fn format_name(&self) -> &str {
+    fn format_name(&self) -> &'static str {
         "Markdown"
     }
 }
@@ -247,15 +248,31 @@ pub enum VerbosityLevel {
 /// Trait for output formatters.
 pub trait OutputFormatter: Send + Sync {
     /// Format complete scan result.
+    ///
+    /// # Errors
+    ///
+    /// Returns `OutputError::InvalidData` if serialization fails.
     fn format_scan_result(&self, result: &ScanResult) -> Result<String>;
 
     /// Format single host result.
+    ///
+    /// # Errors
+    ///
+    /// Returns `OutputError::InvalidData` if serialization fails.
     fn format_host(&self, host: &HostResult) -> Result<String>;
 
     /// Format port result.
+    ///
+    /// # Errors
+    ///
+    /// Returns `OutputError::InvalidData` if serialization fails.
     fn format_port(&self, port: &PortResult) -> Result<String>;
 
     /// Format script result.
+    ///
+    /// # Errors
+    ///
+    /// Returns `OutputError::InvalidData` if serialization fails.
     fn format_script(&self, script: &ScriptResult) -> Result<String>;
 
     /// Get file extension for this format.
@@ -274,11 +291,13 @@ pub struct NormalFormatter {
 
 impl NormalFormatter {
     /// Create new normal formatter with default settings.
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Create normal formatter with specified verbosity.
+    #[must_use]
     pub fn with_verbosity(verbosity: VerbosityLevel) -> Self {
         Self { verbosity }
     }
@@ -289,12 +308,13 @@ impl OutputFormatter for NormalFormatter {
         let mut output = String::new();
 
         // Header
-        output.push_str(&format!(
-            "# RustNmap {} scan initiated {} as:\n",
+        let _ = writeln!(
+            output,
+            "# RustNmap {} scan initiated {} as:",
             result.metadata.scanner_version,
             result.metadata.start_time.format("%a %b %d %H:%M:%S %Y")
-        ));
-        output.push_str(&format!("# {}\n\n", result.metadata.command_line));
+        );
+        let _ = write!(output, "# {}\n\n", result.metadata.command_line);
 
         // Hosts
         for host in &result.hosts {
@@ -305,12 +325,13 @@ impl OutputFormatter for NormalFormatter {
         // Statistics
         let up_count = result.statistics.hosts_up;
         let total = result.statistics.total_hosts;
-        output.push_str(&format!(
-            "Nmap done: {} IP address ({} host up) scanned in {:.2} seconds\n",
+        let _ = writeln!(
+            output,
+            "Nmap done: {} IP address ({} host up) scanned in {:.2} seconds",
             total,
             up_count,
             result.metadata.elapsed.as_secs_f64()
-        ));
+        );
 
         Ok(output)
     }
@@ -319,10 +340,10 @@ impl OutputFormatter for NormalFormatter {
         let mut output = String::new();
 
         // Host line
-        output.push_str(&format!("Nmap scan report for {}\n", host.ip));
+        let _ = writeln!(output, "Nmap scan report for {}", host.ip);
 
         if let Some(ref hostname) = host.hostname {
-            output.push_str(&format!("rDNS record for {}: {}\n", host.ip, hostname));
+            let _ = writeln!(output, "rDNS record for {}: {}", host.ip, hostname);
         }
 
         // Status
@@ -331,16 +352,17 @@ impl OutputFormatter for NormalFormatter {
             HostStatus::Down => "down",
             HostStatus::Unknown => "unknown",
         };
-        output.push_str(&format!(
-            "Host is {} ({}s latency).\n",
+        let _ = writeln!(
+            output,
+            "Host is {} ({}s latency).",
             status_str,
             host.latency.as_secs_f64()
-        ));
+        );
 
         // MAC address
         if let Some(ref mac) = host.mac {
             let vendor = mac.vendor.as_deref().unwrap_or("unknown");
-            output.push_str(&format!("MAC Address: {} ({})\n", mac.address, vendor));
+            let _ = writeln!(output, "MAC Address: {} ({})", mac.address, vendor);
         }
 
         // Ports
@@ -358,7 +380,7 @@ impl OutputFormatter for NormalFormatter {
                 .count();
 
             if closed_count > 0 {
-                writeln!(output, "Not shown: {closed_count} closed ports").unwrap();
+                let _ = writeln!(output, "Not shown: {closed_count} closed ports");
             }
 
             output.push_str("PORT     STATE SERVICE\n");
@@ -379,28 +401,27 @@ impl OutputFormatter for NormalFormatter {
         if !host.os_matches.is_empty() {
             output.push_str("OS detection:\n");
             for os_match in &host.os_matches {
-                output.push_str(&format!("{} ({}%)\n", os_match.name, os_match.accuracy));
+                let _ = writeln!(output, "{} ({}%)", os_match.name, os_match.accuracy);
             }
         }
 
         // Traceroute
         if let Some(ref trace) = host.traceroute {
-            output.push_str(&format!(
-                "TRACEROUTE (using port {}/{} )\n",
+            let _ = writeln!(
+                output,
+                "TRACEROUTE (using port {}/{} )",
                 trace.port,
                 match trace.protocol {
                     Protocol::Tcp => "tcp",
                     Protocol::Udp => "udp",
                     Protocol::Sctp => "sctp",
                 }
-            ));
+            );
             output.push_str("HOP RTT     ADDRESS\n");
             for hop in &trace.hops {
                 let rtt = hop
-                    .rtt
-                    .map(|d| format!("{:.2} ms", d.as_secs_f64() * 1000.0))
-                    .unwrap_or_else(|| "--".to_string());
-                output.push_str(&format!("{}   {}  {}\n", hop.ttl, rtt, hop.ip));
+                    .rtt.map_or_else(|| "--".to_string(), |d| format!("{:.2} ms", d.as_secs_f64() * 1000.0));
+                let _ = writeln!(output, "{}   {}  {}", hop.ttl, rtt, hop.ip);
             }
         }
 
@@ -428,9 +449,7 @@ impl OutputFormatter for NormalFormatter {
 
         let service = port
             .service
-            .as_ref()
-            .map(|s| s.name.clone())
-            .unwrap_or_else(|| "unknown".to_string());
+            .as_ref().map_or_else(|| "unknown".to_string(), |s| s.name.clone());
 
         Ok(format!(
             "{}/{}  {:7} {}\n",
@@ -440,21 +459,21 @@ impl OutputFormatter for NormalFormatter {
 
     fn format_script(&self, script: &ScriptResult) -> Result<String> {
         let mut output = String::new();
-        writeln!(output, "| {}", script.id).unwrap();
+        let _ = writeln!(output, "| {}", script.id);
 
         // Format multi-line output with pipe prefix
         for line in script.output.lines() {
-            writeln!(output, "|_ {line}").unwrap();
+            let _ = writeln!(output, "|_ {line}");
         }
 
         Ok(output)
     }
 
-    fn file_extension(&self) -> &str {
+    fn file_extension(&self) -> &'static str {
         "nmap"
     }
 
-    fn format_name(&self) -> &str {
+    fn format_name(&self) -> &'static str {
         "Normal"
     }
 }
@@ -465,6 +484,7 @@ pub struct XmlFormatter;
 
 impl XmlFormatter {
     /// Create new XML formatter.
+    #[must_use]
     pub fn new() -> Self {
         Self
     }
@@ -533,16 +553,16 @@ impl OutputFormatter for XmlFormatter {
 
         // Verbose/Debug
         let mut verbose = BytesStart::new("verbose");
-        verbose.push_attribute(("level", self.get_verbosity_level().to_string().as_str()));
+        verbose.push_attribute(("level", Self::get_verbosity_level().to_string().as_str()));
         writer.write_event(Event::Empty(verbose)).unwrap();
 
         let mut debugging = BytesStart::new("debugging");
-        debugging.push_attribute(("level", self.get_debug_level().to_string().as_str()));
+        debugging.push_attribute(("level", Self::get_debug_level().to_string().as_str()));
         writer.write_event(Event::Empty(debugging)).unwrap();
 
         // Hosts
         for host in &result.hosts {
-            self.write_host(&mut writer, host)?;
+            Self::write_host(&mut writer, host)?;
         }
 
         // Runstats
@@ -571,25 +591,25 @@ impl OutputFormatter for XmlFormatter {
         Ok(String::new())
     }
 
-    fn file_extension(&self) -> &str {
+    fn file_extension(&self) -> &'static str {
         "xml"
     }
 
-    fn format_name(&self) -> &str {
+    fn format_name(&self) -> &'static str {
         "XML"
     }
 }
 
 impl XmlFormatter {
-    fn get_verbosity_level(&self) -> i8 {
+    fn get_verbosity_level() -> i8 {
         0
     }
 
-    fn get_debug_level(&self) -> u8 {
+    fn get_debug_level() -> u8 {
         0
     }
 
-    fn write_host<W: IoWrite>(&self, writer: &mut Writer<W>, host: &HostResult) -> Result<()> {
+    fn write_host<W: IoWrite>(writer: &mut Writer<W>, host: &HostResult) -> Result<()> {
         let mut host_start = BytesStart::new("host");
         match host.ip {
             std::net::IpAddr::V4(_addr) => {
@@ -658,7 +678,7 @@ impl XmlFormatter {
         if !host.ports.is_empty() {
             writer.write_event(Event::Start(BytesStart::new("ports")))?;
             for port in &host.ports {
-                self.write_port(writer, port)?;
+                Self::write_port(writer, port)?;
             }
             writer.write_event(Event::End(BytesEnd::new("ports")))?;
         }
@@ -667,7 +687,7 @@ impl XmlFormatter {
         if !host.os_matches.is_empty() {
             writer.write_event(Event::Start(BytesStart::new("os")))?;
             for os_match in &host.os_matches {
-                self.write_os_match(writer, os_match)?;
+                Self::write_os_match(writer, os_match)?;
             }
             writer.write_event(Event::End(BytesEnd::new("os")))?;
         }
@@ -676,7 +696,7 @@ impl XmlFormatter {
         Ok(())
     }
 
-    fn write_port<W: IoWrite>(&self, writer: &mut Writer<W>, port: &PortResult) -> Result<()> {
+    fn write_port<W: IoWrite>(writer: &mut Writer<W>, port: &PortResult) -> Result<()> {
         let proto = match port.protocol {
             Protocol::Tcp => "tcp",
             Protocol::Udp => "udp",
@@ -714,11 +734,11 @@ impl XmlFormatter {
             .map_err(OutputError::from)?;
 
         if let Some(ref service) = port.service {
-            self.write_service(writer, service)?;
+            Self::write_service(writer, service)?;
         }
 
         for script in &port.scripts {
-            self.write_script(writer, script)?;
+            Self::write_script(writer, script)?;
         }
 
         writer.write_event(Event::End(BytesEnd::new("port")))?;
@@ -726,7 +746,6 @@ impl XmlFormatter {
     }
 
     fn write_service<W: IoWrite>(
-        &self,
         writer: &mut Writer<W>,
         service: &ServiceInfo,
     ) -> Result<()> {
@@ -756,7 +775,6 @@ impl XmlFormatter {
     }
 
     fn write_script<W: IoWrite>(
-        &self,
         writer: &mut Writer<W>,
         script: &ScriptResult,
     ) -> Result<()> {
@@ -771,7 +789,7 @@ impl XmlFormatter {
 
         // Write structured elements
         for element in &script.elements {
-            self.write_script_element(writer, element)?;
+            Self::write_script_element(writer, element)?;
         }
 
         writer.write_event(Event::End(BytesEnd::new("script")))?;
@@ -779,7 +797,6 @@ impl XmlFormatter {
     }
 
     fn write_script_element<W: IoWrite>(
-        &self,
         writer: &mut Writer<W>,
         element: &ScriptElement,
     ) -> Result<()> {
@@ -796,7 +813,7 @@ impl XmlFormatter {
         Ok(())
     }
 
-    fn write_os_match<W: IoWrite>(&self, writer: &mut Writer<W>, os_match: &OsMatch) -> Result<()> {
+    fn write_os_match<W: IoWrite>(writer: &mut Writer<W>, os_match: &OsMatch) -> Result<()> {
         let mut os_start = BytesStart::new("osmatch");
         os_start.push_attribute(("name", os_match.name.as_str()));
         os_start.push_attribute(("accuracy", os_match.accuracy.to_string().as_str()));
@@ -813,8 +830,8 @@ impl XmlFormatter {
             let osgen = os_match
                 .os_generation
                 .as_deref()
-                .map(|s| s.to_string())
-                .unwrap_or("".to_string());
+                .map(std::string::ToString::to_string)
+                .unwrap_or_default();
             osclass.push_attribute(("osgen", osgen.as_str()));
 
             writer
@@ -836,11 +853,13 @@ pub struct JsonFormatter {
 
 impl JsonFormatter {
     /// Create new JSON formatter with pretty printing enabled.
+    #[must_use]
     pub fn new() -> Self {
         Self { pretty: true }
     }
 
     /// Create JSON formatter with specified pretty print setting.
+    #[must_use]
     pub fn with_pretty(pretty: bool) -> Self {
         Self { pretty }
     }
@@ -876,11 +895,11 @@ impl OutputFormatter for JsonFormatter {
         Ok(String::new())
     }
 
-    fn file_extension(&self) -> &str {
+    fn file_extension(&self) -> &'static str {
         "json"
     }
 
-    fn format_name(&self) -> &str {
+    fn format_name(&self) -> &'static str {
         "JSON"
     }
 }
@@ -891,6 +910,7 @@ pub struct GrepableFormatter;
 
 impl GrepableFormatter {
     /// Create new grepable formatter.
+    #[must_use]
     pub fn new() -> Self {
         Self
     }
@@ -901,12 +921,13 @@ impl OutputFormatter for GrepableFormatter {
         let mut output = String::new();
 
         // Header
-        output.push_str(&format!(
-            "# rustnmap {} scan initiated {} as: {}\n",
+        let _ = writeln!(
+            output,
+            "# rustnmap {} scan initiated {} as: {}",
             result.metadata.scanner_version,
             result.metadata.start_time.format("%a %b %d %H:%M:%S %Y"),
             result.metadata.command_line
-        ));
+        );
 
         // Hosts
         for host in &result.hosts {
@@ -916,13 +937,14 @@ impl OutputFormatter for GrepableFormatter {
         }
 
         // Statistics
-        output.push_str(&format!(
-            "# Nmap done at {} -- {} IP address ({} host up) scanned in {:.2} seconds\n",
+        let _ = writeln!(
+            output,
+            "# Nmap done at {} -- {} IP address ({} host up) scanned in {:.2} seconds",
             result.metadata.end_time.format("%a %b %d %H:%M:%S %Y"),
             result.statistics.total_hosts,
             result.statistics.hosts_up,
             result.metadata.elapsed.as_secs_f64()
-        ));
+        );
 
         Ok(output)
     }
@@ -948,15 +970,13 @@ impl OutputFormatter for GrepableFormatter {
 
         let service = port
             .service
-            .as_ref()
-            .map(|s| s.name.clone())
-            .unwrap_or_else(|| "unknown".to_string());
+            .as_ref().map_or_else(|| "unknown".to_string(), |s| s.name.clone());
 
         let version = port
             .service
             .as_ref()
             .and_then(|s| s.version.as_ref())
-            .map(|v| v.to_owned())
+            .map(std::borrow::ToOwned::to_owned)
             .unwrap_or_default();
 
         Ok(format!(
@@ -970,11 +990,11 @@ impl OutputFormatter for GrepableFormatter {
         Ok(String::new())
     }
 
-    fn file_extension(&self) -> &str {
+    fn file_extension(&self) -> &'static str {
         "gnmap"
     }
 
-    fn format_name(&self) -> &str {
+    fn format_name(&self) -> &'static str {
         "Grepable"
     }
 }
@@ -985,6 +1005,7 @@ pub struct ScriptKiddieFormatter;
 
 impl ScriptKiddieFormatter {
     /// Create new script kiddie formatter.
+    #[must_use]
     pub fn new() -> Self {
         Self
     }
@@ -1006,10 +1027,9 @@ impl OutputFormatter for ScriptKiddieFormatter {
         let mut output = String::new();
 
         // Header
-        output.push_str(&format!("{} ({})", host.ip, host.ip));
+        let _ = write!(output, "{} ({})", host.ip, host.ip);
         if let Some(ref hostname) = host.hostname {
-            use std::fmt::Write;
-            write!(output, " [{hostname}]").unwrap();
+            let _ = write!(output, " [{hostname}]");
         }
         output.push('\n');
 
@@ -1031,9 +1051,7 @@ impl OutputFormatter for ScriptKiddieFormatter {
 
         let service = port
             .service
-            .as_ref()
-            .map(|s| s.name.clone())
-            .unwrap_or_else(|| "?".to_string());
+            .as_ref().map_or_else(|| "?".to_string(), |s| s.name.clone());
 
         Ok(format!("  | {} | {} | {}\n", port.number, state, service))
     }
@@ -1042,11 +1060,11 @@ impl OutputFormatter for ScriptKiddieFormatter {
         Ok(format!("  | |_ {}\n", script.output))
     }
 
-    fn file_extension(&self) -> &str {
+    fn file_extension(&self) -> &'static str {
         "txt"
     }
 
-    fn format_name(&self) -> &str {
+    fn format_name(&self) -> &'static str {
         "Script Kiddie"
     }
 }
@@ -1054,6 +1072,7 @@ impl OutputFormatter for ScriptKiddieFormatter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::{HostTimes, MacAddress, ScanMetadata, ScanStatistics};
     use std::net::{IpAddr, Ipv4Addr};
     use std::time::Duration;
 
@@ -1094,7 +1113,7 @@ mod tests {
             times: HostTimes {
                 srtt: Some(2300),
                 rttvar: Some(500),
-                timeout: Some(100000),
+                timeout: Some(100_000),
             },
         }
     }
@@ -1251,7 +1270,7 @@ mod tests {
         assert!(result.contains("80"));
         assert!(result.contains("Open"));
         assert!(result.contains("http"));
-        assert!(result.contains("|"));
+        assert!(result.contains('|'));
     }
 
     #[test]
@@ -1260,11 +1279,11 @@ mod tests {
         let mut result = create_test_scan_result();
         result.hosts.push(create_test_host());
 
-        let formatted = formatter.format_scan_result(&result).unwrap();
+        let output = formatter.format_scan_result(&result).unwrap();
 
-        assert!(formatted.contains("# RustNmap Scan Report"));
-        assert!(formatted.contains("## Scan Information"));
-        assert!(formatted.contains("## Statistics"));
-        assert!(formatted.contains("## Hosts"));
+        assert!(output.contains("# RustNmap Scan Report"));
+        assert!(output.contains("## Scan Information"));
+        assert!(output.contains("## Statistics"));
+        assert!(output.contains("## Hosts"));
     }
 }

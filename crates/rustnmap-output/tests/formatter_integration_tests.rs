@@ -32,12 +32,13 @@ fn create_basic_host() -> HostResult {
         times: HostTimes {
             srtt: Some(5000),
             rttvar: Some(1000),
-            timeout: Some(2000000),
+            timeout: Some(2_000_000),
         },
     }
 }
 
 /// Create a test host with multiple ports and services.
+#[allow(clippy::too_many_lines)]
 fn create_host_with_ports() -> HostResult {
     HostResult {
         ip: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 100)),
@@ -186,7 +187,7 @@ fn create_host_with_ports() -> HostResult {
         times: HostTimes {
             srtt: Some(2300),
             rttvar: Some(500),
-            timeout: Some(1000000),
+            timeout: Some(1_000_000),
         },
     }
 }
@@ -404,13 +405,11 @@ fn test_xml_formatter_valid_structure() {
     let close_host = output.matches("</host>").count();
     assert_eq!(
         open_host, host_count,
-        "Should have {} host opening tags",
-        host_count
+        "Should have {host_count} host opening tags"
     );
     assert_eq!(
         close_host, host_count,
-        "Should have {} host closing tags",
-        host_count
+        "Should have {host_count} host closing tags"
     );
 
     // Verify ports tags are balanced
@@ -730,23 +729,19 @@ fn test_all_formatters_protocols() {
 
         assert!(
             normal_out.to_lowercase().contains(proto_str),
-            "Normal formatter should contain {}",
-            proto_str
+            "Normal formatter should contain {proto_str}"
         );
         assert!(
             xml_out.to_lowercase().contains(proto_str),
-            "XML formatter should contain {}",
-            proto_str
+            "XML formatter should contain {proto_str}"
         );
         assert!(
             json_out.to_lowercase().contains(proto_str),
-            "JSON formatter should contain {}",
-            proto_str
+            "JSON formatter should contain {proto_str}"
         );
         assert!(
             grep_out.to_lowercase().contains(proto_str),
-            "Grepable formatter should contain {}",
-            proto_str
+            "Grepable formatter should contain {proto_str}"
         );
     }
 }
@@ -776,21 +771,15 @@ fn test_all_formatters_host_statuses() {
 
         assert!(
             normal_out.to_lowercase().contains(expected_str),
-            "Normal formatter should contain '{}' for {:?}",
-            expected_str,
-            status
+            "Normal formatter should contain '{expected_str}' for {status:?}"
         );
         assert!(
             xml_out.to_lowercase().contains(expected_str),
-            "XML formatter should contain '{}' for {:?}",
-            expected_str,
-            status
+            "XML formatter should contain '{expected_str}' for {status:?}"
         );
         assert!(
             json_out.to_lowercase().contains(expected_str),
-            "JSON formatter should contain '{}' for {:?}",
-            expected_str,
-            status
+            "JSON formatter should contain '{expected_str}' for {status:?}"
         );
     }
 }
@@ -960,9 +949,9 @@ fn test_formatters_multiple_hosts() {
     let mut result = ScanResult::default();
 
     // Add 5 hosts
-    for i in 1..=5 {
+    for i in 1..=5u8 {
         let mut host = create_basic_host();
-        host.ip = IpAddr::V4(Ipv4Addr::new(192, 168, 1, i as u8));
+        host.ip = IpAddr::V4(Ipv4Addr::new(192, 168, 1, i));
         host.status = if i % 2 == 0 {
             HostStatus::Up
         } else {

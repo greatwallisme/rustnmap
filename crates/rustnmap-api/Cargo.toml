@@ -1,0 +1,57 @@
+[package]
+name = "rustnmap-api"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+description = "REST API / Daemon mode for RustNmap"
+keywords = ["nmap", "scanner", "network", "api", "rest"]
+categories = ["network-programming", "web-programming"]
+
+[dependencies]
+# Web framework
+axum = "0.7"
+tower = "0.4"
+tower-http = { version = "0.5", features = ["cors", "trace", "request-id"] }
+
+# Async
+tokio = { workspace = true }
+dashmap = "6.0"
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Utilities
+uuid = { version = "1", features = ["v4"] }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+rand = "0.9"
+hex = "0.4"
+once_cell = "1.19"
+futures-util = "0.3"
+async-stream = "0.3"
+http = "1.0"
+
+# Internal dependencies
+rustnmap-core = { path = "../rustnmap-core" }
+rustnmap-output = { path = "../rustnmap-output" }
+rustnmap-scan-management = { path = "../rustnmap-scan-management" }
+
+# HTTP client for health checks
+reqwest = { workspace = true }
+
+# Axum extras
+axum-extra = { version = "0.9", features = ["typed-header"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+
+[lints]
+workspace = true

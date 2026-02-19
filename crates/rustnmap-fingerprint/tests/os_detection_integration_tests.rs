@@ -147,10 +147,10 @@ async fn test_os_detection_with_target_ip() {
     // Result may be Ok(empty) or Err depending on network conditions
     match result {
         Ok(matches) => {
-            eprintln!("Found {} OS matches for {}", matches.len(), target);
+            eprintln!("Found {} OS matches for {target}", matches.len());
         }
         Err(e) => {
-            eprintln!("OS detection failed (expected without root): {}", e);
+            eprintln!("OS detection failed (expected without root): {e}");
         }
     }
 }
@@ -187,7 +187,7 @@ async fn test_os_detection_timeout() {
 #[test]
 fn test_seq_analysis_incremental() {
     // Simulate incremental ISN pattern (Linux-like)
-    let isns: Vec<u32> = vec![1000000, 2000000, 3000000, 4000000, 5000000, 6000000];
+    let isns: Vec<u32> = vec![1_000_000, 2_000_000, 3_000_000, 4_000_000, 5_000_000, 6_000_000];
 
     // Calculate GCD
     let diffs: Vec<u32> = isns.windows(2).map(|w| w[1].wrapping_sub(w[0])).collect();
@@ -207,15 +207,15 @@ fn test_seq_analysis_incremental() {
         .unwrap_or(0);
 
     // All differences should be 1000000
-    assert!(diffs.iter().all(|&d| d == 1000000));
-    assert_eq!(gcd, 1000000);
+    assert!(diffs.iter().all(|&d| d == 1_000_000));
+    assert_eq!(gcd, 1_000_000);
 }
 
 /// Test SEQ analysis with random ISN pattern.
 #[test]
 fn test_seq_analysis_random() {
     // Simulate random ISN pattern
-    let isns: Vec<u32> = vec![1234567, 9876543, 5555555, 3333333, 7777777, 1111111];
+    let isns: Vec<u32> = vec![1_234_567, 9_876_543, 5_555_555, 3_333_333, 7_777_777, 1_111_111];
 
     // Calculate differences
     let diffs: Vec<u32> = isns.windows(2).map(|w| w[1].wrapping_sub(w[0])).collect();

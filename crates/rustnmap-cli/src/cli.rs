@@ -13,10 +13,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! CLI implementation for RustNmap.
+//! CLI implementation for `RustNmap`.
 //!
 //! This module provides the main scan execution logic, integrating all
-//! RustNmap components into a unified command-line interface.
+//! `RustNmap` components into a unified command-line interface.
 
 use std::sync::Arc;
 
@@ -32,7 +32,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::args::Args;
 
-/// Runs the main RustNmap scan workflow.
+/// Runs the main `RustNmap` scan workflow.
 ///
 /// # Errors
 ///
@@ -201,7 +201,7 @@ async fn handle_list_profiles_command(args: &Args) -> Result<()> {
     println!("Available Profiles:");
     println!("{:-<60}", "");
     for profile in profiles {
-        println!("  {}", profile);
+        println!("  {profile}");
     }
 
     Ok(())
@@ -430,7 +430,7 @@ fn build_scan_config_from_profile(
     Ok(config)
 }
 
-/// Normal scan flow (original run_scan logic)
+/// Normal scan flow (original `run_scan` logic)
 async fn run_normal_scan(args: &Args) -> Result<()> {
     // Parse targets
     let targets = parse_targets(args)?;
@@ -890,7 +890,7 @@ fn print_host_normal<W: Write>(handle: &mut W, args: &Args, host: &HostResult) {
     );
 
     if let Some(ref mac) = host.mac {
-        let _ = writeln!(handle, "MAC Address: {:?}", mac);
+        let _ = writeln!(handle, "MAC Address: {mac:?}");
     }
 
     // Port information
@@ -908,7 +908,7 @@ fn print_host_normal<W: Write>(handle: &mut W, args: &Args, host: &HostResult) {
             .count();
 
         if closed_count > 0 {
-            let _ = writeln!(handle, "Not shown: {} closed ports", closed_count);
+            let _ = writeln!(handle, "Not shown: {closed_count} closed ports");
         }
 
         if !open_ports.is_empty() {
@@ -1147,7 +1147,7 @@ async fn write_xml_output(result: &ScanResult, path: &std::path::Path, append: b
                     port.number
                 )
                 .map_err(|e| rustnmap_common::Error::Other(format!("Write error: {e}")))?;
-                writeln!(file, "        <state state=\"{}\"/>", state_str)
+                writeln!(file, "        <state state=\"{state_str}\"/>")
                     .map_err(|e| rustnmap_common::Error::Other(format!("Write error: {e}")))?;
                 writeln!(file, "      </port>")
                     .map_err(|e| rustnmap_common::Error::Other(format!("Write error: {e}")))?;
@@ -1345,7 +1345,7 @@ async fn write_json_output(
             rustnmap_output::models::HostStatus::Down => "down",
             _ => "unknown",
         };
-        writeln!(file, "      \"status\": \"{}\",", status)
+        writeln!(file, "      \"status\": \"{status}\",")
             .map_err(|e| rustnmap_common::Error::Other(format!("Write error: {e}")))?;
         writeln!(file, "      \"ports\": [")
             .map_err(|e| rustnmap_common::Error::Other(format!("Write error: {e}")))?;
@@ -1398,8 +1398,7 @@ async fn write_json_output(
 fn setup_logging(args: &Args) {
     let filter_level = if args.debug > 0 {
         match args.debug {
-            1 => "debug",
-            2 => "debug",
+            1 | 2 => "debug",
             _ => "trace",
         }
     } else if args.verbose > 0 {

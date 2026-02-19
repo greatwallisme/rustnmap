@@ -43,8 +43,8 @@ fn test_service_detector_configuration() {
         .with_intensity(5);
 
     // Verify configuration through debug output
-    let debug_str = format!("{:?}", detector);
-    assert!(debug_str.contains("5")); // Intensity should be in debug output
+    let debug_str = format!("{detector:?}");
+    assert!(debug_str.contains('5')); // Intensity should be in debug output
 }
 
 /// Test intensity clamping.
@@ -54,13 +54,13 @@ fn test_service_detector_intensity_clamping() {
 
     // Test low intensity clamping
     let detector_low = ServiceDetector::new(db.clone()).with_intensity(0);
-    let debug_low = format!("{:?}", detector_low);
-    assert!(debug_low.contains("1")); // Clamped to minimum
+    let debug_low = format!("{detector_low:?}");
+    assert!(debug_low.contains('1')); // Clamped to minimum
 
     // Test high intensity clamping
     let detector_high = ServiceDetector::new(db).with_intensity(15);
-    let debug_high = format!("{:?}", detector_high);
-    assert!(debug_high.contains("9")); // Clamped to maximum
+    let debug_high = format!("{detector_high:?}");
+    assert!(debug_high.contains('9')); // Clamped to maximum
 }
 
 /// Test ProbeDatabase empty creation.
@@ -231,7 +231,7 @@ fn test_intensity_levels() {
 
     for intensity in intensities {
         let detector = ServiceDetector::new(db.clone()).with_intensity(intensity);
-        let debug_str = format!("{:?}", detector);
+        let debug_str = format!("{detector:?}");
         // Intensity should be reflected in debug output
         assert!(debug_str.contains(&intensity.to_string()));
     }
@@ -336,7 +336,7 @@ fn test_detector_debug() {
     let db = ProbeDatabase::empty();
     let detector = ServiceDetector::new(db);
 
-    let debug_str = format!("{:?}", detector);
+    let debug_str = format!("{detector:?}");
     assert!(debug_str.contains("ServiceDetector"));
 }
 
@@ -345,7 +345,7 @@ fn test_detector_debug() {
 fn test_database_debug() {
     let db = ProbeDatabase::empty();
 
-    let debug_str = format!("{:?}", db);
+    let debug_str = format!("{db:?}");
     assert!(debug_str.contains("ProbeDatabase"));
 }
 
@@ -354,7 +354,7 @@ fn test_database_debug() {
 fn test_service_info_debug() {
     let info = ServiceInfo::new("test");
 
-    let debug_str = format!("{:?}", info);
+    let debug_str = format!("{info:?}");
     assert!(debug_str.contains("ServiceInfo"));
     assert!(debug_str.contains("test"));
 }
@@ -372,7 +372,7 @@ fn test_probe_definition_debug() {
         matches: vec![],
     };
 
-    let debug_str = format!("{:?}", probe);
+    let debug_str = format!("{probe:?}");
     assert!(debug_str.contains("Test"));
     assert!(debug_str.contains("Tcp"));
 }
@@ -571,7 +571,7 @@ fn test_timeout_configuration() {
 
     let detector = ServiceDetector::new(db).with_timeout(Duration::from_secs(30));
 
-    let debug_str = format!("{:?}", detector);
+    let debug_str = format!("{detector:?}");
     assert!(debug_str.contains("30s") || debug_str.contains("30"));
 }
 

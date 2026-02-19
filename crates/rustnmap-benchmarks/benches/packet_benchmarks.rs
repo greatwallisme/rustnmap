@@ -1,6 +1,6 @@
-//! Packet I/O performance benchmarks for RustNmap.
+//! Packet I/O performance benchmarks for `RustNmap`.
 //!
-//! This module benchmarks raw socket operations, PACKET_MMAP throughput,
+//! This module benchmarks raw socket operations, `PACKET_MMAP` throughput,
 //! and packet parsing overhead.
 
 use criterion::{criterion_group, criterion_main, Criterion, Throughput};

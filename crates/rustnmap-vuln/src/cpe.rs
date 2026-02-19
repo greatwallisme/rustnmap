@@ -274,7 +274,7 @@ mod tests {
         let cpe = CpeMatcher::parse("cpe:2.3:a:apache:http_server:2.4.49:*:*:*:*:*:*:*").unwrap();
         let result = CpeMatcher::matches(&cpe, "cpe:2.3:a:apache:http_server:2.4.49:*:*:*:*:*:*:*");
         assert!(result.matches);
-        assert_eq!(result.confidence, 1.0);
+        assert!((result.confidence - 1.0).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -296,14 +296,14 @@ mod tests {
 
     #[test]
     fn test_version_matches() {
-        assert!(CpeMatcher::parse("cpe:2.3:a:test:app:1.0:*:*:*:*:*:*:*").is_ok());
+        CpeMatcher::parse("cpe:2.3:a:test:app:1.0:*:*:*:*:*:*:*").unwrap();
     }
 
     #[test]
     fn test_cpe_display() {
         let cpe = CpeMatcher::parse("cpe:2.3:a:apache:http_server:2.4.49:*:*:*:*:*:*:*").unwrap();
         assert_eq!(
-            format!("{}", cpe),
+            format!("{cpe}"),
             "cpe:2.3:a:apache:http_server:2.4.49:*:*:*:*:*:*:*"
         );
     }
