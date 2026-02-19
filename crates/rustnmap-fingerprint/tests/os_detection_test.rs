@@ -34,11 +34,11 @@ fn test_os_detector_configuration() {
 
 /// Test OS detection against localhost (requires root).
 ///
-/// This test requires root privileges (CAP_NET_RAW).
+/// This test requires root privileges (`CAP_NET_RAW`).
 #[tokio::test]
 async fn test_os_detection_localhost() {
     let db = FingerprintDatabase::empty();
-    let local_addr = Ipv4Addr::new(127, 0, 0, 1);
+    let local_addr = Ipv4Addr::LOCALHOST;
     let detector = OsDetector::new(db, local_addr)
         .with_open_port(80)
         .with_closed_port(443)
@@ -103,7 +103,7 @@ fn test_ip_id_classification() {
         let sum_sq_diff: u64 = ip_ids
             .iter()
             .map(|&n| {
-                let diff = n as i64 - mean as i64;
+                let diff = i64::from(n) - mean as i64;
                 (diff * diff) as u64
             })
             .sum();

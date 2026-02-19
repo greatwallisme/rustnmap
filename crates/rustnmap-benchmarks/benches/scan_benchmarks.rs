@@ -1,4 +1,4 @@
-//! Scanning performance benchmarks for RustNmap.
+//! Scanning performance benchmarks for `RustNmap`.
 //!
 //! This module benchmarks the performance of various scanning techniques
 //! including TCP SYN scan, TCP Connect scan, UDP scan, and parallel scan throughput.
@@ -227,7 +227,7 @@ fn bench_timing_templates(c: &mut Criterion) {
                 TimingTemplate::Aggressive,
                 TimingTemplate::Insane,
             ];
-            let results: Vec<_> = templates.iter().map(|t| t.scan_config()).collect();
+            let results: Vec<_> = templates.iter().map(rustnmap_common::TimingTemplate::scan_config).collect();
             black_box(results);
         });
     });

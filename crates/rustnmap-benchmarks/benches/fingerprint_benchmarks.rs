@@ -1,4 +1,4 @@
-//! Fingerprinting performance benchmarks for RustNmap.
+//! Fingerprinting performance benchmarks for `RustNmap`.
 //!
 //! This module benchmarks OS detection probe generation, service detection
 //! matching speed, and database loading performance.
@@ -231,7 +231,7 @@ fn bench_service_probe_parsing(c: &mut Criterion) {
     });
 
     // Sample service probe database content
-    let sample_db = r#"
+    let sample_db = r"
 # Test service probe database
 Probe TCP GenericLines q|\r\n\r\n|
 rarity 1
@@ -247,7 +247,7 @@ Probe TCP FTP q|QUIT\r\n|
 rarity 1
 Ports 21
 Match ftp m|^220 ([\w\s]+)| p/$1/
-"#;
+";
 
     group.bench_function("parse_small_database", |b| {
         b.iter(|| {
@@ -264,7 +264,7 @@ fn bench_service_detection_matching(c: &mut Criterion) {
     let mut group = c.benchmark_group("service_detection_matching");
 
     // Create a probe database with match rules
-    let db_content = r#"
+    let db_content = r"
 Probe TCP GenericLines q|\r\n\r\n|
 rarity 1
 Ports 1-65535
@@ -273,7 +273,7 @@ Match ssh m|^SSH-([\d.]+)| p/SSH/
 Match http m|^HTTP/1\.[01] \d{3}| p/HTTP/
 Match ftp m|^220 .*FTP| p/FTP/
 Match smtp m|^220 .*SMTP| p/SMTP/
-"#;
+";
 
     let db = ProbeDatabase::parse(db_content).unwrap();
 

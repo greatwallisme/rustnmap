@@ -1,4 +1,4 @@
-//! NSE (Nmap Scripting Engine) performance benchmarks for RustNmap.
+//! NSE (Nmap Scripting Engine) performance benchmarks for `RustNmap`.
 //!
 //! This module benchmarks Lua script execution overhead, library function
 //! call overhead, and script scheduling performance.
@@ -158,7 +158,7 @@ end
         let mut db = ScriptDatabase::new();
         let script = create_script_with_source(
             "math-script",
-            r#"
+            r"
 action = function(host)
     local sum = 0
     for i = 1, 100 do
@@ -166,7 +166,7 @@ action = function(host)
     end
     return sum
 end
-"#,
+",
         );
         db.register_script(&script);
 

@@ -204,7 +204,7 @@ fn bench_packet_buffer(c: &mut Criterion) {
 
     group.bench_function("packet_buffer_default", |b| {
         b.iter(|| {
-            let buf: PacketBuffer = Default::default();
+            let buf: PacketBuffer = PacketBuffer::default();
             black_box(buf);
         });
     });
@@ -231,10 +231,10 @@ fn bench_packet_construction_throughput(c: &mut Criterion) {
     group.throughput(Throughput::Elements(1000));
     group.bench_function("construct_1000_tcp_syn", |b| {
         b.iter(|| {
-            for i in 0..1000 {
+            for i in 0u32..1000 {
                 let dst_port = 1 + (i % 65535) as u16;
                 let packet = TcpPacketBuilder::new(src_ip, dst_ip, 60000, dst_port)
-                    .seq(i as u32)
+                    .seq(i)
                     .syn()
                     .window(65535)
                     .build();
@@ -247,8 +247,8 @@ fn bench_packet_construction_throughput(c: &mut Criterion) {
     group.throughput(Throughput::Elements(1000));
     group.bench_function("construct_1000_udp", |b| {
         b.iter(|| {
-            for i in 0..1000 {
-                let dst_port = 1 + (i % 65535) as u16;
+            for i in 0u16..1000 {
+                let dst_port = 1 + (i % 65535);
                 let packet = UdpPacketBuilder::new(src_ip, dst_ip, 60000, dst_port).build();
                 black_box(packet);
             }
@@ -259,10 +259,10 @@ fn bench_packet_construction_throughput(c: &mut Criterion) {
     group.throughput(Throughput::Elements(1000));
     group.bench_function("construct_1000_icmp", |b| {
         b.iter(|| {
-            for i in 0..1000 {
+            for i in 0u16..1000 {
                 let packet = IcmpPacketBuilder::new(src_ip, dst_ip)
-                    .identifier(i as u16)
-                    .sequence(i as u16)
+                    .identifier(i)
+                    .sequence(i)
                     .build();
                 black_box(packet);
             }
@@ -272,7 +272,7 @@ fn bench_packet_construction_throughput(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark PACKET_MMAP constants and configuration.
+/// Benchmark `PACKET_MMAP` constants and configuration.
 fn bench_packet_mmap_config(c: &mut Criterion) {
     let mut group = c.benchmark_group("packet_mmap_config");
 
@@ -345,10 +345,10 @@ fn bench_packet_batch_processing(c: &mut Criterion) {
     let dst_ip = Ipv4Addr::new(192, 168, 1, 100);
 
     // Create sample packets
-    let packets: Vec<Vec<u8>> = (0..100)
+    let packets: Vec<Vec<u8>> = (0u32..100)
         .map(|i| {
             TcpPacketBuilder::new(src_ip, dst_ip, 80 + (i % 10) as u16, 60000)
-                .seq(i as u32)
+                .seq(i)
                 .syn()
                 .ack_flag()
                 .window(65535)

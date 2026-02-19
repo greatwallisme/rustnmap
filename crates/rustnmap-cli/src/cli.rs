@@ -123,7 +123,6 @@ async fn handle_history_command(args: &Args) -> Result<()> {
 
     if let Some(ref scan_type_str) = args.scan_type_filter {
         filter.scan_type = Some(match scan_type_str.as_str() {
-            "syn" | "TcpSyn" => ScanType::TcpSyn,
             "connect" | "TcpConnect" => ScanType::TcpConnect,
             "udp" | "Udp" => ScanType::Udp,
             "fin" | "TcpFin" => ScanType::TcpFin,
@@ -743,14 +742,14 @@ fn parse_port_spec(args: &Args) -> Result<PortSpec> {
 fn parse_port_string(s: &str) -> Result<PortSpec> {
     let mut ports = Vec::new();
 
-    for part in s.split(',') {
-        let part = part.trim();
-        if part.contains('-') {
+    for segment in s.split(',') {
+        let segment = segment.trim();
+        if segment.contains('-') {
             // Range
-            let range_parts: Vec<&str> = part.split('-').collect();
+            let range_parts: Vec<&str> = segment.split('-').collect();
             if range_parts.len() != 2 {
                 return Err(rustnmap_common::Error::Other(format!(
-                    "Invalid port range: {part}"
+                    "Invalid port range: {segment}"
                 )));
             }
             let start: u16 = range_parts[0].parse().map_err(|_| {
@@ -760,13 +759,12 @@ fn parse_port_string(s: &str) -> Result<PortSpec> {
                 rustnmap_common::Error::Other(format!("Invalid port number: {}", range_parts[1]))
             })?;
             return Ok(PortSpec::Range { start, end });
-        } else {
-            // Single port
-            let port: u16 = part.parse().map_err(|_| {
-                rustnmap_common::Error::Other(format!("Invalid port number: {part}"))
-            })?;
-            ports.push(port);
         }
+        // Single port
+        let port_num: u16 = segment.parse().map_err(|_| {
+            rustnmap_common::Error::Other(format!("Invalid port number: {segment}"))
+        })?;
+        ports.push(port_num);
     }
 
     Ok(PortSpec::List(ports))

@@ -68,6 +68,7 @@ use std::path::PathBuf;
     max_term_width = 100,
     args_override_self = true
 )]
+#[allow(clippy::struct_excessive_bools, reason = "Args is a CLI argument struct with independent boolean flags")]
 pub struct Args {
     /// Target hosts to scan
     #[arg(
