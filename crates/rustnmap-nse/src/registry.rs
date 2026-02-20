@@ -28,7 +28,6 @@ pub struct ScriptDatabase {
     by_service: HashMap<String, Vec<String>>,
 
     /// Base directory for scripts.
-    #[expect(dead_code, reason = "used for future path resolution")]
     base_dir: PathBuf,
 }
 
@@ -389,6 +388,84 @@ impl ScriptDatabase {
         self.scripts.is_empty()
     }
 
+    /// Get the base directory for scripts.
+    ///
+    /// Returns the directory from which scripts were loaded,
+    /// or an empty path if no directory was set.
+    #[must_use]
+    pub fn base_dir(&self) -> &Path {
+        &self.base_dir
+    }
+
+    /// Resolve a script name to its full path.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - Script name (with or without .nse extension)
+    ///
+    /// # Returns
+    ///
+    /// Full path to the script file, or `None` if `base_dir` is not set.
+    #[must_use]
+    pub fn resolve_script_path(&self, name: &str) -> Option<PathBuf> {
+        if self.base_dir.as_os_str().is_empty() {
+            return None;
+        }
+
+        let script_name = if std::path::Path::new(name)
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("nse"))
+        {
+            name.to_string()
+        } else {
+            format!("{name}.nse")
+        };
+
+        Some(self.base_dir.join(&script_name))
+    }
+
+    /// Check if a script file exists in the base directory.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - Script name (with or without .nse extension)
+    ///
+    /// # Returns
+    ///
+    /// `true` if the script file exists on disk.
+    #[must_use]
+    pub fn script_file_exists(&self, name: &str) -> bool {
+        self.resolve_script_path(name)
+            .is_some_and(|path| path.exists())
+    }
+
+    /// Reload scripts from the base directory.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the directory cannot be read.
+    pub fn reload(&mut self) -> Result<()> {
+        if self.base_dir.as_os_str().is_empty() {
+            return Err(Error::ScriptLoadError(
+                "no base directory set".to_string(),
+                std::io::Error::new(std::io::ErrorKind::NotFound, "base_dir not set"),
+            ));
+        }
+
+        // Clear existing data
+        self.scripts.clear();
+        self.by_category.clear();
+        self.by_port.clear();
+        self.by_service.clear();
+
+        // Clone base_dir to avoid borrow issues
+        let base_dir = self.base_dir.clone();
+
+        // Reload from base directory
+        self.load_directory(&base_dir)?;
+        Ok(())
+    }
+
     /// Resolve script dependencies and return scripts in dependency order.
     ///
     /// Uses topological sort to ensure dependencies are loaded before dependent scripts.
@@ -650,5 +727,42 @@ author = "Test Author"
 
         let multi_scripts = db.select_by_category(&[ScriptCategory::Vuln, ScriptCategory::Auth]);
         assert_eq!(multi_scripts.len(), 2);
+    }
+
+    #[test]
+    fn test_base_dir() {
+        let db = ScriptDatabase::new();
+        // Empty database has empty base_dir
+        assert!(db.base_dir().as_os_str().is_empty());
+    }
+
+    #[test]
+    fn test_resolve_script_path_no_base_dir() {
+        let db = ScriptDatabase::new();
+        // Without base_dir, resolve returns None
+        assert!(db.resolve_script_path("http-vuln").is_none());
+    }
+
+    #[test]
+    fn test_resolve_script_path_with_base_dir() {
+        let mut db = ScriptDatabase::new();
+        db.base_dir = PathBuf::from("/usr/share/nmap/scripts");
+
+        // With .nse extension
+        let path = db.resolve_script_path("http-vuln.nse").unwrap();
+        assert_eq!(path, PathBuf::from("/usr/share/nmap/scripts/http-vuln.nse"));
+
+        // Without .nse extension (auto-added)
+        let path = db.resolve_script_path("ssh-auth").unwrap();
+        assert_eq!(path, PathBuf::from("/usr/share/nmap/scripts/ssh-auth.nse"));
+    }
+
+    #[test]
+    fn test_script_file_exists() {
+        let mut db = ScriptDatabase::new();
+        db.base_dir = std::env::temp_dir();
+
+        // Non-existent script
+        assert!(!db.script_file_exists("nonexistent-script-12345"));
     }
 }

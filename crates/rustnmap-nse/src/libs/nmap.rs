@@ -304,10 +304,11 @@ fn log_write_impl(level: &str, message: &str) {
 pub struct NseSocket {
     /// Internal socket state
     state: SocketState,
+    /// Listen backlog size
+    backlog: i32,
 }
 
 #[derive(Debug)]
-#[expect(dead_code, reason = "Listening state reserved for future use")]
 enum SocketState {
     /// Socket is not connected
     Disconnected,
@@ -318,8 +319,13 @@ enum SocketState {
         /// Protocol
         proto: String,
     },
-    /// Socket is listening
-    Listening,
+    /// Socket is listening for connections
+    Listening {
+        /// Local address
+        addr: std::net::SocketAddr,
+        /// Protocol
+        proto: String,
+    },
 }
 
 impl NseSocket {
@@ -327,7 +333,13 @@ impl NseSocket {
     fn new() -> Self {
         Self {
             state: SocketState::Disconnected,
+            backlog: 128,
         }
+    }
+
+    /// Set the listen backlog size.
+    fn set_backlog(&mut self, backlog: i32) {
+        self.backlog = backlog.max(1);
     }
 }
 
@@ -365,6 +377,77 @@ impl mlua::UserData for NseSocket {
             },
         );
 
+        // Bind socket to local address
+        methods.add_method_mut("bind", |_, _this, (host, port): (String, u16)| {
+            let addr_str = format!("{host}:{port}");
+            match addr_str.parse::<std::net::SocketAddr>() {
+                Ok(_socket_addr) => {
+                    // For NSE scripts, binding is conceptual - we just track the state
+                    // Actual socket binding would be done by the listener
+                    Ok(true)
+                }
+                Err(e) => Err(mlua::Error::RuntimeError(format!("Invalid address: {e}"))),
+            }
+        });
+
+        // Listen for connections (puts socket in listening state)
+        methods.add_method_mut("listen", |_, this, (host, port): (String, u16)| {
+            let addr_str = format!("{host}:{port}");
+            match addr_str.parse::<std::net::SocketAddr>() {
+                Ok(socket_addr) => {
+                    this.state = SocketState::Listening {
+                        addr: socket_addr,
+                        proto: "tcp".to_string(),
+                    };
+                    Ok(true)
+                }
+                Err(e) => Err(mlua::Error::RuntimeError(format!("Invalid address: {e}"))),
+            }
+        });
+
+        // Set backlog size for listening socket
+        methods.add_method_mut("set_backlog", |_, this, backlog: i32| {
+            this.set_backlog(backlog);
+            Ok(())
+        });
+
+        // Accept a connection (returns new socket for accepted connection)
+        methods.add_async_method_mut("accept", |lua, this, ()| async move {
+            match &this.state {
+                SocketState::Listening { addr, proto } => {
+                    // In a real implementation, this would accept from a TcpListener
+                    // For NSE compatibility, we simulate accepting a connection
+                    let listener = tokio::net::TcpListener::bind(addr).await.map_err(|e| {
+                        mlua::Error::RuntimeError(format!("Accept bind failed: {e}"))
+                    })?;
+
+                    // Try to accept with timeout
+                    let accept_result =
+                        tokio::time::timeout(std::time::Duration::from_secs(5), listener.accept())
+                            .await;
+
+                    match accept_result {
+                        Ok(Ok((stream, peer_addr))) => {
+                            drop(stream);
+                            // Create new socket for accepted connection
+                            let mut accepted_socket = NseSocket::new();
+                            accepted_socket.state = SocketState::Connected {
+                                addr: peer_addr,
+                                proto: proto.clone(),
+                            };
+                            let accepted = lua.create_userdata(accepted_socket)?;
+                            Ok(accepted)
+                        }
+                        Ok(Err(e)) => Err(mlua::Error::RuntimeError(format!("Accept failed: {e}"))),
+                        Err(_) => Err(mlua::Error::RuntimeError("Accept timeout".to_string())),
+                    }
+                }
+                _ => Err(mlua::Error::RuntimeError(
+                    "Socket not in listening state".to_string(),
+                )),
+            }
+        });
+
         methods.add_method_mut("close", |_, this, ()| {
             this.state = SocketState::Disconnected;
             Ok(true)
@@ -374,14 +457,28 @@ impl mlua::UserData for NseSocket {
             Ok(matches!(this.state, SocketState::Connected { .. }))
         });
 
+        methods.add_method("is_listening", |_, this, ()| {
+            Ok(matches!(this.state, SocketState::Listening { .. }))
+        });
+
         methods.add_method("get_info", |lua, this, ()| {
             let table = lua.create_table()?;
-            if let SocketState::Connected { addr, proto } = &this.state {
-                table.set("addr", addr.to_string())?;
-                table.set("proto", proto.clone())?;
-            } else {
-                table.set("addr", mlua::Value::Nil)?;
-                table.set("proto", mlua::Value::Nil)?;
+            match &this.state {
+                SocketState::Connected { addr, proto } => {
+                    table.set("addr", addr.to_string())?;
+                    table.set("proto", proto.clone())?;
+                    table.set("state", "connected")?;
+                }
+                SocketState::Listening { addr, proto } => {
+                    table.set("addr", addr.to_string())?;
+                    table.set("proto", proto.clone())?;
+                    table.set("state", "listening")?;
+                }
+                SocketState::Disconnected => {
+                    table.set("addr", mlua::Value::Nil)?;
+                    table.set("proto", mlua::Value::Nil)?;
+                    table.set("state", "disconnected")?;
+                }
             }
             Ok(table)
         });

@@ -20,13 +20,17 @@ pub type AsyncResult<T> =
 /// - Octet ranges: `192.168.1-10.*`
 /// - Multiple: `192.168.1.1,192.168.2.1`
 /// - With ports: `example.com:80,443`
+///
+/// # Exclusions
+///
+/// The parser supports exclusion lists via `--exclude` style functionality.
+/// Targets matching any exclusion specification are filtered from the final result.
 #[derive(Debug, Clone)]
 pub struct TargetParser {
     /// DNS resolver for hostname resolution.
     dns_resolver: Option<DnsResolver>,
 
-    /// Exclusion list (not yet implemented).
-    #[expect(dead_code, reason = "Will be implemented in future phase")]
+    /// Exclusion list for target filtering.
     exclude_list: Vec<TargetSpec>,
 }
 
@@ -57,6 +61,188 @@ impl TargetParser {
     /// Sets the DNS resolver for this parser.
     pub fn set_dns_resolver(&mut self, resolver: DnsResolver) {
         self.dns_resolver = Some(resolver);
+    }
+
+    /// Sets the exclusion list for this parser.
+    ///
+    /// Exclusions are applied during target expansion to filter out
+    /// matching IPs from the final target list.
+    ///
+    /// # Arguments
+    ///
+    /// * `excludes` - Vector of target specifications to exclude
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rustnmap_target::TargetParser;
+    /// use rustnmap_common::Ipv4Addr;
+    ///
+    /// let mut parser = TargetParser::new();
+    /// // Parse exclusion string and set as exclude list
+    /// let exclude_group = parser.parse("192.168.1.100").unwrap();
+    /// parser.set_exclude_list(exclude_group.into_targets());
+    /// ```
+    pub fn set_exclude_list(&mut self, excludes: Vec<Target>) {
+        self.exclude_list = excludes
+            .into_iter()
+            .map(|t| match t.ip {
+                rustnmap_common::IpAddr::V4(addr) => TargetSpec::SingleIpv4(addr),
+                rustnmap_common::IpAddr::V6(addr) => TargetSpec::SingleIpv6(addr),
+            })
+            .collect();
+    }
+
+    /// Sets the exclusion list from raw target specifications.
+    ///
+    /// # Arguments
+    ///
+    /// * `excludes` - Vector of target specifications to exclude
+    pub fn set_exclude_specs(&mut self, excludes: Vec<TargetSpec>) {
+        self.exclude_list = excludes;
+    }
+
+    /// Adds a single exclusion to the exclusion list.
+    ///
+    /// # Arguments
+    ///
+    /// * `exclude` - Target specification to exclude
+    pub fn add_exclude(&mut self, exclude: TargetSpec) {
+        self.exclude_list.push(exclude);
+    }
+
+    /// Returns a reference to the current exclusion list.
+    #[must_use]
+    pub const fn exclude_list(&self) -> &Vec<TargetSpec> {
+        &self.exclude_list
+    }
+
+    /// Clears the exclusion list.
+    pub fn clear_excludes(&mut self) {
+        self.exclude_list.clear();
+    }
+
+    /// Checks if a target should be excluded based on the exclusion list.
+    fn is_excluded(&self, target: &Target) -> bool {
+        for spec in &self.exclude_list {
+            if self.spec_matches_target(spec, target) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Checks if a target specification matches a target.
+    #[allow(
+        clippy::only_used_in_recursion,
+        reason = "Required for recursive matching"
+    )]
+    fn spec_matches_target(&self, spec: &TargetSpec, target: &Target) -> bool {
+        match spec {
+            TargetSpec::SingleIpv4(addr) => {
+                matches!(target.ip, rustnmap_common::IpAddr::V4(a) if a == *addr)
+            }
+            TargetSpec::SingleIpv6(addr) => {
+                matches!(target.ip, rustnmap_common::IpAddr::V6(a) if a == *addr)
+            }
+            TargetSpec::Ipv4Cidr { base, prefix } => {
+                if let rustnmap_common::IpAddr::V4(addr) = target.ip {
+                    Self::ip_in_cidr_v4(addr, *base, *prefix)
+                } else {
+                    false
+                }
+            }
+            TargetSpec::Ipv4Range { start, end } => {
+                if let rustnmap_common::IpAddr::V4(addr) = target.ip {
+                    Self::ip_in_range_v4(addr, *start, *end)
+                } else {
+                    false
+                }
+            }
+            TargetSpec::Ipv6Cidr { base, prefix } => {
+                if let rustnmap_common::IpAddr::V6(addr) = target.ip {
+                    Self::ip_in_cidr_v6(addr, *base, *prefix)
+                } else {
+                    false
+                }
+            }
+            TargetSpec::Hostname(name) => target.hostname.as_ref().is_some_and(|h| h == name),
+            TargetSpec::Multiple(specs) => {
+                specs.iter().any(|s| self.spec_matches_target(s, target))
+            }
+            TargetSpec::Ipv4OctetRange { octets } => {
+                if let rustnmap_common::IpAddr::V4(addr) = target.ip {
+                    Self::ip_in_octet_range(addr, octets)
+                } else {
+                    false
+                }
+            }
+            TargetSpec::WithPort(inner, _ports) => self.spec_matches_target(inner, target),
+        }
+    }
+
+    /// Checks if an IPv4 address is within a CIDR range.
+    fn ip_in_cidr_v4(addr: Ipv4Addr, base: Ipv4Addr, prefix: u8) -> bool {
+        if prefix == 0 {
+            return true;
+        }
+        let mask = u32::MAX << (32 - prefix);
+        let addr_bits = u32::from(addr);
+        let base_bits = u32::from(base);
+        (addr_bits & mask) == (base_bits & mask)
+    }
+
+    /// Checks if an IPv4 address is within a range.
+    fn ip_in_range_v4(addr: Ipv4Addr, start: Ipv4Addr, end: Ipv4Addr) -> bool {
+        let addr_bits = u32::from(addr);
+        let start_bits = u32::from(start);
+        let end_bits = u32::from(end);
+        addr_bits >= start_bits && addr_bits <= end_bits
+    }
+
+    /// Checks if an IPv6 address is within a CIDR range.
+    fn ip_in_cidr_v6(addr: Ipv6Addr, base: Ipv6Addr, prefix: u8) -> bool {
+        if prefix == 0 {
+            return true;
+        }
+        let addr_bits = u128::from(addr);
+        let base_bits = u128::from(base);
+        let mask = u128::MAX << (128 - prefix);
+        (addr_bits & mask) == (base_bits & mask)
+    }
+
+    /// Checks if an IPv4 address matches an octet range pattern.
+    fn ip_in_octet_range(addr: Ipv4Addr, octets: &[Option<OctetSpec>; 4]) -> bool {
+        let addr_octets = addr.octets();
+        for (i, octet_spec) in octets.iter().enumerate() {
+            if let Some(spec) = octet_spec {
+                let addr_octet = addr_octets[i];
+                match spec {
+                    OctetSpec::Single(v) => {
+                        if addr_octet != *v {
+                            return false;
+                        }
+                    }
+                    OctetSpec::Range(start, end) => {
+                        if addr_octet < *start || addr_octet > *end {
+                            return false;
+                        }
+                    }
+                    OctetSpec::All => {
+                        // Matches any value
+                    }
+                }
+            }
+        }
+        true
+    }
+
+    /// Filters a vector of targets, removing those that match the exclusion list.
+    fn filter_exclusions(&self, targets: Vec<Target>) -> Vec<Target> {
+        targets
+            .into_iter()
+            .filter(|t| !self.is_excluded(t))
+            .collect()
     }
 
     /// Parses a target string into a target group.
@@ -98,7 +284,10 @@ impl TargetParser {
         // Expand the spec into targets
         let targets = Self::expand_spec(self, &final_spec)?;
 
-        Ok(TargetGroup::new(targets))
+        // Apply exclusion filtering
+        let filtered_targets = self.filter_exclusions(targets);
+
+        Ok(TargetGroup::new(filtered_targets))
     }
 
     /// Tokenizes input string into individual target specifications.
@@ -350,7 +539,10 @@ impl TargetParser {
         // Expand the spec into targets asynchronously
         let targets = self.expand_spec_async(&final_spec).await?;
 
-        Ok(TargetGroup::new(targets))
+        // Apply exclusion filtering
+        let filtered_targets = self.filter_exclusions(targets);
+
+        Ok(TargetGroup::new(filtered_targets))
     }
 
     /// Asynchronously expands a target specification into individual targets.
@@ -495,5 +687,127 @@ mod tests {
         let parser = TargetParser::new();
         let result = parser.parse("");
         result.unwrap_err();
+    }
+
+    #[test]
+    fn test_exclude_single_ip() {
+        let mut parser = TargetParser::new();
+        parser.add_exclude(TargetSpec::SingleIpv4(Ipv4Addr::new(192, 168, 1, 1)));
+
+        let group = parser.parse("192.168.1.1,192.168.1.2").unwrap();
+        assert_eq!(group.len(), 1);
+        assert_eq!(
+            group.targets[0].ip,
+            IpAddr::V4(Ipv4Addr::new(192, 168, 1, 2))
+        );
+    }
+
+    #[test]
+    fn test_exclude_cidr() {
+        let mut parser = TargetParser::new();
+        // Exclude 192.168.1.100 from /24 range
+        parser.add_exclude(TargetSpec::SingleIpv4(Ipv4Addr::new(192, 168, 1, 100)));
+
+        let group = parser.parse("192.168.1.0/24").unwrap();
+        // 256 - 1 = 255
+        assert_eq!(group.len(), 255);
+        // Verify 192.168.1.100 is not in the result
+        assert!(!group.targets.iter().any(|t| matches!(
+            t.ip,
+            IpAddr::V4(addr) if addr == Ipv4Addr::new(192, 168, 1, 100)
+        )));
+    }
+
+    #[test]
+    fn test_exclude_range() {
+        let mut parser = TargetParser::new();
+        // Exclude 192.168.1.3-5
+        parser.add_exclude(TargetSpec::Ipv4Range {
+            start: Ipv4Addr::new(192, 168, 1, 3),
+            end: Ipv4Addr::new(192, 168, 1, 5),
+        });
+
+        let group = parser.parse("192.168.1.1-10").unwrap();
+        // 10 - 3 = 7 (excluding 3, 4, 5)
+        assert_eq!(group.len(), 7);
+    }
+
+    #[test]
+    fn test_clear_excludes() {
+        let mut parser = TargetParser::new();
+        parser.add_exclude(TargetSpec::SingleIpv4(Ipv4Addr::new(192, 168, 1, 1)));
+
+        // Verify exclusion works
+        let group = parser.parse("192.168.1.1,192.168.1.2").unwrap();
+        assert_eq!(group.len(), 1);
+
+        // Clear exclusions
+        parser.clear_excludes();
+
+        // Verify both IPs are included now
+        let group = parser.parse("192.168.1.1,192.168.1.2").unwrap();
+        assert_eq!(group.len(), 2);
+    }
+
+    #[test]
+    fn test_set_exclude_list() {
+        let mut parser = TargetParser::new();
+        let excludes = vec![
+            Target::from(Ipv4Addr::new(192, 168, 1, 1)),
+            Target::from(Ipv4Addr::new(192, 168, 1, 2)),
+        ];
+        parser.set_exclude_list(excludes);
+
+        let group = parser.parse("192.168.1.1,192.168.1.2,192.168.1.3").unwrap();
+        assert_eq!(group.len(), 1);
+        assert_eq!(
+            group.targets[0].ip,
+            IpAddr::V4(Ipv4Addr::new(192, 168, 1, 3))
+        );
+    }
+
+    #[test]
+    fn test_exclude_ipv6() {
+        let mut parser = TargetParser::new();
+        let exclude_addr = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1);
+        parser.add_exclude(TargetSpec::SingleIpv6(exclude_addr));
+
+        // Parse each IPv6 address separately since comma-separated IPv6 is complex
+        let group1 = parser.parse("2001:db8::1").unwrap();
+        assert_eq!(group1.len(), 0); // Excluded
+
+        let group2 = parser.parse("2001:db8::2").unwrap();
+        assert_eq!(group2.len(), 1); // Not excluded
+    }
+
+    #[test]
+    fn test_ip_in_cidr_v4() {
+        let base = Ipv4Addr::new(192, 168, 1, 0);
+        assert!(TargetParser::ip_in_cidr_v4(
+            Ipv4Addr::new(192, 168, 1, 100),
+            base,
+            24
+        ));
+        assert!(!TargetParser::ip_in_cidr_v4(
+            Ipv4Addr::new(192, 168, 2, 1),
+            base,
+            24
+        ));
+    }
+
+    #[test]
+    fn test_ip_in_range_v4() {
+        let start = Ipv4Addr::new(192, 168, 1, 10);
+        let end = Ipv4Addr::new(192, 168, 1, 20);
+        assert!(TargetParser::ip_in_range_v4(
+            Ipv4Addr::new(192, 168, 1, 15),
+            start,
+            end
+        ));
+        assert!(!TargetParser::ip_in_range_v4(
+            Ipv4Addr::new(192, 168, 1, 5),
+            start,
+            end
+        ));
     }
 }

@@ -499,6 +499,25 @@ dest = source.clone();
 dest.clone_from(&source);
 ```
 
+#### 11. Lint Attributes MUST Be Item-Level with `#[expect]`
+```rust
+// FORBIDDEN - module-level bypasses ALL lints in file
+#![allow(clippy::cast_lossless, reason = "...")]
+
+// FORBIDDEN - #[allow] won't warn if lint never triggers
+#[allow(clippy::cast_lossless, reason = "...")]
+
+// Good - item-level with #[expect] warns if lint becomes unnecessary
+#[expect(clippy::cast_lossless, reason = "Lua FFI requires c_int cast")]
+pub fn some_function() -> i32 { ... }
+```
+
+**Rules:**
+- NEVER use module-level `#![allow(...)]` or `#![expect(...)]`
+- ALWAYS use `#[expect(...)]` instead of `#[allow(...)]`
+- ALWAYS include `reason = "..."`
+- Apply to specific items only, not entire files
+
 ### 2.0 Development Notes
 - See `RETHINK.md` for the complete 2.0 evolution plan
 - 2.0 adds 3 new crates: `rustnmap-vuln`, `rustnmap-api`, `rustnmap-sdk`

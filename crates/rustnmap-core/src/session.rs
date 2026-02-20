@@ -763,8 +763,7 @@ pub struct DefaultPacketEngine {
     local_mac: Option<MacAddr>,
     /// Packet sender channel.
     tx: broadcast::Sender<PacketBuffer>,
-    /// Packet receiver channel.
-    #[expect(dead_code, reason = "Packet receiver for future raw packet processing")]
+    /// Packet receiver channel for receiving packets sent through this engine.
     rx: broadcast::Receiver<PacketBuffer>,
 }
 
@@ -782,6 +781,46 @@ impl DefaultPacketEngine {
             tx,
             rx,
         })
+    }
+
+    /// Try to receive a packet from the internal channel without blocking.
+    ///
+    /// Returns the packet if available, or `None` if no packet is available.
+    /// This method uses the internal receiver that was created with the engine.
+    #[must_use]
+    pub fn try_recv(&mut self) -> Option<PacketBuffer> {
+        match self.rx.try_recv() {
+            Ok(pkt) => Some(pkt),
+            Err(broadcast::error::TryRecvError::Empty | broadcast::error::TryRecvError::Closed) => {
+                None
+            }
+            Err(broadcast::error::TryRecvError::Lagged(_)) => {
+                // If we lagged, try again to get the next packet
+                self.rx.try_recv().ok()
+            }
+        }
+    }
+
+    /// Receive a packet from the internal channel asynchronously.
+    ///
+    /// Waits for a packet to become available.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the channel is closed.
+    pub async fn recv(&mut self) -> Result<PacketBuffer> {
+        self.rx
+            .recv()
+            .await
+            .map_err(|_e| CoreError::scan("packet receiver closed"))
+    }
+
+    /// Create a new subscriber to the packet channel.
+    ///
+    /// Returns a new receiver that will receive all packets sent through this engine.
+    #[must_use]
+    pub fn subscribe(&self) -> broadcast::Receiver<PacketBuffer> {
+        self.tx.subscribe()
     }
 }
 

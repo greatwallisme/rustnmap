@@ -48,7 +48,6 @@ impl ScanTask {
 #[derive(Debug)]
 pub struct ScanManager {
     tasks: Arc<DashMap<String, ScanTask>>,
-    #[expect(dead_code, reason = "Config field reserved for future use")]
     config: ApiConfig,
 }
 
@@ -151,6 +150,68 @@ impl ScanManager {
             .iter()
             .filter(|r| matches!(r.status, ScanStatus::Queued))
             .count()
+    }
+
+    /// Check if a new scan can be started based on max concurrent limit.
+    #[must_use]
+    pub fn can_start_scan(&self) -> bool {
+        self.active_count() < self.config.max_concurrent_scans
+    }
+
+    /// Validate an API key against the configured keys.
+    #[must_use]
+    pub fn validate_api_key(&self, key: &str) -> bool {
+        self.config.is_valid_key(key)
+    }
+
+    /// Get a reference to the API configuration.
+    #[must_use]
+    pub const fn config(&self) -> &ApiConfig {
+        &self.config
+    }
+
+    /// Check if there are available scan slots.
+    #[must_use]
+    pub fn available_slots(&self) -> usize {
+        self.config
+            .max_concurrent_scans
+            .saturating_sub(self.active_count())
+    }
+
+    /// Get the maximum concurrent scans limit.
+    #[must_use]
+    pub fn max_concurrent_scans(&self) -> usize {
+        self.config.max_concurrent_scans
+    }
+
+    /// Check if result retention is enabled.
+    #[must_use]
+    pub fn is_sse_enabled(&self) -> bool {
+        self.config.enable_sse
+    }
+
+    /// Get the result retention duration.
+    #[must_use]
+    pub fn result_retention(&self) -> std::time::Duration {
+        self.config.result_retention
+    }
+
+    /// Create a scan if under concurrency limit.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ApiError::ScanLimitReached` if the maximum concurrent scans limit is reached.
+    /// Returns `ApiError::ScanAlreadyExists` if a scan with the given ID already exists.
+    pub fn create_scan_if_allowed(
+        &self,
+        id: &str,
+        targets: Vec<String>,
+        scan_type: String,
+    ) -> ApiResult<()> {
+        if !self.can_start_scan() {
+            return Err(ApiError::ScanLimitReached(self.config.max_concurrent_scans));
+        }
+        self.create_scan(id, targets, scan_type)
     }
 }
 

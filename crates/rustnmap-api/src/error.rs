@@ -33,6 +33,9 @@ pub enum ApiError {
 
     #[error("Scan failed: {0}")]
     ScanFailed(String),
+
+    #[error("Scan limit reached: maximum {0} concurrent scans")]
+    ScanLimitReached(usize),
 }
 
 impl IntoResponse for ApiError {
@@ -61,6 +64,10 @@ impl IntoResponse for ApiError {
             ApiError::IoError(err) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("IO error: {err}"),
+            ),
+            ApiError::ScanLimitReached(max) => (
+                StatusCode::TOO_MANY_REQUESTS,
+                format!("Scan limit reached: maximum {max} concurrent scans"),
             ),
         };
 
