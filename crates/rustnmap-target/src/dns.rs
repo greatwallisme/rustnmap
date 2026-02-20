@@ -69,7 +69,6 @@ impl DnsResolver {
     /// # Errors
     ///
     /// Returns an error if the reverse lookup fails.
-    #[allow(dead_code, reason = "Will be used for -R always-resolve option")]
     pub async fn reverse_lookup(&self, ip: IpAddr) -> Result<Option<String>> {
         let name = match ip {
             IpAddr::V4(v4) => {

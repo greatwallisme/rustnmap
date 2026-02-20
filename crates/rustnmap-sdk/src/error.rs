@@ -9,6 +9,9 @@ pub enum ScanError {
     #[error("Invalid request: {0}")]
     InvalidRequest(String),
 
+    #[error("Validation error: {0}")]
+    ValidationError(String),
+
     #[error("Permission denied: {0}")]
     PermissionDenied(String),
 

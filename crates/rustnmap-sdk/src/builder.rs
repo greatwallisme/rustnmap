@@ -1,10 +1,13 @@
 //! Scanner Builder API
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use rustnmap_common::scan::TimingTemplate;
-use rustnmap_core::session::{PortSpec, ScanConfig, ScanType};
+use rustnmap_core::orchestrator::ScanOrchestrator;
+use rustnmap_core::session::{PortSpec, ScanConfig, ScanSession, ScanType};
 use rustnmap_evasion::TimingTemplate as EvasionTiming;
+use rustnmap_target::parser::TargetParser;
 
 use crate::error::{ScanError, ScanResult};
 use crate::models::ScanOutput;
@@ -13,11 +16,8 @@ use crate::profile::ScanProfile;
 /// Main scanner entry point
 #[derive(Debug)]
 pub struct Scanner {
-    #[allow(
-        dead_code,
-        reason = "Config field used when scan execution is implemented"
-    )]
     config: ScanConfig,
+    targets_string: Option<String>,
 }
 
 impl Scanner {
@@ -29,6 +29,7 @@ impl Scanner {
     pub fn new() -> ScanResult<Self> {
         Ok(Self {
             config: ScanConfig::default(),
+            targets_string: None,
         })
     }
 
@@ -39,7 +40,10 @@ impl Scanner {
     /// Returns an error if the profile cannot be converted to a scan configuration.
     pub fn from_profile(profile: &ScanProfile) -> ScanResult<Self> {
         let config = profile.to_scan_config()?;
-        Ok(Self { config })
+        Ok(Self {
+            config,
+            targets_string: None,
+        })
     }
 
     /// Create a scanner builder for fluent API
@@ -48,24 +52,45 @@ impl Scanner {
         ScannerBuilder::new()
     }
 
+    /// Set targets for the scan
+    #[must_use]
+    pub fn with_targets<T: Into<String>>(mut self, targets: T) -> Self {
+        self.targets_string = Some(targets.into());
+        self
+    }
+
     /// Run a scan with the current configuration
     ///
     /// # Errors
     ///
     /// Returns an error if the scan fails due to network issues or invalid configuration.
-    ///
-    /// # Note
-    ///
-    //TODO: This function awaits the scan execution capability and returns an error pending full integration.
-    #[allow(
-        clippy::unused_async,
-        reason = "Async for future scan execution implementation"
-    )]
     pub async fn run(&self) -> ScanResult<ScanOutput> {
-        // Integration with rustnmap-core for scan execution pending
-        Err(ScanError::InternalError(anyhow::anyhow!(
-            "Scan execution pending - requires root privileges and network access"
-        )))
+        // Get targets (require targets to be set)
+        let targets_str = self
+            .targets_string
+            .as_ref()
+            .ok_or_else(|| ScanError::ValidationError("No targets specified".to_string()))?;
+
+        // Parse targets
+        let parser = TargetParser::new();
+        let target_group = parser
+            .parse(targets_str)
+            .map_err(|e| ScanError::ValidationError(format!("Invalid targets: {e}")))?;
+
+        // Create session
+        let session = ScanSession::new(self.config.clone(), target_group).map_err(|e| {
+            ScanError::InternalError(anyhow::anyhow!("Failed to create session: {e}"))
+        })?;
+
+        // Create and run orchestrator
+        let orchestrator = ScanOrchestrator::new(Arc::new(session));
+        let scan_result = orchestrator
+            .run()
+            .await
+            .map_err(|e| ScanError::InternalError(anyhow::anyhow!("Scan failed: {e}")))?;
+
+        // Convert to SDK output
+        Ok(ScanOutput::from(scan_result))
     }
 
     /// Check if the scanner has required privileges for raw socket operations
@@ -103,6 +128,7 @@ impl Default for Scanner {
 #[derive(Debug)]
 pub struct ScannerBuilder {
     config: ScanConfig,
+    targets_string: Option<String>,
 }
 
 impl ScannerBuilder {
@@ -111,14 +137,15 @@ impl ScannerBuilder {
     pub fn new() -> Self {
         Self {
             config: ScanConfig::default(),
+            targets_string: None,
         }
     }
 
     /// Set scan targets
-    //TODO:
     #[must_use]
-    pub fn targets<T: IntoIterator<Item = S>, S: Into<String>>(self, _targets: T) -> Self {
-        // Note: ScanConfig doesn't have a targets field, targets are passed separately when running
+    pub fn targets<T: IntoIterator<Item = S>, S: Into<String>>(mut self, targets: T) -> Self {
+        let targets_vec: Vec<String> = targets.into_iter().map(std::convert::Into::into).collect();
+        self.targets_string = Some(targets_vec.join(","));
         self
     }
 
@@ -296,6 +323,7 @@ impl ScannerBuilder {
     pub async fn run(self) -> ScanResult<ScanOutput> {
         let scanner = Scanner {
             config: self.config,
+            targets_string: self.targets_string,
         };
         scanner.run().await
     }
@@ -323,11 +351,28 @@ mod tests {
             builder.config.port_spec,
             PortSpec::Range { start: 22, end: 80 }
         ));
+        assert_eq!(builder.targets_string, Some("127.0.0.1".to_string()));
     }
 
     #[test]
     fn test_scanner_new() {
         let scanner = Scanner::new().unwrap();
         assert!(matches!(scanner.config.port_spec, PortSpec::Top(1000)));
+        assert!(scanner.targets_string.is_none());
+    }
+
+    #[test]
+    fn test_scanner_with_targets() {
+        let scanner = Scanner::new().unwrap().with_targets("192.168.1.0/24");
+        assert_eq!(scanner.targets_string, Some("192.168.1.0/24".to_string()));
+    }
+
+    #[test]
+    fn test_scanner_builder_multiple_targets() {
+        let builder = Scanner::builder().targets(["192.168.1.1", "192.168.1.2", "10.0.0.1"]);
+        assert_eq!(
+            builder.targets_string,
+            Some("192.168.1.1,192.168.1.2,10.0.0.1".to_string())
+        );
     }
 }

@@ -35,6 +35,7 @@ libc = "0.2"
 # Internal dependencies
 rustnmap-core = { path = "../rustnmap-core" }
 rustnmap-output = { path = "../rustnmap-output" }
+rustnmap-target = { path = "../rustnmap-target" }
 rustnmap-evasion = { path = "../rustnmap-evasion" }
 rustnmap-common = { path = "../rustnmap-common" }
 

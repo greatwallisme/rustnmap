@@ -105,7 +105,10 @@ where
 }
 
 // Wrapper for priority queue ordering
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "Priority queue wrapper for future priority-based scheduling"
+)]
 struct PrioritizedTask {
     /// Task identifier.
     id: TaskId,
@@ -159,7 +162,10 @@ pub struct TaskScheduler {
     /// Task queue receiver (wrapped in Mutex for async access).
     task_rx: Mutex<mpsc::Receiver<TaskMessage>>,
     /// Shutdown signal sender.
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "Shutdown signal for graceful scheduler termination"
+    )]
     shutdown_tx: Option<mpsc::Sender<()>>,
 }
 

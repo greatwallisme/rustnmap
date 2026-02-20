@@ -504,3 +504,31 @@ dest.clone_from(&source);
 - 2.0 adds 3 new crates: `rustnmap-vuln`, `rustnmap-api`, `rustnmap-sdk`
 - 2.0 modules are documented in `doc/modules/` (vulnerability, rest-api, sdk, etc.)
 - Phase 0 baseline fixes must be completed before Phase 1-5 features
+
+## License
+
+RustNmap is licensed under the **GNU General Public License v3.0 or later** (GPL-3.0-or-later).
+
+| Component | License | File |
+|-----------|---------|------|
+| RustNmap Source Code | GPL-3.0-or-later | [LICENSE](LICENSE) |
+| Nmap Fingerprint Databases | NPSL | [NOTICE](NOTICE) |
+
+### Nmap Data Dependency
+
+RustNmap uses Nmap's fingerprint databases which are licensed under the Nmap Public Source License (NPSL):
+- `nmap-service-probes` - Service version detection
+- `nmap-os-db` - OS fingerprinting
+
+When using these databases, you must comply with NPSL terms. See:
+- [COPYING](COPYING) - Nmap attribution
+- [NOTICE](NOTICE) - Data dependency notice
+- https://nmap.org/npsl/ - NPSL full text
+
+### Why GPL-3.0-or-later?
+
+GPL-3.0-or-later was chosen because:
+1. **NPSL Compatibility**: GPL-3.0 is compatible with GPL-2.0 works (NPSL's base)
+2. **Copyleft Protection**: Prevents closed-source derivatives
+3. **Patent Protection**: Explicit patent grant in GPL-3.0
+4. **Future-Proof**: "Or-later" allows upgrade to future GPL versions

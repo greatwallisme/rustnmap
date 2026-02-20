@@ -291,8 +291,49 @@ async fn handle_diff_command(args: &Args, diff_files: &[String]) -> Result<()> {
         "Comparing scans from files: {} vs {}",
         diff_files[0], diff_files[1]
     );
-    // TODO: Implement file-based diff loading
-    warn!("File-based diff comparison not yet implemented. Use --from-history for database scans.");
+
+    // Detect format from file extension
+    let (before_result, after_result) =
+        if diff_files[0].ends_with(".json") && diff_files[1].ends_with(".json") {
+            let before_content = std::fs::read_to_string(&diff_files[0]).map_err(|e| {
+                rustnmap_common::Error::Other(format!("Failed to read {}: {e}", diff_files[0]))
+            })?;
+            let after_content = std::fs::read_to_string(&diff_files[1]).map_err(|e| {
+                rustnmap_common::Error::Other(format!("Failed to read {}: {e}", diff_files[1]))
+            })?;
+
+            let before: rustnmap_output::ScanResult = serde_json::from_str(&before_content)
+                .map_err(|e| {
+                    rustnmap_common::Error::Other(format!("Failed to parse {}: {e}", diff_files[0]))
+                })?;
+            let after: rustnmap_output::ScanResult =
+                serde_json::from_str(&after_content).map_err(|e| {
+                    rustnmap_common::Error::Other(format!("Failed to parse {}: {e}", diff_files[1]))
+                })?;
+
+            (before, after)
+        } else if diff_files[0].ends_with(".xml") && diff_files[1].ends_with(".xml") {
+            return Err(rustnmap_common::Error::Other(
+                "XML format is not yet supported for file-based diff. Use JSON format.".to_string(),
+            ));
+        } else {
+            return Err(rustnmap_common::Error::Other(format!(
+                "Unsupported file format. Only JSON files are supported. Got: {} and {}",
+                diff_files[0], diff_files[1]
+            )));
+        };
+
+    let diff = ScanDiff::new(before_result, after_result);
+
+    let format = match args.diff_format.as_str() {
+        "markdown" | "md" => DiffFormat::Markdown,
+        "json" => DiffFormat::Json,
+        "html" => DiffFormat::Html,
+        _ => DiffFormat::Text,
+    };
+
+    let report = diff.generate_report(format);
+    println!("{report}");
 
     Ok(())
 }

@@ -85,8 +85,14 @@ impl CookieGenerator {
     }
 
     /// Generate a cookie for a target IP.
+    ///
+    /// Note: Only the low 16 bits of the timestamp are used in the hash
+    /// to enable verification from the sequence number alone.
     #[must_use]
     pub fn generate(&self, target: IpAddr, port: u16, timestamp: u64) -> Cookie {
+        // Only use low 16 bits of timestamp for hash (for verification compatibility)
+        let timestamp_16bit = timestamp & 0xFFFF;
+
         let mut hasher = Hasher::new();
         hasher.update(&self.key);
         // Handle both IPv4 and IPv6
@@ -98,7 +104,7 @@ impl CookieGenerator {
                 hasher.update(&ip.octets());
             }
         }
-        hasher.update(&timestamp.to_le_bytes());
+        hasher.update(&timestamp_16bit.to_le_bytes());
         hasher.update(&port.to_le_bytes());
 
         let hash = hasher.finalize();
@@ -109,7 +115,7 @@ impl CookieGenerator {
 
         // Sequence number: use hash bytes 4-7 combined with timestamp
         let seq_high = u32::from(u16::from_le_bytes([hash_bytes[2], hash_bytes[3]]));
-        let seq_low = (timestamp & 0xFFFF) as u32;
+        let seq_low = timestamp_16bit as u32;
         let sequence_num = (seq_high << 16) | seq_low;
 
         Cookie {
@@ -120,8 +126,87 @@ impl CookieGenerator {
     }
 
     /// Verify a received response.
+    ///
+    /// This performs production-grade verification by regenerating the complete
+    /// cookie and verifying both the source port and sequence number match.
+    /// This prevents response spoofing by ensuring the response matches
+    /// the original destination port AND the expected sequence pattern.
+    ///
+    /// # Arguments
+    ///
+    /// * `target` - The target IP address
+    /// * `dest_port` - The original destination port that was probed
+    /// * `source_port` - The source port from the response
+    /// * `ack_num` - The acknowledgment number from the response (seq + 1)
+    /// * `max_age` - Maximum age for the cookie to be considered valid
     #[must_use]
     pub fn verify(
+        &self,
+        target: IpAddr,
+        dest_port: u16,
+        source_port: u16,
+        ack_num: u32,
+        max_age: Duration,
+    ) -> VerifyResult {
+        // Reconstruct sequence number (ack_num = seq + 1)
+        let sequence_num = ack_num.saturating_sub(1);
+
+        // Extract timestamp from sequence number (low 16 bits)
+        let cookie_timestamp_16bit = u64::from(sequence_num & 0xFFFF);
+
+        // Get current timestamp (also as 16-bit for comparison)
+        let current_time_16bit = current_timestamp() & 0xFFFF;
+
+        // Check if cookie has expired (handle wraparound at 16-bit boundary)
+        // The age is calculated in the 16-bit timestamp space
+        let age = if current_time_16bit >= cookie_timestamp_16bit {
+            current_time_16bit - cookie_timestamp_16bit
+        } else {
+            // Wraparound case: cookie timestamp is near 65535, current is near 0
+            (65536 - cookie_timestamp_16bit) + current_time_16bit
+        };
+
+        if age > max_age.as_secs() {
+            return VerifyResult::Expired;
+        }
+
+        // Production-grade verification: regenerate the complete expected cookie
+        // using the target, destination port, and timestamp
+        let expected_cookie = self.generate(target, dest_port, cookie_timestamp_16bit);
+
+        // Verify both the source port AND sequence number match
+        // This prevents response spoofing by ensuring the response is for
+        // the exact probe we sent (correct target, port, and timing)
+        if expected_cookie.source_port == source_port
+            && expected_cookie.sequence_num == sequence_num
+        {
+            VerifyResult::Valid
+        } else {
+            VerifyResult::Invalid
+        }
+    }
+
+    /// Verify a received response without knowing the destination port.
+    ///
+    /// This is a legacy verification method that is less secure because it
+    /// doesn't verify the destination port. Use [`verify`](Self::verify) instead
+    /// when the destination port is known.
+    ///
+    /// # Security Note
+    ///
+    /// This method is vulnerable to certain replay attacks and should only be
+    /// used when the destination port cannot be determined.
+    ///
+    /// # Deprecation Note
+    ///
+    /// This method cannot properly verify cookies generated with the port-based
+    /// hash. It is retained for backward compatibility only.
+    #[must_use]
+    #[deprecated(
+        since = "2.0.0",
+        note = "Cannot properly verify port-based cookies. Use `verify` instead."
+    )]
+    pub fn verify_without_port(
         &self,
         target: IpAddr,
         source_port: u16,
@@ -132,55 +217,32 @@ impl CookieGenerator {
         let sequence_num = ack_num.saturating_sub(1);
 
         // Extract timestamp from sequence number (low 16 bits)
-        let cookie_timestamp = u64::from(sequence_num & 0xFFFF);
+        let cookie_timestamp_16bit = u64::from(sequence_num & 0xFFFF);
 
-        // Get current timestamp
-        let current_time = current_timestamp();
+        // Get current timestamp (also as 16-bit for comparison)
+        let current_time_16bit = current_timestamp() & 0xFFFF;
 
-        // Check if cookie has expired (handle wraparound)
-        let age = if current_time >= cookie_timestamp {
-            current_time - cookie_timestamp
+        // Check if cookie has expired (handle wraparound at 16-bit boundary)
+        let age = if current_time_16bit >= cookie_timestamp_16bit {
+            current_time_16bit - cookie_timestamp_16bit
         } else {
             // Wraparound case
-            (u64::MAX - cookie_timestamp) + current_time
+            (65536 - cookie_timestamp_16bit) + current_time_16bit
         };
 
         if age > max_age.as_secs() {
             return VerifyResult::Expired;
         }
 
-        // Rebuild cookie and verify
-        // We need to find the original port - try to match source_port
-        // Verify by recomputing the expected port from the target and timestamp
-        //TODO: This is a simplified verification - in production, you'd use a different approach
-        let expected_port_hash = self.compute_port_hash(target, cookie_timestamp);
-        let actual_port = 1024 + (expected_port_hash % 64511);
+        // Legacy verification: regenerate with port 0 and check if ports match
+        // This is fundamentally insecure but retained for backward compatibility
+        let expected_cookie = self.generate(target, 0, cookie_timestamp_16bit);
 
-        if actual_port == source_port {
+        if expected_cookie.source_port == source_port {
             VerifyResult::Valid
         } else {
             VerifyResult::Invalid
         }
-    }
-
-    /// Compute port hash for verification.
-    fn compute_port_hash(&self, target: IpAddr, timestamp: u64) -> u16 {
-        let mut hasher = Hasher::new();
-        hasher.update(&self.key);
-        // Handle both IPv4 and IPv6
-        match target {
-            IpAddr::V4(ip) => {
-                hasher.update(&ip.octets());
-            }
-            IpAddr::V6(ip) => {
-                hasher.update(&ip.octets());
-            }
-        }
-        hasher.update(&timestamp.to_le_bytes());
-        // Port is not included in hash for verification
-        let hash = hasher.finalize();
-        let hash_bytes = hash.as_bytes();
-        u16::from_le_bytes([hash_bytes[0], hash_bytes[1]])
     }
 
     /// Generate cookie and return packet parameters.
@@ -275,5 +337,130 @@ mod tests {
 
         assert!(source_port >= 1024);
         assert!(seq_num > 0);
+    }
+
+    #[test]
+    fn test_verify_valid_cookie() {
+        let generator = CookieGenerator::default();
+        let target = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1));
+        let dest_port = 80u16;
+
+        // Use current timestamp (will be truncated to 16 bits in sequence number)
+        let timestamp = current_timestamp();
+
+        // Generate cookie
+        let cookie = generator.generate(target, dest_port, timestamp);
+
+        // Verify with correct parameters (ack_num = seq + 1)
+        // Use large max_age to avoid time-based expiration
+        let result = generator.verify(
+            target,
+            dest_port,
+            cookie.source_port,
+            cookie.sequence_num + 1,
+            Duration::from_secs(100_000),
+        );
+
+        assert_eq!(result, VerifyResult::Valid);
+    }
+
+    #[test]
+    fn test_verify_wrong_dest_port() {
+        let generator = CookieGenerator::default();
+        let target = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1));
+        let dest_port = 80u16;
+
+        // Use current timestamp
+        let timestamp = current_timestamp();
+
+        // Generate cookie for port 80
+        let cookie = generator.generate(target, dest_port, timestamp);
+
+        // Verify with wrong destination port (443 instead of 80)
+        let result = generator.verify(
+            target,
+            443, // Wrong port
+            cookie.source_port,
+            cookie.sequence_num + 1,
+            Duration::from_secs(100_000),
+        );
+
+        assert_eq!(result, VerifyResult::Invalid);
+    }
+
+    #[test]
+    fn test_verify_wrong_target() {
+        let generator = CookieGenerator::default();
+        let target1 = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1));
+        let target2 = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 2));
+        let dest_port = 80u16;
+
+        // Use current timestamp
+        let timestamp = current_timestamp();
+
+        // Generate cookie for target1
+        let cookie = generator.generate(target1, dest_port, timestamp);
+
+        // Verify with wrong target
+        let result = generator.verify(
+            target2, // Wrong target
+            dest_port,
+            cookie.source_port,
+            cookie.sequence_num + 1,
+            Duration::from_secs(100_000),
+        );
+
+        assert_eq!(result, VerifyResult::Invalid);
+    }
+
+    #[test]
+    fn test_verify_expired_cookie() {
+        let generator = CookieGenerator::default();
+        let target = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1));
+        let dest_port = 80u16;
+
+        // Use a timestamp from 120 seconds ago
+        let old_timestamp = current_timestamp() - 120;
+
+        // Generate cookie with old timestamp
+        let cookie = generator.generate(target, dest_port, old_timestamp);
+
+        // Verify with 60 second max age
+        let result = generator.verify(
+            target,
+            dest_port,
+            cookie.source_port,
+            cookie.sequence_num + 1,
+            Duration::from_secs(60),
+        );
+
+        assert_eq!(result, VerifyResult::Expired);
+    }
+
+    #[test]
+    fn test_verify_without_port_valid() {
+        // Note: verify_without_port is deprecated and only works when the
+        // cookie was generated with port 0. For proper verification, use
+        // the verify() method with the known destination port.
+        let generator = CookieGenerator::default();
+        let target = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1));
+
+        // Use current timestamp
+        let timestamp = current_timestamp();
+
+        // Generate cookie with port 0 (required for verify_without_port)
+        #[allow(deprecated, reason = "Testing deprecated verify_without_port method")]
+        let cookie = generator.generate(target, 0, timestamp);
+
+        // Verify without port (legacy method)
+        #[allow(deprecated, reason = "Testing deprecated verify_without_port method")]
+        let result = generator.verify_without_port(
+            target,
+            cookie.source_port,
+            cookie.sequence_num + 1,
+            Duration::from_secs(100_000),
+        );
+
+        assert_eq!(result, VerifyResult::Valid);
     }
 }

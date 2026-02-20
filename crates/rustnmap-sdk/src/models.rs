@@ -270,3 +270,92 @@ impl VulnInfo {
         self.cvss_v3 >= 7.0 || self.is_kev
     }
 }
+
+impl From<rustnmap_output::ScanResult> for ScanOutput {
+    fn from(result: rustnmap_output::ScanResult) -> Self {
+        use uuid::Uuid;
+
+        Self {
+            id: Uuid::new_v4().to_string(),
+            status: ScanStatus::Completed,
+            started_at: result.metadata.start_time,
+            completed_at: Some(result.metadata.end_time),
+            hosts: result.hosts.into_iter().map(HostResult::from).collect(),
+            statistics: result.statistics,
+        }
+    }
+}
+
+impl From<rustnmap_output::models::HostResult> for HostResult {
+    fn from(host: rustnmap_output::models::HostResult) -> Self {
+        // Get the best OS match (highest accuracy)
+        let os = host
+            .os_matches
+            .into_iter()
+            .max_by_key(|os| os.accuracy)
+            .map(OsMatch::from);
+
+        Self {
+            ip: host.ip,
+            hostname: host.hostname,
+            mac: host.mac.map(|m| m.address),
+            status: HostStatus::from(host.status),
+            ports: host.ports.into_iter().map(PortResult::from).collect(),
+            os,
+            vulnerabilities: Vec::new(), // Vulnerabilities are handled by rustnmap-vuln crate
+        }
+    }
+}
+
+impl From<rustnmap_output::models::HostStatus> for HostStatus {
+    fn from(status: rustnmap_output::models::HostStatus) -> Self {
+        match status {
+            rustnmap_output::models::HostStatus::Up => Self::Up,
+            rustnmap_output::models::HostStatus::Down => Self::Down,
+            rustnmap_output::models::HostStatus::Unknown => Self::Unknown,
+        }
+    }
+}
+
+impl From<rustnmap_output::models::PortResult> for PortResult {
+    fn from(port: rustnmap_output::models::PortResult) -> Self {
+        Self {
+            port: port.number,
+            protocol: Protocol::from(port.protocol),
+            state: port.state,
+            service: port.service.map(ServiceInfo::from),
+        }
+    }
+}
+
+impl From<rustnmap_output::models::Protocol> for Protocol {
+    fn from(protocol: rustnmap_output::models::Protocol) -> Self {
+        match protocol {
+            rustnmap_output::models::Protocol::Tcp => Self::Tcp,
+            rustnmap_output::models::Protocol::Udp => Self::Udp,
+            rustnmap_output::models::Protocol::Sctp => Self::Sctp,
+        }
+    }
+}
+
+impl From<rustnmap_output::models::ServiceInfo> for ServiceInfo {
+    fn from(service: rustnmap_output::models::ServiceInfo) -> Self {
+        Self {
+            name: service.name,
+            product: service.product,
+            version: service.version,
+            extra_info: service.extrainfo,
+            cpe: service.cpe,
+        }
+    }
+}
+
+impl From<rustnmap_output::models::OsMatch> for OsMatch {
+    fn from(os: rustnmap_output::models::OsMatch) -> Self {
+        Self {
+            name: os.name,
+            accuracy: os.accuracy,
+            cpe: os.cpe,
+        }
+    }
+}

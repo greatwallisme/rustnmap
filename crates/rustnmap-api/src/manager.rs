@@ -48,7 +48,7 @@ impl ScanTask {
 #[derive(Debug)]
 pub struct ScanManager {
     tasks: Arc<DashMap<String, ScanTask>>,
-    #[allow(dead_code, reason = "Config field reserved for future use")]
+    #[expect(dead_code, reason = "Config field reserved for future use")]
     config: ApiConfig,
 }
 

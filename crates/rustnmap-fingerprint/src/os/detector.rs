@@ -51,7 +51,6 @@ pub struct OsDetector {
 
 /// Response from a single SEQ probe.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 struct SeqProbeResponse {
     /// TCP sequence number from SYN-ACK.
     isn: u32,
@@ -60,13 +59,20 @@ struct SeqProbeResponse {
     /// TCP timestamp value.
     timestamp: Option<u32>,
     /// TCP window size.
+    #[expect(
+        dead_code,
+        reason = "Reserved for advanced ISN predictability analysis"
+    )]
     window: u16,
     /// TCP options.
+    #[expect(
+        dead_code,
+        reason = "Reserved for advanced OS fingerprinting algorithms"
+    )]
     options: OpsFingerprint,
 }
 
 /// TCP flags constants.
-#[allow(dead_code)]
 mod tcp_flags {
     pub const FIN: u8 = 0x01;
     pub const SYN: u8 = 0x02;

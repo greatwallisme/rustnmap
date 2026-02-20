@@ -764,7 +764,7 @@ pub struct DefaultPacketEngine {
     /// Packet sender channel.
     tx: broadcast::Sender<PacketBuffer>,
     /// Packet receiver channel.
-    #[allow(dead_code)]
+    #[expect(dead_code, reason = "Packet receiver for future raw packet processing")]
     rx: broadcast::Receiver<PacketBuffer>,
 }
 

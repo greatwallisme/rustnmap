@@ -8,7 +8,7 @@
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen)](https://github.com/greatwallisme/rust-nmap)
 [![Tests](https://img.shields.io/badge/tests-970%2B%20passing-brightgreen)](https://github.com/greatwallisme/rust-nmap)
 [![Coverage](https://img.shields.io/badge/coverage-63.77%25-yellow)](https://github.com/greatwallisme/rust-nmap)
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](LICENSE)
 
 **[中文文档](README.zh.md)** | [User Manual](doc/manual/) | [User Guide](doc/user-guide.md)
 
@@ -172,7 +172,14 @@ just doc
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) for details.
+RustNmap is licensed under the **GNU General Public License v3.0 or later** (GPL-3.0-or-later).
+
+| Component | License |
+|-----------|---------|
+| RustNmap Source Code | [GPL-3.0-or-later](LICENSE) |
+| Nmap Fingerprint Databases | [NPSL](https://nmap.org/npsl/) (when used) |
+
+RustNmap uses Nmap's fingerprint databases (`nmap-os-db`, `nmap-service-probes`) which are licensed under the Nmap Public Source License (NPSL). See [COPYING](COPYING) and [NOTICE](NOTICE) for details.
 
 ---
 

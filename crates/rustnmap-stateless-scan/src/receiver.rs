@@ -79,9 +79,10 @@ impl StatelessReceiver {
         while let Some(packet) = stream.next().await {
             // Parse packet
             if let Some(event) = Self::parse_packet(&packet) {
-                // Verify cookie
+                // Verify cookie with destination port for production-grade verification
                 match self.cookie_gen.verify(
                     event.target,
+                    event.port, // Destination port we originally probed
                     event.source_port,
                     event.ack_num,
                     self.max_age,

@@ -14,6 +14,7 @@ use rustnmap_common::ScanConfig as ScannerConfig;
 use rustnmap_output::models::PortState;
 use rustnmap_output::models::{HostResult, HostStatus, PortResult, ScanResult, ScanStatistics};
 use rustnmap_scan::connect_scan::TcpConnectScanner;
+use rustnmap_scan::ip_protocol_scan::IpProtocolScanner;
 use rustnmap_scan::scanner::PortScanner;
 use rustnmap_scan::stealth_scans::{
     TcpAckScanner, TcpFinScanner, TcpMaimonScanner, TcpNullScanner, TcpWindowScanner,
@@ -774,13 +775,32 @@ impl ScanOrchestrator {
                         }
                     }
                 }
-                ScanType::SctpInit | ScanType::IpProtocol => {
-                    // TODO: Implement SCTP and IP protocol scans
+                ScanType::IpProtocol => {
+                    match IpProtocolScanner::new(local_addr, scanner_config) {
+                        Ok(scanner) => {
+                            // For IP protocol scan, the 'port' is actually the protocol number
+                            scanner.scan_port(&common_target, port, rustnmap_common::Protocol::Tcp)
+                        }
+                        Err(_) => {
+                            return Ok(PortResult {
+                                number: port,
+                                protocol: rustnmap_output::models::Protocol::Tcp,
+                                state: PortState::Filtered,
+                                state_reason: "ip-protocol-scanner-init-failed".to_string(),
+                                state_ttl: None,
+                                service: None,
+                                scripts: Vec::new(),
+                            });
+                        }
+                    }
+                }
+                ScanType::SctpInit => {
+                    // SCTP requires new scanner implementation (Phase 3)
                     return Ok(PortResult {
                         number: port,
-                        protocol: rustnmap_output::models::Protocol::Tcp,
+                        protocol: rustnmap_output::models::Protocol::Sctp,
                         state: PortState::Filtered,
-                        state_reason: "scan-type-not-implemented".to_string(),
+                        state_reason: "sctp-not-yet-implemented".to_string(),
                         state_ttl: None,
                         service: None,
                         scripts: Vec::new(),

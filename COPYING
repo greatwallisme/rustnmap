@@ -1,0 +1,22 @@
+RustNmap License Information
+============================
+
+RustNmap uses Nmap's fingerprint databases (nmap-os-db, nmap-service-probes)
+which are licensed under the Nmap Public Source License (NPSL).
+
+For Nmap's license, see: https://nmap.org/npsl/
+
+When using Nmap's fingerprint databases with RustNmap, you must comply
+with the NPSL terms. The databases are downloaded from:
+
+  - nmap-service-probes: https://svn.nmap.org/nmap/nmap-service-probes
+  - nmap-os-db: https://svn.nmap.org/nmap/nmap-os-db
+
+RustNmap itself is licensed under the GNU General Public License v3.0
+or later (GPL-3.0-or-later). See the LICENSE file for the full license text.
+
+This licensing approach ensures:
+  - Compatibility with Nmap's data file licensing (NPSL)
+  - Copyleft protection for RustNmap's source code
+  - Commercial use allowed under GPL-3.0 terms
+  - Proper attribution to the Nmap project
