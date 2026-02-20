@@ -7,6 +7,71 @@
 
 ## 最新发现
 
+### 2026-02-20: Module-Level `#![allow(...)]` 违规发现 ⚠️
+
+**发现来源**: 代码审查
+
+**问题描述**:
+
+发现 16 个文件使用了 module-level `#![allow(...)]` 属性，违反了 rust-guidelines 规定:
+
+```
+## NEVER Do These (Prohibited Practices)
+
+**1. NEVER use global `#![allow(...)]` attributes:**
+// FORBIDDEN - this bypasses ALL lints
+#![allow(dead_code)]
+#![allow(clippy::all)]
+```
+
+**Rules for `#[allow]` usage:**
+1. Use `#[expect]` instead of `#[allow]` when possible
+2. Add comment explaining WHY
+3. Include reference to upstream issue or specification
+4. **Keep scope minimal (item-level over module-level)**
+
+#### 违规详情
+
+| 类别 | 文件数 | 典型 Lints |
+|------|--------|-----------|
+| NSE 库 | 5 | cast_*, doc_markdown, too_many_lines |
+| Scan 模块 | 4 | must_use_candidate, cast_* |
+| 其他 lib | 4 | multiple_crate_versions |
+| 测试 | 2 | uninlined_format_args, unreadable_literal |
+
+#### 违规示例
+
+```rust
+// 当前 (违规)
+#![allow(
+    clippy::cast_lossless,
+    clippy::cast_possible_wrap,
+    reason = "NSE library implementation requires these patterns"
+)]
+
+pub fn some_function() { ... }
+
+// 应改为 (正确)
+#[expect(
+    clippy::cast_lossless,
+    clippy::cast_possible_wrap,
+    reason = "NSE library implementation requires these patterns"
+)]
+pub fn some_function() { ... }
+```
+
+#### 根本原因
+
+这些 module-level 豁免是在实现功能时添加的，为了快速消除 clippy 警告，但没有遵循 rust-guidelines 的最佳实践。
+
+#### 建议
+
+1. **短期**: 将 `#![allow(...)]` 转换为 item-level `#[expect(...)]`
+2. **中期**: 评估是否可以通过重构代码消除需要豁免的情况
+3. **长期**: 在 CI 中添加检查，禁止 module-level `#![allow(...)]`
+
+---
+
 ### 2026-02-20: TODO 功能实现完成 ✅
 
 **实现范围**: 5 个 TODO 项目全部完成

@@ -4,11 +4,6 @@
 //! round-trip time estimates for network scanning.
 
 #![warn(missing_docs)]
-#![allow(
-    clippy::manual_abs_diff,
-    clippy::must_use_candidate,
-    reason = "Using explicit abs_diff for clarity; algorithms follow RFC 2988"
-)]
 
 use std::time::{Duration, Instant};
 

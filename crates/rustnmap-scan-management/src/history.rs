@@ -18,6 +18,10 @@ pub struct ScanHistory {
 
 impl ScanHistory {
     /// Open or create the database.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database cannot be opened or created.
     pub fn open(db_path: &str) -> Result<Self> {
         let config = crate::database::DbConfig {
             path: db_path.to_string(),
@@ -28,11 +32,16 @@ impl ScanHistory {
     }
 
     /// Create from existing database.
+    #[must_use]
     pub fn from_database(db: ScanDatabase) -> Self {
         Self { db }
     }
 
     /// Save scan result to history.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the scan cannot be saved to the database.
     pub async fn save_scan(
         &self,
         result: &ScanResult,
@@ -43,16 +52,28 @@ impl ScanHistory {
     }
 
     /// List scans with optional filtering.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database query fails.
     pub async fn list_scans(&self, filter: ScanFilter) -> Result<Vec<ScanSummary>> {
         self.db.list_scans(&filter).await
     }
 
     /// Get scan details by ID.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database query fails.
     pub async fn get_scan(&self, id: &str) -> Result<Option<StoredScan>> {
         self.db.get_scan(id).await
     }
 
     /// Get target's scan history.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database query fails.
     pub async fn get_target_history(&self, target: &str) -> Result<Vec<ScanSummary>> {
         let filter = ScanFilter {
             target: Some(target.to_string()),
@@ -62,11 +83,19 @@ impl ScanHistory {
     }
 
     /// Delete old scans beyond retention period.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database operation fails.
     pub async fn prune_old_scans(&self, retention_days: u32) -> Result<usize> {
         self.db.prune_old_scans(retention_days).await
     }
 
     /// Get the most recent scan for a target.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database query fails.
     pub async fn get_latest_scan(&self, target: &str) -> Result<Option<StoredScan>> {
         let filter = ScanFilter {
             target: Some(target.to_string()),
@@ -82,6 +111,10 @@ impl ScanHistory {
     }
 
     /// Get scans by status.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database query fails.
     pub async fn get_scans_by_status(&self, status: ScanStatus) -> Result<Vec<ScanSummary>> {
         // For now, fetch all and filter (could be optimized)
         let filter = ScanFilter::default();
@@ -112,6 +145,7 @@ pub struct ScanFilter {
 
 impl ScanFilter {
     /// Create a new filter with time range.
+    #[must_use]
     pub fn with_time_range(since: DateTime<Utc>, until: DateTime<Utc>) -> Self {
         Self {
             since: Some(since),
@@ -121,6 +155,7 @@ impl ScanFilter {
     }
 
     /// Create a filter for a specific target.
+    #[must_use]
     pub fn for_target(target: &str) -> Self {
         Self {
             target: Some(target.to_string()),
@@ -129,6 +164,7 @@ impl ScanFilter {
     }
 
     /// Set the limit.
+    #[must_use]
     pub fn with_limit(mut self, limit: usize) -> Self {
         self.limit = Some(limit);
         self

@@ -170,7 +170,7 @@ impl OutputFormatter for MarkdownFormatter {
         let mut output = String::new();
 
         // Host header
-        let _ = write!(output, "### {}\n\n", host.ip);
+        let _ = writeln!(output, "### {}\n\n", host.ip);
 
         if let Some(ref hostname) = host.hostname {
             let _ = writeln!(output, "- **Hostname**: {hostname}");
@@ -211,8 +211,8 @@ impl OutputFormatter for MarkdownFormatter {
         if !host.scripts.is_empty() {
             output.push_str("#### Scripts\n\n");
             for script in &host.scripts {
-                let _ = write!(output, "**{}**\n\n", script.id);
-                let _ = write!(output, "```\n{}\n```\n\n", script.output);
+                let _ = writeln!(output, "**{}**\n\n", script.id);
+                let _ = writeln!(output, "```\n{}\n```\n\n", script.output);
             }
         }
 
@@ -357,7 +357,7 @@ impl OutputFormatter for NormalFormatter {
             result.metadata.scanner_version,
             result.metadata.start_time.format("%a %b %d %H:%M:%S %Y")
         );
-        let _ = write!(output, "# {}\n\n", result.metadata.command_line);
+        let _ = writeln!(output, "# {}\n\n", result.metadata.command_line);
 
         // Hosts
         for host in &result.hosts {

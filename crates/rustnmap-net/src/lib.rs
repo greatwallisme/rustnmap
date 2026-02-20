@@ -4,10 +4,6 @@
 //! packet I/O, and network interface management.
 
 #![warn(missing_docs)]
-#![allow(
-    clippy::multiple_crate_versions,
-    reason = "Dependency version conflict in transitive deps"
-)]
 
 use rustnmap_common::Result;
 

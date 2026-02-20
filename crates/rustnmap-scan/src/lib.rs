@@ -5,11 +5,6 @@
 //! (FIN, NULL, Xmas, ACK, Maimon, Window, Idle).
 
 #![warn(missing_docs)]
-// Transitive dependency version conflicts are unavoidable in large workspaces
-#![allow(
-    clippy::multiple_crate_versions,
-    reason = "Third-party dependency version conflicts cannot be resolved"
-)]
 
 pub mod connect_scan;
 pub mod ftp_bounce_scan;

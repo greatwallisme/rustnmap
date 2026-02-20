@@ -9,6 +9,119 @@
 
 ## 当前任务
 
+### Task: 修复 Module-Level `#![allow(...)]` 违规 ⚠️ PENDING
+**创建时间**: 2026-02-20
+**目标**: 将 module-level `#![allow(...)]` 转换为 item-level `#[expect(...)]`
+
+#### 问题发现
+
+在代码审查中发现 **16 个文件** 使用了 module-level `#![allow(...)]` 属性，这违反了 rust-guidelines 规定:
+
+> **1. NEVER use global `#![allow(...)]` attributes:**
+> ```rust,ignore
+> // FORBIDDEN - this bypasses ALL lints
+> #![allow(dead_code)]
+> #![allow(clippy::all)]
+> ```
+
+#### 违规文件列表
+
+| 文件 | 允许的 Lints | 状态 |
+|------|-------------|------|
+| `rustnmap-nse/src/libs/nmap.rs` | cast_lossless, cast_possible_wrap, cast_sign_loss, doc_markdown, too_many_lines | ⚠️ 待修复 |
+| `rustnmap-nse/src/libs/stdnse.rs` | 多个 cast, clone_on_ref_ptr, doc_markdown, etc. | ⚠️ 待修复 |
+| `rustnmap-nse/src/libs/comm.rs` | cast_*, explicit_auto_deref, needless_pass_by_value, etc. | ⚠️ 待修复 |
+| `rustnmap-nse/src/libs/shortport.rs` | cast_*, doc_markdown, get_first, similar_names, etc. | ⚠️ 待修复 |
+| `rustnmap-nse/src/script.rs` | should_implement_trait, unused_variables | ⚠️ 待修复 |
+| `rustnmap-scan/src/lib.rs` | multiple_crate_versions | ⚠️ 待修复 |
+| `rustnmap-scan/src/connect_scan.rs` | used_underscore_binding, must_use_candidate, unnecessary_wraps | ⚠️ 待修复 |
+| `rustnmap-scan/src/probe.rs` | cast_possible_truncation, double_must_use, must_use_candidate | ⚠️ 待修复 |
+| `rustnmap-scan/src/timeout.rs` | manual_abs_diff, must_use_candidate | ⚠️ 待修复 |
+| `rustnmap-net/src/lib.rs` | multiple_crate_versions | ⚠️ 待修复 |
+| `rustnmap-packet/src/lib.rs` | (需检查) | ⚠️ 待修复 |
+| `rustnmap-core/src/lib.rs` | (需检查) | ⚠️ 待修复 |
+| `rustnmap-core/tests/orchestrator_tests.rs` | uninlined_format_args, default_trait_access | ⚠️ 待修复 |
+| `rustnmap-stateless-scan/src/lib.rs` | (需检查) | ⚠️ 待修复 |
+| `rustnmap-scan-management/src/lib.rs` | (需检查) | ⚠️ 待修复 |
+| `rustnmap-target/tests/discovery_unit_tests.rs` | unreadable_literal | ⚠️ 待修复 |
+
+#### 修复方案
+
+1. **Module-level → Item-level**: 将 `#![allow(...)]` 移动到具体需要豁免的项上
+2. **allow → expect**: 使用 `#[expect(...)]` 替代 `#[allow(...)]`，防止过期的豁免
+3. **添加 reason**: 所有豁免都必须有 `reason = "..."` 说明
+
+#### 修复优先级
+
+| 优先级 | 文件类型 | 原因 |
+|--------|---------|------|
+| HIGH | 生产代码 (lib.rs, *.rs) | 影响代码质量 |
+| MEDIUM | 测试代码 (tests/*.rs) | 测试代码要求相对宽松 |
+| LOW | 依赖版本警告 (multiple_crate_versions) | 无法直接修复，需等待依赖更新 |
+
+---
+
+### Task: 实现 Dead Code 功能 (5 项) ✅ COMPLETE
+**创建时间**: 2026-02-20
+**完成时间**: 2026-02-20
+**目标**: 实现标记为 `#[expect(dead_code)]` 的 5 项功能
+
+#### 实现结果
+
+| 优先级 | 功能 | 文件 | 状态 |
+|--------|------|------|------|
+| HIGH | TargetParser.exclude_list | parser.rs:29 | ✅ 完成 |
+| MEDIUM | ScriptDatabase.base_dir | registry.rs:31 | ✅ 完成 |
+| LOW | SocketState::Listening | nmap.rs:310 | ✅ 完成 |
+| LOW | ScanManager.config | manager.rs:51 | ✅ 完成 |
+| LOW | DefaultPacketEngine.rx | session.rs:767 | ✅ 完成 |
+
+#### 实现详情
+
+**1. TargetParser.exclude_list** (HIGH)
+- 添加 `set_exclude_list()` 方法从 Target 向量设置排除列表
+- 添加 `set_exclude_specs()` 方法从 TargetSpec 向量设置
+- 添加 `add_exclude()` 方法添加单个排除项
+- 添加 `exclude_list()` getter 方法
+- 添加 `clear_excludes()` 方法清空排除列表
+- 实现 `is_excluded()` 和 `filter_exclusions()` 过滤逻辑
+- 支持 IPv4/IPv6 CIDR、范围、主机名匹配
+- 添加 9 个新测试用例
+
+**2. ScriptDatabase.base_dir** (MEDIUM)
+- 添加 `base_dir()` getter 方法
+- 添加 `resolve_script_path()` 方法解析脚本路径
+- 添加 `script_file_exists()` 方法检查脚本文件存在
+- 添加 `reload()` 方法重新加载脚本
+- 添加 4 个新测试用例
+
+**3. SocketState::Listening** (LOW)
+- 扩展 `SocketState` 枚举，`Listening` 变体包含地址和协议
+- 添加 `bind()` 方法绑定地址
+- 添加 `listen()` 方法进入监听状态
+- 添加 `set_backlog()` 方法设置监听队列大小
+- 添加 `accept()` 异步方法接受连接
+- 添加 `is_listening()` 方法检查监听状态
+- 更新 `get_info()` 返回当前状态
+
+**4. ScanManager.config** (LOW)
+- 添加 `can_start_scan()` 检查并发限制
+- 添加 `validate_api_key()` 验证 API 密钥
+- 添加 `config()` getter 方法
+- 添加 `available_slots()` 获取可用槽位
+- 添加 `max_concurrent_scans()` 获取最大并发数
+- 添加 `is_sse_enabled()` 检查 SSE 开关
+- 添加 `result_retention()` 获取结果保留时间
+- 添加 `create_scan_if_allowed()` 带限制的创建方法
+- 添加 `ScanLimitReached` 错误类型
+
+**5. DefaultPacketEngine.rx** (LOW)
+- 添加 `try_recv()` 非阻塞接收方法
+- 添加 `recv()` 异步接收方法
+- 添加 `subscribe()` 创建新订阅者
+
+---
+
 ### Task: Dead Code 和 Placeholder 代码审查 ✅ COMPLETE
 **创建时间**: 2026-02-20
 **完成时间**: 2026-02-20
@@ -106,7 +219,7 @@
 
 ## 项目整体状态
 
-### 完成度: 95%
+### 完成度: 100% ✅
 
 | Phase | 完成度 | 状态 |
 |-------|--------|------|
@@ -115,17 +228,17 @@
 | Phase 3: Advanced Features | 100% | ✅ 全部完成 |
 | Phase 4: Integration | 100% | ✅ 全部完成 |
 | 2.0 New Features | 100% | ✅ 全部完成 |
-| 遗留功能实现 | 90% | ⚠️ 5 项 dead code |
+| 遗留功能实现 | 100% | ✅ 全部完成 |
 
-### 未实现功能 (Dead Code)
+### 已实现的 Dead Code 功能 ✅
 
-| 功能 | 文件 | 优先级 | 状态 |
-|------|------|--------|------|
-| TargetParser.exclude_list | parser.rs:29 | HIGH | ❌ 未实现 |
-| ScriptRegistry.base_dir | registry.rs:31 | MEDIUM | ❌ 未实现 |
-| SocketState::Listening | nmap.rs:310 | LOW | ❌ 未实现 |
-| ScanManager.config | manager.rs:51 | LOW | ❌ 未使用 |
-| DefaultPacketEngine.rx | session.rs:767 | LOW | ❌ 未使用 |
+| 功能 | 文件 | 状态 |
+|------|------|------|
+| TargetParser.exclude_list | parser.rs:29 | ✅ 已实现 |
+| ScriptRegistry.base_dir | registry.rs:31 | ✅ 已实现 |
+| SocketState::Listening | nmap.rs:310 | ✅ 已实现 |
+| ScanManager.config | manager.rs:51 | ✅ 已使用 |
+| DefaultPacketEngine.rx | session.rs:767 | ✅ 已使用 |
 
 ---
 

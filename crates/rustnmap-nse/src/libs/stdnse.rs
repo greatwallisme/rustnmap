@@ -1,20 +1,4 @@
 //! Standard NSE library (stdnse) implementation.
-
-#![allow(
-    clippy::cast_lossless,
-    clippy::cast_possible_truncation,
-    clippy::cast_possible_wrap,
-    clippy::cast_sign_loss,
-    clippy::clone_on_ref_ptr,
-    clippy::collapsible_str_replace,
-    clippy::doc_markdown,
-    clippy::get_first,
-    clippy::implicit_hasher,
-    clippy::must_use_candidate,
-    clippy::too_many_lines,
-    clippy::type_complexity,
-    reason = "NSE library implementation requires these patterns"
-)]
 //!
 //! This module provides the `stdnse` library which contains standard utility
 //! functions for NSE scripts. It corresponds to Nmap's stdnse NSE library.
@@ -62,6 +46,7 @@
 //! ```
 
 use std::collections::HashMap;
+use std::hash::BuildHasher;
 use std::sync::{Arc, Condvar, Mutex};
 
 use mlua::{MultiValue, Value};
@@ -75,50 +60,47 @@ use crate::lua::NseLua;
 static SCRIPT_ARGS: std::sync::OnceLock<Arc<TokioRwLock<HashMap<String, String>>>> =
     std::sync::OnceLock::new();
 
-/// Named mutex storage for stdnse.mutex().
-static NAMED_MUTEXES: std::sync::OnceLock<Arc<TokioRwLock<HashMap<String, Arc<Mutex<()>>>>>> =
+/// Type alias for named mutex storage.
+type MutexStorage = HashMap<String, Arc<Mutex<()>>>;
+
+/// Named mutex storage for `stdnse.mutex()`.
+static NAMED_MUTEXES: std::sync::OnceLock<Arc<TokioRwLock<MutexStorage>>> =
     std::sync::OnceLock::new();
 
 /// Type alias for condition variable storage.
 type CvarStorage = HashMap<String, Arc<(Mutex<bool>, Condvar)>>;
 
-/// Named condition variable storage for stdnse.condition_variable().
+/// Named condition variable storage for `stdnse.condition_variable()`.
 static NAMED_CVARS: std::sync::OnceLock<Arc<TokioRwLock<CvarStorage>>> = std::sync::OnceLock::new();
 
 /// Get or initialize the named mutex storage.
-fn get_mutex_storage() -> Arc<TokioRwLock<HashMap<String, Arc<Mutex<()>>>>> {
-    NAMED_MUTEXES
-        .get_or_init(|| Arc::new(TokioRwLock::new(HashMap::new())))
-        .clone()
+fn get_mutex_storage() -> Arc<TokioRwLock<MutexStorage>> {
+    Arc::clone(NAMED_MUTEXES.get_or_init(|| Arc::new(TokioRwLock::new(HashMap::new()))))
 }
 
 /// Get or initialize the named condition variable storage.
 fn get_cvar_storage() -> Arc<TokioRwLock<CvarStorage>> {
-    NAMED_CVARS
-        .get_or_init(|| Arc::new(TokioRwLock::new(HashMap::new())))
-        .clone()
+    Arc::clone(NAMED_CVARS.get_or_init(|| Arc::new(TokioRwLock::new(HashMap::new()))))
 }
 
 /// Get or initialize the global script arguments storage.
 fn get_script_args_storage() -> Arc<TokioRwLock<HashMap<String, String>>> {
-    SCRIPT_ARGS
-        .get_or_init(|| Arc::new(TokioRwLock::new(HashMap::new())))
-        .clone()
+    Arc::clone(SCRIPT_ARGS.get_or_init(|| Arc::new(TokioRwLock::new(HashMap::new()))))
 }
 
 /// Set script arguments from command line.
 ///
 /// # Arguments
 ///
-/// * `args` - HashMap of argument name to value
+/// * `args` - `HashMap` of argument name to value
 ///
 /// # Panics
 ///
 /// Panics if the write lock is poisoned (should never happen in practice).
-pub async fn set_script_args(args: HashMap<String, String>) {
+pub async fn set_script_args<S: BuildHasher>(args: HashMap<String, String, S>) {
     let storage = get_script_args_storage();
     let mut guard = storage.write().await;
-    *guard = args;
+    *guard = args.into_iter().collect();
 }
 
 /// Get a script argument value.
@@ -149,6 +131,14 @@ pub async fn get_script_arg(name: &str) -> Option<String> {
 /// # Panics
 ///
 /// Panics if thread spawning or joining fails (should not happen in practice).
+#[expect(
+    clippy::cast_lossless,
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::too_many_lines,
+    reason = "Lua FFI requires c_int/i64 casts; library registration is inherently verbose"
+)]
 pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     let lua = nse_lua.lua_mut();
 
@@ -300,7 +290,7 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
 
     // Register fromhex(hexstr) function
     let fromhex_fn = lua.create_function(|_, hexstr: String| {
-        let hex = hexstr.replace(' ', "").replace('\t', "");
+        let hex = hexstr.replace([' ', '\t'], "");
         let mut result = Vec::with_capacity(hex.len() / 2);
 
         let chars: Vec<char> = hex.chars().collect();

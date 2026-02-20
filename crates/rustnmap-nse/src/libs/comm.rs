@@ -1,16 +1,4 @@
 //! Communication library (comm) for NSE.
-
-#![allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_possible_wrap,
-    clippy::cast_sign_loss,
-    clippy::explicit_auto_deref,
-    clippy::needless_pass_by_value,
-    clippy::too_many_lines,
-    clippy::uninlined_format_args,
-    clippy::unnecessary_wraps,
-    reason = "NSE library implementation requires these patterns"
-)]
 //!
 //! This module provides the `comm` library which contains network communication
 //! functions for NSE scripts. It corresponds to Nmap's comm NSE library.
@@ -146,6 +134,10 @@ impl NseSocket {
     }
 }
 
+#[expect(
+    clippy::cast_possible_wrap,
+    reason = "usize to i64 cast for Lua FFI; truncation impossible on 64-bit systems"
+)]
 impl UserData for NseSocket {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
         methods.add_method("is_connected", |_, this, ()| Ok(this.is_connected()));
@@ -184,6 +176,12 @@ impl UserData for NseSocket {
 }
 
 /// Parse connection options from Lua table.
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::unnecessary_wraps,
+    reason = "Lua numbers are i64; clamped casts to usize/u64 are safe; Result required for Lua API consistency"
+)]
 fn parse_opts(opts: Option<Table>) -> mlua::Result<ConnectionOpts> {
     let mut options = ConnectionOpts::default();
 
@@ -241,7 +239,7 @@ impl Default for ConnectionOpts {
 }
 
 /// Open a connection to host:port.
-fn opencon_impl(host: &str, port: u16, opts: ConnectionOpts) -> std::io::Result<NseSocket> {
+fn opencon_impl(host: &str, port: u16, opts: &ConnectionOpts) -> std::io::Result<NseSocket> {
     // Use block_in_place to yield to the async runtime during blocking network operations
     tokio::task::block_in_place(|| opencon_impl_blocking(host, port, opts))
 }
@@ -253,9 +251,9 @@ fn opencon_impl(host: &str, port: u16, opts: ConnectionOpts) -> std::io::Result<
 fn opencon_impl_blocking(
     host: &str,
     port: u16,
-    opts: ConnectionOpts,
+    opts: &ConnectionOpts,
 ) -> std::io::Result<NseSocket> {
-    let addr = format!("{}:{}", host, port);
+    let addr = format!("{host}:{port}");
     let addrs: Vec<SocketAddr> = addr.to_socket_addrs()?.collect();
 
     if addrs.is_empty() {
@@ -281,8 +279,8 @@ fn opencon_impl_blocking(
 }
 
 /// Get service banner from host:port.
-fn get_banner_impl(host: &str, port: u16, opts: ConnectionOpts) -> std::io::Result<String> {
-    let mut socket = opencon_impl(host, port, opts.clone())?;
+fn get_banner_impl(host: &str, port: u16, opts: &ConnectionOpts) -> std::io::Result<String> {
+    let mut socket = opencon_impl(host, port, opts)?;
 
     // Set a shorter timeout for banner grabbing
     let banner_timeout = Duration::from_millis(DEFAULT_BANNER_TIMEOUT_MS);
@@ -311,9 +309,9 @@ fn exchange_impl(
     host: &str,
     port: u16,
     data: &[u8],
-    opts: ConnectionOpts,
+    opts: &ConnectionOpts,
 ) -> std::io::Result<Vec<u8>> {
-    let mut socket = opencon_impl(host, port, opts.clone())?;
+    let mut socket = opencon_impl(host, port, opts)?;
 
     // Send data
     socket.send(data)?;
@@ -331,7 +329,7 @@ fn exchange_impl(
 }
 
 /// Read response from socket.
-fn read_response_impl(socket: &mut NseSocket, opts: ConnectionOpts) -> std::io::Result<Vec<u8>> {
+fn read_response_impl(socket: &mut NseSocket, opts: &ConnectionOpts) -> std::io::Result<Vec<u8>> {
     if let Some(bytes) = opts.bytes {
         socket.receive(bytes)
     } else {
@@ -359,7 +357,7 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
         lua.create_function(|lua, (host, port, opts): (String, u16, Option<Table>)| {
             let options = parse_opts(opts).map_err(|e| mlua::Error::RuntimeError(e.to_string()))?;
 
-            match opencon_impl(&host, port, options) {
+            match opencon_impl(&host, port, &options) {
                 Ok(socket) => Ok(Value::UserData(lua.create_userdata(socket)?)),
                 Err(_e) => Ok(Value::Nil),
             }
@@ -373,7 +371,7 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
                 parse_opts(opts).map_err(|e| mlua::Error::RuntimeError(e.to_string()))?;
             options.ssl = true;
 
-            match opencon_impl(&host, port, options) {
+            match opencon_impl(&host, port, &options) {
                 Ok(socket) => Ok(Value::UserData(lua.create_userdata(socket)?)),
                 Err(_) => Ok(Value::Nil),
             }
@@ -385,7 +383,7 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
         lua.create_function(|lua, (host, port, opts): (String, u16, Option<Table>)| {
             let options = parse_opts(opts).map_err(|e| mlua::Error::RuntimeError(e.to_string()))?;
 
-            match get_banner_impl(&host, port, options) {
+            match get_banner_impl(&host, port, &options) {
                 Ok(banner) => Ok(Value::String(lua.create_string(&banner)?)),
                 Err(_) => Ok(Value::Nil),
             }
@@ -397,7 +395,7 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
         |lua, (host, port, data, opts): (String, u16, mlua::String, Option<Table>)| {
             let options = parse_opts(opts).map_err(|e| mlua::Error::RuntimeError(e.to_string()))?;
 
-            match exchange_impl(&host, port, &data.as_bytes(), options) {
+            match exchange_impl(&host, port, &data.as_bytes(), &options) {
                 Ok(response) => Ok(Value::String(lua.create_string(&response)?)),
                 Err(_) => Ok(Value::Nil),
             }
@@ -412,7 +410,7 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
 
             let mut socket_ref = socket.borrow_mut::<NseSocket>()?;
 
-            match read_response_impl(&mut *socket_ref, options) {
+            match read_response_impl(&mut socket_ref, &options) {
                 Ok(data) => Ok(Value::String(lua.create_string(&data)?)),
                 Err(_) => Ok(Value::Nil),
             }
@@ -432,7 +430,7 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
             }
 
             // Read the response
-            match read_response_impl(&mut *socket_ref, options) {
+            match read_response_impl(&mut socket_ref, &options) {
                 Ok(data) => Ok(Value::String(lua.create_string(&data)?)),
                 Err(_) => Ok(Value::Nil),
             }
@@ -620,14 +618,14 @@ mod tests {
             peer_addr: "127.0.0.1:80".parse().unwrap(),
         };
 
-        let debug_str = format!("{:?}", socket);
+        let debug_str = format!("{socket:?}");
         assert!(debug_str.contains("NseSocket"));
     }
 
     #[test]
     fn test_connection_opts_debug() {
         let opts = ConnectionOpts::default();
-        let debug_str = format!("{:?}", opts);
+        let debug_str = format!("{opts:?}");
         assert!(debug_str.contains("ConnectionOpts"));
     }
 

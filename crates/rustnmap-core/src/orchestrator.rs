@@ -1077,10 +1077,11 @@ impl ScanOrchestrator {
     }
 
     /// Runs NSE scripts on discovered services.
-    #[allow(
+    #[expect(
         clippy::unnecessary_wraps,
         clippy::too_many_lines,
-        clippy::map_unwrap_or
+        clippy::map_unwrap_or,
+        reason = "NSE script execution is inherently verbose; Result return required for future extensions"
     )]
     fn run_nse_scripts(&self, host_results: &mut [HostResult]) -> Result<()> {
         info!("Starting NSE script execution phase");

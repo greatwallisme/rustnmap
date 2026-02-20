@@ -49,10 +49,6 @@
 //! ```
 
 #![warn(missing_docs)]
-#![allow(
-    clippy::allow_attributes_without_reason,
-    reason = "Allow attributes are used extensively for incremental development"
-)]
 
 pub mod congestion;
 pub mod error;

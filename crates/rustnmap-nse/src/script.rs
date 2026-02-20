@@ -3,12 +3,6 @@
 //! This module defines the core types representing NSE scripts,
 //! including their metadata, categories, and execution results.
 
-#![allow(
-    clippy::should_implement_trait,
-    unused_variables,
-    reason = "Partial implementation - traits and variable usage will be completed"
-)]
-
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -62,6 +56,10 @@ impl ScriptCategory {
     /// # Returns
     ///
     /// `Some(category)` if recognized, `None` otherwise.
+    #[expect(
+        clippy::should_implement_trait,
+        reason = "Returns Option not Result; FromStr trait requires Result"
+    )]
     #[must_use]
     pub fn from_str(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {

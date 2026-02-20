@@ -8,6 +8,7 @@ use chrono::Utc;
 use rustnmap_output::models::HostStatus;
 use rustnmap_output::{HostResult, PortResult, ScanResult};
 use std::collections::HashMap;
+use std::fmt::Write;
 use std::net::IpAddr;
 
 /// Output format for diff reports.
@@ -33,11 +34,16 @@ pub struct ScanDiff {
 
 impl ScanDiff {
     /// Create a new diff from two scan results.
+    #[must_use]
     pub fn new(before: ScanResult, after: ScanResult) -> Self {
         Self { before, after }
     }
 
     /// Load two scans from history and create diff.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the scans cannot be loaded from history.
     pub async fn from_history(
         history: &crate::history::ScanHistory,
         before_id: &str,
@@ -65,6 +71,7 @@ impl ScanDiff {
     }
 
     /// Get host changes between scans.
+    #[must_use]
     pub fn host_changes(&self) -> HostChanges {
         let before_hosts: HashMap<IpAddr, &HostResult> =
             self.before.hosts.iter().map(|h| (h.ip, h)).collect();
@@ -104,10 +111,9 @@ impl ScanDiff {
     }
 
     /// Get port changes between scans.
+    #[must_use]
     pub fn port_changes(&self) -> PortChanges {
         use rustnmap_output::Protocol;
-
-        let mut by_host: HashMap<IpAddr, HostPortChanges> = HashMap::new();
 
         // Helper function to get protocol string
         fn protocol_str(p: Protocol) -> &'static str {
@@ -117,6 +123,8 @@ impl ScanDiff {
                 Protocol::Sctp => "sctp",
             }
         }
+
+        let mut by_host: HashMap<IpAddr, HostPortChanges> = HashMap::new();
 
         // Find all hosts - simplified approach
         let before_ips: std::collections::HashSet<_> =
@@ -200,6 +208,7 @@ impl ScanDiff {
     }
 
     /// Get vulnerability changes between scans.
+    #[must_use]
     pub fn vulnerability_changes(&self) -> VulnerabilityChanges {
         // This would require integration with rustnmap-vuln
         // For now, return empty changes
@@ -211,6 +220,7 @@ impl ScanDiff {
     }
 
     /// Generate a diff report in the specified format.
+    #[must_use]
     pub fn generate_report(&self, format: DiffFormat) -> String {
         let host_changes = self.host_changes();
         let port_changes = self.port_changes();
@@ -218,186 +228,213 @@ impl ScanDiff {
 
         match format {
             DiffFormat::Text => {
-                self.generate_text_report(&host_changes, &port_changes, &vuln_changes)
+                Self::generate_text_report(&host_changes, &port_changes, &vuln_changes)
             }
-            DiffFormat::Markdown => {
-                self.generate_markdown_report(&host_changes, &port_changes, &vuln_changes)
-            }
-            DiffFormat::Json => {
-                self.generate_json_report(&host_changes, &port_changes, &vuln_changes)
-            }
-            DiffFormat::Html => {
-                self.generate_html_report(&host_changes, &port_changes, &vuln_changes)
-            }
+            DiffFormat::Markdown => Self::generate_markdown_report(
+                &self.before,
+                &self.after,
+                &host_changes,
+                &port_changes,
+                &vuln_changes,
+            ),
+            DiffFormat::Json => Self::generate_json_report(
+                &self.before,
+                &self.after,
+                &host_changes,
+                &port_changes,
+                &vuln_changes,
+            ),
+            DiffFormat::Html => Self::generate_html_report(
+                &self.before,
+                &self.after,
+                &host_changes,
+                &port_changes,
+                &vuln_changes,
+            ),
         }
     }
 
     fn generate_text_report(
-        &self,
         hosts: &HostChanges,
         ports: &PortChanges,
         vulns: &VulnerabilityChanges,
     ) -> String {
         let mut report = String::new();
 
-        report.push_str("=== Scan Diff Report ===\n\n");
+        let _ = writeln!(report, "=== Scan Diff Report ===\n");
 
-        report.push_str("## Host Changes\n");
-        report.push_str(&format!("  Added: {} hosts\n", hosts.added.len()));
+        let _ = writeln!(report, "## Host Changes");
+        let _ = writeln!(report, "  Added: {} hosts", hosts.added.len());
         for ip in &hosts.added {
-            report.push_str(&format!("    + {}\n", ip));
+            let _ = writeln!(report, "    + {ip}");
         }
 
-        report.push_str(&format!("  Removed: {} hosts\n", hosts.removed.len()));
+        let _ = writeln!(report, "  Removed: {} hosts", hosts.removed.len());
         for ip in &hosts.removed {
-            report.push_str(&format!("    - {}\n", ip));
+            let _ = writeln!(report, "    - {ip}");
         }
 
-        report.push_str(&format!(
-            "  Status Changed: {} hosts\n",
+        let _ = writeln!(
+            report,
+            "  Status Changed: {} hosts",
             hosts.status_changed.len()
-        ));
+        );
 
-        report.push_str("\n## Port Changes\n");
+        let _ = writeln!(report, "\n## Port Changes");
         for (ip, changes) in &ports.by_host {
-            report.push_str(&format!("  {}:\n", ip));
-            report.push_str(&format!("    Added: {}\n", changes.added.len()));
-            report.push_str(&format!("    Removed: {}\n", changes.removed.len()));
-            report.push_str(&format!(
-                "    State Changed: {}\n",
-                changes.state_changed.len()
-            ));
-            report.push_str(&format!(
-                "    Service Changed: {}\n",
+            let _ = writeln!(report, "  {ip}:");
+            let _ = writeln!(report, "    Added: {}", changes.added.len());
+            let _ = writeln!(report, "    Removed: {}", changes.removed.len());
+            let _ = writeln!(report, "    State Changed: {}", changes.state_changed.len());
+            let _ = writeln!(
+                report,
+                "    Service Changed: {}",
                 changes.service_changed.len()
-            ));
+            );
         }
 
-        report.push_str("\n## Vulnerability Changes\n");
-        report.push_str(&format!("  New: {}\n", vulns.added.len()));
-        report.push_str(&format!("  Fixed: {}\n", vulns.fixed.len()));
-        report.push_str(&format!("  Risk Changed: {}\n", vulns.risk_changed.len()));
+        let _ = writeln!(report, "\n## Vulnerability Changes");
+        let _ = writeln!(report, "  New: {}", vulns.added.len());
+        let _ = writeln!(report, "  Fixed: {}", vulns.fixed.len());
+        let _ = writeln!(report, "  Risk Changed: {}", vulns.risk_changed.len());
 
         report
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "Report generation requires comprehensive output"
+    )]
     fn generate_markdown_report(
-        &self,
+        before: &ScanResult,
+        after: &ScanResult,
         hosts: &HostChanges,
         ports: &PortChanges,
         vulns: &VulnerabilityChanges,
     ) -> String {
         let mut report = String::new();
 
-        report.push_str("# 扫描结果对比报告\n\n");
-        report.push_str(&format!(
-            "**生成时间**: {}\n\n",
+        let _ = writeln!(report, "# 扫描结果对比报告\n");
+        let _ = writeln!(
+            report,
+            "**生成时间**: {}\n",
             chrono::Utc::now().format("%Y-%m-%d %H:%M:%S")
-        ));
+        );
 
-        report.push_str("## 主机变化\n\n");
+        let _ = writeln!(report, "## 主机变化\n");
 
-        report.push_str(&format!("### 新增主机 ({})\n", hosts.added.len()));
+        let _ = writeln!(report, "### 新增主机 ({})", hosts.added.len());
         for ip in &hosts.added {
-            report.push_str(&format!("- {} (首次发现)\n", ip));
+            let _ = writeln!(report, "- {ip} (首次发现)");
         }
 
-        report.push_str(&format!("\n### 消失主机 ({})\n", hosts.removed.len()));
+        let _ = writeln!(report, "\n### 消失主机 ({})", hosts.removed.len());
         for ip in &hosts.removed {
-            report.push_str(&format!("- {} (上次在线，本次未响应)\n", ip));
+            let _ = writeln!(report, "- {ip} (上次在线，本次未响应)");
         }
 
         if !hosts.status_changed.is_empty() {
-            report.push_str("\n### 状态变化的主机\n");
+            let _ = writeln!(report, "\n### 状态变化的主机");
             for change in &hosts.status_changed {
-                report.push_str(&format!(
-                    "- {}: {:?} -> {:?}\n",
+                let _ = writeln!(
+                    report,
+                    "- {}: {:?} -> {:?}",
                     change.ip, change.before, change.after
-                ));
+                );
             }
         }
 
-        report.push_str("\n## 端口变化\n\n");
+        let _ = writeln!(report, "\n## 端口变化\n");
         for (ip, changes) in &ports.by_host {
-            report.push_str(&format!("### {}\n", ip));
+            let _ = writeln!(report, "### {ip}");
             if !changes.added.is_empty() {
-                report.push_str("**新增端口:**\n");
+                let _ = writeln!(report, "**新增端口:**");
                 for port in &changes.added {
-                    report.push_str(&format!(
-                        "- {}/{} ({})\n",
-                        port.port, port.protocol, port.state
-                    ));
+                    let _ = writeln!(report, "- {}/{} ({})", port.port, port.protocol, port.state);
                 }
             }
             if !changes.removed.is_empty() {
-                report.push_str("**关闭端口:**\n");
+                let _ = writeln!(report, "**关闭端口:**");
                 for port in &changes.removed {
-                    report.push_str(&format!(
-                        "- {}/{} ({})\n",
+                    let _ = writeln!(
+                        report,
+                        "- {}/{} ({})",
                         port.port,
                         port.protocol,
                         port.previous_state.as_ref().unwrap_or(&port.state)
-                    ));
+                    );
                 }
             }
             if !changes.service_changed.is_empty() {
-                report.push_str("**服务变更:**\n");
+                let _ = writeln!(report, "**服务变更:**");
                 for port in &changes.service_changed {
-                    report.push_str(&format!(
-                        "- {}/{} ({} -> {})\n",
+                    let _ = writeln!(
+                        report,
+                        "- {}/{} ({} -> {})",
                         port.port,
                         port.protocol,
                         port.previous_service
                             .as_ref()
                             .unwrap_or(&String::from("unknown")),
                         port.service.as_ref().unwrap_or(&String::from("unknown"))
-                    ));
+                    );
                 }
             }
         }
 
-        report.push_str("\n## 漏洞变化\n\n");
-        report.push_str(&format!("### 新增漏洞 ({})\n", vulns.added.len()));
+        let _ = writeln!(report, "\n## 漏洞变化\n");
+        let _ = writeln!(report, "### 新增漏洞 ({})", vulns.added.len());
         for vuln in &vulns.added {
-            report.push_str(&format!(
-                "- {} (CVSS {}) - {}\n",
+            let _ = writeln!(
+                report,
+                "- {} (CVSS {}) - {}",
                 vuln.cve_id,
                 vuln.new_cvss.unwrap_or(0.0),
                 vuln.ip
-            ));
+            );
         }
 
-        report.push_str(&format!("\n### 修复漏洞 ({})\n", vulns.fixed.len()));
+        let _ = writeln!(report, "\n### 修复漏洞 ({})", vulns.fixed.len());
         for vuln in &vulns.fixed {
-            report.push_str(&format!(
-                "- {} (CVSS {}) - {}\n",
+            let _ = writeln!(
+                report,
+                "- {} (CVSS {}) - {}",
                 vuln.cve_id,
                 vuln.previous_cvss.unwrap_or(0.0),
                 vuln.ip
-            ));
+            );
         }
 
-        report.push_str("\n## 统计\n\n");
-        report.push_str("| 指标 | 上次 | 本次 | 变化 |\n");
-        report.push_str("|------|------|------|------|\n");
-        report.push_str(&format!(
-            "| 在线主机 | {} | {} | {:+} |\n",
-            self.before.statistics.hosts_up,
-            self.after.statistics.hosts_up,
-            self.after.statistics.hosts_up as i64 - self.before.statistics.hosts_up as i64
-        ));
-        report.push_str(&format!(
-            "| 开放端口 | {} | {} | {:+} |\n",
-            self.before.statistics.open_ports,
-            self.after.statistics.open_ports,
-            self.after.statistics.open_ports as i64 - self.before.statistics.open_ports as i64
-        ));
+        let _ = writeln!(report, "\n## 统计\n");
+        let _ = writeln!(report, "| 指标 | 上次 | 本次 | 变化 |");
+        let _ = writeln!(report, "|------|------|------|------|");
+        let _ = writeln!(
+            report,
+            "| 在线主机 | {} | {} | {:+} |",
+            before.statistics.hosts_up,
+            after.statistics.hosts_up,
+            i64::try_from(after.statistics.hosts_up).unwrap_or(0)
+                - i64::try_from(before.statistics.hosts_up).unwrap_or(0)
+        );
+        let _ = writeln!(
+            report,
+            "| 开放端口 | {} | {} | {:+} |",
+            before.statistics.open_ports,
+            after.statistics.open_ports,
+            i64::try_from(after.statistics.open_ports).unwrap_or(0)
+                - i64::try_from(before.statistics.open_ports).unwrap_or(0)
+        );
 
         report
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "JSON report generation requires comprehensive serialization"
+    )]
     fn generate_json_report(
-        &self,
+        before: &ScanResult,
+        after: &ScanResult,
         hosts: &HostChanges,
         ports: &PortChanges,
         vulns: &VulnerabilityChanges,
@@ -512,8 +549,8 @@ impl ScanDiff {
             .collect();
 
         let report = DiffReport {
-            before_scan: self.before.metadata.command_line.clone(),
-            after_scan: self.after.metadata.command_line.clone(),
+            before_scan: before.metadata.command_line.clone(),
+            after_scan: after.metadata.command_line.clone(),
             generated_at: Utc::now().to_rfc3339(),
             host_changes: HostChangesSerde {
                 added: hosts
@@ -577,7 +614,8 @@ impl ScanDiff {
     }
 
     fn generate_html_report(
-        &self,
+        before: &ScanResult,
+        after: &ScanResult,
         _hosts: &HostChanges,
         _ports: &PortChanges,
         _vulns: &VulnerabilityChanges,
@@ -597,12 +635,12 @@ impl ScanDiff {
 </body>
 </html>",
             chrono::Utc::now().format("%Y-%m-%d %H:%M:%S"),
-            self.before.metadata.command_line,
-            self.after.metadata.command_line,
-            self.before.statistics.hosts_up,
-            self.after.statistics.hosts_up,
-            self.before.statistics.open_ports,
-            self.after.statistics.open_ports,
+            before.metadata.command_line,
+            after.metadata.command_line,
+            before.statistics.hosts_up,
+            after.statistics.hosts_up,
+            before.statistics.open_ports,
+            after.statistics.open_ports,
         )
     }
 }

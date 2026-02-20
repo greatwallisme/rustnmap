@@ -1,16 +1,4 @@
 //! Shortport library for NSE.
-
-#![allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    clippy::doc_markdown,
-    clippy::get_first,
-    clippy::needless_pass_by_value,
-    clippy::similar_names,
-    clippy::too_many_lines,
-    clippy::unnecessary_map_or,
-    reason = "NSE library implementation requires these patterns"
-)]
 //!
 //! This module provides the `shortport` library which contains port rule
 //! definitions and helpers for NSE scripts. It corresponds to Nmap's shortport
@@ -91,7 +79,6 @@ fn create_portnumber_rule(
     proto: Option<String>,
     state: Option<String>,
 ) -> mlua::Result<Function> {
-    let ports_clone = ports.clone();
     lua.create_function(move |_, (_, port_table): (Value, Table)| {
         let port_num: u16 = port_table.get("number")?;
         let port_proto: String = port_table
@@ -102,17 +89,17 @@ fn create_portnumber_rule(
             .unwrap_or_else(|_| "open".to_string());
 
         // Check port number
-        let port_matches = ports_clone.contains(&port_num);
+        let port_matches = ports.contains(&port_num);
 
         // Check protocol if specified
         let proto_matches = proto
             .as_ref()
-            .map_or(true, |p| port_proto.eq_ignore_ascii_case(p));
+            .is_none_or(|p| port_proto.eq_ignore_ascii_case(p));
 
         // Check state if specified
         let state_matches = state
             .as_ref()
-            .map_or(true, |s| port_state.eq_ignore_ascii_case(s));
+            .is_none_or(|s| port_state.eq_ignore_ascii_case(s));
 
         Ok(port_matches && proto_matches && state_matches)
     })
@@ -121,7 +108,7 @@ fn create_portnumber_rule(
 /// Create a port rule function that matches by service name.
 fn create_service_rule(
     lua: &mlua::Lua,
-    services: Vec<String>,
+    services: &[String],
     state: Option<String>,
 ) -> mlua::Result<Function> {
     let services_lower: Vec<String> = services.iter().map(|s| s.to_lowercase()).collect();
@@ -140,7 +127,7 @@ fn create_service_rule(
         // Check state if specified
         let state_matches = state
             .as_ref()
-            .map_or(true, |s| port_state.eq_ignore_ascii_case(s));
+            .is_none_or(|s| port_state.eq_ignore_ascii_case(s));
 
         Ok(service_matches && state_matches)
     })
@@ -150,7 +137,7 @@ fn create_service_rule(
 fn create_port_or_service_rule(
     lua: &mlua::Lua,
     ports: Vec<u16>,
-    services: Vec<String>,
+    services: &[String],
     proto: Option<String>,
     state: Option<String>,
 ) -> mlua::Result<Function> {
@@ -177,18 +164,23 @@ fn create_port_or_service_rule(
         // Check protocol if specified
         let proto_matches = proto
             .as_ref()
-            .map_or(true, |p| port_proto.eq_ignore_ascii_case(p));
+            .is_none_or(|p| port_proto.eq_ignore_ascii_case(p));
 
         // Check state if specified
         let state_matches = state
             .as_ref()
-            .map_or(true, |s| port_state.eq_ignore_ascii_case(s));
+            .is_none_or(|s| port_state.eq_ignore_ascii_case(s));
 
         Ok((port_matches || service_matches) && proto_matches && state_matches)
     })
 }
 
 /// Parse port argument (can be number, table of numbers, or nil).
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "Lua numbers are i64; cast to u16 for port numbers is safe"
+)]
 fn parse_ports_arg(_lua: &mlua::Lua, arg: Value) -> mlua::Result<Vec<u16>> {
     match arg {
         Value::Integer(n) => Ok(vec![n as u16]),
@@ -247,16 +239,16 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     shortport_table.set("http", http_rule)?;
 
     // Create ssl port rule
-    let ssl_rule = create_portnumber_rule(lua, SSL_PORTS.to_vec(), None, None)?;
-    shortport_table.set("ssl", ssl_rule)?;
+    let secure_sockets_rule = create_portnumber_rule(lua, SSL_PORTS.to_vec(), None, None)?;
+    shortport_table.set("ssl", secure_sockets_rule)?;
 
     // Create ftp port rule
     let ftp_rule = create_portnumber_rule(lua, FTP_PORTS.to_vec(), None, None)?;
     shortport_table.set("ftp", ftp_rule)?;
 
     // Create ssh port rule
-    let ssh_rule = create_portnumber_rule(lua, SSH_PORTS.to_vec(), None, None)?;
-    shortport_table.set("ssh", ssh_rule)?;
+    let secure_shell_rule = create_portnumber_rule(lua, SSH_PORTS.to_vec(), None, None)?;
+    shortport_table.set("ssh", secure_shell_rule)?;
 
     // Create smtp port rule
     let smtp_rule = create_portnumber_rule(lua, SMTP_PORTS.to_vec(), None, None)?;
@@ -280,7 +272,7 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
 
     // Register portnumber(ports, [proto], [state]) function
     let portnumber_fn = lua.create_function(|lua, args: mlua::Variadic<Value>| {
-        let ports = if let Some(arg) = args.get(0) {
+        let ports = if let Some(arg) = args.first() {
             parse_ports_arg(lua, arg.clone())?
         } else {
             Vec::new()
@@ -308,7 +300,7 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
 
     // Register service(services, [state]) function
     let service_fn = lua.create_function(|lua, args: mlua::Variadic<Value>| {
-        let services = if let Some(arg) = args.get(0) {
+        let services = if let Some(arg) = args.first() {
             parse_services_arg(lua, arg.clone())?
         } else {
             Vec::new()
@@ -322,13 +314,13 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
             }
         });
 
-        create_service_rule(lua, services, state)
+        create_service_rule(lua, &services, state)
     })?;
     shortport_table.set("service", service_fn)?;
 
     // Register port_or_service(ports, [services], [proto], [state]) function
     let port_or_service_fn = lua.create_function(|lua, args: mlua::Variadic<Value>| {
-        let ports = if let Some(arg) = args.get(0) {
+        let ports = if let Some(arg) = args.first() {
             parse_ports_arg(lua, arg.clone())?
         } else {
             Vec::new()
@@ -356,7 +348,7 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
             }
         });
 
-        create_port_or_service_rule(lua, ports, services, proto, state)
+        create_port_or_service_rule(lua, ports, &services, proto, state)
     })?;
     shortport_table.set("port_or_service", port_or_service_fn)?;
 
@@ -558,13 +550,13 @@ mod tests {
             .unwrap();
 
         // Test port 443
-        let port443 = create_test_port_table(lua.lua(), 443, "tcp", "open", "https");
-        let result: bool = rule.call((Value::Nil, port443)).unwrap();
+        let https_port = create_test_port_table(lua.lua(), 443, "tcp", "open", "https");
+        let result: bool = rule.call((Value::Nil, https_port)).unwrap();
         assert!(result);
 
         // Test service https on non-standard port
-        let port8443 = create_test_port_table(lua.lua(), 8443, "tcp", "open", "https");
-        let result: bool = rule.call((Value::Nil, port8443)).unwrap();
+        let alt_https_port = create_test_port_table(lua.lua(), 8443, "tcp", "open", "https");
+        let result: bool = rule.call((Value::Nil, alt_https_port)).unwrap();
         assert!(result);
     }
 

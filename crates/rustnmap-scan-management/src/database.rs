@@ -9,6 +9,7 @@ use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection, OpenFlags};
 use rustnmap_output::models::ScanType;
 use rustnmap_output::ScanResult;
+use std::fmt::Write;
 use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -43,6 +44,10 @@ pub struct ScanDatabase {
 
 impl ScanDatabase {
     /// Open or create the database.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database cannot be opened or created.
     pub fn open(config: DbConfig) -> Result<Self> {
         let path = shellexpand::tilde(&config.path).to_string();
 
@@ -176,6 +181,10 @@ impl ScanDatabase {
     }
 
     /// Save scan results to the database.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the scan cannot be saved to the database.
     pub async fn save_scan(
         &self,
         result: &ScanResult,
@@ -251,6 +260,10 @@ impl ScanDatabase {
     }
 
     /// Get scan by ID.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database query fails.
     pub async fn get_scan(&self, id: &str) -> Result<Option<StoredScan>> {
         let conn = self.conn.lock().await;
 
@@ -260,12 +273,12 @@ impl ScanDatabase {
         )?;
 
         let row = stmt.query_row(params![id], |row| {
-            let started_at: String = row.get(1)?;
-            let completed_at: Option<String> = row.get(2)?;
+            let started_at_str: String = row.get(1)?;
+            let completed_at_str: Option<String> = row.get(2)?;
             let scan_type: String = row.get(5)?;
             let status: String = row.get(7)?;
 
-            let started_dt = DateTime::parse_from_rfc3339(&started_at)
+            let started_datetime = DateTime::parse_from_rfc3339(&started_at_str)
                 .map(|dt| dt.with_timezone(&Utc))
                 .map_err(|e| {
                     rusqlite::Error::FromSqlConversionFailure(
@@ -275,7 +288,7 @@ impl ScanDatabase {
                     )
                 })?;
 
-            let completed_dt = completed_at
+            let completed_datetime = completed_at_str
                 .map(|s| {
                     DateTime::parse_from_rfc3339(&s)
                         .map(|dt| dt.with_timezone(&Utc))
@@ -313,8 +326,8 @@ impl ScanDatabase {
 
             Ok(StoredScan {
                 id: row.get(0)?,
-                started_at: started_dt,
-                completed_at: completed_dt,
+                started_at: started_datetime,
+                completed_at: completed_datetime,
                 command_line: row.get(3)?,
                 target_spec: row.get(4)?,
                 scan_type: parsed_scan_type,
@@ -334,6 +347,14 @@ impl ScanDatabase {
     }
 
     /// List scans with optional filtering.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database query fails.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "Complex query building with many filter conditions"
+    )]
     pub async fn list_scans(
         &self,
         filter: &crate::history::ScanFilter,
@@ -357,20 +378,20 @@ impl ScanDatabase {
         let mut param_index = 0;
 
         if let Some(since) = &filter.since {
-            query.push_str(&format!(" AND s.started_at >= ?{}", param_index + 1));
+            let _ = write!(query, " AND s.started_at >= ?{}", param_index + 1);
             params.push(since.to_rfc3339());
             param_index += 1;
         }
 
         if let Some(until) = &filter.until {
-            query.push_str(&format!(" AND s.started_at <= ?{}", param_index + 1));
+            let _ = write!(query, " AND s.started_at <= ?{}", param_index + 1);
             params.push(until.to_rfc3339());
             param_index += 1;
         }
 
         if let Some(target) = &filter.target {
-            query.push_str(&format!(" AND s.target_spec LIKE ?{}", param_index + 1));
-            params.push(format!("%{}%", target));
+            let _ = write!(query, " AND s.target_spec LIKE ?{}", param_index + 1);
+            params.push(format!("%{target}%"));
             param_index += 1;
         }
 
@@ -378,7 +399,7 @@ impl ScanDatabase {
         query.push_str(" ORDER BY s.started_at DESC");
 
         if let Some(limit) = &filter.limit {
-            query.push_str(&format!(" LIMIT ?{}", param_index + 1));
+            let _ = write!(query, " LIMIT ?{}", param_index + 1);
             params.push(limit.to_string());
         }
 
@@ -386,12 +407,12 @@ impl ScanDatabase {
         let rows = stmt.query_map(
             rusqlite::params_from_iter(params.iter().map(std::string::String::as_str)),
             |row| {
-                let started_at: String = row.get(1)?;
-                let completed_at: Option<String> = row.get(2)?;
+                let started_at_str: String = row.get(1)?;
+                let completed_at_str: Option<String> = row.get(2)?;
                 let scan_type: String = row.get(4)?;
                 let status: String = row.get(5)?;
 
-                let started_dt = DateTime::parse_from_rfc3339(&started_at)
+                let started_datetime = DateTime::parse_from_rfc3339(&started_at_str)
                     .map(|dt| dt.with_timezone(&Utc))
                     .map_err(|e| {
                         rusqlite::Error::FromSqlConversionFailure(
@@ -401,7 +422,7 @@ impl ScanDatabase {
                         )
                     })?;
 
-                let completed_dt = completed_at
+                let completed_datetime = completed_at_str
                     .map(|s| {
                         DateTime::parse_from_rfc3339(&s)
                             .map(|dt| dt.with_timezone(&Utc))
@@ -439,8 +460,8 @@ impl ScanDatabase {
 
                 Ok(ScanSummary {
                     id: row.get(0)?,
-                    started_at: started_dt,
-                    completed_at: completed_dt,
+                    started_at: started_datetime,
+                    completed_at: completed_datetime,
                     target_spec: row.get(3)?,
                     scan_type: parsed_scan_type,
                     status: parsed_status,
@@ -462,6 +483,10 @@ impl ScanDatabase {
     }
 
     /// Delete old scans.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database operation fails.
     pub async fn prune_old_scans(&self, retention_days: u32) -> Result<usize> {
         let conn = self.conn.lock().await;
 
@@ -500,8 +525,7 @@ fn parse_scan_type(s: &str) -> Result<ScanType> {
         "tcpack" | "tcp_ack" | "ack" => Ok(ScanType::TcpAck),
         "tcpwindow" | "tcp_window" | "window" => Ok(ScanType::TcpWindow),
         _ => Err(ScanManagementError::InvalidStatus(format!(
-            "Invalid scan type: {}",
-            s
+            "Invalid scan type: {s}"
         ))),
     }
 }
@@ -513,8 +537,7 @@ fn parse_scan_status(s: &str) -> Result<ScanStatus> {
         "failed" => Ok(ScanStatus::Failed),
         "cancelled" => Ok(ScanStatus::Cancelled),
         _ => Err(ScanManagementError::InvalidStatus(format!(
-            "Invalid scan status: {}",
-            s
+            "Invalid scan status: {s}"
         ))),
     }
 }

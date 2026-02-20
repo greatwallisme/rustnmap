@@ -134,6 +134,10 @@ impl ScanProfile {
     }
 
     /// Parse profile from YAML string.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the YAML cannot be parsed.
     pub fn from_yaml(yaml: &str) -> Result<Self> {
         let profile: ScanProfile = serde_yaml::from_str(yaml)?;
         Ok(profile)
@@ -151,6 +155,10 @@ impl ScanProfile {
     }
 
     /// Validate profile configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the profile configuration is invalid.
     pub fn validate(&self) -> Result<()> {
         // Validate scan type
         let scan_type_lower = self.scan.scan_type.to_lowercase();
@@ -199,18 +207,16 @@ impl ScanProfile {
         if let Some(intensity) = self.scan.version_intensity {
             if intensity > 9 {
                 return Err(ScanManagementError::ProfileValidation(format!(
-                    "Invalid version_intensity: {}. Must be 0-9",
-                    intensity
+                    "Invalid version_intensity: {intensity}. Must be 0-9"
                 )));
             }
         }
 
         // Validate EPSS threshold
         if let Some(threshold) = self.scan.epss_threshold {
-            if threshold < 0.0 || threshold > 1.0 {
+            if !(0.0..=1.0).contains(&threshold) {
                 return Err(ScanManagementError::ProfileValidation(format!(
-                    "Invalid epss_threshold: {}. Must be 0.0-1.0",
-                    threshold
+                    "Invalid epss_threshold: {threshold}. Must be 0.0-1.0"
                 )));
             }
         }
@@ -219,6 +225,7 @@ impl ScanProfile {
     }
 
     /// Apply defaults to profile.
+    #[must_use]
     pub fn with_defaults(mut self) -> Self {
         if self.scan.timing.is_empty() {
             self.scan.timing = default_timing();
@@ -239,6 +246,7 @@ pub struct ProfileManager {
 
 impl ProfileManager {
     /// Create a new profile manager.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             profiles: HashMap::new(),
@@ -284,11 +292,13 @@ impl ProfileManager {
     }
 
     /// Get a profile by name.
+    #[must_use]
     pub fn get_profile(&self, name: &str) -> Option<&ScanProfile> {
         self.profiles.get(name)
     }
 
     /// List all profiles.
+    #[must_use]
     pub fn list_profiles(&self) -> Vec<&str> {
         self.profiles
             .keys()
@@ -297,6 +307,7 @@ impl ProfileManager {
     }
 
     /// Validate all profiles.
+    #[must_use]
     pub fn validate_all(&self) -> Vec<(String, Result<()>)> {
         self.profiles
             .iter()
@@ -305,6 +316,7 @@ impl ProfileManager {
     }
 
     /// Generate a default profile template.
+    #[must_use]
     pub fn generate_template() -> String {
         r#"# Scan Profile Template
 name: "My Scan Profile"

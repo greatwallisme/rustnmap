@@ -5,11 +5,6 @@
 //! These tests focus on the discovery packet builders, parsers, and
 //! logic that doesn't require actual network operations.
 
-#![allow(
-    clippy::unreadable_literal,
-    reason = "Hex literals in packet tests are more readable without separators"
-)]
-
 use std::time::Duration;
 
 use rustnmap_common::{Ipv4Addr, Ipv6Addr, ScanConfig};
@@ -217,7 +212,7 @@ fn test_tcpv6_packet_builder_with_syn() {
 
     let packet = Tcpv6PacketBuilder::new(src_ip, dst_ip, 12345, 80)
         .syn()
-        .seq(0x12345678)
+        .seq(0x1234_5678)
         .build();
 
     // Check SYN flag (0x02) is set
@@ -226,7 +221,7 @@ fn test_tcpv6_packet_builder_with_syn() {
     // Check sequence number
     assert_eq!(
         u32::from_be_bytes([packet[44], packet[45], packet[46], packet[47]]),
-        0x12345678
+        0x1234_5678
     );
 }
 
@@ -275,7 +270,7 @@ fn test_tcpv6_packet_builder_syn_and_ack() {
     let packet = Tcpv6PacketBuilder::new(src_ip, dst_ip, 12345, 80)
         .syn()
         .ack_flag()
-        .seq(0x11111111)
+        .seq(0x1111_1111)
         .build();
 
     // Check both SYN and ACK flags are set (0x02 | 0x10 = 0x12)
@@ -284,7 +279,7 @@ fn test_tcpv6_packet_builder_syn_and_ack() {
     // Check sequence
     assert_eq!(
         u32::from_be_bytes([packet[44], packet[45], packet[46], packet[47]]),
-        0x11111111
+        0x1111_1111
     );
 }
 
@@ -440,7 +435,7 @@ fn test_parse_tcpv6_response_valid() {
 
     let packet = Tcpv6PacketBuilder::new(src_ip, dst_ip, 12345, 80)
         .syn()
-        .seq(0x12345678)
+        .seq(0x1234_5678)
         .build();
 
     let result = parse_tcpv6_response(&packet);
@@ -448,7 +443,7 @@ fn test_parse_tcpv6_response_valid() {
 
     let (flags, seq, ack, src_port) = result.unwrap();
     assert_eq!(src_port, 12345);
-    assert_eq!(seq, 0x12345678);
+    assert_eq!(seq, 0x1234_5678);
     assert_eq!(ack, 0); // Default ack is 0
     assert_eq!(flags & 0x02, 0x02); // SYN flag set
 }
@@ -655,7 +650,7 @@ fn test_parse_tcpv6_response_minimal_packet() {
     assert!(result.is_some());
     let (flags, seq, ack, src_port) = result.unwrap();
     assert_eq!(src_port, 12345);
-    assert_eq!(seq, 0x12345678);
-    assert_eq!(ack, 0x9ABCDEF0);
+    assert_eq!(seq, 0x1234_5678);
+    assert_eq!(ack, 0x9ABC_DEF0);
     assert_eq!(flags, 0x12);
 }

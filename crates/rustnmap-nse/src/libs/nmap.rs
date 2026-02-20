@@ -1,13 +1,4 @@
 //! Nmap base library for NSE.
-
-#![allow(
-    clippy::cast_lossless,
-    clippy::cast_possible_wrap,
-    clippy::cast_sign_loss,
-    clippy::doc_markdown,
-    clippy::too_many_lines,
-    reason = "NSE library implementation requires these patterns"
-)]
 //!
 //! This module provides the `nmap` library which exposes core scan information
 //! and utilities to Lua scripts. It corresponds to Nmap's nmap NSE library.
@@ -195,6 +186,11 @@ pub fn get_config_copy() -> NmapLibConfig {
 /// # Errors
 ///
 /// Returns an error if registration fails.
+#[expect(
+    clippy::cast_lossless,
+    clippy::cast_possible_wrap,
+    reason = "Lua FFI requires c_int/i64 casts"
+)]
 pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     let lua = nse_lua.lua_mut();
 
@@ -299,7 +295,7 @@ fn log_write_impl(level: &str, message: &str) {
     }
 }
 
-/// NSE Socket implementation for nmap.new_socket().
+/// NSE Socket implementation for `nmap.new_socket()`.
 #[derive(Debug)]
 pub struct NseSocket {
     /// Internal socket state
@@ -343,6 +339,10 @@ impl NseSocket {
     }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "UserData impl requires many method registrations"
+)]
 impl mlua::UserData for NseSocket {
     fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
         // Async connect method - uses spawn_blocking for non-blocking TCP connect

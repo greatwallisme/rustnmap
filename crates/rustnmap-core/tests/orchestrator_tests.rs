@@ -1,14 +1,6 @@
 // Rust guideline compliant 2026-02-15
 
 //! Unit tests for scan orchestrator module.
-#![allow(
-    clippy::uninlined_format_args,
-    reason = "Inlined format args reduce readability in complex assertions"
-)]
-#![allow(
-    clippy::default_trait_access,
-    reason = "Default::default() is idiomatic and clear"
-)]
 //!
 //! These tests focus on the orchestrator state management, pipeline
 //! configuration, and scan phase logic without requiring network operations.
@@ -113,16 +105,16 @@ fn test_scan_phase_name() {
 #[test]
 fn test_scan_phase_display() {
     let phase = ScanPhase::PortScanning;
-    assert_eq!(format!("{}", phase), "Port Scanning");
+    assert_eq!(format!("{phase}"), "Port Scanning");
 
     let phase = ScanPhase::ServiceDetection;
-    assert_eq!(format!("{}", phase), "Service Detection");
+    assert_eq!(format!("{phase}"), "Service Detection");
 }
 
 #[test]
 fn test_scan_phase_debug() {
     let phase = ScanPhase::HostDiscovery;
-    let debug_str = format!("{:?}", phase);
+    let debug_str = format!("{phase:?}");
     assert!(debug_str.contains("HostDiscovery"));
 }
 
@@ -344,7 +336,7 @@ fn test_scan_pipeline_add_phase_with_dependency() {
 #[test]
 fn test_scan_pipeline_debug() {
     let pipeline = ScanPipeline::default();
-    let debug_str = format!("{:?}", pipeline);
+    let debug_str = format!("{pipeline:?}");
     assert!(debug_str.contains("ScanPipeline"));
 }
 
@@ -372,7 +364,7 @@ fn test_scan_state_new() {
 
 #[test]
 fn test_scan_state_default() {
-    let state: ScanState = Default::default();
+    let state = ScanState::default();
     assert_eq!(state.host_count(), 0);
     assert_eq!(state.port_count(), 0);
 }
@@ -492,7 +484,7 @@ fn test_scan_state_debug() {
     let ip = IpAddr::V4(std::net::Ipv4Addr::new(192, 168, 1, 1));
     state.host_state(ip);
 
-    let debug_str = format!("{:?}", state);
+    let debug_str = format!("{state:?}");
     assert!(debug_str.contains("ScanState"));
     assert!(debug_str.contains("hosts"));
     assert!(debug_str.contains("progress"));
@@ -541,7 +533,7 @@ fn test_orchestrator_debug() {
     let session = create_test_session();
     let orchestrator = ScanOrchestrator::new(session);
 
-    let debug_str = format!("{:?}", orchestrator);
+    let debug_str = format!("{orchestrator:?}");
     assert!(debug_str.contains("ScanOrchestrator"));
     assert!(debug_str.contains("pipeline"));
 }
@@ -552,7 +544,7 @@ fn test_orchestrator_debug() {
 
 #[test]
 fn test_host_state_default() {
-    let state: HostState = Default::default();
+    let state = HostState::default();
     assert_eq!(state.status, rustnmap_output::models::HostStatus::Unknown);
     assert!(state.discovery_method.is_none());
 }
@@ -568,7 +560,7 @@ fn test_host_state_new() {
 fn test_host_state_debug() {
     let ip = IpAddr::V4(std::net::Ipv4Addr::new(192, 168, 1, 1));
     let state = HostState::new(ip);
-    let debug_str = format!("{:?}", state);
+    let debug_str = format!("{state:?}");
     assert!(debug_str.contains("HostState"));
 }
 
@@ -578,7 +570,7 @@ fn test_host_state_debug() {
 
 #[test]
 fn test_port_scan_state_default() {
-    let state: PortScanState = Default::default();
+    let state = PortScanState::default();
     assert_eq!(state.probe_count, 0);
     assert!(!state.service_detected);
 }
@@ -586,7 +578,7 @@ fn test_port_scan_state_default() {
 #[test]
 fn test_port_scan_state_debug() {
     let state = PortScanState::default();
-    let debug_str = format!("{:?}", state);
+    let debug_str = format!("{state:?}");
     assert!(debug_str.contains("PortScanState"));
 }
 
@@ -596,7 +588,7 @@ fn test_port_scan_state_debug() {
 
 #[test]
 fn test_scan_progress_default() {
-    let progress: ScanProgress = Default::default();
+    let progress = ScanProgress::default();
     assert_eq!(progress.total_targets, 0);
     assert_eq!(progress.completed_targets, 0);
     assert_eq!(progress.active_targets, 0);
@@ -680,7 +672,7 @@ fn test_scan_progress_clone() {
 #[test]
 fn test_scan_progress_debug() {
     let progress = ScanProgress::default();
-    let debug_str = format!("{:?}", progress);
+    let debug_str = format!("{progress:?}");
     assert!(debug_str.contains("ScanProgress"));
 }
 
@@ -778,7 +770,7 @@ fn test_scan_pipeline_dependencies_all_phases() {
 
     for phase in phases_with_deps {
         let deps = pipeline.dependencies(phase);
-        assert!(deps.is_some(), "Phase {:?} should have dependencies", phase);
+        assert!(deps.is_some(), "Phase {phase:?} should have dependencies");
     }
 }
 

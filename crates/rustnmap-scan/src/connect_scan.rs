@@ -6,12 +6,6 @@
 //! TCP SYN scanning.
 
 #![warn(missing_docs)]
-#![allow(
-    clippy::used_underscore_binding,
-    clippy::must_use_candidate,
-    clippy::unnecessary_wraps,
-    reason = "Required for PortScanner trait compatibility"
-)]
 
 use crate::scanner::{PortScanner, ScanResult};
 use rustnmap_common::{Port, PortState, Protocol, ScanConfig};

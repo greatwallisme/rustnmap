@@ -4,12 +4,6 @@
 //! used across different scanning techniques.
 
 #![warn(missing_docs)]
-#![allow(
-    clippy::cast_possible_truncation,
-    clippy::double_must_use,
-    clippy::must_use_candidate,
-    reason = "Casts are safe for protocol-defined field sizes;TcpProbeResponse already has #[must_use]"
-)]
 
 use rustnmap_common::{Ipv4Addr, Port};
 
@@ -204,6 +198,7 @@ pub enum TcpProbeResponse {
 /// # Returns
 ///
 /// Parsed TCP probe response indicating port state.
+#[must_use]
 pub fn parse_tcp_response(packet: &[u8], _expected_seq: ProbeSeq) -> TcpProbeResponse {
     // Minimum packet size check (IP header 20 + TCP header 20)
     if packet.len() < 40 {
@@ -271,6 +266,10 @@ pub fn parse_tcp_response(packet: &[u8], _expected_seq: ProbeSeq) -> TcpProbeRes
 /// # Returns
 ///
 /// The 16-bit checksum value.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "Loop folds sum to 16 bits; cast is safe"
+)]
 fn checksum_data(data: &[u8]) -> u16 {
     let mut sum: u32 = 0;
 
@@ -306,6 +305,10 @@ fn checksum_data(data: &[u8]) -> u16 {
 /// # Returns
 ///
 /// The 16-bit TCP checksum value.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "TCP max segment is 65535 bytes; cast to u16 is safe for valid TCP"
+)]
 fn tcp_checksum_data(src_addr: Ipv4Addr, dst_addr: Ipv4Addr, tcp_data: &[u8]) -> u16 {
     // Build pseudo-header for TCP checksum
     let mut pseudo_header = Vec::with_capacity(12 + tcp_data.len());

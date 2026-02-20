@@ -156,7 +156,12 @@ impl StatelessSender {
     /// Returns an error if packet sending fails.
     pub async fn send_rst(&mut self, target: IpAddr, dest_port: u16, ack_num: u32) -> Result<()> {
         if self.rst_source_port == 0 {
-            self.rst_source_port = 1024 + (current_timestamp() as u16 % 64511);
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "Timestamp modulo 64511 always fits in u16"
+            )]
+            let port_offset = current_timestamp() as u16 % 64511;
+            self.rst_source_port = 1024 + port_offset;
         }
 
         let packet = self.build_rst_packet(target, dest_port, self.rst_source_port, ack_num)?;
@@ -225,10 +230,19 @@ impl StatelessSender {
         // TOS
         packet[1] = 0;
         // Total length
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "Packet length always fits in u16 (max 65535 bytes)"
+        )]
         let total_len: u16 = packet.len() as u16;
         packet[2..4].copy_from_slice(&total_len.to_be_bytes());
         // Identification
-        packet[4..6].copy_from_slice(&(current_timestamp() as u16).to_be_bytes());
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "Timestamp lower 16 bits used for identification"
+        )]
+        let ident: u16 = current_timestamp() as u16;
+        packet[4..6].copy_from_slice(&ident.to_be_bytes());
         // Flags + Fragment offset (Don't Fragment)
         packet[6..8].copy_from_slice(&0x4000u16.to_be_bytes());
         // TTL

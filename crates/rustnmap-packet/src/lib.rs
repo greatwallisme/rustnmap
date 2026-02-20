@@ -25,18 +25,6 @@
 //! See [`AfPacketEngine`] for usage examples.
 
 #![warn(missing_docs)]
-#![allow(
-    clippy::cast_possible_wrap,
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    clippy::module_name_repetitions,
-    clippy::cast_lossless,
-    clippy::ptr_as_ptr,
-    clippy::undocumented_unsafe_blocks,
-    clippy::as_pointer_underscore,
-    clippy::ref_as_ptr,
-    reason = "FFI bindings and casts are safe for well-defined conversions"
-)]
 
 use bytes::Bytes;
 use libc::{c_int, c_uint, c_ushort, sockaddr_ll};
@@ -543,6 +531,14 @@ pub struct AfPacketEngine {
     mac_addr: MacAddr,
 }
 
+#[expect(
+    clippy::cast_possible_wrap,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_lossless,
+    clippy::undocumented_unsafe_blocks,
+    reason = "FFI bindings require casts and unsafe blocks for Linux socket API"
+)]
 impl AfPacketEngine {
     /// Creates a new `PACKET_MMAP` V3 engine.
     ///

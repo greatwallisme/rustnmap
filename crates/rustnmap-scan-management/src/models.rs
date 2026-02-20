@@ -109,6 +109,7 @@ impl StoredScan {
     }
 
     /// Convert to `ScanSummary`.
+    #[must_use]
     pub fn to_summary(
         &self,
         hosts_up: usize,
@@ -216,6 +217,7 @@ pub struct StoredPort {
 
 impl StoredPort {
     /// Create from `PortResult`.
+    #[must_use]
     pub fn from_port_result(port: &rustnmap_output::PortResult) -> Self {
         let protocol = match port.protocol {
             Protocol::Tcp => "tcp".to_string(),
@@ -260,6 +262,7 @@ pub struct StoredVulnerability {
 
 impl StoredVulnerability {
     /// Create from `VulnInfo`.
+    #[must_use]
     pub fn from_vuln_info(vuln: &rustnmap_vuln::VulnInfo, host_id: i64) -> Self {
         Self {
             id: None,
