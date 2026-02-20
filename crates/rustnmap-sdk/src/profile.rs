@@ -126,8 +126,7 @@ impl ScanProfile {
     /// Returns an error if the file cannot be read or the YAML is invalid.
     pub fn from_file<P: AsRef<Path>>(path: P) -> ScanResult<Self> {
         let content = tokio::task::block_in_place(|| {
-            std::fs::read_to_string(path.as_ref())
-                .map_err(|e| ScanError::InternalError(e.into()))
+            std::fs::read_to_string(path.as_ref()).map_err(|e| ScanError::InternalError(e.into()))
         })?;
 
         let profile: ScanProfile = serde_yaml::from_str(&content)

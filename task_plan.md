@@ -8,6 +8,40 @@
 
 ## 当前任务
 
+### Task: Async/Await 优化审查与改进 ✅ COMPLETE
+**创建时间**: 2026-02-20
+**完成时间**: 2026-02-20
+**目标**: 审查已完成异步优化的代码，识别遗漏和改进点
+
+#### 发现摘要
+- **严重问题**: 1 个 (block_on 在 orchestrator) ✅ 已修复
+- **高优先级**: 2 个 (混合 API、Std 锁在异步上下文) ✅ 已修复
+- **中优先级**: 4 个 (blocking_lock、低效 sleep、混合连接扫描) ✅ 已修复
+
+#### 进度状态
+1. ✅ `rustnmap-core/src/orchestrator.rs` - block_on 已移除
+2. ✅ `rustnmap-nse/src/libs/stdnse.rs` - std RwLock 已替换为 tokio RwLock
+3. ✅ `rustnmap-vuln/src/database.rs` - 转换为 tokio-rusqlite
+4. ✅ `rustnmap-vuln/src/client.rs` - 已更新为 async API
+5. ✅ `rustnmap-vuln/src/cve.rs` - 已更新为 async API
+6. ✅ `rustnmap-vuln/src/epss.rs` - 已更新为 async API
+7. ✅ `rustnmap-vuln/src/kev.rs` - 已更新为 async API
+
+#### 修复详情
+
+**rustnmap-vuln 完整 async 转换**:
+- `database.rs`: 使用 `tokio-rusqlite` 替代 `rusqlite` + `Mutex`
+- `cve.rs`: `CveEngine::get_cve()` 转换为 async
+- `epss.rs`: 所有 `EpssEngine` 方法转换为 async
+- `kev.rs`: 所有 `KevEngine` 方法转换为 async
+- `client.rs`: 已是 async，更新测试为 `#[tokio::test]`
+
+**rustnmap-nse stdnse 修复**:
+- `get_script_args()` Lua 回调使用 `block_in_place` + `Handle::block_on()`
+- 测试更新为 `#[tokio::test(flavor = "multi_thread")]`
+
+---
+
 ### Task: Async/Await 性能优化 ✅ COMPLETE
 **完成时间**: 2026-02-20
 **目标**: 全工作空间异步/等待性能优化，解决阻塞异步运行时的同步操作
@@ -54,14 +88,6 @@
 | Phase 3: Advanced Features | 100% | ✅ 全部完成 |
 | Phase 4: Integration | 100% | ✅ 全部完成 |
 | 2.0 New Features | 100% | ✅ 全部完成 |
-
-### Phase 1 详情 (基础设施)
-
-| Crate | 状态 | 代码行数 | 测试 |
-|-------|------|----------|------|
-| rustnmap-common | ✅ | ~200 | 8+ |
-| rustnmap-net | ✅ | ~1,851 | 25+ |
-| rustnmap-packet | ✅ | ~1,152 | 16 |
 
 ---
 
@@ -128,4 +154,6 @@ cargo test --workspace
 
 | 时间 | 错误 | 解决方案 |
 |------|------|----------|
-| - | - | - |
+| 2026-02-20 | vuln cve/epss/kev 模块调用 async 方法没有 await | 将这些模块的所有方法转换为 async |
+| 2026-02-20 | NSE get_script_args 测试失败 (竞态条件) | 使用 block_in_place 替代创建新 runtime，测试改为 multi_thread flavor |
+| 2026-02-20 | vacuum() 返回类型错误 (Result<usize> vs Result<()>) | 在 .call() 闭包中显式返回 Ok(()) |

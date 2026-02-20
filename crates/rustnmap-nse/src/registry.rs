@@ -72,9 +72,7 @@ impl ScriptDatabase {
     /// Load all scripts from a directory recursively.
     fn load_directory(&mut self, dir: &Path) -> Result<()> {
         // Use block_in_place to yield to async runtime during directory traversal
-        tokio::task::block_in_place(|| {
-            self.load_directory_blocking(dir)
-        })
+        tokio::task::block_in_place(|| self.load_directory_blocking(dir))
     }
 
     /// Blocking implementation of directory loading.
@@ -105,9 +103,7 @@ impl ScriptDatabase {
     /// Load a single script file.
     fn load_script(&mut self, path: &Path) -> Result<()> {
         // Use block_in_place to yield to async runtime during file read
-        tokio::task::block_in_place(|| {
-            self.load_script_blocking(path)
-        })
+        tokio::task::block_in_place(|| self.load_script_blocking(path))
     }
 
     /// Blocking implementation of script file loading.

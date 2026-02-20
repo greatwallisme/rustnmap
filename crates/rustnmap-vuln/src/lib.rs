@@ -13,19 +13,21 @@
 //! # Example
 //!
 //! ```no_run
-//! use rustnmap_vuln::{VulnClient, VulnDatabase};
+//! use rustnmap_vuln::VulnClient;
 //! use std::path::Path;
 //!
 //! # #[tokio::main]
 //! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! // Create offline client
-//! let client = VulnClient::offline(Path::new("/var/lib/rustnmap/vuln.db"))?;
+//! let client = VulnClient::offline_async(Path::new("/var/lib/rustnmap/vuln.db")).await?;
 //!
 //! // Query vulnerabilities for a CPE
-//! let vulns = client.query_cpe("cpe:2.3:a:apache:http_server:2.4.49:*:*:*:*:*:*:*")?;
+//! let vulns = client.query_cpe("cpe:2.3:a:apache:http_server:2.4.49:*:*:*:*:*:*:*").await?;
 //!
+//! // Process vulnerabilities
 //! for vuln in vulns {
-//!     println!("CVE: {} (CVSS: {}, EPSS: {})", vuln.cve_id, vuln.cvss_v3, vuln.epss_score);
+//!     let _ = format!("CVE: {} (CVSS: {}, EPSS: {}, KEV: {})",
+//!         vuln.cve_id, vuln.cvss_v3, vuln.epss_score, vuln.is_kev);
 //! }
 //! # Ok(())
 //! # }

@@ -7,6 +7,80 @@
 
 ## 会话日志
 
+### 2026-02-20: Async/Await 优化审查 - 全部完成 ✅
+
+**任务**: 完成审查中发现的所有问题，将数据库转换为真正异步
+
+**已完成**:
+- ✅ **Task 1 (CRITICAL)**: 修复 orchestrator block_on 调用
+- ✅ **Task 2 (HIGH)**: 替换 NSE std RwLock 为 tokio RwLock
+- ✅ **Task 3 (HIGH)**: VulnClient API 一致性 (所有方法 async)
+- ✅ **Task 4 (MEDIUM)**: VulnDatabase 转换为 tokio-rusqlite
+
+**修复详情**:
+
+**rustnmap-vuln 完整 async 转换**:
+- `Cargo.toml`: 添加 `tokio-rusqlite = "0.5"` 依赖
+- `error.rs`: 添加 `From<tokio_rusqlite::Error>` 实现
+- `database.rs`:
+  - 使用 `tokio_rusqlite::Connection` 替代 `rusqlite::Connection`
+  - 所有方法使用 `.call()` API
+  - 修复 `vacuum()` 返回类型 (Result<usize> → Result<()>)
+  - 修复日期解析错误处理 (返回 rusqlite::Error，自动转换)
+- `cve.rs`: `CveEngine::get_cve()` 转换为 async
+- `epss.rs`: 所有 `EpssEngine` 方法转换为 async
+- `kev.rs`: 所有 `KevEngine` 方法转换为 async
+- `client.rs`: 测试更新为 `#[tokio::test]`
+
+**rustnmap-nse stdnse 修复**:
+- `get_script_args()` Lua 回调:
+  - 使用 `block_in_place` + `Handle::block_on()` 替代创建新 runtime
+  - 修复竞态条件问题
+- 测试更新为 `#[tokio::test(flavor = "multi_thread")]`
+
+**验证结果**:
+```
+✅ cargo check -p rustnmap-vuln --all-targets
+✅ cargo test -p rustnmap-vuln --lib (34 tests)
+✅ cargo clippy -p rustnmap-vuln --all-targets -- -D warnings
+✅ cargo test -p rustnmap-nse --lib (109 tests)
+✅ cargo clippy --workspace --all-targets -- -D warnings
+```
+
+---
+
+### 2026-02-20: Async/Await 优化修复 - CRITICAL + HIGH ✅
+
+**任务**: 修复审查中发现的关键和高优先级问题
+
+**已完成**:
+- ✅ **Task 1 (CRITICAL)**: 修复 orchestrator block_on 调用
+- ✅ **Task 2 (HIGH)**: 替换 NSE std RwLock 为 tokio RwLock
+
+**Task 1 详情 - Orchestrator 修复**:
+- 文件: `rustnmap-core/src/orchestrator.rs`
+- 修改:
+  - `run_service_detection()` → async
+  - `run_os_detection()` → async
+  - `run_traceroute()` → async
+  - 移除 lines 920, 1008, 1301 的 `rt.block_on()` 调用
+  - 修复 clippy 警告 (map_or 替代 map().unwrap_or())
+- 测试: 53 tests passed
+
+**Task 2 详情 - NSE stdnse 修复**:
+- 文件: `rustnmap-nse/src/libs/stdnse.rs`
+- 修改:
+  - `std::sync::RwLock` → `tokio::sync::RwLock`
+  - 3 个静态变量: SCRIPT_ARGS, NAMED_MUTEXES, NAMED_CVARS
+  - 相关函数变为 async
+  - Lua 回调使用 `block_in_place` 创建运行时
+  - 测试改为 `#[tokio::test]`
+- 测试: 109 tests passed
+
+---
+
+### 2026-02-20 - Async/Await 性能优化完成 ✅
+
 ### 2026-02-19 - rustnmap-packet 模块完成 ✅
 
 **任务**: 严格按照设计文档 `doc/modules/raw-packet.md` 完成 rustnmap-packet 模块
@@ -69,83 +143,6 @@
 - rustnmap-packet 缺少内核接口实现 (60% 缺失)
 - 所有 crate 缺少 README.md
 - rustnmap-net 需要模块拆分 (1,851 行单文件)
-
----
-
-### 2026-02-20 - Async/Await 性能优化完成 ✅
-
-**任务**: 全工作空间异步/等待性能优化，解决阻塞异步运行时的同步操作
-
-**完成阶段**:
-- ✅ Phase 1: 关键阻塞修复 (P0) - `std::thread::sleep`、TCP Connect、NSE 网络操作
-- ✅ Phase 2: 热路径文件 I/O (P1) - Session 恢复、NSE 脚本加载、输出写入
-- ✅ Phase 3: 网络操作 (P1) - FTP Bounce 扫描、NSE nmap 库
-- ✅ Phase 4: 数据库操作 (P1) - SQLite 操作异步化
-- ✅ Phase 5: CPU 密集型任务 (P2) - 指数退避、yield 点
-- ✅ Phase 6: 配置/设置 I/O (P2) - CLI 输出、Profile 操作
-- ✅ Phase 7: 同步原语一致性 (P3) - 异步上下文中的 Mutex
-
-**修改文件** (15 个):
-1. `rustnmap-nse/src/libs/stdnse.rs` - Sleep 异步化
-2. `rustnmap-scan/src/idle_scan.rs` - Idle 扫描延迟异步
-3. `rustnmap-scan/src/connect_scan.rs` - TCP 连接异步
-4. `rustnmap-nse/src/libs/comm.rs` - 网络操作异步
-5. `rustnmap-core/src/session.rs` - Session 恢复 I/O
-6. `rustnmap-nse/src/registry.rs` - 脚本加载
-7. `rustnmap-output/src/writer.rs` - 输出写入
-8. `rustnmap-scan/src/ftp_bounce_scan.rs` - FTP 操作
-9. `rustnmap-scan-management/src/database.rs` - 数据库 I/O
-10. `rustnmap-vuln/src/database.rs` - 漏洞数据库
-11. `rustnmap-fingerprint/src/os/database.rs` - 指纹匹配 yield 点
-12. `rustnmap-core/src/congestion.rs` - 自旋循环退避、异步 Mutex
-13. `rustnmap-scan-management/src/profile.rs` - Profile I/O
-14. `rustnmap-sdk/src/profile.rs` - SDK Profile I/O
-15. `rustnmap-cli/src/cli.rs` - 输出文件 I/O
-
-**实现模式**:
-```rust
-// 使用 tokio::task::block_in_place 包装阻塞操作
-tokio::task::block_in_place(|| {
-    // 阻塞 I/O 或网络操作
-    blocking_operation()
-})
-```
-
-**验证结果**:
-```bash
-✅ cargo clippy --workspace --all-targets -- -D warnings (零警告)
-✅ cargo test --workspace --lib (553 测试通过)
-```
-
-**影响**:
-- 解决了 `std::thread::sleep()` 阻塞异步运行时的问题
-- TCP Connect 扫描现在让步于异步执行器
-- 文件 I/O 操作不再阻塞异步运行时线程
-- 自旋循环添加了指数退避防止 CPU 饥饿
-- CPU 密集型循环添加了 yield 点
-- 异步上下文中的 Mutex 现在使用 `tokio::sync::Mutex`
-
----
-
-### 2026-02-19 - Clippy 零警告修复
-
-**任务**: 修复全工作空间 clippy 警告达到零警告标准
-
-**修复内容**:
-- 修复所有基本 clippy 警告
-- 修复所有 pedantic 级别警告
-- 修复编译错误 (不必要的 .await 调用)
-
-**主要修复**:
-1. 编译错误 (cli.rs) - 将 async 函数改为同步
-2. 测试文件 pedantic 警告 - 浮点数比较、数字分隔符、类型转换等
-
-**验证结果**:
-```bash
-✅ cargo fmt --all -- --check
-✅ cargo clippy --workspace --all-targets -- -D warnings
-✅ cargo test --workspace
-```
 
 ---
 

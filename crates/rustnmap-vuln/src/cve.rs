@@ -14,8 +14,12 @@ pub struct CveEngine {
 
 impl CveEngine {
     /// Create a new CVE engine with a database.
+    ///
+    /// # Arguments
+    ///
+    /// * `db` - The vulnerability database.
     #[must_use]
-    pub fn new(db: VulnDatabase) -> Self {
+    pub const fn new(db: VulnDatabase) -> Self {
         Self { db }
     }
 
@@ -28,13 +32,13 @@ impl CveEngine {
     /// # Errors
     ///
     /// Returns an error if the database query fails.
-    pub fn get_cve(&self, cve_id: &str) -> Result<Option<CveEntry>> {
-        self.db.get_cve(cve_id)
+    pub async fn get_cve(&self, cve_id: &str) -> Result<Option<CveEntry>> {
+        self.db.get_cve(cve_id).await
     }
 
     /// Get the database reference.
     #[must_use]
-    pub fn database(&self) -> &VulnDatabase {
+    pub const fn database(&self) -> &VulnDatabase {
         &self.db
     }
 }
@@ -43,10 +47,10 @@ impl CveEngine {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_cve_engine_creation() {
-        let db = VulnDatabase::open_in_memory().unwrap();
+    #[tokio::test]
+    async fn test_cve_engine_creation() {
+        let db = VulnDatabase::open_in_memory().await.unwrap();
         let engine = CveEngine::new(db);
-        engine.database().get_stats().unwrap();
+        engine.database().get_stats().await.unwrap();
     }
 }

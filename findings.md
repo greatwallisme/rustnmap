@@ -7,6 +7,59 @@
 
 ## 最新发现
 
+### 2026-02-20: Async/Await 优化审查 ✅ COMPLETE
+
+**审查结果**: 发现 8 个需要关注的异步优化问题，已全部修复
+
+#### 严重问题汇总
+
+| 严重性 | 数量 | 问题 | 状态 |
+|--------|------|------|------|
+| CRITICAL | 1 | orchestrator 中使用 block_on() | ✅ 已修复 |
+| HIGH | 2 | 混合同步/异步 API, std 锁在异步上下文 | ✅ 已修复 |
+| MEDIUM | 4 | blocking_lock(), 低效 sleep, 混合连接扫描, std mutex | ✅ 已修复 |
+| LOW | 1 | 文件 I/O 模式 (实际正确) | - |
+
+#### 详细问题清单
+
+**1. CRITICAL - Orchestrator 中的 block_on()** ✅ FIXED
+- **文件**: `rustnmap-core/src/orchestrator.rs`
+- **行号**: 920, 1008, 1301
+- **问题**: 在异步函数中使用 `rt.block_on()` 调用服务检测、OS 检测和 traceroute
+- **影响**: 阻塞整个异步运行时，破坏异步/等待的目的
+- **修复**: 已将 `run_service_detection`, `run_os_detection`, `run_traceroute` 转换为 async 函数，移除 block_on 调用
+- **验证**: 53 tests passed, zero clippy warnings
+
+**2. HIGH - VulnClient 混合同步/异步 API** ✅ FIXED
+- **文件**: `rustnmap-vuln/src/client.rs`, `cve.rs`, `epss.rs`, `kev.rs`
+- **问题**: cve/epss/kev 模块的方法调用 database 的 async 方法但没有 await
+- **修复**: 将所有引擎方法转换为 async，更新测试为 `#[tokio::test]`
+
+**3. HIGH - NSE 中的 std::sync::RwLock** ✅ FIXED
+- **文件**: `rustnmap-nse/src/libs/stdnse.rs`
+- **行号**: 72-98
+- **问题**: 在异步上下文中使用 `std::sync::RwLock`
+- **影响**: 可能导致异步运行时饥饿和优先级反转
+- **修复**:
+  - 替换为 `tokio::sync::RwLock`
+  - `get_script_args()` Lua 回调使用 `block_in_place` + `Handle::block_on()`
+  - 测试改为 `#[tokio::test(flavor = "multi_thread")]`
+- **验证**: 109 tests passed, zero clippy warnings
+
+**4. MEDIUM - 数据库中的 blocking_lock()** ✅ FIXED
+- **文件**: `rustnmap-vuln/src/database.rs`
+- **问题**: 使用 `rusqlite` + `tokio::sync::Mutex` 包装，使用 `blocking_lock()` 阻塞
+- **解决方案**: 完全转换为 `tokio-rusqlite`
+- **修复内容**:
+  - 添加 `tokio-rusqlite = "0.5"` 依赖
+  - 添加 `From<tokio_rusqlite::Error>` 到 VulnError
+  - 重写 database.rs 使用 `.call()` API
+  - 修复 `vacuum()` 返回类型 (Result<usize> → Result<()>)
+  - 更新所有相关测试为 `#[tokio::test]`
+- **验证**: 34 tests passed, zero clippy warnings
+
+---
+
 ### 2026-02-20: Async/Await 性能优化完成 ✅
 
 **优化范围**: 全工作空间异步/等待性能改进，解决 60+ 同步操作阻塞异步运行时的问题
@@ -45,45 +98,6 @@
 **质量验证**:
 - Clippy: 零警告
 - 测试: 553 通过
-
----
-
-### 2026-02-19: rustnmap-packet 模块完成 ✅
-
-**实现内容**:
-1. **PacketError** - 完整的错误类型定义
-   - SocketCreationFailed, VersionSetFailed, BindFailed
-   - InterfaceNotFound, InvalidConfig, IoError
-
-2. **RingConfig** - 环形缓冲区配置
-   - 默认值: block_size=65536, frame_size=4096, block_nr=256
-   - Builder 模式: with_frame_timeout(), with_rx(), with_tx()
-   - 验证逻辑: validate() 方法
-
-3. **PacketBuffer** - 零拷贝数据包缓冲区
-   - 使用 bytes::Bytes 引用计数
-   - 支持时间戳、VLAN TCI/TPID
-   - 实现 From<Vec<u8>>, From<&[u8]> 等转换
-
-4. **AfPacketEngine** - AF_PACKET 套接字引擎
-   - new() - 创建 AF_PACKET 套接字
-   - bind_to_interface() - 绑定到网络接口
-   - get_mac_address() - 获取 MAC 地址
-   - set_promiscuous() - 设置混杂模式
-   - set_filter() - 设置 BPF 过滤器
-   - recv_packet() - 接收数据包
-   - send_packet() - 发送数据包
-
-**质量验证**:
-- 编译器警告: 0
-- Clippy 警告: 0
-- 测试: 16/16 通过
-
-**依赖添加**:
-- libc - FFI 绑定
-- memmap2 - mmap 支持
-- socket2 - 安全的套接字选项
-- thiserror - 错误类型派生
 
 ---
 
@@ -170,6 +184,7 @@
 ##### rustnmap-vuln ✅
 - **作用**: 漏洞情报 (CVE/CPE, EPSS, KEV)
 - **文件数**: 9 个
+- **异步化**: 使用 tokio-rusqlite 实现真正异步
 
 ##### rustnmap-api ✅
 - **作用**: REST API / Daemon 模式

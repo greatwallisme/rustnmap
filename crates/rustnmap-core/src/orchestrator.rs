@@ -340,12 +340,12 @@ impl ScanOrchestrator {
                 }
                 ScanPhase::ServiceDetection => {
                     if self.pipeline.is_enabled(ScanPhase::ServiceDetection) {
-                        self.run_service_detection(&mut host_results)?;
+                        self.run_service_detection(&mut host_results).await?;
                     }
                 }
                 ScanPhase::OsDetection => {
                     if self.pipeline.is_enabled(ScanPhase::OsDetection) {
-                        self.run_os_detection(&mut host_results)?;
+                        self.run_os_detection(&mut host_results).await?;
                     }
                 }
                 ScanPhase::NseExecution => {
@@ -355,7 +355,7 @@ impl ScanOrchestrator {
                 }
                 ScanPhase::Traceroute => {
                     if self.pipeline.is_enabled(ScanPhase::Traceroute) {
-                        self.run_traceroute(&mut host_results)?;
+                        self.run_traceroute(&mut host_results).await?;
                     }
                 }
                 ScanPhase::ResultAggregation => {
@@ -775,8 +775,7 @@ impl ScanOrchestrator {
                     }
                 }
                 ScanType::SctpInit | ScanType::IpProtocol => {
-                    // SCTP and IP protocol scans not yet implemented
-                    // Return filtered as placeholder
+                    // TODO: Implement SCTP and IP protocol scans
                     return Ok(PortResult {
                         number: port,
                         protocol: rustnmap_output::models::Protocol::Tcp,
@@ -889,8 +888,11 @@ impl ScanOrchestrator {
     }
 
     /// Runs the service detection phase.
-    #[allow(clippy::unnecessary_wraps)]
-    fn run_service_detection(&self, host_results: &mut [HostResult]) -> Result<()> {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if service detection fails for any host.
+    async fn run_service_detection(&self, host_results: &mut [HostResult]) -> Result<()> {
         info!("Starting service detection phase");
 
         // Check if service database is available
@@ -908,16 +910,11 @@ impl ScanOrchestrator {
                 if port_result.state == PortState::Open {
                     let target_addr = SocketAddr::new(host_result.ip, port_result.number);
 
-                    // Create a runtime for synchronous execution within async context
-                    let Ok(rt) = tokio::runtime::Handle::try_current() else {
-                        warn!("No tokio runtime available for service detection");
-                        continue;
-                    };
-
-                    // Run detection for this port
-                    let detection_future =
-                        detector.detect_service(&target_addr, port_result.number);
-                    match rt.block_on(detection_future) {
+                    // Run detection for this port using async await
+                    match detector
+                        .detect_service(&target_addr, port_result.number)
+                        .await
+                    {
                         Ok(services) => {
                             if let Some(service_info) = services.first() {
                                 debug!(
@@ -964,8 +961,11 @@ impl ScanOrchestrator {
     }
 
     /// Runs the OS detection phase.
-    #[allow(clippy::unnecessary_wraps, clippy::map_unwrap_or)]
-    fn run_os_detection(&self, host_results: &mut [HostResult]) -> Result<()> {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if OS detection fails for any host.
+    async fn run_os_detection(&self, host_results: &mut [HostResult]) -> Result<()> {
         info!("Starting OS detection phase");
 
         // Check if OS database is available
@@ -992,20 +992,12 @@ impl ScanOrchestrator {
                 .ports
                 .iter()
                 .find(|p| p.state == PortState::Open)
-                .map(|p| p.number)
-                .unwrap_or(80);
+                .map_or(80, |p| p.number);
 
             let target_addr = SocketAddr::new(IpAddr::V4(target_ip), open_port);
 
-            // Create a runtime for synchronous execution within async context
-            let Ok(rt) = tokio::runtime::Handle::try_current() else {
-                warn!("No tokio runtime available for OS detection");
-                continue;
-            };
-
-            // Run OS detection
-            let detection_future = detector.detect_os(&target_addr);
-            match rt.block_on(detection_future) {
+            // Run OS detection using async await
+            match detector.detect_os(&target_addr).await {
                 Ok(matches) => {
                     debug!(
                         ip = %host_result.ip,
@@ -1256,8 +1248,11 @@ impl ScanOrchestrator {
     }
 
     /// Runs traceroute to discovered hosts.
-    #[allow(clippy::unnecessary_wraps, clippy::unused_self)]
-    fn run_traceroute(&self, host_results: &mut [HostResult]) -> Result<()> {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if traceroute fails for any host.
+    async fn run_traceroute(&self, host_results: &mut [HostResult]) -> Result<()> {
         info!("Starting traceroute phase");
 
         // Create traceroute configuration
@@ -1272,12 +1267,6 @@ impl ScanOrchestrator {
         // Create traceroute instance
         let Ok(tracer) = rustnmap_traceroute::Traceroute::new(config, local_addr) else {
             warn!("Failed to create traceroute instance");
-            return Ok(());
-        };
-
-        // Create a runtime for synchronous execution within async context
-        let Ok(rt) = tokio::runtime::Handle::try_current() else {
-            warn!("No tokio runtime available for traceroute");
             return Ok(());
         };
 
@@ -1296,9 +1285,8 @@ impl ScanOrchestrator {
                 addr.octets()[3],
             );
 
-            // Run traceroute
-            let trace_future = tracer.trace(target_ip);
-            match rt.block_on(trace_future) {
+            // Run traceroute using async await
+            match tracer.trace(target_ip).await {
                 Ok(result) => {
                     debug!(
                         ip = %host_result.ip,

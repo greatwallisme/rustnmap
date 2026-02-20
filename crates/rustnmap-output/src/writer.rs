@@ -151,9 +151,7 @@ impl OutputManager {
     /// Write data to a file.
     fn write_to_file(path: &Path, data: &str) -> Result<()> {
         // Use block_in_place to yield to async runtime during file I/O
-        tokio::task::block_in_place(|| {
-            Self::write_to_file_blocking(path, data)
-        })
+        tokio::task::block_in_place(|| Self::write_to_file_blocking(path, data))
     }
 
     /// Blocking implementation of file writing.

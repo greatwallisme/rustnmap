@@ -507,8 +507,9 @@ fn parse_targets(args: &Args) -> Result<TargetGroup> {
     // Handle input file if specified
     if let Some(input_file) = &args.input_file {
         let content = tokio::task::block_in_place(|| {
-            std::fs::read_to_string(input_file)
-                .map_err(|e| rustnmap_common::Error::Other(format!("Failed to read input file: {e}")))
+            std::fs::read_to_string(input_file).map_err(|e| {
+                rustnmap_common::Error::Other(format!("Failed to read input file: {e}"))
+            })
         })?;
 
         for line in content.lines() {
@@ -1021,7 +1022,9 @@ fn open_output_file(path: &std::path::Path, append: bool) -> Result<std::fs::Fil
                 .create(true)
                 .append(true)
                 .open(path)
-                .map_err(|e| rustnmap_common::Error::Other(format!("Failed to open output file: {e}")))
+                .map_err(|e| {
+                    rustnmap_common::Error::Other(format!("Failed to open output file: {e}"))
+                })
         } else {
             File::create(path).map_err(|e| {
                 rustnmap_common::Error::Other(format!("Failed to create output file: {e}"))

@@ -334,29 +334,36 @@ impl NseSocket {
 impl mlua::UserData for NseSocket {
     fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
         // Async connect method - uses spawn_blocking for non-blocking TCP connect
-        methods.add_async_method_mut("connect", |_, mut this, (host, port): (String, u16)| async move {
-            let addr = format!("{host}:{port}");
-            match addr.parse::<std::net::SocketAddr>() {
-                Ok(socket_addr) => {
-                    match tokio::task::spawn_blocking(move || {
-                        std::net::TcpStream::connect_timeout(
-                            &socket_addr,
-                            std::time::Duration::from_secs(30),
-                        )
-                    }).await {
-                        Ok(_stream) => {
-                            this.state = SocketState::Connected {
-                                addr: socket_addr,
-                                proto: "tcp".to_string(),
-                            };
-                            Ok(true)
+        methods.add_async_method_mut(
+            "connect",
+            |_, mut this, (host, port): (String, u16)| async move {
+                let addr = format!("{host}:{port}");
+                match addr.parse::<std::net::SocketAddr>() {
+                    Ok(socket_addr) => {
+                        match tokio::task::spawn_blocking(move || {
+                            std::net::TcpStream::connect_timeout(
+                                &socket_addr,
+                                std::time::Duration::from_secs(30),
+                            )
+                        })
+                        .await
+                        {
+                            Ok(_stream) => {
+                                this.state = SocketState::Connected {
+                                    addr: socket_addr,
+                                    proto: "tcp".to_string(),
+                                };
+                                Ok(true)
+                            }
+                            Err(e) => {
+                                Err(mlua::Error::RuntimeError(format!("Connect failed: {e}")))
+                            }
                         }
-                        Err(e) => Err(mlua::Error::RuntimeError(format!("Connect failed: {e}"))),
                     }
+                    Err(e) => Err(mlua::Error::RuntimeError(format!("Invalid address: {e}"))),
                 }
-                Err(e) => Err(mlua::Error::RuntimeError(format!("Invalid address: {e}"))),
-            }
-        });
+            },
+        );
 
         methods.add_method_mut("close", |_, this, ()| {
             this.state = SocketState::Disconnected;

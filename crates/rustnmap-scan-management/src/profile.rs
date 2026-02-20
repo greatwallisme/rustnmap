@@ -146,9 +146,7 @@ impl ScanProfile {
     /// Returns an error if the file cannot be written or the profile cannot be serialized.
     pub fn save(&self, path: &Path) -> Result<()> {
         let yaml = serde_yaml::to_string(self)?;
-        tokio::task::block_in_place(|| {
-            fs::write(path, yaml).map_err(ScanManagementError::from)
-        })?;
+        tokio::task::block_in_place(|| fs::write(path, yaml).map_err(ScanManagementError::from))?;
         Ok(())
     }
 

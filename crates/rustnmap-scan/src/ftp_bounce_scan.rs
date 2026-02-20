@@ -92,9 +92,7 @@ impl FtpBounceScanner {
     /// Returns an error if the FTP connection fails or communication errors occur.
     fn scan_port_impl(&self, target: &Target, port: Port) -> ScanResult<PortState> {
         // Use block_in_place to yield to the async runtime during blocking FTP operations
-        tokio::task::block_in_place(|| {
-            self.scan_port_impl_blocking(target, port)
-        })
+        tokio::task::block_in_place(|| self.scan_port_impl_blocking(target, port))
     }
 
     /// Connects to the FTP server.

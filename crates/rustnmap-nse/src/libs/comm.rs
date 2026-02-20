@@ -243,16 +243,18 @@ impl Default for ConnectionOpts {
 /// Open a connection to host:port.
 fn opencon_impl(host: &str, port: u16, opts: ConnectionOpts) -> std::io::Result<NseSocket> {
     // Use block_in_place to yield to the async runtime during blocking network operations
-    tokio::task::block_in_place(|| {
-        opencon_impl_blocking(host, port, opts)
-    })
+    tokio::task::block_in_place(|| opencon_impl_blocking(host, port, opts))
 }
 
 /// Blocking implementation of TCP connection.
 ///
 /// This function performs the actual blocking DNS resolution and TCP connection.
 /// It is called within `block_in_place` to avoid blocking the async runtime.
-fn opencon_impl_blocking(host: &str, port: u16, opts: ConnectionOpts) -> std::io::Result<NseSocket> {
+fn opencon_impl_blocking(
+    host: &str,
+    port: u16,
+    opts: ConnectionOpts,
+) -> std::io::Result<NseSocket> {
     let addr = format!("{}:{}", host, port);
     let addrs: Vec<SocketAddr> = addr.to_socket_addrs()?.collect();
 

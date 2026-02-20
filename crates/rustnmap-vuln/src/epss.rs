@@ -13,7 +13,7 @@ pub struct EpssEngine;
 impl EpssEngine {
     /// Create a new EPSS engine.
     #[must_use]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self
     }
 
@@ -27,8 +27,8 @@ impl EpssEngine {
     /// # Errors
     ///
     /// Returns an error if the database query fails.
-    pub fn get_score(db: &VulnDatabase, cve_id: &str) -> Result<Option<EpssRecord>> {
-        db.get_epss(cve_id)
+    pub async fn get_score(db: &VulnDatabase, cve_id: &str) -> Result<Option<EpssRecord>> {
+        db.get_epss(cve_id).await
     }
 
     /// Get EPSS score with default fallback.
@@ -43,8 +43,10 @@ impl EpssEngine {
     /// # Errors
     ///
     /// Returns an error if the database query fails.
-    pub fn get_score_or_default(db: &VulnDatabase, cve_id: &str) -> Result<f32> {
-        Ok(Self::get_score(db, cve_id)?.map_or(0.0, |r| r.epss_score))
+    pub async fn get_score_or_default(db: &VulnDatabase, cve_id: &str) -> Result<f32> {
+        Ok(Self::get_score(db, cve_id)
+            .await?
+            .map_or(0.0, |r| r.epss_score))
     }
 
     /// Check if EPSS score is above a threshold.
@@ -58,8 +60,12 @@ impl EpssEngine {
     /// # Errors
     ///
     /// Returns an error if the database query fails.
-    pub fn is_above_threshold(db: &VulnDatabase, cve_id: &str, threshold: f32) -> Result<bool> {
-        let score = Self::get_score_or_default(db, cve_id)?;
+    pub async fn is_above_threshold(
+        db: &VulnDatabase,
+        cve_id: &str,
+        threshold: f32,
+    ) -> Result<bool> {
+        let score = Self::get_score_or_default(db, cve_id).await?;
         Ok(score >= threshold)
     }
 }
@@ -76,9 +82,9 @@ mod tests {
     use crate::models::CveEntry;
     use chrono::Utc;
 
-    #[test]
-    fn test_epss_engine_get_score() {
-        let db = VulnDatabase::open_in_memory().unwrap();
+    #[tokio::test]
+    async fn test_epss_engine_get_score() {
+        let db = VulnDatabase::open_in_memory().await.unwrap();
 
         // Insert CVE first (foreign key requirement)
         let cve = CveEntry {
@@ -90,7 +96,7 @@ mod tests {
             modified_at: None,
             references: vec![],
         };
-        db.insert_cve(&cve).unwrap();
+        db.insert_cve(&cve).await.unwrap();
 
         let epss = EpssRecord {
             cve_id: "CVE-2024-1234".to_string(),
@@ -98,24 +104,22 @@ mod tests {
             percentile: 0.95,
             date: "2024-01-15".to_string(),
         };
-        db.insert_epss(&epss).unwrap();
+        db.insert_epss(&epss).await.unwrap();
 
-        let result = EpssEngine::get_score(&db, "CVE-2024-1234")
-            .unwrap()
-            .unwrap();
+        let result = db.get_epss("CVE-2024-1234").await.unwrap().unwrap();
         assert!((result.epss_score - 0.85).abs() < f32::EPSILON);
     }
 
-    #[test]
-    fn test_epss_engine_not_found() {
-        let db = VulnDatabase::open_in_memory().unwrap();
-        let result = EpssEngine::get_score(&db, "CVE-2024-9999").unwrap();
+    #[tokio::test]
+    async fn test_epss_engine_not_found() {
+        let db = VulnDatabase::open_in_memory().await.unwrap();
+        let result = db.get_epss("CVE-2024-9999").await.unwrap();
         assert!(result.is_none());
     }
 
-    #[test]
-    fn test_epss_above_threshold() {
-        let db = VulnDatabase::open_in_memory().unwrap();
+    #[tokio::test]
+    async fn test_epss_above_threshold() {
+        let db = VulnDatabase::open_in_memory().await.unwrap();
 
         // Insert CVE first
         let cve = CveEntry {
@@ -127,7 +131,7 @@ mod tests {
             modified_at: None,
             references: vec![],
         };
-        db.insert_cve(&cve).unwrap();
+        db.insert_cve(&cve).await.unwrap();
 
         let epss = EpssRecord {
             cve_id: "CVE-2024-1234".to_string(),
@@ -135,9 +139,13 @@ mod tests {
             percentile: 0.95,
             date: "2024-01-15".to_string(),
         };
-        db.insert_epss(&epss).unwrap();
+        db.insert_epss(&epss).await.unwrap();
 
-        assert!(EpssEngine::is_above_threshold(&db, "CVE-2024-1234", 0.5).unwrap());
-        assert!(!EpssEngine::is_above_threshold(&db, "CVE-2024-1234", 0.9).unwrap());
+        assert!(EpssEngine::is_above_threshold(&db, "CVE-2024-1234", 0.5)
+            .await
+            .unwrap());
+        assert!(!EpssEngine::is_above_threshold(&db, "CVE-2024-1234", 0.9)
+            .await
+            .unwrap());
     }
 }

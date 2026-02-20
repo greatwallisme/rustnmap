@@ -13,7 +13,7 @@ pub struct KevEngine;
 impl KevEngine {
     /// Create a new KEV engine.
     #[must_use]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self
     }
 
@@ -27,8 +27,8 @@ impl KevEngine {
     /// # Errors
     ///
     /// Returns an error if the database query fails.
-    pub fn is_kev(db: &VulnDatabase, cve_id: &str) -> Result<bool> {
-        Ok(db.get_kev(cve_id)?.is_some())
+    pub async fn is_kev(db: &VulnDatabase, cve_id: &str) -> Result<bool> {
+        Ok(db.get_kev(cve_id).await?.is_some())
     }
 
     /// Get KEV entry for a CVE.
@@ -41,8 +41,8 @@ impl KevEngine {
     /// # Errors
     ///
     /// Returns an error if the database query fails.
-    pub fn get_entry(db: &VulnDatabase, cve_id: &str) -> Result<Option<KevEntry>> {
-        db.get_kev(cve_id)
+    pub async fn get_entry(db: &VulnDatabase, cve_id: &str) -> Result<Option<KevEntry>> {
+        db.get_kev(cve_id).await
     }
 
     /// Get KEV required action for a CVE.
@@ -55,8 +55,8 @@ impl KevEngine {
     /// # Errors
     ///
     /// Returns an error if the database query fails.
-    pub fn get_required_action(db: &VulnDatabase, cve_id: &str) -> Result<Option<String>> {
-        Ok(db.get_kev(cve_id)?.map(|k| k.required_action))
+    pub async fn get_required_action(db: &VulnDatabase, cve_id: &str) -> Result<Option<String>> {
+        Ok(db.get_kev(cve_id).await?.map(|k| k.required_action))
     }
 
     /// Get KEV due date for a CVE.
@@ -69,8 +69,8 @@ impl KevEngine {
     /// # Errors
     ///
     /// Returns an error if the database query fails.
-    pub fn get_due_date(db: &VulnDatabase, cve_id: &str) -> Result<Option<String>> {
-        Ok(db.get_kev(cve_id)?.map(|k| k.due_date))
+    pub async fn get_due_date(db: &VulnDatabase, cve_id: &str) -> Result<Option<String>> {
+        Ok(db.get_kev(cve_id).await?.map(|k| k.due_date))
     }
 }
 
@@ -86,9 +86,9 @@ mod tests {
     use crate::models::CveEntry;
     use chrono::Utc;
 
-    #[test]
-    fn test_kev_engine_is_kev() {
-        let db = VulnDatabase::open_in_memory().unwrap();
+    #[tokio::test]
+    async fn test_kev_engine_is_kev() {
+        let db = VulnDatabase::open_in_memory().await.unwrap();
 
         // Insert CVE first (foreign key requirement)
         let cve = CveEntry {
@@ -100,7 +100,7 @@ mod tests {
             modified_at: None,
             references: vec![],
         };
-        db.insert_cve(&cve).unwrap();
+        db.insert_cve(&cve).await.unwrap();
 
         let kev = KevEntry {
             cve_id: "CVE-2024-1234".to_string(),
@@ -111,15 +111,15 @@ mod tests {
             due_date: "2024-02-15".to_string(),
             notes: None,
         };
-        db.insert_kev(&kev).unwrap();
+        db.insert_kev(&kev).await.unwrap();
 
-        assert!(KevEngine::is_kev(&db, "CVE-2024-1234").unwrap());
-        assert!(!KevEngine::is_kev(&db, "CVE-2024-9999").unwrap());
+        assert!(KevEngine::is_kev(&db, "CVE-2024-1234").await.unwrap());
+        assert!(!KevEngine::is_kev(&db, "CVE-2024-9999").await.unwrap());
     }
 
-    #[test]
-    fn test_kev_engine_get_entry() {
-        let db = VulnDatabase::open_in_memory().unwrap();
+    #[tokio::test]
+    async fn test_kev_engine_get_entry() {
+        let db = VulnDatabase::open_in_memory().await.unwrap();
 
         // Insert CVE first
         let cve = CveEntry {
@@ -131,7 +131,7 @@ mod tests {
             modified_at: None,
             references: vec![],
         };
-        db.insert_cve(&cve).unwrap();
+        db.insert_cve(&cve).await.unwrap();
 
         let kev = KevEntry {
             cve_id: "CVE-2024-1234".to_string(),
@@ -142,9 +142,12 @@ mod tests {
             due_date: "2024-02-15".to_string(),
             notes: Some("Critical update".to_string()),
         };
-        db.insert_kev(&kev).unwrap();
+        db.insert_kev(&kev).await.unwrap();
 
-        let entry = KevEngine::get_entry(&db, "CVE-2024-1234").unwrap().unwrap();
+        let entry = KevEngine::get_entry(&db, "CVE-2024-1234")
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(entry.vendor_project, "Apache");
         assert_eq!(entry.product, "HTTP Server");
         assert!(entry.notes.is_some());

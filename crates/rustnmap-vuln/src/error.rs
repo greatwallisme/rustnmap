@@ -112,6 +112,12 @@ impl From<rusqlite::Error> for VulnError {
     }
 }
 
+impl From<tokio_rusqlite::Error> for VulnError {
+    fn from(err: tokio_rusqlite::Error) -> Self {
+        Self::database(err.to_string())
+    }
+}
+
 impl From<serde_json::Error> for VulnError {
     fn from(err: serde_json::Error) -> Self {
         Self::json(err.to_string())

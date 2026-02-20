@@ -19,6 +19,7 @@ rustnmap-output = { path = "../rustnmap-output" }
 
 # Database
 rusqlite = { version = "0.31", features = ["bundled"] }
+tokio-rusqlite = "0.5"
 
 # HTTP client for NVD API
 reqwest = { workspace = true }

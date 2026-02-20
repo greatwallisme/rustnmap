@@ -5,12 +5,14 @@
     clippy::cast_possible_truncation,
     clippy::cast_possible_wrap,
     clippy::cast_sign_loss,
+    clippy::clone_on_ref_ptr,
     clippy::collapsible_str_replace,
     clippy::doc_markdown,
     clippy::get_first,
     clippy::implicit_hasher,
     clippy::must_use_candidate,
     clippy::too_many_lines,
+    clippy::type_complexity,
     reason = "NSE library implementation requires these patterns"
 )]
 //!
@@ -64,38 +66,44 @@ use std::sync::{Arc, Condvar, Mutex};
 
 use mlua::{MultiValue, Value};
 use rand::distributions::{Alphanumeric, DistString};
+use tokio::sync::RwLock as TokioRwLock;
 
 use crate::error::Result;
 use crate::lua::NseLua;
 
 /// Script arguments storage (key-value pairs from --script-args).
-static SCRIPT_ARGS: std::sync::OnceLock<std::sync::RwLock<HashMap<String, String>>> =
+static SCRIPT_ARGS: std::sync::OnceLock<Arc<TokioRwLock<HashMap<String, String>>>> =
     std::sync::OnceLock::new();
 
 /// Named mutex storage for stdnse.mutex().
-static NAMED_MUTEXES: std::sync::OnceLock<std::sync::RwLock<HashMap<String, Arc<Mutex<()>>>>> =
+static NAMED_MUTEXES: std::sync::OnceLock<Arc<TokioRwLock<HashMap<String, Arc<Mutex<()>>>>>> =
     std::sync::OnceLock::new();
 
 /// Type alias for condition variable storage.
 type CvarStorage = HashMap<String, Arc<(Mutex<bool>, Condvar)>>;
 
 /// Named condition variable storage for stdnse.condition_variable().
-static NAMED_CVARS: std::sync::OnceLock<std::sync::RwLock<CvarStorage>> =
-    std::sync::OnceLock::new();
+static NAMED_CVARS: std::sync::OnceLock<Arc<TokioRwLock<CvarStorage>>> = std::sync::OnceLock::new();
 
 /// Get or initialize the named mutex storage.
-fn get_mutex_storage() -> &'static std::sync::RwLock<HashMap<String, Arc<Mutex<()>>>> {
-    NAMED_MUTEXES.get_or_init(|| std::sync::RwLock::new(HashMap::new()))
+fn get_mutex_storage() -> Arc<TokioRwLock<HashMap<String, Arc<Mutex<()>>>>> {
+    NAMED_MUTEXES
+        .get_or_init(|| Arc::new(TokioRwLock::new(HashMap::new())))
+        .clone()
 }
 
 /// Get or initialize the named condition variable storage.
-fn get_cvar_storage() -> &'static std::sync::RwLock<CvarStorage> {
-    NAMED_CVARS.get_or_init(|| std::sync::RwLock::new(HashMap::new()))
+fn get_cvar_storage() -> Arc<TokioRwLock<CvarStorage>> {
+    NAMED_CVARS
+        .get_or_init(|| Arc::new(TokioRwLock::new(HashMap::new())))
+        .clone()
 }
 
 /// Get or initialize the global script arguments storage.
-fn get_script_args_storage() -> &'static std::sync::RwLock<HashMap<String, String>> {
-    SCRIPT_ARGS.get_or_init(|| std::sync::RwLock::new(HashMap::new()))
+fn get_script_args_storage() -> Arc<TokioRwLock<HashMap<String, String>>> {
+    SCRIPT_ARGS
+        .get_or_init(|| Arc::new(TokioRwLock::new(HashMap::new())))
+        .clone()
 }
 
 /// Set script arguments from command line.
@@ -103,10 +111,14 @@ fn get_script_args_storage() -> &'static std::sync::RwLock<HashMap<String, Strin
 /// # Arguments
 ///
 /// * `args` - HashMap of argument name to value
-pub fn set_script_args(args: HashMap<String, String>) {
-    if let Ok(mut guard) = get_script_args_storage().write() {
-        *guard = args;
-    }
+///
+/// # Panics
+///
+/// Panics if the write lock is poisoned (should never happen in practice).
+pub async fn set_script_args(args: HashMap<String, String>) {
+    let storage = get_script_args_storage();
+    let mut guard = storage.write().await;
+    *guard = args;
 }
 
 /// Get a script argument value.
@@ -118,11 +130,10 @@ pub fn set_script_args(args: HashMap<String, String>) {
 /// # Returns
 ///
 /// The argument value if set, None otherwise.
-pub fn get_script_arg(name: &str) -> Option<String> {
-    get_script_args_storage()
-        .read()
-        .ok()
-        .and_then(|guard| guard.get(name).cloned())
+pub async fn get_script_arg(name: &str) -> Option<String> {
+    let storage = get_script_args_storage();
+    let guard = storage.read().await;
+    guard.get(name).cloned()
 }
 
 /// Register the stdnse library with the Lua runtime.
@@ -134,6 +145,10 @@ pub fn get_script_arg(name: &str) -> Option<String> {
 /// # Errors
 ///
 /// Returns an error if registration fails.
+///
+/// # Panics
+///
+/// Panics if thread spawning or joining fails (should not happen in practice).
 pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     let lua = nse_lua.lua_mut();
 
@@ -176,12 +191,22 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     let get_script_args_fn = lua.create_function(|lua, args: MultiValue| {
         let result = lua.create_table()?;
 
+        // Get storage and handle
+        let storage = get_script_args_storage();
+        let handle = tokio::runtime::Handle::try_current()
+            .map_err(|_e| mlua::Error::RuntimeError("No tokio runtime available".to_string()))?;
+
         // If no arguments, return all script args
         if args.is_empty() {
-            if let Ok(guard) = get_script_args_storage().read() {
-                for (key, value) in guard.iter() {
-                    result.set(key.clone(), value.clone())?;
-                }
+            let data: Vec<(String, String)> = tokio::task::block_in_place(|| {
+                handle.block_on(async {
+                    let guard = storage.read().await;
+                    guard.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+                })
+            });
+
+            for (key, value) in data {
+                result.set(key, value)?;
             }
             return Ok(Value::Table(result));
         }
@@ -190,8 +215,18 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
         for arg in args {
             if let Value::String(s) = arg {
                 if let Ok(key) = s.to_str() {
-                    if let Some(value) = get_script_arg(&key) {
-                        result.set(key.to_string(), value)?;
+                    let key_string = key.to_string();
+                    let key_for_closure = key_string.clone();
+
+                    let value: Option<String> = tokio::task::block_in_place(|| {
+                        handle.block_on(async {
+                            let guard = storage.read().await;
+                            guard.get(&key_for_closure).cloned()
+                        })
+                    });
+
+                    if let Some(v) = value {
+                        result.set(key_string, v)?;
                     }
                 }
             }
@@ -218,8 +253,7 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
         // Use block_in_place to yield to the async runtime while sleeping
         // This allows other async tasks to run during the sleep without blocking
         tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current()
-                .block_on(tokio::time::sleep(duration));
+            tokio::runtime::Handle::current().block_on(tokio::time::sleep(duration));
         });
         Ok(())
     })?;
@@ -291,7 +325,19 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
 
     // Register mutex(name) function - returns a mutex function
     let mutex_fn = lua.create_function(|lua, name: String| {
-        let _mutex = get_or_create_mutex(&name);
+        // Call async get_or_create_mutex from sync Lua callback
+        let _handle = tokio::runtime::Handle::try_current()
+            .map_err(|_e| mlua::Error::RuntimeError("No tokio runtime available".to_string()))?;
+        let name_clone = name.clone();
+        let _mutex = std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            rt.block_on(get_or_create_mutex(&name_clone))
+        })
+        .join()
+        .map_err(|e| mlua::Error::RuntimeError(format!("Thread join failed: {e:?}")))?;
         let mutex_fn = lua.create_function(move |_, operation: String| {
             match operation.as_str() {
                 "lock" => {
@@ -319,7 +365,19 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
 
     // Register condition_variable(name) function
     let condition_variable_fn = lua.create_function(|lua, name: String| {
-        let _cvar = get_or_create_cvar(&name);
+        // Call async get_or_create_cvar from sync Lua callback
+        let _handle = tokio::runtime::Handle::try_current()
+            .map_err(|_e| mlua::Error::RuntimeError("No tokio runtime available".to_string()))?;
+        let name_clone = name.clone();
+        let _cvar = std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            rt.block_on(get_or_create_cvar(&name_clone))
+        })
+        .join()
+        .map_err(|e| mlua::Error::RuntimeError(format!("Thread join failed: {e:?}")))?;
         let cvar_fn = lua.create_function(move |_, operation: String| {
             match operation.as_str() {
                 "wait" => {
@@ -379,38 +437,48 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
 }
 
 /// Get or create a named mutex.
-fn get_or_create_mutex(name: &str) -> Arc<Mutex<()>> {
+async fn get_or_create_mutex(name: &str) -> Arc<Mutex<()>> {
     let storage = get_mutex_storage();
-    if let Ok(guard) = storage.read() {
+    // First try to get existing mutex with read lock
+    {
+        let guard = storage.read().await;
         if let Some(mutex) = guard.get(name) {
             return Arc::clone(mutex);
         }
     }
 
-    if let Ok(mut guard) = storage.write() {
+    // Mutex doesn't exist, acquire write lock and create it
+    let mut guard = storage.write().await;
+    // Double-check in case another thread created it while we waited
+    if let Some(mutex) = guard.get(name) {
+        Arc::clone(mutex)
+    } else {
         let mutex = Arc::new(Mutex::new(()));
         guard.insert(name.to_string(), Arc::clone(&mutex));
         mutex
-    } else {
-        Arc::new(Mutex::new(()))
     }
 }
 
 /// Get or create a named condition variable.
-fn get_or_create_cvar(name: &str) -> Arc<(Mutex<bool>, Condvar)> {
+async fn get_or_create_cvar(name: &str) -> Arc<(Mutex<bool>, Condvar)> {
     let storage = get_cvar_storage();
-    if let Ok(guard) = storage.read() {
+    // First try to get existing cvar with read lock
+    {
+        let guard = storage.read().await;
         if let Some(cvar) = guard.get(name) {
             return Arc::clone(cvar);
         }
     }
 
-    if let Ok(mut guard) = storage.write() {
+    // Cvar doesn't exist, acquire write lock and create it
+    let mut guard = storage.write().await;
+    // Double-check in case another thread created it while we waited
+    if let Some(cvar) = guard.get(name) {
+        Arc::clone(cvar)
+    } else {
         let cvar = Arc::new((Mutex::new(false), Condvar::new()));
         guard.insert(name.to_string(), Arc::clone(&cvar));
         cvar
-    } else {
-        Arc::new((Mutex::new(false), Condvar::new()))
     }
 }
 
@@ -629,13 +697,13 @@ mod tests {
         assert_eq!(String::from_utf8(decoded).unwrap(), original);
     }
 
-    #[test]
-    fn test_get_script_args_empty() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_get_script_args_empty() {
         let mut lua = NseLua::new_default().unwrap();
         register(&mut lua).unwrap();
 
         // Clear any existing args
-        set_script_args(HashMap::new());
+        set_script_args(HashMap::new()).await;
 
         // Get all args (should be empty)
         let args: mlua::Table = lua
@@ -647,8 +715,8 @@ mod tests {
         assert_eq!(len, 0);
     }
 
-    #[test]
-    fn test_get_script_args_with_values() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_get_script_args_with_values() {
         let mut lua = NseLua::new_default().unwrap();
         register(&mut lua).unwrap();
 
@@ -656,7 +724,7 @@ mod tests {
         let mut args = HashMap::new();
         args.insert("test.http.useragent".to_string(), "Mozilla/5.0".to_string());
         args.insert("test.timeout".to_string(), "30".to_string());
-        set_script_args(args);
+        set_script_args(args).await;
 
         // Get specific arg
         let value: mlua::Table = lua
@@ -681,13 +749,13 @@ mod tests {
         assert_eq!(timeout_val, "30");
     }
 
-    #[test]
-    fn test_get_script_arg_helper() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_get_script_arg_helper() {
         let mut args = HashMap::new();
         args.insert("key1".to_string(), "value1".to_string());
-        set_script_args(args);
+        set_script_args(args).await;
 
-        assert_eq!(get_script_arg("key1"), Some("value1".to_string()));
-        assert_eq!(get_script_arg("nonexistent"), None);
+        assert_eq!(get_script_arg("key1").await, Some("value1".to_string()));
+        assert_eq!(get_script_arg("nonexistent").await, None);
     }
 }

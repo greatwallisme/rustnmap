@@ -74,7 +74,8 @@ impl TcpConnectScanner {
                 match handle.block_on(async {
                     tokio::task::spawn_blocking(move || {
                         Self::scan_port_impl_blocking_static(&target_clone, port, protocol)
-                    }).await
+                    })
+                    .await
                 }) {
                     Ok(state) => return state,
                     Err(_) => return PortState::Filtered,
@@ -90,7 +91,12 @@ impl TcpConnectScanner {
     ///
     /// This function performs the actual blocking TCP connection.
     /// It is called within `block_in_place` to avoid blocking the async runtime.
-    fn scan_port_impl_blocking(&self, target: &Target, port: Port, _protocol: Protocol) -> PortState {
+    fn scan_port_impl_blocking(
+        &self,
+        target: &Target,
+        port: Port,
+        _protocol: Protocol,
+    ) -> PortState {
         // Get target socket address
         let socket_addr = match target.ip {
             rustnmap_common::IpAddr::V4(addr) => SocketAddr::new(std::net::IpAddr::V4(addr), port),
@@ -128,7 +134,11 @@ impl TcpConnectScanner {
     ///
     /// This is a standalone function that doesn't require `self`,
     /// making it suitable for use with `spawn_blocking` which requires `Send + 'static` closures.
-    fn scan_port_impl_blocking_static(target: &Target, port: Port, _protocol: Protocol) -> PortState {
+    fn scan_port_impl_blocking_static(
+        target: &Target,
+        port: Port,
+        _protocol: Protocol,
+    ) -> PortState {
         // Get target socket address
         let socket_addr = match target.ip {
             rustnmap_common::IpAddr::V4(addr) => SocketAddr::new(std::net::IpAddr::V4(addr), port),
@@ -142,21 +152,15 @@ impl TcpConnectScanner {
         let result = std::net::TcpStream::connect_timeout(&socket_addr, timeout);
 
         match result {
-            Ok(_stream) => {
-                PortState::Open
-            }
+            Ok(_stream) => PortState::Open,
             Err(e)
                 if e.kind() == std::io::ErrorKind::ConnectionRefused
                     || e.kind() == std::io::ErrorKind::ConnectionReset =>
             {
                 PortState::Closed
             }
-            Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {
-                PortState::Filtered
-            }
-            Err(_e) => {
-                PortState::Filtered
-            }
+            Err(e) if e.kind() == std::io::ErrorKind::TimedOut => PortState::Filtered,
+            Err(_e) => PortState::Filtered,
         }
     }
 }
