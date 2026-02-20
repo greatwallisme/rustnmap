@@ -112,15 +112,17 @@ impl ScanHistory {
 
     /// Get scans by status.
     ///
+    /// Uses database-level filtering for efficient queries.
+    ///
     /// # Errors
     ///
     /// Returns an error if the database query fails.
     pub async fn get_scans_by_status(&self, status: ScanStatus) -> Result<Vec<ScanSummary>> {
-        // For now, fetch all and filter (could be optimized)
-        let filter = ScanFilter::default();
-        let mut scans = self.db.list_scans(&filter).await?;
-        scans.retain(|s| s.status == status);
-        Ok(scans)
+        let filter = ScanFilter {
+            status: Some(status),
+            ..Default::default()
+        };
+        self.db.list_scans(&filter).await
     }
 }
 

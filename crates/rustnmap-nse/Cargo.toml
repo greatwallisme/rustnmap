@@ -15,6 +15,7 @@ categories = ["network-programming", "scripting-language-bindings"]
 [dependencies]
 # Core dependencies
 rustnmap-common = { path = "../rustnmap-common" }
+rustnmap-target = { path = "../rustnmap-target" }
 
 # Async runtime
 tokio = { workspace = true }

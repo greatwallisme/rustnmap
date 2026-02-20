@@ -9,7 +9,74 @@
 
 ## 当前任务
 
-### Task: 修复 Module-Level `#![allow(...)]` 违规 ⚠️ PENDING
+### Task: 消除所有 "Simplified/For Now" 代码 🔴 IN PROGRESS
+**创建时间**: 2026-02-20
+**目标**: 删除所有 "for now", "simplified", "placeholder" 等简化代码，实现 100% 功能完整性
+
+#### 问题发现
+
+代码审查发现 **17+ 处** 简化/占位符代码，违反 "No Simplification" 原则:
+
+#### HIGH 严重性 (功能不完整) - 需要完整功能实现
+
+| # | 文件 | 行号 | 问题 | 状态 |
+|---|------|------|------|------|
+| 1 | `rustnmap-fingerprint/src/os/detector.rs` | 167 | IPv6 OS 检测不支持 | 🔴 待实现 (需要完整 IPv6 指纹数据库) |
+| 2 | `rustnmap-cli/src/cli.rs` | 317 | XML diff 格式不支持 | 🔴 待实现 (需要 XML 反序列化) |
+| 3 | `rustnmap-core/tests/udp_scan_test.rs` | 199 | UDP IPv6 扫描不支持 | 🔴 待实现 (需要 IPv6 UDP 扫描器) |
+| 4 | `rustnmap-nse/src/registry.rs` | 558 | **Portrule 启发式匹配而非 Lua 评估** | 🔴 待实现 |
+
+#### MEDIUM 严重性 ("for now" 临时方案) - ✅ 已全部修复
+
+| # | 文件 | 行号 | 问题 | 状态 |
+|---|------|------|------|------|
+| 4 | `rustnmap-net/src/lib.rs` | 390, 895, 1280 | IP Identification = 0 | ✅ 已修复 |
+| 5 | `rustnmap-stateless-scan/src/sender.rs` | 252, 296 | Checksum = 0 | ✅ 已修复 |
+| 6 | `rustnmap-traceroute/src/tcp.rs` | 486 | TCP checksum | ✅ 已修复 |
+| 7 | `rustnmap-nse/src/engine.rs` | 188 | Hostname 空 (缺 DNS) | ✅ 已修复 |
+
+#### LOW 严重性 (简化实现) - ✅ 已全部修复
+
+| # | 文件 | 行号 | 问题 | 状态 |
+|---|------|------|------|------|
+| 8 | `rustnmap-vuln/src/cpe.rs` | 177 | CPE 版本范围比较 | ✅ 已实现完整语义版本比较 |
+| 9 | `rustnmap-cli/src/cli.rs` | 99 | 日期解析 | ✅ 已实现多格式解析 |
+| 10 | `rustnmap-scan-management/src/diff.rs` | 129, 214 | PortChange 状态追踪 | ✅ 已实现完整状态追踪 |
+| 11 | `rustnmap-scan-management/src/history.rs` | 119 | 查询优化 | ✅ 已实现数据库级别过滤 |
+
+#### 可接受 (测试基础设施)
+
+| # | 文件 | 行号 | 问题 | 状态 |
+|---|------|------|------|------|
+| 14 | `rustnmap-evasion/src/fragment.rs` | 134 | Fragment ID 固定值 (测试确定性) | ✅ 可接受 |
+| 15 | `rustnmap-scan/src/probe.rs` | 28 | IP_IDENTIFICATION 常量 (已文档化) | ✅ 可接受 |
+
+#### Portrule 问题详情 (HIGH #4)
+
+**问题描述**: `scripts_for_port()` 使用启发式匹配而不是评估真正的 Lua portrule 函数。
+
+**当前实现**:
+```rust
+// 启发式预过滤 - 不准确！
+id_lower.contains(&service_lower) || port_matches_common_service(port, &id_lower)
+```
+
+**正确实现**: 应该使用 `ScriptEngine::evaluate_portrule()` 方法评估每个脚本的 portrule 函数。
+
+**影响**: 脚本选择可能不准确，导致:
+- 漏选应该运行的脚本
+- 误选不应该运行的脚本
+
+#### 剩余 HIGH 问题实现方案
+
+1. **IPv6 OS Detection** - 需要添加 IPv6 指纹数据库和探测逻辑
+2. **XML Diff Format** - 需要添加 `serde-xml-rs` 或类似依赖进行 XML 解析
+3. **UDP IPv6 Scan** - 需要实现 IPv6 UDP 扫描器
+4. **Portrule Lua Evaluation** - 需要在 registry 中集成 Lua 评估
+
+---
+
+### Task: 修复 Module-Level `#![allow(...)]` 违规 ✅ COMPLETE
 **创建时间**: 2026-02-20
 **目标**: 将 module-level `#![allow(...)]` 转换为 item-level `#[expect(...)]`
 

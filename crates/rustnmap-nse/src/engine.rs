@@ -185,8 +185,9 @@ impl ScriptEngine {
         // host.ip - IP address string
         host_table.set("ip", target_ip.to_string())?;
 
-        // host.name - Hostname (empty for now, would require DNS lookup)
-        host_table.set("name", "")?;
+        // host.name - Hostname from DNS reverse lookup
+        let hostname = Self::resolve_hostname(target_ip);
+        host_table.set("name", hostname.as_deref().unwrap_or(""))?;
 
         // host.targetname - The original target specification
         host_table.set("targetname", target_ip.to_string())?;
@@ -256,6 +257,25 @@ impl ScriptEngine {
         host_table.set("times", times_table)?;
 
         Ok(host_table)
+    }
+
+    /// Resolve hostname via DNS reverse lookup.
+    ///
+    /// Uses blocking DNS lookup wrapped in `block_in_place` to avoid
+    /// blocking the async runtime. Returns None if not in a Tokio context
+    /// or if DNS lookup fails.
+    fn resolve_hostname(ip: std::net::IpAddr) -> Option<String> {
+        use rustnmap_target::dns::DnsResolver;
+
+        // Check if we're in a Tokio context
+        let handle = tokio::runtime::Handle::try_current().ok()?;
+
+        tokio::task::block_in_place(|| {
+            handle.block_on(async {
+                let resolver = DnsResolver::new().ok()?;
+                resolver.reverse_lookup(ip).await.ok().flatten()
+            })
+        })
     }
 
     /// Create a full Nmap port table with all properties.

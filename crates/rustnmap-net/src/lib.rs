@@ -271,12 +271,15 @@ pub mod raw_socket {
         window: u16,
         /// TCP options.
         options: Vec<u8>,
+        /// IP identification field.
+        identification: u16,
     }
 
     impl TcpPacketBuilder {
-        /// Creates a new TCP packet builder.
+        /// Creates a new TCP packet builder with random IP identification.
         #[must_use]
         pub fn new(src_ip: Ipv4Addr, dst_ip: Ipv4Addr, src_port: Port, dst_port: Port) -> Self {
+            use rand::Rng;
             Self {
                 src_ip,
                 dst_ip,
@@ -287,6 +290,7 @@ pub mod raw_socket {
                 flags: 0,
                 window: 65535,
                 options: Vec::new(),
+                identification: rand::rng().random(),
             }
         }
 
@@ -387,9 +391,9 @@ pub mod raw_socket {
             // Total length (16 bits)
             packet.push((total_len >> 8) as u8);
             packet.push((total_len & 0xFF) as u8);
-            // Identification (16 bits) - use 0 for now
-            packet.push(0);
-            packet.push(0);
+            // Identification (16 bits)
+            packet.push((self.identification >> 8) as u8);
+            packet.push((self.identification & 0xFF) as u8);
             // Flags and fragment offset (16 bits) - don't fragment
             packet.push(0x40);
             packet.push(0);
@@ -842,18 +846,22 @@ pub mod raw_socket {
         dst_port: Port,
         /// UDP payload.
         payload: Vec<u8>,
+        /// IP identification field.
+        identification: u16,
     }
 
     impl UdpPacketBuilder {
-        /// Creates a new UDP packet builder.
+        /// Creates a new UDP packet builder with random IP identification.
         #[must_use]
         pub fn new(src_ip: Ipv4Addr, dst_ip: Ipv4Addr, src_port: Port, dst_port: Port) -> Self {
+            use rand::Rng;
             Self {
                 src_ip,
                 dst_ip,
                 src_port,
                 dst_port,
                 payload: Vec::new(),
+                identification: rand::rng().random(),
             }
         }
 
@@ -892,9 +900,9 @@ pub mod raw_socket {
             // Total length (16 bits)
             packet.push((total_len >> 8) as u8);
             packet.push((total_len & 0xFF) as u8);
-            // Identification (16 bits) - use 0 for now
-            packet.push(0);
-            packet.push(0);
+            // Identification (16 bits)
+            packet.push((self.identification >> 8) as u8);
+            packet.push((self.identification & 0xFF) as u8);
             // Flags and fragment offset (16 bits) - don't fragment
             packet.push(0x40);
             packet.push(0);
@@ -1191,18 +1199,21 @@ pub mod raw_socket {
         icmp_type: u8,
         /// ICMP code.
         icmp_code: u8,
-        /// ICMP identifier.
+        /// ICMP identifier (echo request/reply ID).
         identifier: u16,
         /// ICMP sequence number.
         sequence: u16,
         /// ICMP payload/data.
         payload: Vec<u8>,
+        /// IP header identification field.
+        ip_identification: u16,
     }
 
     impl IcmpPacketBuilder {
-        /// Creates a new ICMP packet builder for echo request.
+        /// Creates a new ICMP packet builder for echo request with random IP identification.
         #[must_use]
         pub fn new(src_ip: Ipv4Addr, dst_ip: Ipv4Addr) -> Self {
+            use rand::Rng;
             Self {
                 src_ip,
                 dst_ip,
@@ -1211,12 +1222,14 @@ pub mod raw_socket {
                 identifier: 0,
                 sequence: 0,
                 payload: Vec::new(),
+                ip_identification: rand::rng().random(),
             }
         }
 
-        /// Creates a new ICMP packet builder for timestamp request.
+        /// Creates a new ICMP packet builder for timestamp request with random IP identification.
         #[must_use]
         pub fn timestamp_request(src_ip: Ipv4Addr, dst_ip: Ipv4Addr) -> Self {
+            use rand::Rng;
             Self {
                 src_ip,
                 dst_ip,
@@ -1225,6 +1238,7 @@ pub mod raw_socket {
                 identifier: 0,
                 sequence: 0,
                 payload: vec![0; 12], // Originate, Receive, Transmit timestamps (4 bytes each)
+                ip_identification: rand::rng().random(),
             }
         }
 
@@ -1277,9 +1291,9 @@ pub mod raw_socket {
             // Total length (16 bits)
             packet.push((total_len >> 8) as u8);
             packet.push((total_len & 0xFF) as u8);
-            // Identification (16 bits) - use 0 for now
-            packet.push(0);
-            packet.push(0);
+            // IP Identification (16 bits)
+            packet.push((self.ip_identification >> 8) as u8);
+            packet.push((self.ip_identification & 0xFF) as u8);
             // Flags and fragment offset (16 bits) - don't fragment
             packet.push(0x40);
             packet.push(0);

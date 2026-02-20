@@ -183,14 +183,25 @@ impl StatelessSender {
         source_port: u16,
         seq: u32,
     ) -> Result<PacketBuffer> {
-        // Use pnet to build packet
         let mut packet = vec![0u8; 40]; // 20 bytes IP + 20 bytes TCP
+
+        // Extract IPv4 addresses for checksum calculation
+        let IpAddr::V4(dest_ip) = target else {
+            return Err(rustnmap_common::Error::Other(
+                "IPv6 not supported in stateless mode".into(),
+            ));
+        };
+        let IpAddr::V4(source_ip) = self.local_ip else {
+            return Err(rustnmap_common::Error::Other(
+                "IPv6 not supported in stateless mode".into(),
+            ));
+        };
 
         // Build IP header
         self.build_ip_header(&mut packet, target)?;
 
-        // Build TCP header
-        Self::build_tcp_header(&mut packet[20..], source_port, dest_port, seq, true, false);
+        // Build TCP header with checksum
+        Self::build_tcp_header(&mut packet, source_ip, dest_ip, source_port, dest_port, seq, true, false);
 
         Ok(PacketBuffer::from_data(packet))
     }
@@ -205,13 +216,25 @@ impl StatelessSender {
     ) -> Result<PacketBuffer> {
         let mut packet = vec![0u8; 40];
 
+        // Extract IPv4 addresses for checksum calculation
+        let IpAddr::V4(dest_ip) = target else {
+            return Err(rustnmap_common::Error::Other(
+                "IPv6 not supported in stateless mode".into(),
+            ));
+        };
+        let IpAddr::V4(source_ip) = self.local_ip else {
+            return Err(rustnmap_common::Error::Other(
+                "IPv6 not supported in stateless mode".into(),
+            ));
+        };
+
         self.build_ip_header(&mut packet, target)?;
-        Self::build_tcp_header(&mut packet[20..], source_port, dest_port, seq, false, true);
+        Self::build_tcp_header(&mut packet, source_ip, dest_ip, source_port, dest_port, seq, false, true);
 
         Ok(PacketBuffer::from_data(packet))
     }
 
-    /// Build IP header (simplified IPv4).
+    /// Build IPv4 header with proper checksum calculation.
     fn build_ip_header(&self, packet: &mut [u8], target: IpAddr) -> Result<()> {
         let IpAddr::V4(dest_ip) = target else {
             return Err(rustnmap_common::Error::Other(
@@ -249,54 +272,127 @@ impl StatelessSender {
         packet[8] = 64;
         // Protocol (TCP)
         packet[9] = 6;
-        // Checksum (0 for now, let kernel handle it)
+        // Header checksum (zero initially, calculated below)
         packet[10..12].copy_from_slice(&[0, 0]);
         // Source IP
         packet[12..16].copy_from_slice(&source_ip.octets());
         // Dest IP
         packet[16..20].copy_from_slice(&dest_ip.octets());
 
+        // Calculate IP header checksum
+        let checksum = Self::calculate_ip_checksum(&packet[..20]);
+        packet[10..12].copy_from_slice(&checksum.to_be_bytes());
+
         Ok(())
     }
 
-    /// Build TCP header.
+    /// Calculate IP header checksum using one's complement sum.
+    fn calculate_ip_checksum(header: &[u8]) -> u16 {
+        let mut sum = 0u32;
+        let len = header.len();
+
+        for i in (0..len).step_by(2) {
+            if i + 1 < len {
+                sum += u32::from(u16::from_be_bytes([header[i], header[i + 1]]));
+            } else {
+                sum += u32::from(header[i]) << 8;
+            }
+        }
+
+        while (sum >> 16) != 0 {
+            sum = (sum & 0xFFFF) + (sum >> 16);
+        }
+
+        #[expect(clippy::cast_possible_truncation, reason = "Checksum algorithm truncation")]
+        !(sum as u16)
+    }
+
+    /// Build TCP header with proper checksum calculation.
     ///
     /// # Arguments
     ///
-    /// * `packet` - TCP packet buffer (20 bytes)
+    /// * `packet` - Full packet buffer (IP header + TCP header, 40 bytes)
+    /// * `source_ip` - Source IP address
+    /// * `dest_ip` - Destination IP address
     /// * `source_port` - Source port
     /// * `dest_port` - Destination port
     /// * `seq` - Sequence number
     /// * `syn` - SYN flag
     /// * `rst` - RST flag
+    #[expect(clippy::too_many_arguments, reason = "TCP header requires all these fields")]
     fn build_tcp_header(
         packet: &mut [u8],
+        source_ip: std::net::Ipv4Addr,
+        dest_ip: std::net::Ipv4Addr,
         source_port: u16,
         dest_port: u16,
         seq: u32,
         syn: bool,
         rst: bool,
     ) {
+        // TCP header starts at offset 20
+        let tcp_start = 20;
+
         // Source port
-        packet[0..2].copy_from_slice(&source_port.to_be_bytes());
+        packet[tcp_start..tcp_start + 2].copy_from_slice(&source_port.to_be_bytes());
         // Dest port
-        packet[2..4].copy_from_slice(&dest_port.to_be_bytes());
+        packet[tcp_start + 2..tcp_start + 4].copy_from_slice(&dest_port.to_be_bytes());
         // Sequence number
-        packet[4..8].copy_from_slice(&seq.to_be_bytes());
+        packet[tcp_start + 4..tcp_start + 8].copy_from_slice(&seq.to_be_bytes());
         // Acknowledgment number (0 for SYN, seq for RST)
         let ack = if rst { seq } else { 0 };
-        packet[8..12].copy_from_slice(&ack.to_be_bytes());
+        packet[tcp_start + 8..tcp_start + 12].copy_from_slice(&ack.to_be_bytes());
         // Data offset (5 = 20 bytes, no options) + Reserved + Flags
         let data_offset = 5 << 4;
         let flags = if syn { 0x02 } else { 0 } | if rst { 0x04 } else { 0 };
-        packet[12] = data_offset;
-        packet[13] = flags;
+        packet[tcp_start + 12] = data_offset;
+        packet[tcp_start + 13] = flags;
         // Window size
-        packet[14..16].copy_from_slice(&1024u16.to_be_bytes());
-        // Checksum (0 for now)
-        packet[16..18].copy_from_slice(&[0, 0]);
+        packet[tcp_start + 14..tcp_start + 16].copy_from_slice(&1024u16.to_be_bytes());
+        // Checksum (zero initially, calculated below)
+        packet[tcp_start + 16..tcp_start + 18].copy_from_slice(&[0, 0]);
         // Urgent pointer
-        packet[18..20].copy_from_slice(&[0, 0]);
+        packet[tcp_start + 18..tcp_start + 20].copy_from_slice(&[0, 0]);
+
+        // Calculate TCP checksum with pseudo-header
+        let tcp_segment = &packet[tcp_start..];
+        let checksum = Self::calculate_tcp_checksum(source_ip, dest_ip, tcp_segment);
+        packet[tcp_start + 16..tcp_start + 18].copy_from_slice(&checksum.to_be_bytes());
+    }
+
+    /// Calculate TCP checksum with pseudo-header.
+    fn calculate_tcp_checksum(src_ip: std::net::Ipv4Addr, dst_ip: std::net::Ipv4Addr, tcp_segment: &[u8]) -> u16 {
+        let mut sum = 0u32;
+
+        // Pseudo-header: source IP
+        for octet in src_ip.octets().chunks(2) {
+            sum += u32::from(u16::from_be_bytes([octet[0], octet[1]]));
+        }
+        // Pseudo-header: destination IP
+        for octet in dst_ip.octets().chunks(2) {
+            sum += u32::from(u16::from_be_bytes([octet[0], octet[1]]));
+        }
+        // Pseudo-header: protocol (TCP = 6)
+        sum += 6u32;
+        // Pseudo-header: TCP segment length
+        sum += u32::try_from(tcp_segment.len()).unwrap_or(0);
+
+        // TCP segment
+        let len = tcp_segment.len();
+        for i in (0..len).step_by(2) {
+            if i + 1 < len {
+                sum += u32::from(u16::from_be_bytes([tcp_segment[i], tcp_segment[i + 1]]));
+            } else {
+                sum += u32::from(tcp_segment[i]) << 8;
+            }
+        }
+
+        while (sum >> 16) != 0 {
+            sum = (sum & 0xFFFF) + (sum >> 16);
+        }
+
+        #[expect(clippy::cast_possible_truncation, reason = "Checksum algorithm truncation")]
+        !(sum as u16)
     }
 }
 

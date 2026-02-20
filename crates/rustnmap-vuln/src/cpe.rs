@@ -174,15 +174,73 @@ impl CpeMatcher {
             return true;
         }
 
-        // Handle version ranges (simplified)
+        // Handle version ranges with semantic version comparison
         if pattern.contains("..") {
             let parts: Vec<&str> = pattern.split("..").collect();
             if parts.len() == 2 {
-                return version >= parts[0] && version <= parts[1];
+                let min_ver = Self::parse_version(parts[0]);
+                let max_ver = Self::parse_version(parts[1]);
+                let ver = Self::parse_version(version);
+                return ver >= min_ver && ver <= max_ver;
             }
         }
 
         false
+    }
+
+    /// Parse version string into comparable components.
+    ///
+    /// Handles semantic versioning with optional pre-release tags.
+    fn parse_version(version: &str) -> Vec<u64> {
+        let version = version.trim();
+
+        // Handle wildcards
+        if version == "*" || version == "-" || version.is_empty() {
+            return vec![0];
+        }
+
+        // Strip build metadata (+...)
+        let version = version.split('+').next().unwrap_or(version);
+
+        // Split pre-release (-alpha, -beta, etc.)
+        let (version_part, pre_release) = if let Some(idx) = version.find('-') {
+            (&version[..idx], Some(&version[idx + 1..]))
+        } else {
+            (version, None)
+        };
+
+        // Parse numeric version components
+        let mut components: Vec<u64> = version_part
+            .split('.')
+            .filter_map(|s| s.parse::<u64>().ok())
+            .collect();
+
+        // Normalize to at least 3 components (major.minor.patch)
+        while components.len() < 3 {
+            components.push(0);
+        }
+
+        // Add pre-release modifier (negative offset for pre-release versions)
+        // Pre-release versions sort before release versions
+        if let Some(pre) = pre_release {
+            // alpha < beta < rc < release
+            let pre_mod = if pre.starts_with("alpha") {
+                0
+            } else if pre.starts_with("beta") {
+                1
+            } else if pre.starts_with("rc") || pre.starts_with("pre") {
+                2
+            } else {
+                3
+            };
+            // Add a flag component to indicate pre-release (lower = earlier in sort order)
+            components.push(pre_mod);
+        } else {
+            // Release versions get a higher pre-release value to sort after pre-releases
+            components.push(1000);
+        }
+
+        components
     }
 }
 

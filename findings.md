@@ -7,6 +7,82 @@
 
 ## 最新发现
 
+### 2026-02-20: Simplified/Placeholder 代码修复进度 🔴 IN PROGRESS
+
+**发现来源**: 全代码库搜索
+
+**问题描述**:
+
+发现 17+ 处使用 "for now", "simplified", "placeholder" 等标记的简化代码，违反项目 "No Simplification" 原则:
+
+> **CRITICAL**: This project aims for 100% functional parity with Nmap. NO simplifications are permitted.
+
+#### 当前状态总览
+
+| 严重性 | 总数 | 已修复 | 待实现 |
+|--------|------|--------|--------|
+| HIGH | 4 | 0 | 4 |
+| MEDIUM | 4 | 4 | 0 |
+| LOW | 4 | 4 | 0 |
+
+#### HIGH 严重性问题 (功能不完整) - 🔴 待实现
+
+| # | 问题 | 文件:行号 | 状态 |
+|---|------|-----------|------|
+| 1 | IPv6 OS 检测不支持 | `rustnmap-fingerprint/src/os/detector.rs:167` | 🔴 需要完整 IPv6 指纹数据库 |
+| 2 | XML diff 格式不支持 | `rustnmap-cli/src/cli.rs:317` | 🔴 需要 XML 反序列化支持 |
+| 3 | UDP IPv6 扫描不支持 | `rustnmap-core/tests/udp_scan_test.rs:199` | 🔴 需要 IPv6 UDP 扫描器 |
+| 4 | **Portrule 启发式匹配** | `rustnmap-nse/src/registry.rs:558` | 🔴 需要真正 Lua 评估 |
+
+#### Portrule 问题详解 (HIGH #4)
+
+**当前实现问题**:
+```rust
+// 当前: 启发式匹配 - 不准确
+fn scripts_for_port(...) {
+    id_lower.contains(&service_lower) || port_matches_common_service(port, &id_lower)
+}
+```
+
+**正确实现**:
+- 应该使用 `ScriptEngine::evaluate_portrule()` 评估每个脚本的 Lua portrule 函数
+- 这确保脚本选择 100% 准确
+
+**影响**:
+- 可能漏选应该运行的脚本
+- 可能误选不应该运行的脚本
+- 这是功能正确性问题，不是优化问题
+
+#### MEDIUM 严重性问题 - ✅ 已全部修复
+
+| # | 问题 | 文件:行号 | 修复内容 |
+|---|------|-----------|----------|
+| 1 | IP Identification = 0 | `rustnmap-net/src/lib.rs` | ✅ 添加随机 identification 字段 |
+| 2 | Checksum = 0 | `rustnmap-stateless-scan/src/sender.rs` | ✅ 实现 calculate_ip_checksum() 和 calculate_tcp_checksum() |
+| 3 | TCP checksum | `rustnmap-traceroute/src/tcp.rs` | ✅ 更新注释 (测试代码) |
+| 4 | Hostname 空 | `rustnmap-nse/src/engine.rs` | ✅ 实现 resolve_hostname() DNS 反向查询 |
+
+#### LOW 严重性问题 - ✅ 已全部修复
+
+| # | 问题 | 文件:行号 | 修复内容 |
+|---|------|-----------|----------|
+| 1 | CPE 版本范围 | `rustnmap-vuln/src/cpe.rs` | ✅ 实现完整语义版本比较 (parse_version) |
+| 2 | 日期解析 | `rustnmap-cli/src/cli.rs` | ✅ 实现 parse_date_flexible() 多格式支持 |
+| 3 | PortChange 状态追踪 | `rustnmap-scan-management/src/diff.rs` | ✅ 实现完整的状态变化追踪 (from_state_change, from_service_change 等) |
+| 4 | 查询优化 | `rustnmap-scan-management/src/history.rs` | ✅ 实现数据库级别 WHERE 条件过滤 |
+
+#### 实现的真正修复 (非仅改注释)
+
+1. **IP Identification**: 为 `TcpPacketBuilder`, `UdpPacketBuilder`, `IcmpPacketBuilder` 添加 `identification` 字段，使用随机值初始化
+2. **Checksum**: 实现 `calculate_ip_checksum()` 和 `calculate_tcp_checksum()` 函数，包括伪首部计算
+3. **DNS Lookup**: 实现 `resolve_hostname()` 使用 `DnsResolver::reverse_lookup()`
+4. **Semantic Version**: 实现 `parse_version()` 支持 major.minor.patch 和 pre-release (alpha < beta < rc < release)
+5. **Flexible Date**: 实现 `parse_date_flexible()` 支持 10+ 种日期格式
+6. **PortChange**: 实现 `from_port()`, `from_removed_port()`, `from_state_change()`, `from_service_change()` 四个方法，真正追踪之前状态
+7. **Database Filtering**: 在 `database.rs` 的 SQL 查询中添加 `status` 和 `scan_type` WHERE 条件
+
+---
+
 ### 2026-02-20: Module-Level `#![allow(...)]` 违规发现 ⚠️
 
 **发现来源**: 代码审查

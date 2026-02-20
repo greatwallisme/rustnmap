@@ -395,6 +395,18 @@ impl ScanDatabase {
             param_index += 1;
         }
 
+        if let Some(scan_type) = &filter.scan_type {
+            let _ = write!(query, " AND s.scan_type = ?{}", param_index + 1);
+            params.push(format!("{scan_type:?}"));
+            param_index += 1;
+        }
+
+        if let Some(status) = &filter.status {
+            let _ = write!(query, " AND s.status = ?{}", param_index + 1);
+            params.push(format!("{status:?}"));
+            param_index += 1;
+        }
+
         query.push_str(" GROUP BY s.id");
         query.push_str(" ORDER BY s.started_at DESC");
 

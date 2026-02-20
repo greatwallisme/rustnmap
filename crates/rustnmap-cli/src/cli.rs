@@ -96,22 +96,19 @@ async fn handle_history_command(args: &Args) -> Result<()> {
     let mut filter = ScanFilter::default();
 
     if let Some(ref since) = args.since {
-        // Parse since date (simplified - accepts YYYY-MM-DD format)
-        if let Ok(date) = chrono::NaiveDate::parse_from_str(since, "%Y-%m-%d") {
-            filter.since = Some(chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(
-                date.and_time(chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap()),
-                chrono::Utc,
-            ));
-        }
+        // Parse since date with multiple format support
+        filter.since = parse_date_flexible(since);
     }
 
     if let Some(ref until) = args.until {
-        if let Ok(date) = chrono::NaiveDate::parse_from_str(until, "%Y-%m-%d") {
-            filter.until = Some(chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(
-                date.and_time(chrono::NaiveTime::from_hms_opt(23, 59, 59).unwrap()),
-                chrono::Utc,
-            ));
-        }
+        // Parse until date with multiple format support
+        filter.until = parse_date_flexible(until).map(|dt| {
+            // Set to end of day for until dates
+            dt.date_naive()
+                .and_hms_opt(23, 59, 59)
+                .map(|t| chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(t, chrono::Utc))
+                .unwrap_or(dt)
+        });
     }
 
     if let Some(ref target) = args.target {
@@ -140,12 +137,13 @@ async fn handle_history_command(args: &Args) -> Result<()> {
             rustnmap_common::Error::Other(format!("Failed to get scan details: {e}"))
         })?;
         if let Some(scan) = scan_opt {
-            println!("Scan ID: {}", scan.id);
-            println!("  Target: {}", scan.target_spec);
-            println!("  Type: {:?}", scan.scan_type);
-            println!("  Status: {:?}", scan.status);
-            println!("  Started: {}", scan.started_at);
-            println!("  Completed: {:?}", scan.completed_at);
+            let mut stdout = std::io::stdout().lock();
+            writeln!(stdout, "Scan ID: {}", scan.id)?;
+            writeln!(stdout, "  Target: {}", scan.target_spec)?;
+            writeln!(stdout, "  Type: {:?}", scan.scan_type)?;
+            writeln!(stdout, "  Status: {:?}", scan.status)?;
+            writeln!(stdout, "  Started: {}", scan.started_at)?;
+            writeln!(stdout, "  Completed: {:?}", scan.completed_at)?;
         }
         return Ok(());
     }
@@ -157,25 +155,31 @@ async fn handle_history_command(args: &Args) -> Result<()> {
         .map_err(|e| rustnmap_common::Error::Other(format!("Failed to list scans: {e}")))?;
 
     if scans.is_empty() {
-        println!("No scans found in history database.");
+        let mut stdout = std::io::stdout().lock();
+        writeln!(stdout, "No scans found in history database.")?;
         return Ok(());
     }
 
-    println!("Scan History:");
-    println!("{:-<80}", "");
-    for scan in scans {
-        println!(
-            "ID: {:<36}  Status: {:<10}  Type: {:<8}",
-            scan.id,
-            format!("{:?}", scan.status),
-            format!("{:?}", scan.scan_type)
-        );
-        println!("  Target: {}", scan.target_spec);
-        println!(
-            "  Started: {}  Hosts: {}",
-            scan.started_at, scan.hosts_count
-        );
-        println!("{:-<80}", "");
+    {
+        let mut stdout = std::io::stdout().lock();
+        writeln!(stdout, "Scan History:")?;
+        writeln!(stdout, "{:-<80}", "")?;
+        for scan in scans {
+            writeln!(
+                stdout,
+                "ID: {:<36}  Status: {:<10}  Type: {:<8}",
+                scan.id,
+                format!("{:?}", scan.status),
+                format!("{:?}", scan.scan_type)
+            )?;
+            writeln!(stdout, "  Target: {}", scan.target_spec)?;
+            writeln!(
+                stdout,
+                "  Started: {}  Hosts: {}",
+                scan.started_at, scan.hosts_count
+            )?;
+            writeln!(stdout, "{:-<80}", "")?;
+        }
     }
 
     Ok(())
@@ -196,15 +200,18 @@ fn handle_list_profiles_command(args: &Args) -> Result<()> {
 
     let profiles = manager.list_profiles();
 
-    if profiles.is_empty() {
-        println!("No profiles found. Use --generate-profile to create one.");
-        return Ok(());
-    }
+    {
+        let mut stdout = std::io::stdout().lock();
+        if profiles.is_empty() {
+            writeln!(stdout, "No profiles found. Use --generate-profile to create one.")?;
+            return Ok(());
+        }
 
-    println!("Available Profiles:");
-    println!("{:-<60}", "");
-    for profile in profiles {
-        println!("  {profile}");
+        writeln!(stdout, "Available Profiles:")?;
+        writeln!(stdout, "{:-<60}", "")?;
+        for profile in profiles {
+            writeln!(stdout, "  {profile}")?;
+        }
     }
 
     Ok(())
@@ -221,11 +228,14 @@ fn handle_validate_profile_command(profile_path: &std::path::Path) -> Result<()>
         .validate()
         .map_err(|e| rustnmap_common::Error::Other(format!("Profile validation failed: {e}")))?;
 
-    println!("Profile '{}' is valid.", profile.name);
-    println!("  Description: {:?}", profile.description);
-    println!("  Targets: {} specified", profile.targets.len());
-    println!("  Scan Type: {:?}", profile.scan.scan_type);
-    println!("  Ports: {:?}", profile.scan.ports);
+    {
+        let mut stdout = std::io::stdout().lock();
+        writeln!(stdout, "Profile '{}' is valid.", profile.name)?;
+        writeln!(stdout, "  Description: {:?}", profile.description)?;
+        writeln!(stdout, "  Targets: {} specified", profile.targets.len())?;
+        writeln!(stdout, "  Scan Type: {:?}", profile.scan.scan_type)?;
+        writeln!(stdout, "  Ports: {:?}", profile.scan.ports)?;
+    }
 
     Ok(())
 }
@@ -250,7 +260,8 @@ output:
   save_to_history: true
 "#;
 
-    println!("{profile_template}");
+    let mut stdout = std::io::stdout().lock();
+    let _ = writeln!(stdout, "{profile_template}");
 }
 
 /// Handle --diff command
@@ -282,15 +293,20 @@ async fn handle_diff_command(args: &Args, diff_files: &[String]) -> Result<()> {
         };
 
         let report = diff.generate_report(format);
-        println!("{report}");
+        let mut stdout = std::io::stdout().lock();
+        writeln!(stdout, "{report}")?;
         return Ok(());
     }
 
     // Load from files
-    println!(
-        "Comparing scans from files: {} vs {}",
-        diff_files[0], diff_files[1]
-    );
+    {
+        let mut stdout = std::io::stdout().lock();
+        writeln!(
+            stdout,
+            "Comparing scans from files: {} vs {}",
+            diff_files[0], diff_files[1]
+        )?;
+    }
 
     // Detect format from file extension
     let (before_result, after_result) =
@@ -333,7 +349,10 @@ async fn handle_diff_command(args: &Args, diff_files: &[String]) -> Result<()> {
     };
 
     let report = diff.generate_report(format);
-    println!("{report}");
+    {
+        let mut stdout = std::io::stdout().lock();
+        writeln!(stdout, "{report}")?;
+    }
 
     Ok(())
 }
@@ -352,7 +371,7 @@ async fn handle_profile_scan(args: &Args, profile_path: &std::path::Path) -> Res
     info!("Loaded profile: {}", profile.name);
 
     // Merge profile settings with command-line args
-    // For now, use targets from command line or profile
+    // Use targets from command line (priority) or profile
     let targets = if args.targets.is_empty() && !profile.targets.is_empty() {
         Ok(parse_targets_from_list(&profile.targets))
     } else {
@@ -383,6 +402,77 @@ async fn handle_profile_scan(args: &Args, profile_path: &std::path::Path) -> Res
 
     info!("Scan completed successfully");
     Ok(())
+}
+
+/// Parse date string with multiple format support.
+///
+/// Supports the following formats:
+/// - `YYYY-MM-DD` (ISO date)
+/// - `YYYY-MM-DD HH:MM:SS` (ISO datetime)
+/// - `YYYY-MM-DDTHH:MM:SS` (ISO 8601)
+/// - Relative expressions: `today`, `yesterday`, `-Nd` (N days ago)
+///
+/// Returns `None` if the date string cannot be parsed.
+fn parse_date_flexible(date_str: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    let date_str = date_str.trim();
+    let now = chrono::Utc::now();
+
+    // Handle relative date expressions
+    match date_str.to_lowercase().as_str() {
+        "today" => {
+            return now.date_naive()
+                .and_hms_opt(0, 0, 0)
+                .map(|t| chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(t, chrono::Utc));
+        }
+        "yesterday" => {
+            return (now - chrono::Duration::days(1)).date_naive()
+                .and_hms_opt(0, 0, 0)
+                .map(|t| chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(t, chrono::Utc));
+        }
+        "now" => return Some(now),
+        _ => {}
+    }
+
+    // Handle relative days (e.g., "-7d", "-30d")
+    if date_str.starts_with('-') && date_str.ends_with('d') {
+        if let Ok(days) = date_str[1..date_str.len()-1].parse::<i64>() {
+            return Some(now - chrono::Duration::days(days));
+        }
+    }
+
+    // Try multiple date formats
+    let formats = [
+        "%Y-%m-%d",                    // 2026-02-20
+        "%Y-%m-%d %H:%M:%S",           // 2026-02-20 10:30:00
+        "%Y-%m-%dT%H:%M:%S",           // 2026-02-20T10:30:00
+        "%Y-%m-%dT%H:%M:%SZ",          // 2026-02-20T10:30:00Z
+        "%Y-%m-%dT%H:%M:%S%:z",        // 2026-02-20T10:30:00+00:00
+        "%d/%m/%Y",                    // 20/02/2026
+        "%m/%d/%Y",                    // 02/20/2026
+        "%b %d, %Y",                   // Feb 20, 2026
+        "%B %d, %Y",                   // February 20, 2026
+    ];
+
+    for fmt in &formats {
+        // Try parsing as datetime with timezone
+        if let Ok(dt) = chrono::DateTime::parse_from_str(date_str, fmt) {
+            return Some(dt.with_timezone(&chrono::Utc));
+        }
+
+        // Try parsing as naive datetime
+        if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(date_str, fmt) {
+            return Some(chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(dt, chrono::Utc));
+        }
+
+        // Try parsing as naive date
+        if let Ok(date) = chrono::NaiveDate::parse_from_str(date_str, fmt) {
+            if let Some(time) = date.and_hms_opt(0, 0, 0) {
+                return Some(chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(time, chrono::Utc));
+            }
+        }
+    }
+
+    None
 }
 
 /// Parse targets from a string list

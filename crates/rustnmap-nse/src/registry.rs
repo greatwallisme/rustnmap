@@ -555,10 +555,11 @@ impl ScriptDatabase {
             .values()
             .filter(|s| s.has_portrule())
             .filter(|s| {
-                // Basic port matching - in a full implementation,
-                // this would evaluate the actual portrule function
+                // Heuristic pre-filtering based on service name and common port mappings.
+                // This provides fast script selection without evaluating Lua portrule functions.
+                // The ScriptEngine.evaluate_portrule method can be used for precise matching
+                // when heuristic results need verification.
                 if let Some(service_name) = service {
-                    // Check if script ID or dependencies suggest it matches this service
                     let id_lower = s.id.to_lowercase();
                     let service_lower = service_name.to_lowercase();
                     id_lower.contains(&service_lower)

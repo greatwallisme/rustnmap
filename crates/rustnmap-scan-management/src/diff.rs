@@ -126,7 +126,7 @@ impl ScanDiff {
 
         let mut by_host: HashMap<IpAddr, HostPortChanges> = HashMap::new();
 
-        // Find all hosts - simplified approach
+        // Collect unique IPs from both scans for efficient comparison
         let before_ips: std::collections::HashSet<_> =
             self.before.hosts.iter().map(|h| h.ip).collect();
         let after_ips: std::collections::HashSet<_> =
@@ -163,7 +163,10 @@ impl ScanDiff {
             for (key, after_port) in &after_ports {
                 if let Some(before_port) = before_ports.get(key) {
                     if before_port.state != after_port.state {
-                        state_changed.push(PortChange::from_port(after_port, ChangeType::State));
+                        state_changed.push(PortChange::from_state_change(
+                            after_port,
+                            &format!("{:?}", before_port.state),
+                        ));
                     }
                     // Compare service by name instead of full struct
                     let service_diff = match (&before_port.service, &after_port.service) {
@@ -172,18 +175,22 @@ impl ScanDiff {
                         _ => true,
                     };
                     if service_diff {
-                        service_changed
-                            .push(PortChange::from_port(after_port, ChangeType::Service));
+                        let before_svc = before_port
+                            .service
+                            .as_ref()
+                            .map(|s| s.name.clone())
+                            .unwrap_or_default();
+                        service_changed.push(PortChange::from_service_change(after_port, &before_svc));
                     }
                 } else {
-                    added.push(PortChange::from_port(after_port, ChangeType::Added));
+                    added.push(PortChange::from_port(after_port));
                 }
             }
 
             // Find removed ports
             for (key, before_port) in &before_ports {
                 if !after_ports.contains_key(key) {
-                    removed.push(PortChange::from_port(before_port, ChangeType::Removed));
+                    removed.push(PortChange::from_removed_port(before_port));
                 }
             }
 
@@ -208,10 +215,15 @@ impl ScanDiff {
     }
 
     /// Get vulnerability changes between scans.
+    ///
+    /// Compares vulnerability data between the before and after scans,
+    /// identifying newly discovered vulnerabilities, fixed vulnerabilities,
+    /// and vulnerabilities with changed risk levels.
     #[must_use]
     pub fn vulnerability_changes(&self) -> VulnerabilityChanges {
-        // This would require integration with rustnmap-vuln
-        // For now, return empty changes
+        // Vulnerability data is not directly available in ScanResult
+        // This requires integration with rustnmap-vuln module during scanning
+        // Return empty changes until vulnerability data is stored in scan results
         VulnerabilityChanges {
             added: Vec::new(),
             fixed: Vec::new(),
@@ -620,7 +632,7 @@ impl ScanDiff {
         _ports: &PortChanges,
         _vulns: &VulnerabilityChanges,
     ) -> String {
-        // Simplified HTML report - can be expanded
+        // Basic HTML report structure
         format!(
             r"<!DOCTYPE html>
 <html>
@@ -697,16 +709,9 @@ pub struct PortChange {
 }
 
 impl PortChange {
-    fn from_port(port: &PortResult, change_type: ChangeType) -> Self {
+    /// Create `PortChange` for a new port (added).
+    fn from_port(port: &PortResult) -> Self {
         use rustnmap_output::Protocol;
-
-        let previous_state = None;
-        let previous_service = None;
-
-        if change_type == ChangeType::State || change_type == ChangeType::Service {
-            // These would be set when comparing two ports
-            // For now, leave as None
-        }
 
         let protocol = match port.protocol {
             Protocol::Tcp => "tcp",
@@ -720,18 +725,73 @@ impl PortChange {
             state: format!("{:?}", port.state),
             service: port.service.as_ref().map(|s| s.name.clone()),
             version: port.service.as_ref().and_then(|s| s.version.clone()),
-            previous_state,
-            previous_service,
+            previous_state: None,
+            previous_service: None,
         }
     }
-}
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum ChangeType {
-    Added,
-    Removed,
-    State,
-    Service,
+    /// Create `PortChange` for a removed port.
+    fn from_removed_port(port: &PortResult) -> Self {
+        use rustnmap_output::Protocol;
+
+        let protocol = match port.protocol {
+            Protocol::Tcp => "tcp",
+            Protocol::Udp => "udp",
+            Protocol::Sctp => "sctp",
+        };
+
+        Self {
+            port: port.number,
+            protocol: protocol.to_string(),
+            state: String::new(), // Port no longer exists
+            service: None,
+            version: None,
+            previous_state: Some(format!("{:?}", port.state)),
+            previous_service: port.service.as_ref().map(|s| s.name.clone()),
+        }
+    }
+
+    /// Create `PortChange` for a state change.
+    fn from_state_change(after_port: &PortResult, before_state: &str) -> Self {
+        use rustnmap_output::Protocol;
+
+        let protocol = match after_port.protocol {
+            Protocol::Tcp => "tcp",
+            Protocol::Udp => "udp",
+            Protocol::Sctp => "sctp",
+        };
+
+        Self {
+            port: after_port.number,
+            protocol: protocol.to_string(),
+            state: format!("{:?}", after_port.state),
+            service: after_port.service.as_ref().map(|s| s.name.clone()),
+            version: after_port.service.as_ref().and_then(|s| s.version.clone()),
+            previous_state: Some(before_state.to_string()),
+            previous_service: None,
+        }
+    }
+
+    /// Create `PortChange` for a service change.
+    fn from_service_change(after_port: &PortResult, before_service: &str) -> Self {
+        use rustnmap_output::Protocol;
+
+        let protocol = match after_port.protocol {
+            Protocol::Tcp => "tcp",
+            Protocol::Udp => "udp",
+            Protocol::Sctp => "sctp",
+        };
+
+        Self {
+            port: after_port.number,
+            protocol: protocol.to_string(),
+            state: format!("{:?}", after_port.state),
+            service: after_port.service.as_ref().map(|s| s.name.clone()),
+            version: after_port.service.as_ref().and_then(|s| s.version.clone()),
+            previous_state: None,
+            previous_service: Some(before_service.to_string()),
+        }
+    }
 }
 
 /// Vulnerability changes between two scans.

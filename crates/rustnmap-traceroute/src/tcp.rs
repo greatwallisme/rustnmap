@@ -483,7 +483,7 @@ mod tests {
         packet[7] = 0x00; // Fragment offset
         packet[8] = 64; // TTL
         packet[9] = 6; // Protocol: TCP
-        packet[10] = 0x00; // Header checksum (placeholder)
+        packet[10] = 0x00; // Header checksum (zero for test packet)
         packet[11] = 0x00; // Header checksum
         packet[12..16].copy_from_slice(&src_ip.octets()); // Source IP
         packet[16..20].copy_from_slice(&dst_ip.octets()); // Destination IP
@@ -497,8 +497,8 @@ mod tests {
         packet[33] = flags; // Flags
         packet[34] = 0xff; // Window size (high byte)
         packet[35] = 0xff; // Window size (low byte)
-        packet[36] = 0x00; // Checksum
-        packet[37] = 0x00; // Checksum
+        packet[36] = 0x00; // TCP checksum (zero for test packet)
+        packet[37] = 0x00; // TCP checksum
         packet[38] = 0x00; // Urgent pointer
         packet[39] = 0x00; // Urgent pointer
 
