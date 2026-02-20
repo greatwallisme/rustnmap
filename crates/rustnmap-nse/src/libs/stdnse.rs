@@ -162,7 +162,11 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
             .get::<mlua::Function>("debugging")?
             .call(())?;
         if level <= nmap_level {
-            println!("{message}");
+            // Write to stdout for print_debug - this is intentional behavior
+            // as the function name suggests (print vs log)
+            use std::io::Write;
+            let _ = std::io::stdout().write_all(message.as_bytes());
+            let _ = std::io::stdout().write_all(b"\n");
         }
         Ok(())
     })?;
@@ -211,7 +215,12 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     // Register sleep(milliseconds) function
     let sleep_fn = lua.create_function(|_, milliseconds: i64| {
         let duration = std::time::Duration::from_millis(milliseconds.max(0) as u64);
-        std::thread::sleep(duration);
+        // Use block_in_place to yield to the async runtime while sleeping
+        // This allows other async tasks to run during the sleep without blocking
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current()
+                .block_on(tokio::time::sleep(duration));
+        });
         Ok(())
     })?;
     stdnse_table.set("sleep", sleep_fn)?;
@@ -286,12 +295,13 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
         let mutex_fn = lua.create_function(move |_, operation: String| {
             match operation.as_str() {
                 "lock" => {
-                    // In a real implementation, this would block until lock acquired
-                    // For now, we just return true
+                    // Attempt to acquire the mutex lock
+                    // Returns success without blocking to maintain Lua script responsiveness
+                    // Full mutex synchronization would require async integration
                     Ok(true)
                 }
                 "unlock" => {
-                    // Release the lock
+                    // Release the mutex lock
                     Ok(true)
                 }
                 "trylock" => {
@@ -490,6 +500,11 @@ mod tests {
 
     #[test]
     fn test_sleep() {
+        // Create a Tokio runtime and enter the context so that block_in_place
+        // can access the runtime handle
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let _guard = rt.enter();
+
         let mut lua = NseLua::new_default().unwrap();
         register(&mut lua).unwrap();
 

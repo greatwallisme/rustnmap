@@ -3,6 +3,8 @@
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::path::Path;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 use tracing::debug;
 
 use crate::error::{Result, VulnError};
@@ -11,9 +13,10 @@ use crate::models::{CpeMatch, CveEntry, EpssRecord, KevEntry};
 /// Vulnerability database wrapper.
 ///
 /// Provides SQLite-based storage for CVE, CPE, EPSS, and KEV data.
-#[derive(Debug)]
+/// Uses async-safe mutex for concurrent access in async contexts.
+#[derive(Debug, Clone)]
 pub struct VulnDatabase {
-    conn: Connection,
+    conn: Arc<Mutex<Connection>>,
 }
 
 impl VulnDatabase {
@@ -29,14 +32,18 @@ impl VulnDatabase {
     pub fn open(path: &Path) -> Result<Self> {
         // Ensure parent directory exists
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| {
+            tokio::task::block_in_place(|| {
+                std::fs::create_dir_all(parent)
+            }).map_err(|e| {
                 VulnError::config(format!("Failed to create database directory: {e}"))
             })?;
         }
 
         let conn = Connection::open(path).map_err(VulnError::from)?;
 
-        let db = Self { conn };
+        let db = Self {
+            conn: Arc::new(Mutex::new(conn)),
+        };
         db.init_schema()?;
 
         Ok(db)
@@ -49,7 +56,9 @@ impl VulnDatabase {
     /// Returns an error if the database cannot be created.
     pub fn open_in_memory() -> Result<Self> {
         let conn = Connection::open_in_memory().map_err(VulnError::from)?;
-        let db = Self { conn };
+        let db = Self {
+            conn: Arc::new(Mutex::new(conn)),
+        };
         db.init_schema()?;
         Ok(db)
     }
@@ -114,8 +123,8 @@ impl VulnDatabase {
         ];
 
         for query in queries {
-            self.conn
-                .execute(query, [])
+            let conn = self.conn.blocking_lock();
+            conn.execute(query, [])
                 .map_err(|e| VulnError::database(format!("Failed to execute schema query: {e}")))?;
         }
 
@@ -129,7 +138,8 @@ impl VulnDatabase {
     ///
     /// Returns an error if the insert fails.
     pub fn insert_cve(&self, cve: &CveEntry) -> Result<()> {
-        self.conn.execute(
+        let conn = self.conn.blocking_lock();
+        conn.execute(
             "INSERT OR REPLACE INTO cve (id, description, cvss_v3_base, cvss_v3_vector, published_at, modified_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![
@@ -144,8 +154,8 @@ impl VulnDatabase {
 
         // Insert references
         for url in &cve.references {
-            self.conn
-                .execute(
+            let conn = self.conn.blocking_lock();
+            conn.execute(
                     "INSERT INTO cve_references (cve_id, url) VALUES (?1, ?2)",
                     params![cve.id, url],
                 )
@@ -161,7 +171,8 @@ impl VulnDatabase {
     ///
     /// Returns an error if the insert fails.
     pub fn insert_cpe_match(&self, cpe_match: &CpeMatch) -> Result<()> {
-        self.conn
+        let conn = self.conn.blocking_lock();
+        conn
             .execute(
                 "INSERT INTO cpe_match (cve_id, cpe_23_uri, version_start_excluding,
              version_end_excluding, version_start_including, version_end_including, vulnerable)
@@ -187,7 +198,8 @@ impl VulnDatabase {
     ///
     /// Returns an error if the insert fails.
     pub fn insert_epss(&self, epss: &EpssRecord) -> Result<()> {
-        self.conn
+        let conn = self.conn.blocking_lock();
+        conn
             .execute(
                 "INSERT OR REPLACE INTO epss (cve_id, epss_score, percentile, date)
              VALUES (?1, ?2, ?3, ?4)",
@@ -204,7 +216,8 @@ impl VulnDatabase {
     ///
     /// Returns an error if the insert fails.
     pub fn insert_kev(&self, kev: &KevEntry) -> Result<()> {
-        self.conn
+        let conn = self.conn.blocking_lock();
+        conn
             .execute(
                 "INSERT OR REPLACE INTO kev (cve_id, vendor_project, product, date_added,
              required_action, due_date, notes)
@@ -235,6 +248,7 @@ impl VulnDatabase {
     )]
     pub fn get_cve(&self, cve_id: &str) -> Result<Option<CveEntry>> {
         // Query main CVE data
+        let conn = self.conn.blocking_lock();
         let cve_data: Option<(
             String,
             String,
@@ -242,8 +256,7 @@ impl VulnDatabase {
             Option<String>,
             String,
             Option<String>,
-        )> = self
-            .conn
+        )> = conn
             .query_row(
                 "SELECT id, description, cvss_v3_base, cvss_v3_vector, published_at, modified_at
                  FROM cve WHERE id = ?1",
@@ -285,8 +298,7 @@ impl VulnDatabase {
             .map_err(|e| VulnError::database(format!("Failed to parse modified date: {e}")))?;
 
         // Get references
-        let mut ref_stmt = self
-            .conn
+        let mut ref_stmt = conn
             .prepare("SELECT url FROM cve_references WHERE cve_id = ?1")
             .map_err(|e| VulnError::database(format!("Failed to prepare reference query: {e}")))?;
 
@@ -313,8 +325,8 @@ impl VulnDatabase {
     ///
     /// Returns an error if the query fails.
     pub fn get_cpe_matches(&self, cve_id: &str) -> Result<Vec<CpeMatch>> {
-        let mut stmt = self
-            .conn
+        let conn = self.conn.blocking_lock();
+        let mut stmt = conn
             .prepare(
                 "SELECT cve_id, cpe_23_uri, version_start_excluding, version_end_excluding,
                     version_start_including, version_end_including, vulnerable
@@ -346,8 +358,8 @@ impl VulnDatabase {
     ///
     /// Returns an error if the query fails.
     pub fn get_epss(&self, cve_id: &str) -> Result<Option<EpssRecord>> {
-        let row = self
-            .conn
+        let conn = self.conn.blocking_lock();
+        let row = conn
             .query_row(
                 "SELECT cve_id, epss_score, percentile, date FROM epss WHERE cve_id = ?1",
                 params![cve_id],
@@ -372,7 +384,8 @@ impl VulnDatabase {
     ///
     /// Returns an error if the query fails.
     pub fn get_kev(&self, cve_id: &str) -> Result<Option<KevEntry>> {
-        let row = self.conn.query_row(
+        let conn = self.conn.blocking_lock();
+        let row = conn.query_row(
             "SELECT cve_id, vendor_project, product, date_added, required_action, due_date, notes
              FROM kev WHERE cve_id = ?1",
             params![cve_id],
@@ -405,7 +418,8 @@ impl VulnDatabase {
         // Use LIKE for pattern matching
         let pattern = cpe_pattern.replace('*', "%");
 
-        let mut stmt = self.conn.prepare(
+        let conn = self.conn.blocking_lock();
+        let mut stmt = conn.prepare(
             "SELECT c.id, c.description, c.cvss_v3_base, c.cvss_v3_vector, c.published_at, c.modified_at,
                     m.cpe_23_uri, m.version_start_excluding, m.version_end_excluding,
                     m.version_start_including, m.version_end_including, m.vulnerable
@@ -484,18 +498,22 @@ impl VulnDatabase {
     pub fn get_stats(&self) -> Result<DatabaseStats> {
         let cve_count: i64 = self
             .conn
+            .blocking_lock()
             .query_row("SELECT COUNT(*) FROM cve", [], |row| row.get(0))?;
 
         let cpe_match_count: i64 =
             self.conn
+                .blocking_lock()
                 .query_row("SELECT COUNT(*) FROM cpe_match", [], |row| row.get(0))?;
 
         let epss_count: i64 = self
             .conn
+            .blocking_lock()
             .query_row("SELECT COUNT(*) FROM epss", [], |row| row.get(0))?;
 
         let kev_count: i64 = self
             .conn
+            .blocking_lock()
             .query_row("SELECT COUNT(*) FROM kev", [], |row| row.get(0))?;
 
         Ok(DatabaseStats {
@@ -512,8 +530,8 @@ impl VulnDatabase {
     ///
     /// Returns an error if vacuum fails.
     pub fn vacuum(&self) -> Result<()> {
-        self.conn
-            .execute("VACUUM", [])
+        let conn = self.conn.blocking_lock();
+        conn.execute("VACUUM", [])
             .map_err(|e| VulnError::database(format!("Vacuum failed: {e}")))?;
         Ok(())
     }

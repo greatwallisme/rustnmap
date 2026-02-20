@@ -120,7 +120,7 @@ async fn test_syn_scan_high_ports() {
 /// Tests TCP Connect scan against configured target.
 ///
 /// This test does NOT require root privileges.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_connect_scan_target() {
     let ports = test_target_ports();
     let config = connect_scan_config(ports.clone());
@@ -154,7 +154,7 @@ async fn test_connect_scan_target() {
 ///
 /// This test does NOT require root privileges.
 /// Note: Port state depends on target configuration.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_connect_scan_high_ports() {
     // Use high ports that are likely closed
     let high_ports: Vec<u16> = vec![54321, 65432];
@@ -221,7 +221,7 @@ async fn test_syn_scan_mixed_ports() {
 ///
 /// This test does NOT require root privileges.
 /// Note: Port states depend on target configuration.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_connect_scan_mixed_ports() {
     let target_ports = test_target_ports();
     let high_ports: Vec<u16> = vec![54321, 65432];
@@ -281,7 +281,7 @@ async fn test_syn_scan_performance() {
 /// Benchmarks TCP Connect scan performance.
 ///
 /// This test does NOT require root privileges.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_connect_scan_performance() {
     let ports: Vec<u16> = (8000..8050).collect();
     let config = connect_scan_config(ports);

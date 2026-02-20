@@ -91,34 +91,10 @@ impl FtpBounceScanner {
     ///
     /// Returns an error if the FTP connection fails or communication errors occur.
     fn scan_port_impl(&self, target: &Target, port: Port) -> ScanResult<PortState> {
-        // Get target IP address
-        let target_addr = match target.ip {
-            rustnmap_common::IpAddr::V4(addr) => addr,
-            rustnmap_common::IpAddr::V6(_) => return Ok(PortState::Filtered),
-        };
-
-        // Establish FTP control connection
-        let mut ftp = self.connect_to_ftp()?;
-
-        // Read greeting
-        let _greeting = ftp.read_response(&target.ip.to_string(), port)?;
-
-        // Authenticate if credentials provided
-        self.authenticate(&mut ftp, &target.ip.to_string(), port)?;
-
-        // Send PORT command with target address
-        Self::send_port_command(&mut ftp, target_addr, port, &target.ip.to_string())?;
-
-        // Send LIST command to trigger data connection attempt
-        let response = ftp.send_command("LIST", &target.ip.to_string(), port)?;
-
-        // Determine port state from FTP response
-        let port_state = Self::parse_port_state(&response);
-
-        // Send QUIT to close gracefully
-        let _ = ftp.send_command("QUIT", &target.ip.to_string(), port);
-
-        Ok(port_state)
+        // Use block_in_place to yield to the async runtime during blocking FTP operations
+        tokio::task::block_in_place(|| {
+            self.scan_port_impl_blocking(target, port)
+        })
     }
 
     /// Connects to the FTP server.
@@ -261,6 +237,42 @@ impl FtpBounceScanner {
             // No meaningful response or timeout
             PortState::Filtered
         }
+    }
+
+    /// Blocking implementation of FTP bounce scan.
+    ///
+    /// This function performs the actual blocking FTP operations.
+    /// It is called directly when no multi-threaded runtime is available,
+    /// or from within `spawn_blocking` when in an async context.
+    fn scan_port_impl_blocking(&self, target: &Target, port: Port) -> ScanResult<PortState> {
+        // Get target IP address
+        let target_addr = match target.ip {
+            rustnmap_common::IpAddr::V4(addr) => addr,
+            rustnmap_common::IpAddr::V6(_) => return Ok(PortState::Filtered),
+        };
+
+        // Establish FTP control connection
+        let mut ftp = self.connect_to_ftp()?;
+
+        // Read greeting
+        let _greeting = ftp.read_response(&target.ip.to_string(), port)?;
+
+        // Authenticate if credentials provided
+        self.authenticate(&mut ftp, &target.ip.to_string(), port)?;
+
+        // Send PORT command with target address
+        Self::send_port_command(&mut ftp, target_addr, port, &target.ip.to_string())?;
+
+        // Send LIST command to trigger data connection attempt
+        let response = ftp.send_command("LIST", &target.ip.to_string(), port)?;
+
+        // Determine port state from FTP response
+        let port_state = Self::parse_port_state(&response);
+
+        // Send QUIT to close gracefully
+        let _ = ftp.send_command("QUIT", &target.ip.to_string(), port);
+
+        Ok(port_state)
     }
 }
 

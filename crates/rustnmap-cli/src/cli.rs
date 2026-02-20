@@ -506,31 +506,27 @@ fn parse_targets(args: &Args) -> Result<TargetGroup> {
 
     // Handle input file if specified
     if let Some(input_file) = &args.input_file {
-        match std::fs::read_to_string(input_file) {
-            Ok(content) => {
-                for line in content.lines() {
-                    let line = line.trim();
-                    if line.is_empty() || line.starts_with('#') {
-                        continue;
-                    }
-                    match parser.parse(line) {
-                        Ok(group) => {
-                            for target in group.targets {
-                                if !all_targets.iter().any(|t: &Target| t.ip == target.ip) {
-                                    all_targets.push(target);
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            warn!("Failed to parse target from file '{}': {}", line, e);
+        let content = tokio::task::block_in_place(|| {
+            std::fs::read_to_string(input_file)
+                .map_err(|e| rustnmap_common::Error::Other(format!("Failed to read input file: {e}")))
+        })?;
+
+        for line in content.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            match parser.parse(line) {
+                Ok(group) => {
+                    for target in group.targets {
+                        if !all_targets.iter().any(|t: &Target| t.ip == target.ip) {
+                            all_targets.push(target);
                         }
                     }
                 }
-            }
-            Err(e) => {
-                return Err(rustnmap_common::Error::Other(format!(
-                    "Failed to read input file: {e}"
-                )));
+                Err(e) => {
+                    warn!("Failed to parse target from file '{}': {}", line, e);
+                }
             }
         }
     }
@@ -1009,23 +1005,36 @@ fn write_all_formats(result: &ScanResult, basename: &std::path::Path, append: bo
     Ok(())
 }
 
+/// Opens a file for writing with async-friendly blocking I/O.
+///
+/// Uses `block_in_place` to avoid blocking the async runtime during file operations.
+///
+/// # Errors
+///
+/// Returns an error if the file cannot be opened or created.
+fn open_output_file(path: &std::path::Path, append: bool) -> Result<std::fs::File> {
+    use std::fs::File;
+
+    tokio::task::block_in_place(|| {
+        if append {
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+                .map_err(|e| rustnmap_common::Error::Other(format!("Failed to open output file: {e}")))
+        } else {
+            File::create(path).map_err(|e| {
+                rustnmap_common::Error::Other(format!("Failed to create output file: {e}"))
+            })
+        }
+    })
+}
+
 /// Writes normal format output to file.
 fn write_normal_output(result: &ScanResult, path: &std::path::Path, append: bool) -> Result<()> {
     use std::io::Write;
 
-    let mut file = if append {
-        std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)
-            .map_err(|e| {
-                rustnmap_common::Error::Other(format!("Failed to open output file: {e}"))
-            })?
-    } else {
-        std::fs::File::create(path).map_err(|e| {
-            rustnmap_common::Error::Other(format!("Failed to create output file: {e}"))
-        })?
-    };
+    let mut file = open_output_file(path, append)?;
 
     // Write header
     writeln!(
@@ -1095,19 +1104,7 @@ fn write_normal_output(result: &ScanResult, path: &std::path::Path, append: bool
 fn write_xml_output(result: &ScanResult, path: &std::path::Path, append: bool) -> Result<()> {
     use std::io::Write;
 
-    let mut file = if append {
-        std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)
-            .map_err(|e| {
-                rustnmap_common::Error::Other(format!("Failed to open output file: {e}"))
-            })?
-    } else {
-        std::fs::File::create(path).map_err(|e| {
-            rustnmap_common::Error::Other(format!("Failed to create output file: {e}"))
-        })?
-    };
+    let mut file = open_output_file(path, append)?;
 
     writeln!(file, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>")
         .map_err(|e| rustnmap_common::Error::Other(format!("Write error: {e}")))?;
@@ -1177,19 +1174,7 @@ fn write_xml_output(result: &ScanResult, path: &std::path::Path, append: bool) -
 fn write_grepable_output(result: &ScanResult, path: &std::path::Path, append: bool) -> Result<()> {
     use std::io::Write;
 
-    let mut file = if append {
-        std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)
-            .map_err(|e| {
-                rustnmap_common::Error::Other(format!("Failed to open output file: {e}"))
-            })?
-    } else {
-        std::fs::File::create(path).map_err(|e| {
-            rustnmap_common::Error::Other(format!("Failed to create output file: {e}"))
-        })?
-    };
+    let mut file = open_output_file(path, append)?;
 
     for host in &result.hosts {
         let status = match host.status {
@@ -1232,19 +1217,7 @@ fn write_ndjson_output(result: &ScanResult, path: &std::path::Path, append: bool
         .format_scan_result(result)
         .map_err(|e| rustnmap_common::Error::Other(format!("Failed to format NDJSON: {e}")))?;
 
-    let mut file = if append {
-        std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)
-            .map_err(|e| {
-                rustnmap_common::Error::Other(format!("Failed to open output file: {e}"))
-            })?
-    } else {
-        std::fs::File::create(path).map_err(|e| {
-            rustnmap_common::Error::Other(format!("Failed to create output file: {e}"))
-        })?
-    };
+    let mut file = open_output_file(path, append)?;
 
     file.write_all(output.as_bytes())
         .map_err(|e| rustnmap_common::Error::Other(format!("Write error: {e}")))?;
@@ -1262,19 +1235,7 @@ fn write_markdown_output(result: &ScanResult, path: &std::path::Path, append: bo
         .format_scan_result(result)
         .map_err(|e| rustnmap_common::Error::Other(format!("Failed to format Markdown: {e}")))?;
 
-    let mut file = if append {
-        std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)
-            .map_err(|e| {
-                rustnmap_common::Error::Other(format!("Failed to open output file: {e}"))
-            })?
-    } else {
-        std::fs::File::create(path).map_err(|e| {
-            rustnmap_common::Error::Other(format!("Failed to create output file: {e}"))
-        })?
-    };
+    let mut file = open_output_file(path, append)?;
 
     file.write_all(output.as_bytes())
         .map_err(|e| rustnmap_common::Error::Other(format!("Write error: {e}")))?;
@@ -1286,19 +1247,7 @@ fn write_markdown_output(result: &ScanResult, path: &std::path::Path, append: bo
 fn write_json_output(result: &ScanResult, path: &std::path::Path, append: bool) -> Result<()> {
     use std::io::Write;
 
-    let mut file = if append {
-        std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)
-            .map_err(|e| {
-                rustnmap_common::Error::Other(format!("Failed to open output file: {e}"))
-            })?
-    } else {
-        std::fs::File::create(path).map_err(|e| {
-            rustnmap_common::Error::Other(format!("Failed to create output file: {e}"))
-        })?
-    };
+    let mut file = open_output_file(path, append)?;
 
     // Simple JSON serialization
     writeln!(file, "{{").map_err(|e| rustnmap_common::Error::Other(format!("Write error: {e}")))?;

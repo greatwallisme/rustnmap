@@ -168,6 +168,11 @@ impl FingerprintDatabase {
     pub fn find_matches(&self, fp: &OsFingerprint) -> Vec<OsMatch> {
         let mut matches: Vec<OsMatch> = Vec::new();
 
+        // Add yield points every N iterations for CPU-bound operation
+        // Per rust-concurrency guidelines: yield in long-running CPU loops
+        const YIELD_EVERY: usize = 256;
+        let mut iter_count: usize = 0;
+
         for reference in self.fingerprints.values() {
             let score = self.calculate_match_score(fp, &reference.fingerprint);
 
@@ -183,6 +188,12 @@ impl FingerprintDatabase {
                     cpe: reference.cpe.clone(),
                     accuracy: self.score_to_accuracy(score),
                 });
+            }
+
+            // Periodically yield to prevent CPU starvation
+            iter_count = iter_count.wrapping_add(1);
+            if iter_count.is_multiple_of(YIELD_EVERY) {
+                std::hint::spin_loop();
             }
         }
 

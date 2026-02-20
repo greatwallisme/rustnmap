@@ -1,10 +1,10 @@
 ---
 name: rust-guidelines
-description: ALWAYS invoke this skill BEFORE writing or modifying ANY Rust code (.rs files) even for simple Hello World programs. Enforces Microsoft-style Rust development discipline and requires consulting the appropriate guideline files before any coding activity. This skill is MANDATORY for all Rust development.
+description: ALWAYS invoke this skill BEFORE writing or modifying ANY Rust code (.rs files) even for simple Hello World programs. Enforces Microsoft-style Rust development discipline, zero-tolerance quality standards (zero errors, zero warnings), and requires consulting the appropriate guideline files before any coding activity. This skill is MANDATORY for all Rust development.
 ---
 
 # Rust Development Skill
-This skill enforces structured, guideline-driven Rust development. It ensures all Rust code strictly follows the appropriate Microsoft-style rules, documentation formats, and quality constraints.
+This skill enforces structured, guideline-driven Rust development with zero-tolerance quality standards. It ensures all Rust code strictly follows the appropriate Microsoft-style rules, documentation formats, and quality constraints.
 
 
 ## Mandatory Workflow
@@ -20,6 +20,14 @@ This skill enforces structured, guideline-driven Rust development. It ensures al
 Before writing or modifying Rust code, **Claude must load ONLY the guideline files that apply to the requested task**, using segmented reading (`offset` and `limit`) when needed.
 
 ### Guidelines and when they apply
+
+#### 0. `00_quality_gates.md`
+**Read FIRST for ALL Rust tasks.** This file defines:
+- Zero Tolerance Policy: ALL code must pass with zero errors and zero warnings
+- NEVER rules: prohibited practices (unwrap, global allow, Cargo.toml changes)
+- ALWAYS rules: required standards (error handling, iterators, documentation)
+- Required lint configuration for Cargo.toml
+- Verification commands to run before claiming code is complete
 
 #### 1. `01_ai_guidelines.md`
 Use when the Rust code involves:
@@ -102,10 +110,12 @@ Use when:
 ## Coding Rules
 
 1. **Load the necessary guideline files BEFORE ANY RUST CODE GENERATION.**
-2. Apply the required rules from the relevant guidelines.
-3. Apply the *M-CANONICAL-DOCS* documentation format.
-5. Comments must ALWAYS be written in American English, unless the user explicitly requests ‘write comments in French’ or provides another clear instruction specifying a different comment language.
-6. If the file is fully compliant, add a comment: `// Rust guideline compliant {date}` where {date} is the guideline date or the date of the current day (format YYYY-MM-DD)
+2. **Always read `00_quality_gates.md` FIRST** for ALL Rust tasks.
+3. Apply the required rules from the relevant guidelines.
+4. Apply the *M-CANONICAL-DOCS* documentation format.
+5. For common anti-patterns, reference `references/anti_patterns.md` for BEFORE/AFTER examples.
+6. Comments must ALWAYS be written in American English, unless the user explicitly requests ‘write comments in French’ or provides another clear instruction specifying a different comment language.
+7. If the file is fully compliant, add a comment: `// Rust guideline compliant {date}` where {date} is the guideline date or the date of the current day (format YYYY-MM-DD)
 
 
 ---

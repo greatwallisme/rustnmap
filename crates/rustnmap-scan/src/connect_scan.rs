@@ -66,6 +66,31 @@ impl TcpConnectScanner {
             return PortState::Filtered;
         }
 
+        // Try to use spawn_blocking if in a multi-threaded tokio runtime context
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread {
+                // Clone data needed for the blocking operation
+                let target_clone = target.clone();
+                match handle.block_on(async {
+                    tokio::task::spawn_blocking(move || {
+                        Self::scan_port_impl_blocking_static(&target_clone, port, protocol)
+                    }).await
+                }) {
+                    Ok(state) => return state,
+                    Err(_) => return PortState::Filtered,
+                }
+            }
+        }
+
+        // No multi-threaded runtime, do blocking operation directly
+        self.scan_port_impl_blocking(target, port, protocol)
+    }
+
+    /// Blocking implementation of TCP connect scan.
+    ///
+    /// This function performs the actual blocking TCP connection.
+    /// It is called within `block_in_place` to avoid blocking the async runtime.
+    fn scan_port_impl_blocking(&self, target: &Target, port: Port, _protocol: Protocol) -> PortState {
         // Get target socket address
         let socket_addr = match target.ip {
             rustnmap_common::IpAddr::V4(addr) => SocketAddr::new(std::net::IpAddr::V4(addr), port),
@@ -94,6 +119,42 @@ impl TcpConnectScanner {
             }
             Err(_e) => {
                 // Other errors: treat as filtered
+                PortState::Filtered
+            }
+        }
+    }
+
+    /// Static version of blocking TCP connect scan for use with `spawn_blocking`.
+    ///
+    /// This is a standalone function that doesn't require `self`,
+    /// making it suitable for use with `spawn_blocking` which requires `Send + 'static` closures.
+    fn scan_port_impl_blocking_static(target: &Target, port: Port, _protocol: Protocol) -> PortState {
+        // Get target socket address
+        let socket_addr = match target.ip {
+            rustnmap_common::IpAddr::V4(addr) => SocketAddr::new(std::net::IpAddr::V4(addr), port),
+            rustnmap_common::IpAddr::V6(_) => return PortState::Filtered,
+        };
+
+        // Use default timeout for static version
+        let timeout = Duration::from_secs(10);
+
+        // Attempt connection with timeout
+        let result = std::net::TcpStream::connect_timeout(&socket_addr, timeout);
+
+        match result {
+            Ok(_stream) => {
+                PortState::Open
+            }
+            Err(e)
+                if e.kind() == std::io::ErrorKind::ConnectionRefused
+                    || e.kind() == std::io::ErrorKind::ConnectionReset =>
+            {
+                PortState::Closed
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {
+                PortState::Filtered
+            }
+            Err(_e) => {
                 PortState::Filtered
             }
         }

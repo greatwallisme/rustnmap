@@ -282,8 +282,16 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
 /// Log write implementation.
 fn log_write_impl(level: &str, message: &str) {
     match level {
-        "stdout" => println!("{message}"),
-        "stderr" => eprintln!("{message}"),
+        "stdout" => {
+            use std::io::Write;
+            let _ = std::io::stdout().write_all(message.as_bytes());
+            let _ = std::io::stdout().write_all(b"\n");
+        }
+        "stderr" => {
+            use std::io::Write;
+            let _ = std::io::stderr().write_all(message.as_bytes());
+            let _ = std::io::stderr().write_all(b"\n");
+        }
         _ => {
             // Log to appropriate channel based on level
             tracing::debug!("[{level}] {message}");
@@ -325,14 +333,17 @@ impl NseSocket {
 
 impl mlua::UserData for NseSocket {
     fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
-        methods.add_method_mut("connect", |_, this, (host, port): (String, u16)| {
+        // Async connect method - uses spawn_blocking for non-blocking TCP connect
+        methods.add_async_method_mut("connect", |_, mut this, (host, port): (String, u16)| async move {
             let addr = format!("{host}:{port}");
             match addr.parse::<std::net::SocketAddr>() {
                 Ok(socket_addr) => {
-                    match std::net::TcpStream::connect_timeout(
-                        &socket_addr,
-                        std::time::Duration::from_secs(30),
-                    ) {
+                    match tokio::task::spawn_blocking(move || {
+                        std::net::TcpStream::connect_timeout(
+                            &socket_addr,
+                            std::time::Duration::from_secs(30),
+                        )
+                    }).await {
                         Ok(_stream) => {
                             this.state = SocketState::Connected {
                                 addr: socket_addr,

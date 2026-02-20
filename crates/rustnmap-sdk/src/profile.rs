@@ -125,8 +125,10 @@ impl ScanProfile {
     ///
     /// Returns an error if the file cannot be read or the YAML is invalid.
     pub fn from_file<P: AsRef<Path>>(path: P) -> ScanResult<Self> {
-        let content = std::fs::read_to_string(path.as_ref())
-            .map_err(|e| ScanError::InternalError(e.into()))?;
+        let content = tokio::task::block_in_place(|| {
+            std::fs::read_to_string(path.as_ref())
+                .map_err(|e| ScanError::InternalError(e.into()))
+        })?;
 
         let profile: ScanProfile = serde_yaml::from_str(&content)
             .map_err(|e| ScanError::InvalidRequest(format!("Invalid YAML: {e}")))?;
@@ -143,7 +145,9 @@ impl ScanProfile {
         let content =
             serde_yaml::to_string(self).map_err(|e| ScanError::InternalError(e.into()))?;
 
-        std::fs::write(path.as_ref(), content).map_err(|e| ScanError::InternalError(e.into()))?;
+        tokio::task::block_in_place(|| {
+            std::fs::write(path.as_ref(), content).map_err(|e| ScanError::InternalError(e.into()))
+        })?;
 
         Ok(())
     }
@@ -288,7 +292,13 @@ impl ProfileManager {
         let mut profiles = Vec::new();
         for dir in dirs {
             if dir.exists() {
-                if let Ok(entries) = std::fs::read_dir(&dir) {
+                let entries = tokio::task::block_in_place(|| {
+                    std::fs::read_dir(&dir).map_err(|e| {
+                        ScanError::InvalidRequest(format!("Failed to read profile directory: {e}"))
+                    })
+                });
+
+                if let Ok(entries) = entries {
                     for entry in entries.flatten() {
                         if let Some(name) = entry.file_name().to_str() {
                             if std::path::Path::new(name)

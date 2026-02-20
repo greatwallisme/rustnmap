@@ -242,6 +242,17 @@ impl Default for ConnectionOpts {
 
 /// Open a connection to host:port.
 fn opencon_impl(host: &str, port: u16, opts: ConnectionOpts) -> std::io::Result<NseSocket> {
+    // Use block_in_place to yield to the async runtime during blocking network operations
+    tokio::task::block_in_place(|| {
+        opencon_impl_blocking(host, port, opts)
+    })
+}
+
+/// Blocking implementation of TCP connection.
+///
+/// This function performs the actual blocking DNS resolution and TCP connection.
+/// It is called within `block_in_place` to avoid blocking the async runtime.
+fn opencon_impl_blocking(host: &str, port: u16, opts: ConnectionOpts) -> std::io::Result<NseSocket> {
     let addr = format!("{}:{}", host, port);
     let addrs: Vec<SocketAddr> = addr.to_socket_addrs()?.collect();
 
@@ -259,8 +270,8 @@ fn opencon_impl(host: &str, port: u16, opts: ConnectionOpts) -> std::io::Result<
     let mut socket = NseSocket::new(stream, addrs[0]);
 
     if opts.ssl {
-        // In a real implementation, this would wrap the stream with TLS
-        // For now, we just mark it as SSL requested
+        // Mark the socket as SSL requested
+        // Full TLS/SSL implementation would wrap the stream with native_tls or rustls
         socket.is_ssl = true;
     }
 

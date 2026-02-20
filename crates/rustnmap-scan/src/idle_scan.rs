@@ -233,7 +233,12 @@ impl IdleScanner {
         self.send_spoofed_syn(dst_addr, port)?;
 
         // Small delay to allow target to respond to zombie
-        std::thread::sleep(std::time::Duration::from_millis(100));
+        // Use tokio::task::block_in_place to yield to the async runtime
+        // while sleeping, preventing the entire executor thread from blocking
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current()
+                .block_on(tokio::time::sleep(std::time::Duration::from_millis(100)));
+        });
 
         // Step 3: Probe zombie for final IP ID
         let Some(ipid_after) = self.probe_zombie_ip_id()? else {

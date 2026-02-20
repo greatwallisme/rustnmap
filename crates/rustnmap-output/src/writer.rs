@@ -150,6 +150,17 @@ impl OutputManager {
 
     /// Write data to a file.
     fn write_to_file(path: &Path, data: &str) -> Result<()> {
+        // Use block_in_place to yield to async runtime during file I/O
+        tokio::task::block_in_place(|| {
+            Self::write_to_file_blocking(path, data)
+        })
+    }
+
+    /// Blocking implementation of file writing.
+    ///
+    /// This function performs the actual blocking file system operations.
+    /// It is called within `block_in_place` to avoid blocking the async runtime.
+    fn write_to_file_blocking(path: &Path, data: &str) -> Result<()> {
         // Ensure parent directory exists
         if let Some(parent) = path.parent() {
             if !parent.as_os_str().is_empty() {

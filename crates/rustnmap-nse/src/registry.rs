@@ -71,6 +71,17 @@ impl ScriptDatabase {
 
     /// Load all scripts from a directory recursively.
     fn load_directory(&mut self, dir: &Path) -> Result<()> {
+        // Use block_in_place to yield to async runtime during directory traversal
+        tokio::task::block_in_place(|| {
+            self.load_directory_blocking(dir)
+        })
+    }
+
+    /// Blocking implementation of directory loading.
+    ///
+    /// This function performs the actual blocking file system operations.
+    /// It is called within `block_in_place` to avoid blocking the async runtime.
+    fn load_directory_blocking(&mut self, dir: &Path) -> Result<()> {
         let entries = std::fs::read_dir(dir)
             .map_err(|e| Error::ScriptLoadError(dir.display().to_string(), e))?;
 
@@ -93,6 +104,17 @@ impl ScriptDatabase {
 
     /// Load a single script file.
     fn load_script(&mut self, path: &Path) -> Result<()> {
+        // Use block_in_place to yield to async runtime during file read
+        tokio::task::block_in_place(|| {
+            self.load_script_blocking(path)
+        })
+    }
+
+    /// Blocking implementation of script file loading.
+    ///
+    /// This function performs the actual blocking file read operation.
+    /// It is called within `block_in_place` to avoid blocking the async runtime.
+    fn load_script_blocking(&mut self, path: &Path) -> Result<()> {
         let source = std::fs::read_to_string(path)
             .map_err(|e| Error::ScriptLoadError(path.display().to_string(), e))?;
 

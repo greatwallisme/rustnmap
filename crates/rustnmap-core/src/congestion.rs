@@ -4,10 +4,11 @@
 //! packet loss detection, and adaptive rate limiting for efficient scanning.
 
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 
 use rustnmap_evasion::TimingTemplate;
+use tokio::sync::Mutex;
 use tracing::{debug, trace};
 
 /// Statistics for congestion control decisions.
@@ -24,7 +25,7 @@ pub struct CongestionStats {
     /// RTT variance in microseconds.
     rttvar_micros: AtomicU64,
     /// Last congestion window update time.
-    last_update: Mutex<Option<Instant>>,
+    last_update: StdMutex<Option<Instant>>,
 }
 
 impl CongestionStats {
@@ -37,7 +38,7 @@ impl CongestionStats {
             retransmissions: AtomicU64::new(0),
             rtt_micros: AtomicU64::new(100_000), // 100ms default
             rttvar_micros: AtomicU64::new(50_000), // 50ms default
-            last_update: Mutex::new(None),
+            last_update: StdMutex::new(None),
         }
     }
 
@@ -69,10 +70,17 @@ impl CongestionStats {
     /// This function may panic if the internal lock is poisoned.
     #[expect(clippy::cast_possible_truncation, reason = "RTT in micros fits in u64")]
     pub fn update_rtt(&self, rtt: Duration) {
+        const MAX_SPIN: u32 = 32;
+        const YIELD_THRESHOLD: u32 = 100;
+
         debug_assert!(!rtt.is_zero(), "RTT should never be zero");
         debug_assert!(rtt.as_secs() < 300, "RTT should be less than 5 minutes");
 
         let rtt_micros = rtt.as_micros() as u64;
+
+        // Use exponential backoff for spin loop to avoid CPU starvation
+        // Per rust-concurrency guidelines: avoid unconditional spin loops
+        let mut spin_count: u32 = 0;
 
         loop {
             let old_srtt = self.rtt_micros.load(Ordering::Relaxed);
@@ -99,6 +107,18 @@ impl CongestionStats {
                 *self.last_update.lock().unwrap() = Some(Instant::now());
                 trace!(srtt = clamped_srtt, rttvar = clamped_rttvar, "RTT updated");
                 break;
+            }
+
+            // Exponential backoff: spin hint for MAX_SPIN iterations, then yield
+            spin_count = spin_count.saturating_add(1);
+            if spin_count < MAX_SPIN {
+                std::hint::spin_loop();
+            } else {
+                std::thread::yield_now();
+                // Reset after yield to allow future CAS attempts
+                if spin_count > YIELD_THRESHOLD {
+                    spin_count = 0;
+                }
             }
         }
     }
@@ -161,7 +181,7 @@ pub struct CongestionController {
     /// Timing template for base rates.
     timing_template: TimingTemplate,
     /// Last time congestion was detected.
-    last_congestion: Mutex<Option<Instant>>,
+    last_congestion: StdMutex<Option<Instant>>,
 }
 
 impl CongestionController {
@@ -184,7 +204,7 @@ impl CongestionController {
             max_cwnd: max_parallel,
             ssthresh: AtomicUsize::new(max_parallel / 2),
             timing_template,
-            last_congestion: Mutex::new(None),
+            last_congestion: StdMutex::new(None),
         }
     }
 
@@ -425,7 +445,7 @@ pub struct RateLimiter {
     /// Packets sent in current window.
     window_count: AtomicU64,
     /// Window start time.
-    window_start: Mutex<Instant>,
+    window_start: StdMutex<Instant>,
     /// Window size for rate measurement.
     window_size: Duration,
 }
@@ -443,7 +463,7 @@ impl RateLimiter {
             min_rate,
             max_rate,
             window_count: AtomicU64::new(0),
-            window_start: Mutex::new(Instant::now()),
+            window_start: StdMutex::new(Instant::now()),
             window_size: Duration::from_secs(1),
         }
     }
@@ -618,13 +638,13 @@ impl AdaptiveTiming {
 
         // Apply recommended delay from congestion controller
         let congestion_delay = self.congestion.recommended_delay();
-        let elapsed = self.last_probe.lock().unwrap().elapsed();
+        let elapsed = self.last_probe.lock().await.elapsed();
 
         if congestion_delay > elapsed {
             tokio::time::sleep(congestion_delay - elapsed).await;
         }
 
-        *self.last_probe.lock().unwrap() = Instant::now();
+        *self.last_probe.lock().await = Instant::now();
         self.rate_limiter.record_sent();
         self.congestion.on_packet_sent();
 

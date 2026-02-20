@@ -48,7 +48,9 @@ impl ScanDatabase {
 
         // Ensure parent directory exists
         if let Some(parent) = Path::new(&path).parent() {
-            std::fs::create_dir_all(parent)?;
+            tokio::task::block_in_place(|| {
+                std::fs::create_dir_all(parent)
+            })?;
         }
 
         let flags = OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE;

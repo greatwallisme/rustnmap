@@ -16,6 +16,10 @@ categories = ["network-programming", "os::linux-apis"]
 rustnmap-common = { path = "../rustnmap-common" }
 bytes = { workspace = true }
 tokio = { workspace = true }
+libc = "0.2"
+memmap2 = "0.9"
+socket2 = "0.5"
+thiserror = "2.0"
 
 [lints]
 workspace = true

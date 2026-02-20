@@ -1,5 +1,7 @@
 # Universal Guidelines
 
+**Prerequisite:** Before applying these guidelines, read `00_quality_gates.md` for zero-tolerance quality standards that apply to ALL Rust code.
+
 
 
 ## Names are Free of Weasel Words (M-CONCISE-NAMES) { #M-CONCISE-NAMES }

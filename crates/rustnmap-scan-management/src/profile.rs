@@ -122,8 +122,14 @@ fn default_true() -> bool {
 
 impl ScanProfile {
     /// Load profile from file.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file cannot be read or the YAML is invalid.
     pub fn from_file(path: &Path) -> Result<Self> {
-        let content = fs::read_to_string(path)?;
+        let content = tokio::task::block_in_place(|| {
+            fs::read_to_string(path).map_err(ScanManagementError::from)
+        })?;
         Self::from_yaml(&content)
     }
 
@@ -134,9 +140,15 @@ impl ScanProfile {
     }
 
     /// Save profile to file.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file cannot be written or the profile cannot be serialized.
     pub fn save(&self, path: &Path) -> Result<()> {
         let yaml = serde_yaml::to_string(self)?;
-        fs::write(path, yaml)?;
+        tokio::task::block_in_place(|| {
+            fs::write(path, yaml).map_err(ScanManagementError::from)
+        })?;
         Ok(())
     }
 
@@ -237,14 +249,22 @@ impl ProfileManager {
     }
 
     /// Create from profile directory.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the directory cannot be read or profiles cannot be loaded.
     pub fn from_directory(path: &str) -> Result<Self> {
         let mut manager = Self::new();
         manager.profile_dir = Some(path.to_string());
 
         let dir_path = Path::new(path);
         if dir_path.exists() {
-            for entry in fs::read_dir(dir_path)? {
-                let entry = entry?;
+            let entries = tokio::task::block_in_place(|| {
+                fs::read_dir(dir_path).map_err(ScanManagementError::from)
+            })?;
+
+            for entry in entries {
+                let entry = entry.map_err(ScanManagementError::from)?;
                 let path = entry.path();
                 if path
                     .extension()

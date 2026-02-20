@@ -707,10 +707,11 @@ impl ResumeStore {
     /// # Errors
     ///
     /// Returns an error if the state cannot be serialized or written.
-    pub fn save(&self, state: &ResumeState) -> Result<()> {
+    pub async fn save(&self, state: &ResumeState) -> Result<()> {
         let json = serde_json::to_string_pretty(state)
             .map_err(|e| CoreError::config(format!("Failed to serialize resume state: {e}")))?;
-        std::fs::write(&self.path, &json)
+        tokio::fs::write(&self.path, &json)
+            .await
             .map_err(|e| CoreError::config(format!("Failed to write resume file: {e}")))?;
         Ok(())
     }
@@ -720,11 +721,15 @@ impl ResumeStore {
     /// # Errors
     ///
     /// Returns an error if the state cannot be read or deserialized.
-    pub fn load(&self) -> Result<Option<ResumeState>> {
-        if !self.path.exists() {
+    pub async fn load(&self) -> Result<Option<ResumeState>> {
+        if !tokio::fs::try_exists(&self.path)
+            .await
+            .map_err(|e| CoreError::config(format!("Failed to check resume file: {e}")))?
+        {
             return Ok(None);
         }
-        let json = std::fs::read_to_string(&self.path)
+        let json = tokio::fs::read_to_string(&self.path)
+            .await
             .map_err(|e| CoreError::config(format!("Failed to read resume file: {e}")))?;
         let state = serde_json::from_str(&json)
             .map_err(|e| CoreError::config(format!("Failed to deserialize resume state: {e}")))?;
@@ -736,9 +741,13 @@ impl ResumeStore {
     /// # Errors
     ///
     /// Returns an error if the file cannot be removed.
-    pub fn cleanup(&self) -> Result<()> {
-        if self.path.exists() {
-            std::fs::remove_file(&self.path)
+    pub async fn cleanup(&self) -> Result<()> {
+        if tokio::fs::try_exists(&self.path)
+            .await
+            .map_err(|e| CoreError::config(format!("Failed to check resume file: {e}")))?
+        {
+            tokio::fs::remove_file(&self.path)
+                .await
                 .map_err(|e| CoreError::config(format!("Failed to remove resume file: {e}")))?;
         }
         Ok(())
