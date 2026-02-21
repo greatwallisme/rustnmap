@@ -32,6 +32,7 @@ fn test_config() -> ScanConfig {
         max_retries: 1,
         host_timeout: 900_000,
         scan_delay: Duration::ZERO,
+        dns_server: rustnmap_common::DEFAULT_DNS_SERVER.to_string(),
     }
 }
 

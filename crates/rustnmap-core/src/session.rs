@@ -173,6 +173,8 @@ pub struct ScanConfig {
     pub two_phase_scan: bool,
     /// First phase port list for fast discovery (used in two-phase mode).
     pub first_phase_ports: Vec<u16>,
+    /// DNS server address for local IP detection (default: 8.8.8.8:53).
+    pub dns_server: String,
 }
 
 impl Default for ScanConfig {
@@ -204,6 +206,7 @@ impl Default for ScanConfig {
             first_phase_ports: vec![
                 21, 22, 23, 25, 80, 110, 143, 443, 993, 995, 3306, 3389, 5432, 8080,
             ],
+            dns_server: rustnmap_common::DEFAULT_DNS_SERVER.to_string(),
         }
     }
 }

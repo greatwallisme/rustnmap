@@ -20,6 +20,13 @@ pub use types::{MacAddr, Port, PortList, PortRange, PortSelector, PortState, Pro
 // Re-export std types for convenience
 pub use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 
+/// Default DNS server used for local IP address detection.
+///
+/// This is Google's public DNS server (8.8.8.8:53), used to determine
+/// the local IP address by creating a UDP socket connection (no data sent).
+/// Users in different regions may override this via the `--dns-server` CLI option.
+pub const DEFAULT_DNS_SERVER: &str = "8.8.8.8:53";
+
 /// Common timeout values used throughout `RustNmap`.
 ///
 /// These values are based on Nmap's defaults and represent reasonable

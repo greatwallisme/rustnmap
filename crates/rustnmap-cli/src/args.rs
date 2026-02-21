@@ -624,6 +624,15 @@ pub struct Args {
         default_value = "~/.rustnmap"
     )]
     pub datadir: String,
+
+    /// DNS server for local IP detection (default: 8.8.8.8:53)
+    #[arg(
+        long,
+        help_heading = "Scan Management",
+        value_name = "ADDRESS",
+        default_value = "8.8.8.8:53"
+    )]
+    pub dns_server: String,
 }
 
 impl Args {

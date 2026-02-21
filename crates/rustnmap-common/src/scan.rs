@@ -24,6 +24,8 @@ pub struct ScanConfig {
     pub host_timeout: u64,
     /// Scan delay between probes.
     pub scan_delay: Duration,
+    /// DNS server address for local IP detection (default: 8.8.8.8:53).
+    pub dns_server: String,
 }
 
 impl Default for ScanConfig {
@@ -35,6 +37,7 @@ impl Default for ScanConfig {
             max_retries: 2,
             host_timeout: 900_000,
             scan_delay: Duration::ZERO,
+            dns_server: crate::DEFAULT_DNS_SERVER.to_string(),
         }
     }
 }
@@ -59,7 +62,7 @@ pub enum TimingTemplate {
 impl TimingTemplate {
     /// Returns the timing parameters for this template.
     #[must_use]
-    pub const fn scan_config(&self) -> ScanConfig {
+    pub fn scan_config(&self) -> ScanConfig {
         match self {
             Self::Paranoid => ScanConfig {
                 min_rtt: Duration::from_millis(100),
@@ -68,6 +71,7 @@ impl TimingTemplate {
                 max_retries: 10,
                 host_timeout: 900_000,
                 scan_delay: Duration::from_millis(500),
+                ..Default::default()
             },
             Self::Sneaky => ScanConfig {
                 min_rtt: Duration::from_millis(100),
@@ -76,6 +80,7 @@ impl TimingTemplate {
                 max_retries: 8,
                 host_timeout: 900_000,
                 scan_delay: Duration::from_millis(400),
+                ..Default::default()
             },
             Self::Polite => ScanConfig {
                 min_rtt: Duration::from_millis(100),
@@ -84,6 +89,7 @@ impl TimingTemplate {
                 max_retries: 6,
                 host_timeout: 900_000,
                 scan_delay: Duration::from_millis(100),
+                ..Default::default()
             },
             Self::Normal => ScanConfig {
                 min_rtt: Duration::from_millis(50),
@@ -92,6 +98,7 @@ impl TimingTemplate {
                 max_retries: 2,
                 host_timeout: 900_000,
                 scan_delay: Duration::ZERO,
+                ..Default::default()
             },
             Self::Aggressive => ScanConfig {
                 min_rtt: Duration::from_millis(20),
@@ -100,6 +107,7 @@ impl TimingTemplate {
                 max_retries: 1,
                 host_timeout: 900_000,
                 scan_delay: Duration::ZERO,
+                ..Default::default()
             },
             Self::Insane => ScanConfig {
                 min_rtt: Duration::from_millis(5),
@@ -108,6 +116,7 @@ impl TimingTemplate {
                 max_retries: 0,
                 host_timeout: 300_000,
                 scan_delay: Duration::ZERO,
+                ..Default::default()
             },
         }
     }

@@ -592,6 +592,9 @@ fn build_scan_config_from_profile(
         };
     }
 
+    // DNS server from CLI args
+    config.dns_server = args.dns_server.clone();
+
     config
 }
 
@@ -762,6 +765,9 @@ fn build_scan_config(args: &Args) -> Result<ScanConfig> {
 
     // Evasion configuration (--decoys, --spoof-ip, --fragment-mtu, --source-port)
     config.evasion_config = build_evasion_config(args)?;
+
+    // DNS server for local IP detection
+    config.dns_server = args.dns_server.clone();
 
     Ok(config)
 }

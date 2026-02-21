@@ -32,14 +32,14 @@ use crate::scheduler::{ScheduledTask, TaskPriority, TaskScheduler};
 use crate::session::{ScanConfig, ScanSession, ScanType};
 use crate::state::{HostState, PortScanState, ScanProgress};
 
-/// Get the local IPv4 address by creating a UDP socket to an external address.
+/// Gets the local IPv4 address by creating a UDP socket to an external address.
+///
 /// This returns the source IP that would be used for packets to the internet.
-fn get_local_address() -> std::net::Ipv4Addr {
-    // Try to connect to a public DNS server (8.8.8.8) to determine local IP
-    // This doesn't actually send any data, just determines the route
+/// The DNS server address is used to determine the route (no data is sent).
+fn get_local_address(dns_server: &str) -> std::net::Ipv4Addr {
     let socket = std::net::UdpSocket::bind("0.0.0.0:0");
     if let Ok(sock) = socket {
-        if sock.connect("8.8.8.8:53").is_ok() {
+        if sock.connect(dns_server).is_ok() {
             if let Ok(local_addr) = sock.local_addr() {
                 debug!(local_addr = %local_addr, "Socket local_addr after connect");
                 if let IpAddr::V4(ipv4) = local_addr.ip() {
@@ -430,6 +430,7 @@ impl ScanOrchestrator {
                             .try_into()
                             .unwrap_or(30000),
                         scan_delay: session.config.scan_delay,
+                        dns_server: session.config.dns_server.clone(),
                     };
                     let discovery = HostDiscovery::new(discovery_config);
 
@@ -673,10 +674,11 @@ impl ScanOrchestrator {
                 .try_into()
                 .unwrap_or(30000),
             scan_delay: self.session.config.scan_delay,
+            dns_server: self.session.config.dns_server.clone(),
         };
 
         // Get local address for the scanner by detecting the source IP for the target
-        let local_addr = get_local_address();
+        let local_addr = get_local_address(&self.session.config.dns_server);
         debug!(local_addr = %local_addr, "Using local address for scanner");
 
         // Get target IP address

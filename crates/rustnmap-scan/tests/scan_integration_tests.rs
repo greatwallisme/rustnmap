@@ -30,6 +30,7 @@ fn test_config() -> ScanConfig {
         max_retries: 1,
         host_timeout: 900_000,
         scan_delay: Duration::ZERO,
+        ..Default::default()
     }
 }
 
@@ -361,6 +362,7 @@ fn test_scan_timeout() {
         max_retries: 0,
         host_timeout: 900_000,
         scan_delay: Duration::ZERO,
+        ..Default::default()
     };
 
     let scanner = rustnmap_scan::connect_scan::TcpConnectScanner::new(None, config);
@@ -456,6 +458,7 @@ fn test_scanner_error_handling() {
         max_retries: 0,
         host_timeout: 1000,
         scan_delay: Duration::ZERO,
+        ..Default::default()
     };
 
     let scanner = rustnmap_scan::connect_scan::TcpConnectScanner::new(None, config);

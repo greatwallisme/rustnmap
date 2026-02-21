@@ -1791,13 +1791,14 @@ impl HostDiscovery {
         Self { config, retries: 2 }
     }
 
-    /// Detects the local IPv4 address by connecting to a public DNS server.
+    /// Detects the local IPv4 address by connecting to a DNS server.
     ///
     /// This doesn't actually send any data, just determines the route.
-    fn get_local_ipv4_address() -> Ipv4Addr {
+    /// Uses the DNS server from the configuration.
+    fn get_local_ipv4_address(&self) -> Ipv4Addr {
         let socket = std::net::UdpSocket::bind("0.0.0.0:0");
         if let Ok(sock) = socket {
-            if sock.connect("8.8.8.8:53").is_ok() {
+            if sock.connect(&self.config.dns_server).is_ok() {
                 if let Ok(local_addr) = sock.local_addr() {
                     if let std::net::IpAddr::V4(ipv4) = local_addr.ip() {
                         return ipv4;
@@ -1825,7 +1826,7 @@ impl HostDiscovery {
     /// Returns an error if the discovery cannot be performed due to network
     /// issues or permissions.
     pub fn discover_tcp_ping(&self, target: &Target) -> Result<HostState, ScanError> {
-        let local_addr = Self::get_local_ipv4_address();
+        let local_addr = self.get_local_ipv4_address();
         let timeout = self.config.initial_rtt;
         let ports = vec![80, 443, 22];
 
@@ -1858,7 +1859,7 @@ impl HostDiscovery {
     /// Returns an error if the discovery cannot be performed due to network
     /// issues or permissions.
     pub fn discover_icmp(&self, target: &Target) -> Result<HostState, ScanError> {
-        let local_addr = Self::get_local_ipv4_address();
+        let local_addr = self.get_local_ipv4_address();
         let timeout = self.config.initial_rtt;
 
         let icmp_ping = IcmpPing::new(local_addr, timeout, self.retries)?;
@@ -1891,7 +1892,7 @@ impl HostDiscovery {
     /// issues or permissions.
     pub fn discover_arp(&self, target: &Target) -> Result<HostState, ScanError> {
         let src_mac = MacAddr::broadcast();
-        let src_ip = Self::get_local_ipv4_address();
+        let src_ip = self.get_local_ipv4_address();
         let timeout = self.config.initial_rtt;
 
         let arp_ping = ArpPing::new(src_mac, src_ip, timeout, self.retries)?;
