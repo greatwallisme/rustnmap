@@ -155,7 +155,9 @@ impl TcpSynPing {
             .recv_packet(recv_buf.as_mut_slice(), Some(self.timeout))
         {
             Ok(len) if len > 0 => {
-                if let Some((flags, _seq, ack, src_port)) = parse_tcp_response(&recv_buf[..len]) {
+                if let Some((flags, _seq, ack, src_port, _src_ip)) =
+                    parse_tcp_response(&recv_buf[..len])
+                {
                     if src_port != dst_port {
                         return Ok(false);
                     }
@@ -329,7 +331,9 @@ impl TcpAckPing {
             .recv_packet(recv_buf.as_mut_slice(), Some(self.timeout))
         {
             Ok(len) if len > 0 => {
-                if let Some((flags, _seq, _ack, src_port)) = parse_tcp_response(&recv_buf[..len]) {
+                if let Some((flags, _seq, _ack, src_port, _src_ip)) =
+                    parse_tcp_response(&recv_buf[..len])
+                {
                     if src_port != dst_port {
                         return Ok(false);
                     }
@@ -1787,6 +1791,23 @@ impl HostDiscovery {
         Self { config, retries: 2 }
     }
 
+    /// Detects the local IPv4 address by connecting to a public DNS server.
+    ///
+    /// This doesn't actually send any data, just determines the route.
+    fn get_local_ipv4_address() -> Ipv4Addr {
+        let socket = std::net::UdpSocket::bind("0.0.0.0:0");
+        if let Ok(sock) = socket {
+            if sock.connect("8.8.8.8:53").is_ok() {
+                if let Ok(local_addr) = sock.local_addr() {
+                    if let std::net::IpAddr::V4(ipv4) = local_addr.ip() {
+                        return ipv4;
+                    }
+                }
+            }
+        }
+        Ipv4Addr::UNSPECIFIED
+    }
+
     /// Discovers if a host is up using TCP ping.
     ///
     /// Sends a TCP ACK or SYN probe to well-known ports.
@@ -1804,7 +1825,7 @@ impl HostDiscovery {
     /// Returns an error if the discovery cannot be performed due to network
     /// issues or permissions.
     pub fn discover_tcp_ping(&self, target: &Target) -> Result<HostState, ScanError> {
-        let local_addr = Ipv4Addr::UNSPECIFIED;
+        let local_addr = Self::get_local_ipv4_address();
         let timeout = self.config.initial_rtt;
         let ports = vec![80, 443, 22];
 
@@ -1837,7 +1858,7 @@ impl HostDiscovery {
     /// Returns an error if the discovery cannot be performed due to network
     /// issues or permissions.
     pub fn discover_icmp(&self, target: &Target) -> Result<HostState, ScanError> {
-        let local_addr = Ipv4Addr::UNSPECIFIED;
+        let local_addr = Self::get_local_ipv4_address();
         let timeout = self.config.initial_rtt;
 
         let icmp_ping = IcmpPing::new(local_addr, timeout, self.retries)?;
@@ -1870,7 +1891,7 @@ impl HostDiscovery {
     /// issues or permissions.
     pub fn discover_arp(&self, target: &Target) -> Result<HostState, ScanError> {
         let src_mac = MacAddr::broadcast();
-        let src_ip = Ipv4Addr::UNSPECIFIED;
+        let src_ip = Self::get_local_ipv4_address();
         let timeout = self.config.initial_rtt;
 
         let arp_ping = ArpPing::new(src_mac, src_ip, timeout, self.retries)?;

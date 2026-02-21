@@ -180,7 +180,8 @@ impl ScanDiff {
                             .as_ref()
                             .map(|s| s.name.clone())
                             .unwrap_or_default();
-                        service_changed.push(PortChange::from_service_change(after_port, &before_svc));
+                        service_changed
+                            .push(PortChange::from_service_change(after_port, &before_svc));
                     }
                 } else {
                     added.push(PortChange::from_port(after_port));

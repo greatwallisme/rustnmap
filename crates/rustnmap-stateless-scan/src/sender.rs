@@ -201,7 +201,16 @@ impl StatelessSender {
         self.build_ip_header(&mut packet, target)?;
 
         // Build TCP header with checksum
-        Self::build_tcp_header(&mut packet, source_ip, dest_ip, source_port, dest_port, seq, true, false);
+        Self::build_tcp_header(
+            &mut packet,
+            source_ip,
+            dest_ip,
+            source_port,
+            dest_port,
+            seq,
+            true,
+            false,
+        );
 
         Ok(PacketBuffer::from_data(packet))
     }
@@ -229,7 +238,16 @@ impl StatelessSender {
         };
 
         self.build_ip_header(&mut packet, target)?;
-        Self::build_tcp_header(&mut packet, source_ip, dest_ip, source_port, dest_port, seq, false, true);
+        Self::build_tcp_header(
+            &mut packet,
+            source_ip,
+            dest_ip,
+            source_port,
+            dest_port,
+            seq,
+            false,
+            true,
+        );
 
         Ok(PacketBuffer::from_data(packet))
     }
@@ -303,7 +321,10 @@ impl StatelessSender {
             sum = (sum & 0xFFFF) + (sum >> 16);
         }
 
-        #[expect(clippy::cast_possible_truncation, reason = "Checksum algorithm truncation")]
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "Checksum algorithm truncation"
+        )]
         !(sum as u16)
     }
 
@@ -319,7 +340,10 @@ impl StatelessSender {
     /// * `seq` - Sequence number
     /// * `syn` - SYN flag
     /// * `rst` - RST flag
-    #[expect(clippy::too_many_arguments, reason = "TCP header requires all these fields")]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "TCP header requires all these fields"
+    )]
     fn build_tcp_header(
         packet: &mut [u8],
         source_ip: std::net::Ipv4Addr,
@@ -361,7 +385,11 @@ impl StatelessSender {
     }
 
     /// Calculate TCP checksum with pseudo-header.
-    fn calculate_tcp_checksum(src_ip: std::net::Ipv4Addr, dst_ip: std::net::Ipv4Addr, tcp_segment: &[u8]) -> u16 {
+    fn calculate_tcp_checksum(
+        src_ip: std::net::Ipv4Addr,
+        dst_ip: std::net::Ipv4Addr,
+        tcp_segment: &[u8],
+    ) -> u16 {
         let mut sum = 0u32;
 
         // Pseudo-header: source IP
@@ -391,7 +419,10 @@ impl StatelessSender {
             sum = (sum & 0xFFFF) + (sum >> 16);
         }
 
-        #[expect(clippy::cast_possible_truncation, reason = "Checksum algorithm truncation")]
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "Checksum algorithm truncation"
+        )]
         !(sum as u16)
     }
 }

@@ -147,67 +147,85 @@ impl TcpSynScanner {
                 ))
             })?;
 
-        // Wait for response with timeout
+        // Wait for response with timeout, looping until we get a valid response or timeout
+        let total_timeout = self.config.initial_rtt;
+        let start_time = std::time::Instant::now();
         let mut recv_buf = vec![0u8; 65535];
-        let timeout = self.config.initial_rtt;
 
-        match self
-            .socket
-            .recv_packet(recv_buf.as_mut_slice(), Some(timeout))
-        {
-            Ok(len) if len > 0 => {
-                // Parse the response
-                if let Some((flags, _seq, ack, src_port)) = parse_tcp_response(&recv_buf[..len]) {
-                    // Verify this is a response to our probe
-                    if src_port != dst_port {
-                        // Response from wrong port, treat as filtered
-                        return Ok(PortState::Filtered);
-                    }
-
-                    // Check if ACK matches our sequence number + 1
-                    let expected_ack = seq.wrapping_add(1);
-                    if ack != expected_ack {
-                        // Unexpected ACK, might be a spoofed packet
-                        return Ok(PortState::Filtered);
-                    }
-
-                    // Analyze flags
-                    let syn_received = (flags & 0x02) != 0;
-                    let ack_received = (flags & 0x10) != 0;
-                    let rst_received = (flags & 0x04) != 0;
-
-                    if syn_received && ack_received {
-                        // SYN-ACK received - port is open
-                        Ok(PortState::Open)
-                    } else if rst_received {
-                        // RST received - port is closed
-                        Ok(PortState::Closed)
-                    } else {
-                        // Unexpected flags
-                        Ok(PortState::Filtered)
-                    }
-                } else {
-                    // Could not parse TCP response
-                    Ok(PortState::Filtered)
-                }
+        loop {
+            // Calculate remaining timeout
+            let elapsed = start_time.elapsed();
+            if elapsed >= total_timeout {
+                // Total timeout expired - port is filtered or host is down
+                return Ok(PortState::Filtered);
             }
-            Ok(_) => {
-                // Empty response (shouldn't happen)
-                Ok(PortState::Filtered)
-            }
-            Err(e)
-                if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut =>
+            let remaining_timeout = total_timeout - elapsed;
+
+            match self
+                .socket
+                .recv_packet(recv_buf.as_mut_slice(), Some(remaining_timeout))
             {
-                // No response received within timeout - port is filtered or host is down
-                Ok(PortState::Filtered)
-            }
-            Err(e) => {
-                // Other error
-                Err(rustnmap_common::ScanError::Network(
-                    rustnmap_common::Error::Network(
-                        rustnmap_common::error::NetworkError::ReceiveError { source: e },
-                    ),
-                ))
+                Ok(len) if len > 0 => {
+                    // Parse the response
+                    if let Some((flags, _seq, ack, resp_src_port, src_ip)) =
+                        parse_tcp_response(&recv_buf[..len])
+                    {
+                        // Verify this is a response from the target IP
+                        if src_ip != dst_addr {
+                            // Response from wrong IP, this is unrelated traffic - continue waiting
+                            continue;
+                        }
+
+                        // Verify this is a response to our probe (correct source port)
+                        if resp_src_port != dst_port {
+                            // Response from wrong port - continue waiting
+                            continue;
+                        }
+
+                        // Check if ACK matches our sequence number + 1
+                        let expected_ack = seq.wrapping_add(1);
+                        if ack != expected_ack {
+                            // Unexpected ACK - continue waiting
+                            continue;
+                        }
+
+                        // Analyze flags
+                        let syn_received = (flags & 0x02) != 0;
+                        let ack_received = (flags & 0x10) != 0;
+                        let rst_received = (flags & 0x04) != 0;
+
+                        if syn_received && ack_received {
+                            // SYN-ACK received - port is open
+                            return Ok(PortState::Open);
+                        } else if rst_received {
+                            // RST received - port is closed
+                            return Ok(PortState::Closed);
+                        }
+                        // Unexpected flags - continue waiting
+                    }
+                    // Could not parse TCP response - continue waiting
+                }
+                Ok(_) => {
+                    // Empty response - continue waiting
+                }
+                Err(e)
+                    if e.kind() == io::ErrorKind::WouldBlock
+                        || e.kind() == io::ErrorKind::TimedOut =>
+                {
+                    // Timeout on this recv - check if total timeout expired
+                    if start_time.elapsed() >= total_timeout {
+                        return Ok(PortState::Filtered);
+                    }
+                    // Otherwise continue waiting
+                }
+                Err(e) => {
+                    // Other error
+                    return Err(rustnmap_common::ScanError::Network(
+                        rustnmap_common::Error::Network(
+                            rustnmap_common::error::NetworkError::ReceiveError { source: e },
+                        ),
+                    ));
+                }
             }
         }
     }

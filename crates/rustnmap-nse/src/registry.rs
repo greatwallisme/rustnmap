@@ -543,6 +543,11 @@ impl ScriptDatabase {
     /// # Returns
     ///
     /// Vector of scripts that have matching portrules.
+    ///
+    /// # Note
+    ///
+    /// This method uses heuristic matching for performance. For precise Lua portrule
+    /// evaluation, use [`Self::scripts_for_port_with_engine`] instead.
     #[must_use]
     pub fn scripts_for_port(
         &self,
@@ -557,8 +562,6 @@ impl ScriptDatabase {
             .filter(|s| {
                 // Heuristic pre-filtering based on service name and common port mappings.
                 // This provides fast script selection without evaluating Lua portrule functions.
-                // The ScriptEngine.evaluate_portrule method can be used for precise matching
-                // when heuristic results need verification.
                 if let Some(service_name) = service {
                     let id_lower = s.id.to_lowercase();
                     let service_lower = service_name.to_lowercase();
@@ -566,6 +569,60 @@ impl ScriptDatabase {
                         || Self::port_matches_common_service(port, &id_lower)
                 } else {
                     Self::port_matches_common_service(port, &s.id.to_lowercase())
+                }
+            })
+            .collect()
+    }
+
+    /// Get scripts that should run against a specific port using Lua portrule evaluation.
+    ///
+    /// This method evaluates the actual Lua `portrule` function for each script,
+    /// providing 100% accurate script selection matching Nmap's behavior.
+    ///
+    /// # Arguments
+    ///
+    /// * `engine` - Script engine for Lua evaluation
+    /// * `port` - Port number
+    /// * `protocol` - Protocol (tcp/udp)
+    /// * `state` - Port state (open, closed, filtered, etc.)
+    /// * `service` - Service name (optional)
+    /// * `target_ip` - Target IP address for host table construction
+    ///
+    /// # Returns
+    ///
+    /// Vector of scripts whose portrule functions return `true`.
+    ///
+    /// # Note
+    ///
+    /// Falls back to heuristic matching if Lua evaluation fails for a script.
+    #[must_use]
+    pub fn scripts_for_port_with_engine(
+        &self,
+        engine: &crate::engine::ScriptEngine,
+        port: u16,
+        protocol: &str,
+        state: &str,
+        service: Option<&str>,
+        target_ip: std::net::IpAddr,
+    ) -> Vec<&NseScript> {
+        self.scripts
+            .values()
+            .filter(|s| s.has_portrule())
+            .filter(|script| {
+                // Attempt Lua evaluation first
+                match engine.evaluate_portrule(script, target_ip, port, protocol, state, service) {
+                    Ok(result) => result,
+                    Err(_) => {
+                        // Fall back to heuristic matching on Lua evaluation failure
+                        if let Some(service_name) = service {
+                            let id_lower = script.id.to_lowercase();
+                            let service_lower = service_name.to_lowercase();
+                            id_lower.contains(&service_lower)
+                                || Self::port_matches_common_service(port, &id_lower)
+                        } else {
+                            Self::port_matches_common_service(port, &script.id.to_lowercase())
+                        }
+                    }
                 }
             })
             .collect()

@@ -32,6 +32,28 @@ use crate::scheduler::{ScheduledTask, TaskPriority, TaskScheduler};
 use crate::session::{ScanConfig, ScanSession, ScanType};
 use crate::state::{HostState, PortScanState, ScanProgress};
 
+/// Get the local IPv4 address by creating a UDP socket to an external address.
+/// This returns the source IP that would be used for packets to the internet.
+fn get_local_address() -> std::net::Ipv4Addr {
+    // Try to connect to a public DNS server (8.8.8.8) to determine local IP
+    // This doesn't actually send any data, just determines the route
+    let socket = std::net::UdpSocket::bind("0.0.0.0:0");
+    if let Ok(sock) = socket {
+        if sock.connect("8.8.8.8:53").is_ok() {
+            if let Ok(local_addr) = sock.local_addr() {
+                debug!(local_addr = %local_addr, "Socket local_addr after connect");
+                if let IpAddr::V4(ipv4) = local_addr.ip() {
+                    debug!(ipv4 = %ipv4, "Detected local IPv4 address");
+                    return ipv4;
+                }
+            }
+        }
+    }
+    // Fallback to localhost if detection fails
+    debug!("Failed to detect local address, using LOCALHOST");
+    std::net::Ipv4Addr::LOCALHOST
+}
+
 /// Scan phase enumeration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ScanPhase {
@@ -372,13 +394,6 @@ impl ScanOrchestrator {
         // Build final scan result
         let scan_result = self.build_scan_result(host_results, elapsed)?;
 
-        // Output final results
-        self.session
-            .output_sink
-            .output_scan_result(&scan_result)
-            .await?;
-        self.session.output_sink.flush().await?;
-
         Ok(scan_result)
     }
 
@@ -502,10 +517,6 @@ impl ScanOrchestrator {
             };
 
             host_results.push(host_result);
-            self.session
-                .output_sink
-                .output_host(host_results.last().unwrap())
-                .await?;
         }
 
         info!(hosts = host_results.len(), "Port scanning phase completed");
@@ -597,10 +608,6 @@ impl ScanOrchestrator {
             };
 
             host_results.push(host_result);
-            self.session
-                .output_sink
-                .output_host(host_results.last().unwrap())
-                .await?;
         }
 
         // Add hosts from Phase 1 that had no open ports (skip in Phase 2)
@@ -668,8 +675,9 @@ impl ScanOrchestrator {
             scan_delay: self.session.config.scan_delay,
         };
 
-        // Get local address for the scanner
-        let local_addr = std::net::Ipv4Addr::UNSPECIFIED;
+        // Get local address for the scanner by detecting the source IP for the target
+        let local_addr = get_local_address();
+        debug!(local_addr = %local_addr, "Using local address for scanner");
 
         // Get target IP address
         let target_ip = match target.ip {
@@ -828,13 +836,19 @@ impl ScanOrchestrator {
                 _ => rustnmap_output::models::Protocol::Tcp,
             };
 
+            let is_udp = matches!(primary_scan_type, ScanType::Udp);
+            let service_proto = if is_udp {
+                rustnmap_common::ServiceProtocol::Udp
+            } else {
+                rustnmap_common::ServiceProtocol::Tcp
+            };
             return Ok(PortResult {
                 number: port,
                 protocol,
                 state: port_state,
                 state_reason: reason,
                 state_ttl: None,
-                service: None,
+                service: service_info_from_db(port, service_proto),
                 scripts: Vec::new(),
             });
         }
@@ -892,7 +906,7 @@ impl ScanOrchestrator {
             state,
             state_reason: reason,
             state_ttl: None,
-            service: None,
+            service: service_info_from_db(port, rustnmap_common::ServiceProtocol::Tcp),
             scripts: Vec::new(),
         })
     }
@@ -901,7 +915,22 @@ impl ScanOrchestrator {
     fn get_ports_for_scan(&self) -> Vec<u16> {
         match &self.session.config.port_spec {
             super::session::PortSpec::All => (1..=65535).collect(),
-            super::session::PortSpec::Top(n) => (1..=u16::try_from(*n).unwrap_or(65535)).collect(),
+            super::session::PortSpec::Top(n) => {
+                let db = rustnmap_common::ServiceDatabase::global();
+                // Use frequency-sorted top ports from nmap-services database
+                let primary_scan_type = self
+                    .session
+                    .config
+                    .scan_types
+                    .first()
+                    .copied()
+                    .unwrap_or(ScanType::TcpSyn);
+                if matches!(primary_scan_type, ScanType::Udp) {
+                    db.top_udp_ports(*n).to_vec()
+                } else {
+                    db.top_tcp_ports(*n).to_vec()
+                }
+            }
             super::session::PortSpec::List(ports) => ports.clone(),
             super::session::PortSpec::Range { start, end } => (*start..=*end).collect(),
         }
@@ -1513,6 +1542,31 @@ impl ScanOrchestrator {
     pub fn pipeline(&self) -> &ScanPipeline {
         &self.pipeline
     }
+}
+
+/// Looks up service info from the `nmap-services` database.
+///
+/// Returns a `ServiceInfo` with method "table" and confidence 3,
+/// matching Nmap's behavior for non-probed service identification.
+fn service_info_from_db(
+    port: u16,
+    protocol: rustnmap_common::ServiceProtocol,
+) -> Option<rustnmap_output::models::ServiceInfo> {
+    let db = rustnmap_common::ServiceDatabase::global();
+    let name = db.lookup(port, protocol)?;
+
+    Some(rustnmap_output::models::ServiceInfo {
+        name: name.to_string(),
+        product: None,
+        version: None,
+        extrainfo: None,
+        ostype: None,
+        hostname: None,
+        devicetype: None,
+        method: "table".to_string(),
+        confidence: 3,
+        cpe: Vec::new(),
+    })
 }
 
 #[cfg(test)]

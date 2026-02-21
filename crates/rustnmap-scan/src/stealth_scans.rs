@@ -155,7 +155,9 @@ impl TcpFinScanner {
         {
             Ok(len) if len > 0 => {
                 // Check for TCP response first
-                if let Some((flags, _seq, _ack, src_port)) = parse_tcp_response(&recv_buf[..len]) {
+                if let Some((flags, _seq, _ack, src_port, _src_ip)) =
+                    parse_tcp_response(&recv_buf[..len])
+                {
                     if src_port != dst_port {
                         return Ok(PortState::Filtered);
                     }
@@ -350,7 +352,9 @@ impl TcpNullScanner {
         {
             Ok(len) if len > 0 => {
                 // Check for TCP response first
-                if let Some((flags, _seq, _ack, src_port)) = parse_tcp_response(&recv_buf[..len]) {
+                if let Some((flags, _seq, _ack, src_port, _src_ip)) =
+                    parse_tcp_response(&recv_buf[..len])
+                {
                     if src_port != dst_port {
                         return Ok(PortState::Filtered);
                     }
@@ -548,7 +552,9 @@ impl TcpXmasScanner {
         {
             Ok(len) if len > 0 => {
                 // Check for TCP response first
-                if let Some((flags, _seq, _ack, src_port)) = parse_tcp_response(&recv_buf[..len]) {
+                if let Some((flags, _seq, _ack, src_port, _src_ip)) =
+                    parse_tcp_response(&recv_buf[..len])
+                {
                     if src_port != dst_port {
                         return Ok(PortState::Filtered);
                     }
@@ -745,7 +751,9 @@ impl TcpAckScanner {
         {
             Ok(len) if len > 0 => {
                 // Check for TCP response first
-                if let Some((flags, _seq, _ack, src_port)) = parse_tcp_response(&recv_buf[..len]) {
+                if let Some((flags, _seq, _ack, src_port, _src_ip)) =
+                    parse_tcp_response(&recv_buf[..len])
+                {
                     if src_port != dst_port {
                         return Ok(PortState::Filtered);
                     }
@@ -922,7 +930,9 @@ impl TcpMaimonScanner {
         {
             Ok(len) if len > 0 => {
                 // Check for TCP response first
-                if let Some((flags, _seq, _ack, src_port)) = parse_tcp_response(&recv_buf[..len]) {
+                if let Some((flags, _seq, _ack, src_port, _src_ip)) =
+                    parse_tcp_response(&recv_buf[..len])
+                {
                     if src_port != dst_port {
                         return Ok(PortState::Filtered);
                     }

@@ -86,10 +86,75 @@ pub mod raw_socket {
             )
             .map_err(|e| Error::Network(NetworkError::RawSocketCreation { source: e }))?;
 
-            // Set socket options for better performance
-            socket
-                .set_nonblocking(true)
-                .map_err(|e| Error::Network(NetworkError::RawSocketCreation { source: e }))?;
+            // Enable IP_HDRINCL so we can provide our own IP header when sending.
+            // IPPROTO_RAW (255) sets this automatically, but other protocols do not.
+            // Without this, the kernel prepends its own IP header, corrupting our
+            // carefully crafted packet (source IP, identification, TTL, etc.).
+            let enable: libc::c_int = 1;
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "size_of<c_int> is always 4, safely fits in socklen_t"
+            )]
+            // SAFETY: setsockopt with valid fd, valid option pointer, and correct size
+            let ret = unsafe {
+                libc::setsockopt(
+                    socket.as_raw_fd(),
+                    libc::IPPROTO_IP,
+                    libc::IP_HDRINCL,
+                    (&raw const enable).cast::<libc::c_void>(),
+                    std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+                )
+            };
+            if ret < 0 {
+                return Err(Error::Network(NetworkError::RawSocketCreation {
+                    source: std::io::Error::last_os_error(),
+                }));
+            }
+
+            // Socket uses blocking mode with SO_RCVTIMEO for timeouts.
+            // Non-blocking mode would ignore SO_RCVTIMEO and require poll/select.
+
+            Ok(Self { fd: socket.into() })
+        }
+
+        /// Creates a raw IPv6 socket for a specific IP protocol.
+        ///
+        /// # Arguments
+        ///
+        /// * `protocol` - The IP protocol number (e.g., 6 for TCP, 17 for UDP, 58 for `ICMPv6`)
+        ///
+        /// # Errors
+        ///
+        /// Returns an error if:
+        /// - The process lacks `CAP_NET_RAW` capability
+        /// - The system runs out of file descriptors
+        /// - The socket protocol is not supported
+        ///
+        /// # Examples
+        ///
+        /// ```rust,no_run
+        /// use rustnmap_net::raw_socket::RawSocket;
+        ///
+        /// // Create an IPv6 TCP raw socket for receiving TCP responses
+        /// let tcp_socket = RawSocket::with_protocol_ipv6(6).unwrap();
+        ///
+        /// // Create an IPv6 UDP raw socket for receiving UDP responses
+        /// let udp_socket = RawSocket::with_protocol_ipv6(17).unwrap();
+        /// ```
+        pub fn with_protocol_ipv6(protocol: u8) -> super::Result<Self> {
+            use rustnmap_common::error::NetworkError;
+            use rustnmap_common::Error;
+            use socket2::{Domain, Protocol, Type};
+
+            let socket = socket2::Socket::new(
+                Domain::IPV6,
+                Type::RAW,
+                Some(Protocol::from(i32::from(protocol))),
+            )
+            .map_err(|e| Error::Network(NetworkError::RawSocketCreation { source: e }))?;
+
+            // Socket uses blocking mode with SO_RCVTIMEO for timeouts.
+            // Non-blocking mode would ignore SO_RCVTIMEO and require poll/select.
 
             Ok(Self { fd: socket.into() })
         }
@@ -699,8 +764,8 @@ pub mod raw_socket {
 
     /// Parses a TCP response packet.
     ///
-    /// Returns the TCP flags, sequence number, acknowledgment number, and source port
-    /// if the packet is a valid TCP response.
+    /// Returns the TCP flags, sequence number, acknowledgment number, source port,
+    /// and source IP address if the packet is a valid TCP response.
     ///
     /// # Arguments
     ///
@@ -708,9 +773,9 @@ pub mod raw_socket {
     ///
     /// # Returns
     ///
-    /// `Some((flags, seq, ack, src_port))` if valid TCP packet, `None` otherwise.
+    /// `Some((flags, seq, ack, src_port, src_ip))` if valid TCP packet, `None` otherwise.
     #[must_use]
-    pub fn parse_tcp_response(packet: &[u8]) -> Option<(u8, u32, u32, Port)> {
+    pub fn parse_tcp_response(packet: &[u8]) -> Option<(u8, u32, u32, Port, Ipv4Addr)> {
         // Minimum IP header + TCP header
         if packet.len() < 40 {
             return None;
@@ -729,6 +794,9 @@ pub mod raw_socket {
         if packet[9] != 6 {
             return None;
         }
+
+        // Parse source IP address (bytes 12-15 of IP header)
+        let src_ip = Ipv4Addr::new(packet[12], packet[13], packet[14], packet[15]);
 
         // Parse TCP header
         let tcp_start = ip_header_len;
@@ -755,7 +823,7 @@ pub mod raw_socket {
         // Flags
         let flags = packet[tcp_start + 13];
 
-        Some((flags, seq, ack, src_port))
+        Some((flags, seq, ack, src_port, src_ip))
     }
 
     /// Parses a full TCP response packet with all fields and options.
@@ -1856,5 +1924,935 @@ pub mod raw_socket {
         );
 
         Some((sender_mac, sender_ip))
+    }
+
+    /// IPv6 UDP packet builder for constructing raw UDP packets over IPv6.
+    #[derive(Debug)]
+    pub struct Ipv6UdpPacketBuilder {
+        /// Source IP address.
+        src_ip: std::net::Ipv6Addr,
+        /// Destination IP address.
+        dst_ip: std::net::Ipv6Addr,
+        /// Source port.
+        src_port: Port,
+        /// Destination port.
+        dst_port: Port,
+        /// UDP payload.
+        payload: Vec<u8>,
+        /// Flow label (20 bits).
+        flow_label: u32,
+        /// Hop limit (TTL equivalent).
+        hop_limit: u8,
+    }
+
+    impl Ipv6UdpPacketBuilder {
+        /// Creates a new IPv6 UDP packet builder.
+        #[must_use]
+        pub fn new(
+            src_ip: std::net::Ipv6Addr,
+            dst_ip: std::net::Ipv6Addr,
+            src_port: Port,
+            dst_port: Port,
+        ) -> Self {
+            Self {
+                src_ip,
+                dst_ip,
+                src_port,
+                dst_port,
+                payload: Vec::new(),
+                flow_label: 0,
+                hop_limit: 64,
+            }
+        }
+
+        /// Sets the UDP payload.
+        #[must_use]
+        pub fn payload(mut self, payload: &[u8]) -> Self {
+            self.payload = payload.to_vec();
+            self
+        }
+
+        /// Sets the flow label (20 bits, will be masked).
+        #[must_use]
+        pub fn flow_label(mut self, flow_label: u32) -> Self {
+            self.flow_label = flow_label & 0x000F_FFFF;
+            self
+        }
+
+        /// Sets the hop limit.
+        #[must_use]
+        pub fn hop_limit(mut self, hop_limit: u8) -> Self {
+            self.hop_limit = hop_limit;
+            self
+        }
+
+        /// Builds the IPv6 UDP packet.
+        ///
+        /// Returns a complete IPv6 packet with UDP header and payload.
+        #[must_use]
+        pub fn build(self) -> Vec<u8> {
+            // UDP header is 8 bytes + payload
+            let udp_header_len = 8;
+            let udp_payload_len = self.payload.len();
+            let udp_total_len = udp_header_len + udp_payload_len;
+
+            // IPv6 header is 40 bytes
+            let ipv6_header_len = 40;
+            let total_len = ipv6_header_len + udp_total_len;
+
+            let mut packet = Vec::with_capacity(total_len);
+
+            // Build IPv6 header
+            // Version (4 bits = 6) + Traffic class first 4 bits + Flow label first 4 bits
+            let version_tc_fl = (6u32 << 28) | (self.flow_label & 0x000F_FFFF);
+            packet.extend_from_slice(&version_tc_fl.to_be_bytes());
+
+            // Payload length (16 bits) - just the UDP packet
+            packet.extend_from_slice(&u16::try_from(udp_total_len).unwrap_or(0).to_be_bytes());
+
+            // Next header (8 bits) - UDP = 17
+            packet.push(17);
+
+            // Hop limit (8 bits)
+            packet.push(self.hop_limit);
+
+            // Source IP (128 bits)
+            packet.extend_from_slice(&self.src_ip.octets());
+
+            // Destination IP (128 bits)
+            packet.extend_from_slice(&self.dst_ip.octets());
+
+            // Build UDP header
+            let udp_header_start = packet.len();
+            // Source port (16 bits)
+            packet.extend_from_slice(&self.src_port.to_be_bytes());
+            // Destination port (16 bits)
+            packet.extend_from_slice(&self.dst_port.to_be_bytes());
+            // Length (16 bits) - header + payload
+            packet.extend_from_slice(&u16::try_from(udp_total_len).unwrap_or(0).to_be_bytes());
+            // Checksum (16 bits) - calculated later
+            packet.push(0);
+            packet.push(0);
+            // Payload
+            packet.extend_from_slice(&self.payload);
+
+            // Calculate UDP checksum with IPv6 pseudo-header
+            let udp_checksum = Self::calculate_udp_checksum_ipv6(
+                self.src_ip,
+                self.dst_ip,
+                &packet[udp_header_start..],
+            );
+            packet[udp_header_start + 6] = (udp_checksum >> 8) as u8;
+            packet[udp_header_start + 7] = (udp_checksum & 0xFF) as u8;
+
+            packet
+        }
+
+        /// Calculates the UDP checksum with IPv6 pseudo-header.
+        fn calculate_udp_checksum_ipv6(
+            src_ip: std::net::Ipv6Addr,
+            dst_ip: std::net::Ipv6Addr,
+            udp_segment: &[u8],
+        ) -> u16 {
+            let mut sum = 0u128;
+
+            // IPv6 pseudo-header: source IP (128 bits)
+            for chunk in src_ip.octets().chunks(2) {
+                sum += u128::from(u16::from_be_bytes([chunk[0], chunk[1]]));
+            }
+
+            // IPv6 pseudo-header: destination IP (128 bits)
+            for chunk in dst_ip.octets().chunks(2) {
+                sum += u128::from(u16::from_be_bytes([chunk[0], chunk[1]]));
+            }
+
+            // IPv6 pseudo-header: UDP length (32 bits, upper 16 bits should be 0)
+            let udp_len = u32::try_from(udp_segment.len()).unwrap_or(0);
+            sum += u128::from(udp_len);
+
+            // IPv6 pseudo-header: zero (24 bits) + next header (8 bits)
+            sum += 17u128; // UDP protocol number
+
+            // UDP segment
+            let len = udp_segment.len();
+            for i in (0..len).step_by(2) {
+                if i + 1 < len {
+                    sum += u128::from(u16::from_be_bytes([udp_segment[i], udp_segment[i + 1]]));
+                } else {
+                    sum += u128::from(udp_segment[i]) << 8;
+                }
+            }
+
+            // Fold the sum
+            while (sum >> 16) != 0 {
+                sum = (sum & 0xFFFF) + (sum >> 16);
+            }
+
+            // Truncation is intentional for checksum calculation
+            #[expect(clippy::cast_possible_truncation, reason = "Checksum algorithm")]
+            {
+                let checksum = !(sum as u16);
+                // UDP checksum of 0 means no checksum, so use 0xFFFF instead
+                if checksum == 0 {
+                    0xFFFF
+                } else {
+                    checksum
+                }
+            }
+        }
+    }
+
+    /// Parses an IPv6 UDP response packet.
+    ///
+    /// Returns the source port and payload if the packet is a valid IPv6 UDP response.
+    ///
+    /// # Arguments
+    ///
+    /// * `packet` - The raw packet bytes
+    ///
+    /// # Returns
+    ///
+    /// `Some((src_port, payload))` if valid IPv6 UDP packet, `None` otherwise.
+    #[must_use]
+    pub fn parse_ipv6_udp_response(packet: &[u8]) -> Option<(Port, Vec<u8>)> {
+        // Minimum IPv6 header + UDP header
+        if packet.len() < 48 {
+            return None;
+        }
+
+        // Check IP version (must be 6)
+        let version = (packet[0] >> 4) & 0x0F;
+        if version != 6 {
+            return None;
+        }
+
+        // Check next header (must be UDP = 17)
+        if packet[6] != 17 {
+            return None;
+        }
+
+        // IPv6 header is fixed at 40 bytes
+        let udp_start = 40;
+
+        if packet.len() < udp_start + 8 {
+            return None;
+        }
+
+        // Source port
+        let src_port = u16::from_be_bytes([packet[udp_start], packet[udp_start + 1]]);
+
+        // UDP length (header + payload)
+        let udp_len = u16::from_be_bytes([packet[udp_start + 4], packet[udp_start + 5]]) as usize;
+        let payload_len = udp_len.saturating_sub(8);
+
+        // Extract payload
+        let payload_start = udp_start + 8;
+        let payload_end = (payload_start + payload_len).min(packet.len());
+        let payload = packet[payload_start..payload_end].to_vec();
+
+        Some((src_port, payload))
+    }
+
+    /// `ICMPv6` packet types for IPv6 OS detection.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum Icmpv6Type {
+        /// Echo Request (Type 128)
+        EchoRequest,
+        /// Echo Reply (Type 129)
+        EchoReply,
+        /// Neighbor Solicitation (Type 135)
+        NeighborSolicitation,
+        /// Neighbor Advertisement (Type 136)
+        NeighborAdvertisement,
+        /// Unknown type
+        Unknown(u8),
+    }
+
+    impl From<u8> for Icmpv6Type {
+        fn from(t: u8) -> Self {
+            match t {
+                128 => Self::EchoRequest,
+                129 => Self::EchoReply,
+                135 => Self::NeighborSolicitation,
+                136 => Self::NeighborAdvertisement,
+                n => Self::Unknown(n),
+            }
+        }
+    }
+
+    impl From<Icmpv6Type> for u8 {
+        fn from(t: Icmpv6Type) -> Self {
+            match t {
+                Icmpv6Type::EchoRequest => 128,
+                Icmpv6Type::EchoReply => 129,
+                Icmpv6Type::NeighborSolicitation => 135,
+                Icmpv6Type::NeighborAdvertisement => 136,
+                Icmpv6Type::Unknown(n) => n,
+            }
+        }
+    }
+
+    /// `ICMPv6` Destination Unreachable codes.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum Icmpv6UnreachableCode {
+        /// No route to destination (Code 0)
+        NoRoute,
+        /// Communication administratively prohibited (Code 1)
+        AdminProhibited,
+        /// Beyond scope of source address (Code 2)
+        BeyondScope,
+        /// Address unreachable (Code 3)
+        AddressUnreachable,
+        /// Port unreachable (Code 4) - indicates closed UDP port
+        PortUnreachable,
+        /// Source address failed ingress/egress policy (Code 5)
+        PolicyFailed,
+        /// Reject route to destination (Code 6)
+        RejectRoute,
+        /// Unknown code
+        Unknown(u8),
+    }
+
+    impl From<u8> for Icmpv6UnreachableCode {
+        fn from(code: u8) -> Self {
+            match code {
+                0 => Self::NoRoute,
+                1 => Self::AdminProhibited,
+                2 => Self::BeyondScope,
+                3 => Self::AddressUnreachable,
+                4 => Self::PortUnreachable,
+                5 => Self::PolicyFailed,
+                6 => Self::RejectRoute,
+                n => Self::Unknown(n),
+            }
+        }
+    }
+
+    /// `ICMPv6` packet builder for constructing `ICMPv6` packets.
+    #[derive(Debug)]
+    pub struct Icmpv6PacketBuilder {
+        /// Source IP address.
+        src_ip: std::net::Ipv6Addr,
+        /// Destination IP address.
+        dst_ip: std::net::Ipv6Addr,
+        /// `ICMPv6` type.
+        icmp_type: Icmpv6Type,
+        /// `ICMPv6` code.
+        icmp_code: u8,
+        /// `ICMPv6` identifier (echo request/reply ID).
+        identifier: u16,
+        /// `ICMPv6` sequence number.
+        sequence: u16,
+        /// `ICMPv6` payload/data.
+        payload: Vec<u8>,
+        /// Flow label.
+        flow_label: u32,
+        /// Hop limit.
+        hop_limit: u8,
+    }
+
+    impl Icmpv6PacketBuilder {
+        /// Creates a new `ICMPv6` packet builder for echo request.
+        #[must_use]
+        pub fn new(src_ip: std::net::Ipv6Addr, dst_ip: std::net::Ipv6Addr) -> Self {
+            Self {
+                src_ip,
+                dst_ip,
+                icmp_type: Icmpv6Type::EchoRequest,
+                icmp_code: 0,
+                identifier: 0,
+                sequence: 0,
+                payload: Vec::new(),
+                flow_label: 0,
+                hop_limit: 64,
+            }
+        }
+
+        /// Sets the `ICMPv6` identifier.
+        #[must_use]
+        pub fn identifier(mut self, identifier: u16) -> Self {
+            self.identifier = identifier;
+            self
+        }
+
+        /// Sets the `ICMPv6` sequence number.
+        #[must_use]
+        pub fn sequence(mut self, sequence: u16) -> Self {
+            self.sequence = sequence;
+            self
+        }
+
+        /// Sets the `ICMPv6` payload.
+        #[must_use]
+        pub fn payload(mut self, payload: &[u8]) -> Self {
+            self.payload = payload.to_vec();
+            self
+        }
+
+        /// Sets the flow label (20 bits, will be masked).
+        #[must_use]
+        pub fn flow_label(mut self, flow_label: u32) -> Self {
+            self.flow_label = flow_label & 0x000F_FFFF;
+            self
+        }
+
+        /// Sets the hop limit.
+        #[must_use]
+        pub fn hop_limit(mut self, hop_limit: u8) -> Self {
+            self.hop_limit = hop_limit;
+            self
+        }
+
+        /// Builds the `ICMPv6` packet.
+        ///
+        /// Returns a complete IPv6 packet with `ICMPv6` header and payload.
+        #[must_use]
+        pub fn build(self) -> Vec<u8> {
+            // ICMPv6 header is 8 bytes + payload
+            let icmp_header_len = 8;
+            let icmp_payload_len = self.payload.len();
+            let icmp_total_len = icmp_header_len + icmp_payload_len;
+
+            // IPv6 header is 40 bytes
+            let ipv6_header_len = 40;
+            let total_len = ipv6_header_len + icmp_total_len;
+
+            let mut packet = Vec::with_capacity(total_len);
+
+            // Build IPv6 header
+            // Version (4 bits = 6) + Traffic class first 4 bits + Flow label first 4 bits
+            let version_tc_fl = (6u32 << 28) | (self.flow_label & 0x000F_FFFF);
+            packet.extend_from_slice(&version_tc_fl.to_be_bytes());
+
+            // Payload length (16 bits) - just the ICMPv6 packet
+            packet.extend_from_slice(&u16::try_from(icmp_total_len).unwrap_or(0).to_be_bytes());
+
+            // Next header (8 bits) - ICMPv6 = 58
+            packet.push(58);
+
+            // Hop limit (8 bits)
+            packet.push(self.hop_limit);
+
+            // Source IP (128 bits)
+            packet.extend_from_slice(&self.src_ip.octets());
+
+            // Destination IP (128 bits)
+            packet.extend_from_slice(&self.dst_ip.octets());
+
+            // Build ICMPv6 header
+            let icmp_header_start = packet.len();
+            // ICMPv6 Type (8 bits)
+            packet.push(u8::from(self.icmp_type));
+            // ICMPv6 Code (8 bits)
+            packet.push(self.icmp_code);
+            // Checksum (16 bits) - calculated later
+            packet.push(0);
+            packet.push(0);
+            // Identifier (16 bits)
+            packet.extend_from_slice(&self.identifier.to_be_bytes());
+            // Sequence Number (16 bits)
+            packet.extend_from_slice(&self.sequence.to_be_bytes());
+            // Payload
+            packet.extend_from_slice(&self.payload);
+
+            // Calculate ICMPv6 checksum with IPv6 pseudo-header
+            let icmp_checksum = Self::calculate_icmpv6_checksum(
+                self.src_ip,
+                self.dst_ip,
+                &packet[icmp_header_start..],
+            );
+            packet[icmp_header_start + 2] = (icmp_checksum >> 8) as u8;
+            packet[icmp_header_start + 3] = (icmp_checksum & 0xFF) as u8;
+
+            packet
+        }
+
+        /// Calculates the `ICMPv6` checksum with IPv6 pseudo-header.
+        fn calculate_icmpv6_checksum(
+            src_ip: std::net::Ipv6Addr,
+            dst_ip: std::net::Ipv6Addr,
+            icmp_packet: &[u8],
+        ) -> u16 {
+            let mut sum = 0u128;
+
+            // IPv6 pseudo-header: source IP (128 bits)
+            for chunk in src_ip.octets().chunks(2) {
+                sum += u128::from(u16::from_be_bytes([chunk[0], chunk[1]]));
+            }
+
+            // IPv6 pseudo-header: destination IP (128 bits)
+            for chunk in dst_ip.octets().chunks(2) {
+                sum += u128::from(u16::from_be_bytes([chunk[0], chunk[1]]));
+            }
+
+            // IPv6 pseudo-header: ICMPv6 length (32 bits, upper 16 bits should be 0)
+            let icmp_len = u32::try_from(icmp_packet.len()).unwrap_or(0);
+            sum += u128::from(icmp_len);
+
+            // IPv6 pseudo-header: zero (24 bits) + next header (8 bits)
+            sum += 58u128; // ICMPv6 protocol number
+
+            // ICMPv6 packet
+            let len = icmp_packet.len();
+            for i in (0..len).step_by(2) {
+                if i + 1 < len {
+                    sum += u128::from(u16::from_be_bytes([icmp_packet[i], icmp_packet[i + 1]]));
+                } else {
+                    sum += u128::from(icmp_packet[i]) << 8;
+                }
+            }
+
+            // Fold the sum
+            while (sum >> 16) != 0 {
+                sum = (sum & 0xFFFF) + (sum >> 16);
+            }
+
+            // Truncation is intentional for checksum calculation
+            #[expect(clippy::cast_possible_truncation, reason = "Checksum algorithm")]
+            {
+                // ICMPv6 checksum of 0 is valid, unlike UDP
+                !(sum as u16)
+            }
+        }
+    }
+
+    /// Parses an `ICMPv6` echo reply packet.
+    ///
+    /// Returns the identifier and sequence number if the packet is a valid
+    /// `ICMPv6` echo reply.
+    ///
+    /// # Arguments
+    ///
+    /// * `packet` - The raw packet bytes
+    ///
+    /// # Returns
+    ///
+    /// `Some((identifier, sequence))` if valid `ICMPv6` echo reply, `None` otherwise.
+    #[must_use]
+    pub fn parse_icmpv6_echo_reply(packet: &[u8]) -> Option<(u16, u16)> {
+        // Minimum IPv6 header + ICMPv6 header
+        if packet.len() < 48 {
+            return None;
+        }
+
+        // Check IP version (must be 6)
+        let version = (packet[0] >> 4) & 0x0F;
+        if version != 6 {
+            return None;
+        }
+
+        // Check next header (must be ICMPv6 = 58)
+        if packet[6] != 58 {
+            return None;
+        }
+
+        // IPv6 header is fixed at 40 bytes
+        let icmp_start = 40;
+
+        if packet.len() < icmp_start + 8 {
+            return None;
+        }
+
+        let icmp_type = packet[icmp_start];
+        let icmp_code = packet[icmp_start + 1];
+
+        // Echo Reply is Type 129, Code 0
+        if icmp_type != 129 || icmp_code != 0 {
+            return None;
+        }
+
+        // Extract identifier and sequence
+        let identifier = u16::from_be_bytes([packet[icmp_start + 4], packet[icmp_start + 5]]);
+        let sequence = u16::from_be_bytes([packet[icmp_start + 6], packet[icmp_start + 7]]);
+
+        Some((identifier, sequence))
+    }
+
+    /// Parses an `ICMPv6` Destination Unreachable response.
+    ///
+    /// Returns the unreachable code and original destination info.
+    ///
+    /// # Arguments
+    ///
+    /// * `packet` - The raw packet bytes
+    ///
+    /// # Returns
+    ///
+    /// `Some((code, original_dst_ip, original_dst_port))` if valid `ICMPv6` unreachable, `None` otherwise.
+    #[must_use]
+    pub fn parse_icmpv6_unreachable(
+        packet: &[u8],
+    ) -> Option<(Icmpv6UnreachableCode, std::net::Ipv6Addr, Port)> {
+        // Minimum IPv6 header + ICMPv6 header + original IPv6 header + 8 bytes
+        if packet.len() < 96 {
+            return None;
+        }
+
+        // Check IP version (must be 6)
+        let version = (packet[0] >> 4) & 0x0F;
+        if version != 6 {
+            return None;
+        }
+
+        // Check next header (must be ICMPv6 = 58)
+        if packet[6] != 58 {
+            return None;
+        }
+
+        // IPv6 header is fixed at 40 bytes
+        let icmp_start = 40;
+
+        let icmp_type = packet[icmp_start];
+
+        // Destination Unreachable is Type 1
+        if icmp_type != 1 {
+            return None;
+        }
+
+        let code = Icmpv6UnreachableCode::from(packet[icmp_start + 1]);
+
+        // ICMPv6 payload contains the original IPv6 packet (as much as possible)
+        // The original IPv6 header starts at icmp_start + 8
+        let orig_ip_start = icmp_start + 8;
+
+        if packet.len() < orig_ip_start + 48 {
+            // Not enough data for original IPv6 header + 8 bytes of transport
+            return Some((code, std::net::Ipv6Addr::UNSPECIFIED, 0));
+        }
+
+        // Extract original destination IP (bytes 24-39 from original IPv6 header start)
+        let orig_dst_ip = std::net::Ipv6Addr::new(
+            u16::from_be_bytes([packet[orig_ip_start + 24], packet[orig_ip_start + 25]]),
+            u16::from_be_bytes([packet[orig_ip_start + 26], packet[orig_ip_start + 27]]),
+            u16::from_be_bytes([packet[orig_ip_start + 28], packet[orig_ip_start + 29]]),
+            u16::from_be_bytes([packet[orig_ip_start + 30], packet[orig_ip_start + 31]]),
+            u16::from_be_bytes([packet[orig_ip_start + 32], packet[orig_ip_start + 33]]),
+            u16::from_be_bytes([packet[orig_ip_start + 34], packet[orig_ip_start + 35]]),
+            u16::from_be_bytes([packet[orig_ip_start + 36], packet[orig_ip_start + 37]]),
+            u16::from_be_bytes([packet[orig_ip_start + 38], packet[orig_ip_start + 39]]),
+        );
+
+        // Original IPv6 header is 40 bytes, transport header starts at orig_ip_start + 40
+        let orig_transport_start = orig_ip_start + 40;
+        let orig_dst_port = if packet.len() >= orig_transport_start + 2 {
+            u16::from_be_bytes([
+                packet[orig_transport_start],
+                packet[orig_transport_start + 1],
+            ])
+        } else {
+            0
+        };
+
+        Some((code, orig_dst_ip, orig_dst_port))
+    }
+
+    /// IPv6 TCP packet builder for constructing raw TCP packets over IPv6.
+    #[derive(Debug)]
+    pub struct Ipv6TcpPacketBuilder {
+        /// Source IP address.
+        src_ip: std::net::Ipv6Addr,
+        /// Destination IP address.
+        dst_ip: std::net::Ipv6Addr,
+        /// Source port.
+        src_port: Port,
+        /// Destination port.
+        dst_port: Port,
+        /// Sequence number.
+        seq: u32,
+        /// Acknowledgment number.
+        ack: u32,
+        /// TCP flags.
+        flags: u8,
+        /// Window size.
+        window: u16,
+        /// TCP options.
+        options: Vec<u8>,
+        /// Flow label.
+        flow_label: u32,
+        /// Hop limit.
+        hop_limit: u8,
+    }
+
+    impl Ipv6TcpPacketBuilder {
+        /// Creates a new IPv6 TCP packet builder.
+        #[must_use]
+        pub fn new(
+            src_ip: std::net::Ipv6Addr,
+            dst_ip: std::net::Ipv6Addr,
+            src_port: Port,
+            dst_port: Port,
+        ) -> Self {
+            Self {
+                src_ip,
+                dst_ip,
+                src_port,
+                dst_port,
+                seq: 0,
+                ack: 0,
+                flags: 0,
+                window: 65535,
+                options: Vec::new(),
+                flow_label: 0,
+                hop_limit: 64,
+            }
+        }
+
+        /// Sets the sequence number.
+        #[must_use]
+        pub fn seq(mut self, seq: u32) -> Self {
+            self.seq = seq;
+            self
+        }
+
+        /// Sets the acknowledgment number.
+        #[must_use]
+        pub fn ack(mut self, ack: u32) -> Self {
+            self.ack = ack;
+            self
+        }
+
+        /// Sets the SYN flag.
+        #[must_use]
+        pub fn syn(mut self) -> Self {
+            self.flags |= 0x02;
+            self
+        }
+
+        /// Sets the ACK flag.
+        #[must_use]
+        pub fn ack_flag(mut self) -> Self {
+            self.flags |= 0x10;
+            self
+        }
+
+        /// Sets the RST flag.
+        #[must_use]
+        pub fn rst(mut self) -> Self {
+            self.flags |= 0x04;
+            self
+        }
+
+        /// Sets the FIN flag.
+        #[must_use]
+        pub fn fin(mut self) -> Self {
+            self.flags |= 0x01;
+            self
+        }
+
+        /// Sets the PSH (Push) flag.
+        #[must_use]
+        pub fn psh(mut self) -> Self {
+            self.flags |= 0x08;
+            self
+        }
+
+        /// Sets the window size.
+        #[must_use]
+        pub fn window(mut self, window: u16) -> Self {
+            self.window = window;
+            self
+        }
+
+        /// Adds TCP options.
+        #[must_use]
+        pub fn options(mut self, options: &[u8]) -> Self {
+            self.options = options.to_vec();
+            self
+        }
+
+        /// Sets the flow label (20 bits, will be masked).
+        #[must_use]
+        pub fn flow_label(mut self, flow_label: u32) -> Self {
+            self.flow_label = flow_label & 0x000F_FFFF;
+            self
+        }
+
+        /// Sets the hop limit.
+        #[must_use]
+        pub fn hop_limit(mut self, hop_limit: u8) -> Self {
+            self.hop_limit = hop_limit;
+            self
+        }
+
+        /// Builds the IPv6 TCP packet.
+        ///
+        /// Returns a complete IPv6 packet with TCP header.
+        #[must_use]
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "Byte extraction from integers requires truncation"
+        )]
+        pub fn build(self) -> Vec<u8> {
+            // Calculate TCP header length (including options)
+            let tcp_header_len = 20 + self.options.len();
+            let tcp_header_len_words = (tcp_header_len / 4) as u8;
+
+            // IPv6 header is 40 bytes + TCP header + options
+            let ipv6_header_len = 40;
+            let total_len = ipv6_header_len + tcp_header_len;
+
+            let mut packet = Vec::with_capacity(total_len);
+
+            // Build IPv6 header
+            // Version (4 bits = 6) + Traffic class first 4 bits + Flow label first 4 bits
+            let version_tc_fl = (6u32 << 28) | (self.flow_label & 0x000F_FFFF);
+            packet.extend_from_slice(&version_tc_fl.to_be_bytes());
+
+            // Payload length (16 bits) - just the TCP packet
+            packet.extend_from_slice(&u16::try_from(tcp_header_len).unwrap_or(0).to_be_bytes());
+
+            // Next header (8 bits) - TCP = 6
+            packet.push(6);
+
+            // Hop limit (8 bits)
+            packet.push(self.hop_limit);
+
+            // Source IP (128 bits)
+            packet.extend_from_slice(&self.src_ip.octets());
+
+            // Destination IP (128 bits)
+            packet.extend_from_slice(&self.dst_ip.octets());
+
+            // Build TCP header
+            let tcp_header_start = packet.len();
+            // Source port (16 bits)
+            packet.extend_from_slice(&self.src_port.to_be_bytes());
+            // Destination port (16 bits)
+            packet.extend_from_slice(&self.dst_port.to_be_bytes());
+            // Sequence number (32 bits)
+            packet.extend_from_slice(&self.seq.to_be_bytes());
+            // Acknowledgment number (32 bits)
+            packet.extend_from_slice(&self.ack.to_be_bytes());
+            // Data offset (4 bits) and reserved (4 bits)
+            packet.push(tcp_header_len_words << 4);
+            // Flags (8 bits)
+            packet.push(self.flags);
+            // Window size (16 bits)
+            packet.extend_from_slice(&self.window.to_be_bytes());
+            // Checksum (16 bits) - calculated later
+            packet.push(0);
+            packet.push(0);
+            // Urgent pointer (16 bits)
+            packet.push(0);
+            packet.push(0);
+            // Options
+            packet.extend_from_slice(&self.options);
+
+            // Calculate TCP checksum with IPv6 pseudo-header
+            let tcp_checksum = Self::calculate_tcp_checksum_ipv6(
+                self.src_ip,
+                self.dst_ip,
+                &packet[tcp_header_start..],
+            );
+            packet[tcp_header_start + 16] = (tcp_checksum >> 8) as u8;
+            packet[tcp_header_start + 17] = (tcp_checksum & 0xFF) as u8;
+
+            packet
+        }
+
+        /// Calculates the TCP checksum with IPv6 pseudo-header.
+        fn calculate_tcp_checksum_ipv6(
+            src_ip: std::net::Ipv6Addr,
+            dst_ip: std::net::Ipv6Addr,
+            tcp_segment: &[u8],
+        ) -> u16 {
+            let mut sum = 0u128;
+
+            // IPv6 pseudo-header: source IP (128 bits)
+            for chunk in src_ip.octets().chunks(2) {
+                sum += u128::from(u16::from_be_bytes([chunk[0], chunk[1]]));
+            }
+
+            // IPv6 pseudo-header: destination IP (128 bits)
+            for chunk in dst_ip.octets().chunks(2) {
+                sum += u128::from(u16::from_be_bytes([chunk[0], chunk[1]]));
+            }
+
+            // IPv6 pseudo-header: TCP length (32 bits, upper 16 bits should be 0)
+            let tcp_len = u32::try_from(tcp_segment.len()).unwrap_or(0);
+            sum += u128::from(tcp_len);
+
+            // IPv6 pseudo-header: zero (24 bits) + next header (8 bits)
+            sum += 6u128; // TCP protocol number
+
+            // TCP segment
+            let len = tcp_segment.len();
+            for i in (0..len).step_by(2) {
+                if i + 1 < len {
+                    sum += u128::from(u16::from_be_bytes([tcp_segment[i], tcp_segment[i + 1]]));
+                } else {
+                    sum += u128::from(tcp_segment[i]) << 8;
+                }
+            }
+
+            // Fold the sum
+            while (sum >> 16) != 0 {
+                sum = (sum & 0xFFFF) + (sum >> 16);
+            }
+
+            // Truncation is intentional for checksum calculation
+            #[expect(clippy::cast_possible_truncation, reason = "Checksum algorithm")]
+            {
+                !(sum as u16)
+            }
+        }
+    }
+
+    /// Parses an IPv6 TCP response packet.
+    ///
+    /// Returns TCP flags, sequence number, acknowledgment number, and source port.
+    ///
+    /// # Arguments
+    ///
+    /// * `packet` - The raw packet bytes
+    ///
+    /// # Returns
+    ///
+    /// `Some((flags, seq, ack, src_port))` if valid IPv6 TCP packet, `None` otherwise.
+    #[must_use]
+    pub fn parse_ipv6_tcp_response(packet: &[u8]) -> Option<(u8, u32, u32, Port)> {
+        // Minimum IPv6 header + TCP header
+        if packet.len() < 60 {
+            return None;
+        }
+
+        // Check IP version (must be 6)
+        let version = (packet[0] >> 4) & 0x0F;
+        if version != 6 {
+            return None;
+        }
+
+        // Check next header (must be TCP = 6)
+        if packet[6] != 6 {
+            return None;
+        }
+
+        // IPv6 header is fixed at 40 bytes
+        let tcp_start = 40;
+
+        if packet.len() < tcp_start + 20 {
+            return None;
+        }
+
+        // Source port
+        let src_port = u16::from_be_bytes([packet[tcp_start], packet[tcp_start + 1]]);
+        // Sequence number
+        let seq = u32::from_be_bytes([
+            packet[tcp_start + 4],
+            packet[tcp_start + 5],
+            packet[tcp_start + 6],
+            packet[tcp_start + 7],
+        ]);
+        // Acknowledgment number
+        let ack = u32::from_be_bytes([
+            packet[tcp_start + 8],
+            packet[tcp_start + 9],
+            packet[tcp_start + 10],
+            packet[tcp_start + 11],
+        ]);
+        // Flags
+        let flags = packet[tcp_start + 13];
+
+        Some((flags, seq, ack, src_port))
     }
 }

@@ -43,6 +43,10 @@ pub async fn run_scan(args: Args) -> Result<()> {
 
     info!("RustNmap v{} starting...", env!("CARGO_PKG_VERSION"));
 
+    // Initialize service database with custom data directory
+    let datadir = shellexpand::tilde(&args.datadir);
+    rustnmap_common::ServiceDatabase::set_data_dir(datadir.as_ref());
+
     // Validate arguments
     if let Err(e) = args.validate() {
         error!("Argument validation failed: {e}");
@@ -203,7 +207,10 @@ fn handle_list_profiles_command(args: &Args) -> Result<()> {
     {
         let mut stdout = std::io::stdout().lock();
         if profiles.is_empty() {
-            writeln!(stdout, "No profiles found. Use --generate-profile to create one.")?;
+            writeln!(
+                stdout,
+                "No profiles found. Use --generate-profile to create one."
+            )?;
             return Ok(());
         }
 
@@ -329,12 +336,24 @@ async fn handle_diff_command(args: &Args, diff_files: &[String]) -> Result<()> {
 
             (before, after)
         } else if diff_files[0].ends_with(".xml") && diff_files[1].ends_with(".xml") {
-            return Err(rustnmap_common::Error::Other(
-                "XML format is not yet supported for file-based diff. Use JSON format.".to_string(),
-            ));
+            let before_content = std::fs::read_to_string(&diff_files[0]).map_err(|e| {
+                rustnmap_common::Error::Other(format!("Failed to read {}: {e}", diff_files[0]))
+            })?;
+            let after_content = std::fs::read_to_string(&diff_files[1]).map_err(|e| {
+                rustnmap_common::Error::Other(format!("Failed to read {}: {e}", diff_files[1]))
+            })?;
+
+            let before = rustnmap_output::parse_nmap_xml(&before_content).map_err(|e| {
+                rustnmap_common::Error::Other(format!("Failed to parse {}: {e}", diff_files[0]))
+            })?;
+            let after = rustnmap_output::parse_nmap_xml(&after_content).map_err(|e| {
+                rustnmap_common::Error::Other(format!("Failed to parse {}: {e}", diff_files[1]))
+            })?;
+
+            (before, after)
         } else {
             return Err(rustnmap_common::Error::Other(format!(
-                "Unsupported file format. Only JSON files are supported. Got: {} and {}",
+                "Unsupported file format. Supported: JSON (.json), XML (.xml). Got: {} and {}",
                 diff_files[0], diff_files[1]
             )));
         };
@@ -420,14 +439,17 @@ fn parse_date_flexible(date_str: &str) -> Option<chrono::DateTime<chrono::Utc>> 
     // Handle relative date expressions
     match date_str.to_lowercase().as_str() {
         "today" => {
-            return now.date_naive()
-                .and_hms_opt(0, 0, 0)
-                .map(|t| chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(t, chrono::Utc));
+            return now.date_naive().and_hms_opt(0, 0, 0).map(|t| {
+                chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(t, chrono::Utc)
+            });
         }
         "yesterday" => {
-            return (now - chrono::Duration::days(1)).date_naive()
+            return (now - chrono::Duration::days(1))
+                .date_naive()
                 .and_hms_opt(0, 0, 0)
-                .map(|t| chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(t, chrono::Utc));
+                .map(|t| {
+                    chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(t, chrono::Utc)
+                });
         }
         "now" => return Some(now),
         _ => {}
@@ -435,22 +457,22 @@ fn parse_date_flexible(date_str: &str) -> Option<chrono::DateTime<chrono::Utc>> 
 
     // Handle relative days (e.g., "-7d", "-30d")
     if date_str.starts_with('-') && date_str.ends_with('d') {
-        if let Ok(days) = date_str[1..date_str.len()-1].parse::<i64>() {
+        if let Ok(days) = date_str[1..date_str.len() - 1].parse::<i64>() {
             return Some(now - chrono::Duration::days(days));
         }
     }
 
     // Try multiple date formats
     let formats = [
-        "%Y-%m-%d",                    // 2026-02-20
-        "%Y-%m-%d %H:%M:%S",           // 2026-02-20 10:30:00
-        "%Y-%m-%dT%H:%M:%S",           // 2026-02-20T10:30:00
-        "%Y-%m-%dT%H:%M:%SZ",          // 2026-02-20T10:30:00Z
-        "%Y-%m-%dT%H:%M:%S%:z",        // 2026-02-20T10:30:00+00:00
-        "%d/%m/%Y",                    // 20/02/2026
-        "%m/%d/%Y",                    // 02/20/2026
-        "%b %d, %Y",                   // Feb 20, 2026
-        "%B %d, %Y",                   // February 20, 2026
+        "%Y-%m-%d",             // 2026-02-20
+        "%Y-%m-%d %H:%M:%S",    // 2026-02-20 10:30:00
+        "%Y-%m-%dT%H:%M:%S",    // 2026-02-20T10:30:00
+        "%Y-%m-%dT%H:%M:%SZ",   // 2026-02-20T10:30:00Z
+        "%Y-%m-%dT%H:%M:%S%:z", // 2026-02-20T10:30:00+00:00
+        "%d/%m/%Y",             // 20/02/2026
+        "%m/%d/%Y",             // 02/20/2026
+        "%b %d, %Y",            // Feb 20, 2026
+        "%B %d, %Y",            // February 20, 2026
     ];
 
     for fmt in &formats {
@@ -461,13 +483,19 @@ fn parse_date_flexible(date_str: &str) -> Option<chrono::DateTime<chrono::Utc>> 
 
         // Try parsing as naive datetime
         if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(date_str, fmt) {
-            return Some(chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(dt, chrono::Utc));
+            return Some(chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(
+                dt,
+                chrono::Utc,
+            ));
         }
 
         // Try parsing as naive date
         if let Ok(date) = chrono::NaiveDate::parse_from_str(date_str, fmt) {
             if let Some(time) = date.and_hms_opt(0, 0, 0) {
-                return Some(chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(time, chrono::Utc));
+                return Some(chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(
+                    time,
+                    chrono::Utc,
+                ));
             }
         }
     }
@@ -1028,10 +1056,11 @@ fn print_host_normal<W: Write>(handle: &mut W, args: &Args, host: &HostResult) {
 
     // Port information
     if !host.ports.is_empty() {
-        let open_ports: Vec<&PortResult> = host
+        // Show all non-closed ports (open, filtered, etc.)
+        let visible_ports: Vec<&PortResult> = host
             .ports
             .iter()
-            .filter(|p| matches!(p.state, PortState::Open))
+            .filter(|p| !matches!(p.state, PortState::Closed))
             .collect();
 
         let closed_count = host
@@ -1044,9 +1073,9 @@ fn print_host_normal<W: Write>(handle: &mut W, args: &Args, host: &HostResult) {
             let _ = writeln!(handle, "Not shown: {closed_count} closed ports");
         }
 
-        if !open_ports.is_empty() {
-            let _ = writeln!(handle, "PORT     STATE SERVICE     VERSION");
-            for port in open_ports {
+        if !visible_ports.is_empty() {
+            let _ = writeln!(handle, "PORT     STATE SERVICE");
+            for port in visible_ports {
                 print_port_normal(handle, args, port);
             }
         }
@@ -1076,14 +1105,17 @@ fn print_port_normal<W: Write>(handle: &mut W, _args: &Args, port: &PortResult) 
     };
 
     if let Some(ref service) = port.service {
-        let version = service.version.as_deref().unwrap_or("");
         let _ = writeln!(
             handle,
-            "{}/{:<5} {:<7} {:<11} {}",
-            port.number, protocol, state_str, service.name, version
+            "{}/{:<5} {:<8} {}",
+            port.number, protocol, state_str, service.name
         );
     } else {
-        let _ = writeln!(handle, "{}/{:<5} {:<7}", port.number, protocol, state_str);
+        let _ = writeln!(
+            handle,
+            "{}/{:<5} {:<8} unknown",
+            port.number, protocol, state_str
+        );
     }
 }
 

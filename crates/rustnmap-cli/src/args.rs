@@ -615,6 +615,15 @@ pub struct Args {
         default_value = "~/.rustnmap/scans.db"
     )]
     pub db_path: String,
+
+    /// Data directory for Nmap databases (nmap-services, nmap-os-db, etc.)
+    #[arg(
+        long,
+        help_heading = "Scan Management",
+        value_name = "DIR",
+        default_value = "~/.rustnmap"
+    )]
+    pub datadir: String,
 }
 
 impl Args {

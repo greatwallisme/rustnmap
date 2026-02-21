@@ -174,7 +174,7 @@ impl TcpSynTraceroute {
         _expected_target: Ipv4Addr,
         expected_port: u16,
     ) -> Option<ProbeResponse> {
-        if let Some((flags, _seq, ack, src_port)) = parse_tcp_response(packet) {
+        if let Some((flags, _seq, ack, src_port, _src_ip)) = parse_tcp_response(packet) {
             // Verify this is a response to our probe
             if src_port != expected_port {
                 return None;
@@ -387,17 +387,14 @@ impl TcpAckTraceroute {
         expected_target: Ipv4Addr,
         expected_port: u16,
     ) -> Option<ProbeResponse> {
-        if let Some((flags, _seq, _ack, src_port)) = parse_tcp_response(packet) {
+        if let Some((flags, _seq, _ack, src_port, src_ip)) = parse_tcp_response(packet) {
             // Verify this is a response to our probe
             if src_port != expected_port {
                 return None;
             }
 
-            // Extract source IP from IP header
-            if packet.len() < 20 {
-                return None;
-            }
-            let source_ip = Ipv4Addr::new(packet[12], packet[13], packet[14], packet[15]);
+            // Use the parsed source IP from the response
+            let source_ip = src_ip;
 
             // For ACK probe, RST typically means we reached the target
             // (target has no matching connection and sends RST)

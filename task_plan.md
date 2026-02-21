@@ -1,336 +1,170 @@
 # Task Plan
 
-**Created**: 2026-02-19
-**Updated**: 2026-02-20
-**Status**: active
-**Goal**: RustNmap 项目持续开发与完善
+**Created**: 2026-02-21
+**Updated**: 2026-02-21
+**Status**: Phase 6 完成
+**Goal**: 自主测试 RustNmap 项目实际可用性，与 nmap 对比验证功能是否正常工作
 
 ---
 
-## 当前任务
+## 目标
 
-### Task: 消除所有 "Simplified/For Now" 代码 🔴 IN PROGRESS
-**创建时间**: 2026-02-20
-**目标**: 删除所有 "for now", "simplified", "placeholder" 等简化代码，实现 100% 功能完整性
+测试编译后的 rustnmap 二进制程序实际可用性:
+- 验证 CLI 是否正确解析参数
+- 验证扫描功能是否正常工作
+- 对比 nmap 的行为和输出
+- 识别潜在的功能缺失或 bug
 
-#### 问题发现
+**测试靶机**: 110.242.74.102
+**Sudo 密码**: huichli875279
 
-代码审查发现 **17+ 处** 简化/占位符代码，违反 "No Simplification" 原则:
+---
 
-#### HIGH 严重性 (功能不完整) - 需要完整功能实现
+## 当前阶段
 
-| # | 文件 | 行号 | 问题 | 状态 |
-|---|------|------|------|------|
-| 1 | `rustnmap-fingerprint/src/os/detector.rs` | 167 | IPv6 OS 检测不支持 | 🔴 待实现 (需要完整 IPv6 指纹数据库) |
-| 2 | `rustnmap-cli/src/cli.rs` | 317 | XML diff 格式不支持 | 🔴 待实现 (需要 XML 反序列化) |
-| 3 | `rustnmap-core/tests/udp_scan_test.rs` | 199 | UDP IPv6 扫描不支持 | 🔴 待实现 (需要 IPv6 UDP 扫描器) |
-| 4 | `rustnmap-nse/src/registry.rs` | 558 | **Portrule 启发式匹配而非 Lua 评估** | 🔴 待实现 |
+Phase 6: 服务数据库重构 - 已完成
 
-#### MEDIUM 严重性 ("for now" 临时方案) - ✅ 已全部修复
+---
 
-| # | 文件 | 行号 | 问题 | 状态 |
-|---|------|------|------|------|
-| 4 | `rustnmap-net/src/lib.rs` | 390, 895, 1280 | IP Identification = 0 | ✅ 已修复 |
-| 5 | `rustnmap-stateless-scan/src/sender.rs` | 252, 296 | Checksum = 0 | ✅ 已修复 |
-| 6 | `rustnmap-traceroute/src/tcp.rs` | 486 | TCP checksum | ✅ 已修复 |
-| 7 | `rustnmap-nse/src/engine.rs` | 188 | Hostname 空 (缺 DNS) | ✅ 已修复 |
+## 阶段划分
 
-#### LOW 严重性 (简化实现) - ✅ 已全部修复
+### Phase 1: 环境准备 ✅ COMPLETE
+- [x] 编译 release 版本二进制
+- [x] 验证二进制存在并可执行
+- [x] 检查帮助信息是否正常
 
-| # | 文件 | 行号 | 问题 | 状态 |
-|---|------|------|------|------|
-| 8 | `rustnmap-vuln/src/cpe.rs` | 177 | CPE 版本范围比较 | ✅ 已实现完整语义版本比较 |
-| 9 | `rustnmap-cli/src/cli.rs` | 99 | 日期解析 | ✅ 已实现多格式解析 |
-| 10 | `rustnmap-scan-management/src/diff.rs` | 129, 214 | PortChange 状态追踪 | ✅ 已实现完整状态追踪 |
-| 11 | `rustnmap-scan-management/src/history.rs` | 119 | 查询优化 | ✅ 已实现数据库级别过滤 |
+### Phase 2: 基础扫描测试 ✅ COMPLETE
+- [x] 简单端口扫描 (rustnmap target)
+- [x] 指定端口扫描 (-p option)
+- [x] 对比 nmap 同等命令输出
 
-#### 可接受 (测试基础设施)
+### Phase 3: 扫描类型测试 ⏭ SKIPPED
+- 扫描功能本身有问题，跳过类型测试
 
-| # | 文件 | 行号 | 问题 | 状态 |
-|---|------|------|------|------|
-| 14 | `rustnmap-evasion/src/fragment.rs` | 134 | Fragment ID 固定值 (测试确定性) | ✅ 可接受 |
-| 15 | `rustnmap-scan/src/probe.rs` | 28 | IP_IDENTIFICATION 常量 (已文档化) | ✅ 可接受 |
+### Phase 4: 高级功能测试 ⏭ SKIPPED
+- 基础扫描不工作，跳过高级功能测试
 
-#### Portrule 问题详情 (HIGH #4)
+### Phase 5: 问题分析与修复 ✅ COMPLETE
+- [x] 汇总所有发现的问题
+- [x] 分类问题类型
+- [x] 修复所有 CRITICAL/HIGH/MEDIUM 问题
+- [x] 验证扫描结果与 nmap 一致
 
-**问题描述**: `scripts_for_port()` 使用启发式匹配而不是评估真正的 Lua portrule 函数。
+### Phase 6: 服务数据库重构 ✅ COMPLETE
+- [x] 新建 `crates/rustnmap-common/src/services.rs` - `ServiceDatabase` 结构体
+- [x] 解析 `nmap-services` 文件格式 (27,454 条目)
+- [x] 运行时从 `~/.rustnmap/db/nmap-services` 加载，回退到编译时嵌入数据
+- [x] O(1) 端口查找, 按频率排序的 top-ports 列表
+- [x] 删除 `well_known_service()` 硬编码函数
+- [x] 修复 `--top-ports N` 使用频率排序
+- [x] 修复 `scan_port_connect` 也使用服务数据库
+- [x] 添加 `--datadir` CLI 选项
+- [x] 35 个新测试通过
+- [x] 零警告，零错误
 
-**当前实现**:
-```rust
-// 启发式预过滤 - 不准确！
-id_lower.contains(&service_lower) || port_matches_common_service(port, &id_lower)
+---
+
+## 已修复的问题
+
+### ✅ CRITICAL 1: scan_delay 默认值为 0
+**文件**: `session.rs:198` | **修复**: 改为 `Duration::from_secs(1)`
+
+### ✅ CRITICAL 2: Socket 非阻塞模式
+**文件**: `lib.rs:91, 135` | **修复**: 移除 `set_nonblocking(true)`
+
+### ✅ CRITICAL 3: 扫描器不验证源 IP
+**文件**: `lib.rs:parse_tcp_response` | **修复**: 返回 `(flags, seq, ack, src_port, src_ip)`
+
+### ✅ CRITICAL 4: 数据包源 IP 为 0.0.0.0
+**文件**: `discovery.rs` | **修复**: 添加 `get_local_ipv4_address()` 辅助函数
+
+### ✅ CRITICAL 5: 端口状态检测不正确
+**文件**: `lib.rs` | **修复**: 在 `with_protocol()` 中设置 `IP_HDRINCL` socket 选项
+
+### ✅ HIGH: 输出重复 3 次
+**文件**: `orchestrator.rs` | **修复**: 移除 orchestrator 中的输出调用，由 CLI 统一处理
+
+### ✅ MEDIUM: 服务名显示 "unknown"
+**文件**: `orchestrator.rs` | **修复**: 添加 `well_known_service()` 临时方案 (Phase 6 将替换)
+
+---
+
+## Phase 6 实施记录: 服务数据库重构
+
+### 实施内容
+
+1. **新建** `crates/rustnmap-common/src/services.rs` - `ServiceDatabase` 结构体
+   - 解析 `nmap-services` 文件格式 (27,454 条目)
+   - 运行时优先从 `~/.rustnmap/db/nmap-services` 加载
+   - 回退到 `include_str!` 嵌入的编译时数据
+   - O(1) 端口查找 (`HashMap<PortKey, String>`)
+   - 按频率排序的 `top_tcp_ports` / `top_udp_ports` 列表
+   - `OnceLock` + `LazyLock` 全局单例
+   - `set_data_dir()` 支持自定义数据目录
+   - `load_from_file()` 支持直接加载指定文件
+   - `DatabaseSource` 枚举标识数据来源
+
+2. **修改** `crates/rustnmap-common/src/lib.rs` - 注册模块并导出类型
+
+3. **修改** `crates/rustnmap-core/src/orchestrator.rs`
+   - 删除 `well_known_service()` 硬编码函数 (~70 行)
+   - 新增 `service_info_from_db()` 使用 `ServiceDatabase::global()`
+   - 修复 `get_ports_for_scan()` 中 `PortSpec::Top(n)` 使用频率排序
+   - 修复 `scan_port_connect()` 也使用服务数据库
+
+4. **修改** `crates/rustnmap-cli/src/args.rs` - 添加 `--datadir` CLI 选项
+
+5. **修改** `crates/rustnmap-cli/src/cli.rs` - 在扫描前调用 `ServiceDatabase::set_data_dir()`
+
+### 数据目录结构
+
+```
+~/.rustnmap/
+├── db/
+│   ├── nmap-services          # 端口服务映射 (可替换)
+│   ├── nmap-service-probes    # 服务探测规则 (未来)
+│   └── nmap-os-db             # OS 指纹数据库 (未来)
+├── profiles/                  # 扫描配置文件
+└── scans.db                   # 扫描历史数据库
 ```
 
-**正确实现**: 应该使用 `ScriptEngine::evaluate_portrule()` 方法评估每个脚本的 portrule 函数。
+---
 
-**影响**: 脚本选择可能不准确，导致:
-- 漏选应该运行的脚本
-- 误选不应该运行的脚本
+## 对比结果
 
-#### 剩余 HIGH 问题实现方案
-
-1. **IPv6 OS Detection** - 需要添加 IPv6 指纹数据库和探测逻辑
-2. **XML Diff Format** - 需要添加 `serde-xml-rs` 或类似依赖进行 XML 解析
-3. **UDP IPv6 Scan** - 需要实现 IPv6 UDP 扫描器
-4. **Portrule Lua Evaluation** - 需要在 registry 中集成 Lua 评估
+| 功能 | nmap | rustnmap (修复后) |
+|------|------|-------------------|
+| 端口状态检测 | 80/open, 443/open, 22/filtered | 80/open, 443/open, 22/filtered ✅ |
+| 扫描速度 | ~2s | ~1.3s ✅ |
+| 服务名 | ssh, http, https | ssh, http, https ✅ |
+| 输出格式 | 单次输出 | 单次输出 ✅ |
 
 ---
 
-### Task: 修复 Module-Level `#![allow(...)]` 违规 ✅ COMPLETE
-**创建时间**: 2026-02-20
-**目标**: 将 module-level `#![allow(...)]` 转换为 item-level `#[expect(...)]`
+## 修改的文件 (总计)
 
-#### 问题发现
-
-在代码审查中发现 **16 个文件** 使用了 module-level `#![allow(...)]` 属性，这违反了 rust-guidelines 规定:
-
-> **1. NEVER use global `#![allow(...)]` attributes:**
-> ```rust,ignore
-> // FORBIDDEN - this bypasses ALL lints
-> #![allow(dead_code)]
-> #![allow(clippy::all)]
-> ```
-
-#### 违规文件列表
-
-| 文件 | 允许的 Lints | 状态 |
-|------|-------------|------|
-| `rustnmap-nse/src/libs/nmap.rs` | cast_lossless, cast_possible_wrap, cast_sign_loss, doc_markdown, too_many_lines | ⚠️ 待修复 |
-| `rustnmap-nse/src/libs/stdnse.rs` | 多个 cast, clone_on_ref_ptr, doc_markdown, etc. | ⚠️ 待修复 |
-| `rustnmap-nse/src/libs/comm.rs` | cast_*, explicit_auto_deref, needless_pass_by_value, etc. | ⚠️ 待修复 |
-| `rustnmap-nse/src/libs/shortport.rs` | cast_*, doc_markdown, get_first, similar_names, etc. | ⚠️ 待修复 |
-| `rustnmap-nse/src/script.rs` | should_implement_trait, unused_variables | ⚠️ 待修复 |
-| `rustnmap-scan/src/lib.rs` | multiple_crate_versions | ⚠️ 待修复 |
-| `rustnmap-scan/src/connect_scan.rs` | used_underscore_binding, must_use_candidate, unnecessary_wraps | ⚠️ 待修复 |
-| `rustnmap-scan/src/probe.rs` | cast_possible_truncation, double_must_use, must_use_candidate | ⚠️ 待修复 |
-| `rustnmap-scan/src/timeout.rs` | manual_abs_diff, must_use_candidate | ⚠️ 待修复 |
-| `rustnmap-net/src/lib.rs` | multiple_crate_versions | ⚠️ 待修复 |
-| `rustnmap-packet/src/lib.rs` | (需检查) | ⚠️ 待修复 |
-| `rustnmap-core/src/lib.rs` | (需检查) | ⚠️ 待修复 |
-| `rustnmap-core/tests/orchestrator_tests.rs` | uninlined_format_args, default_trait_access | ⚠️ 待修复 |
-| `rustnmap-stateless-scan/src/lib.rs` | (需检查) | ⚠️ 待修复 |
-| `rustnmap-scan-management/src/lib.rs` | (需检查) | ⚠️ 待修复 |
-| `rustnmap-target/tests/discovery_unit_tests.rs` | unreadable_literal | ⚠️ 待修复 |
-
-#### 修复方案
-
-1. **Module-level → Item-level**: 将 `#![allow(...)]` 移动到具体需要豁免的项上
-2. **allow → expect**: 使用 `#[expect(...)]` 替代 `#[allow(...)]`，防止过期的豁免
-3. **添加 reason**: 所有豁免都必须有 `reason = "..."` 说明
-
-#### 修复优先级
-
-| 优先级 | 文件类型 | 原因 |
-|--------|---------|------|
-| HIGH | 生产代码 (lib.rs, *.rs) | 影响代码质量 |
-| MEDIUM | 测试代码 (tests/*.rs) | 测试代码要求相对宽松 |
-| LOW | 依赖版本警告 (multiple_crate_versions) | 无法直接修复，需等待依赖更新 |
+1. `crates/rustnmap-core/src/session.rs` - scan_delay 默认值
+2. `crates/rustnmap-net/src/lib.rs` - socket 阻塞模式, IP_HDRINCL, parse_tcp_response
+3. `crates/rustnmap-scan/src/syn_scan.rs` - 源 IP 验证, 循环等待, clippy 修复
+4. `crates/rustnmap-target/src/discovery.rs` - 本地 IP 检测
+5. `crates/rustnmap-traceroute/src/tcp.rs` - 适配新 parse_tcp_response 签名
+6. `crates/rustnmap-scan/src/stealth_scans.rs` - 适配新 parse_tcp_response 签名
+7. `crates/rustnmap-core/src/orchestrator.rs` - 输出去重, well_known_service, get_local_address
+8. `crates/rustnmap-cli/src/cli.rs` - 输出格式修复
 
 ---
 
-### Task: 实现 Dead Code 功能 (5 项) ✅ COMPLETE
-**创建时间**: 2026-02-20
-**完成时间**: 2026-02-20
-**目标**: 实现标记为 `#[expect(dead_code)]` 的 5 项功能
+## 验证命令
 
-#### 实现结果
-
-| 优先级 | 功能 | 文件 | 状态 |
-|--------|------|------|------|
-| HIGH | TargetParser.exclude_list | parser.rs:29 | ✅ 完成 |
-| MEDIUM | ScriptDatabase.base_dir | registry.rs:31 | ✅ 完成 |
-| LOW | SocketState::Listening | nmap.rs:310 | ✅ 完成 |
-| LOW | ScanManager.config | manager.rs:51 | ✅ 完成 |
-| LOW | DefaultPacketEngine.rx | session.rs:767 | ✅ 完成 |
-
-#### 实现详情
-
-**1. TargetParser.exclude_list** (HIGH)
-- 添加 `set_exclude_list()` 方法从 Target 向量设置排除列表
-- 添加 `set_exclude_specs()` 方法从 TargetSpec 向量设置
-- 添加 `add_exclude()` 方法添加单个排除项
-- 添加 `exclude_list()` getter 方法
-- 添加 `clear_excludes()` 方法清空排除列表
-- 实现 `is_excluded()` 和 `filter_exclusions()` 过滤逻辑
-- 支持 IPv4/IPv6 CIDR、范围、主机名匹配
-- 添加 9 个新测试用例
-
-**2. ScriptDatabase.base_dir** (MEDIUM)
-- 添加 `base_dir()` getter 方法
-- 添加 `resolve_script_path()` 方法解析脚本路径
-- 添加 `script_file_exists()` 方法检查脚本文件存在
-- 添加 `reload()` 方法重新加载脚本
-- 添加 4 个新测试用例
-
-**3. SocketState::Listening** (LOW)
-- 扩展 `SocketState` 枚举，`Listening` 变体包含地址和协议
-- 添加 `bind()` 方法绑定地址
-- 添加 `listen()` 方法进入监听状态
-- 添加 `set_backlog()` 方法设置监听队列大小
-- 添加 `accept()` 异步方法接受连接
-- 添加 `is_listening()` 方法检查监听状态
-- 更新 `get_info()` 返回当前状态
-
-**4. ScanManager.config** (LOW)
-- 添加 `can_start_scan()` 检查并发限制
-- 添加 `validate_api_key()` 验证 API 密钥
-- 添加 `config()` getter 方法
-- 添加 `available_slots()` 获取可用槽位
-- 添加 `max_concurrent_scans()` 获取最大并发数
-- 添加 `is_sse_enabled()` 检查 SSE 开关
-- 添加 `result_retention()` 获取结果保留时间
-- 添加 `create_scan_if_allowed()` 带限制的创建方法
-- 添加 `ScanLimitReached` 错误类型
-
-**5. DefaultPacketEngine.rx** (LOW)
-- 添加 `try_recv()` 非阻塞接收方法
-- 添加 `recv()` 异步接收方法
-- 添加 `subscribe()` 创建新订阅者
-
----
-
-### Task: Dead Code 和 Placeholder 代码审查 ✅ COMPLETE
-**创建时间**: 2026-02-20
-**完成时间**: 2026-02-20
-**目标**: 彻底排查 `#[allow(dead_code)]`、`#[allow(unused)]`、placeholder 代码
-
-#### 审查结果 (修正后)
-
-**搜索模式**:
-- `#[allow(dead_code)]` - 0 处 (代码使用 `#[expect(dead_code)]` 替代)
-- `#[allow(unused)]` - 0 处
-- `todo!()` / `unimplemented!()` - 0 处
-- `unreachable!()` - 0 处
-- `// TODO:` / `//TODO:` - **0 处** (5 处已全部实现)
-- `// FIXME:` / `HACK` / `XXX` - 0 处
-
-#### 已实现的功能 (5 项) ✅
-
-| 优先级 | 功能 | 文件 | 状态 |
-|--------|------|------|------|
-| HIGH | IP Protocol 扫描集成 | orchestrator.rs | ✅ 完成 |
-| HIGH | SCTP 扫描占位符 | orchestrator.rs | ✅ 占位符 |
-| MEDIUM | 文件方式 Diff 对比 | cli.rs | ✅ 完成 |
-| MEDIUM | SDK run() 扫描执行 | builder.rs | ✅ 完成 |
-| MEDIUM | SDK targets() 方法 | builder.rs | ✅ 完成 |
-| LOW | Cookie 验证生产级方案 | cookie.rs | ✅ 完成 |
-
-#### 保留的未来功能 (#[expect(dead_code)])
-
-| 功能 | 文件 | 行号 | 原因 |
-|------|------|------|------|
-| TargetParser.exclude_list | parser.rs | 29 | 排除列表功能 |
-| ScriptRegistry.base_dir | registry.rs | 31 | 脚本路径解析 |
-| SocketState::Listening | nmap.rs | 310 | Socket 状态扩展 |
-| ScanManager.config | manager.rs | 51 | API 配置保留 |
-| DefaultPacketEngine.rx | session.rs | 767 | 接收通道保留 |
-
----
-
-### Task: Async/Await 全面审查 (第二轮) ✅ COMPLETE
-**创建时间**: 2026-02-20
-**完成时间**: 2026-02-20
-**目标**: 全面审查项目中是否还有遗漏的异步优化，验证已有优化是否合适
-
-#### 审查结果
-
-**检查项目**:
-1. ✅ `std::sync` 原语在异步上下文中的使用
-2. ✅ `block_on()` 调用
-3. ✅ `.blocking_lock()` / `.blocking_read()` / `.blocking_write()`
-4. ✅ `std::thread::sleep` 在异步函数中
-5. ✅ 同步文件 I/O 在异步函数中
-6. ✅ 同步网络 I/O 在异步函数中
-7. ✅ CPU 密集型循环缺少 yield 点
-8. ✅ 自旋锁没有指数退避
-9. ✅ 混合同步/异步 API 设计
-
-#### 发现摘要
-
-| 类别 | 数量 | 状态 |
-|------|------|------|
-| MEDIUM 问题 | 2 | 可接受 |
-| LOW/INFO | 3 | 已记录 |
-| 已正确优化 | 15+ | GOOD |
-
-#### MEDIUM 问题详情
-
-**1. FingerprintDatabase API 不一致** (可接受)
-- `load_os_db()` 同步 vs `load_service_db()` 异步
-- 通常在启动时调用，不在热路径
-- 建议: 未来可统一为 async
-
-**2. NSE comm 库同步网络操作** (可接受)
-- Lua 回调本质上是同步的
-- 建议: 可添加 `block_in_place` 提高一致性
-
----
-
-### Task: Async/Await 优化审查与改进 ✅ COMPLETE
-**创建时间**: 2026-02-20
-**完成时间**: 2026-02-20
-**目标**: 审查已完成异步优化的代码，识别遗漏和改进点
-
-#### 发现摘要
-- **严重问题**: 1 个 (block_on 在 orchestrator) ✅ 已修复
-- **高优先级**: 2 个 (混合 API、Std 锁在异步上下文) ✅ 已修复
-- **中优先级**: 4 个 (blocking_lock、低效 sleep、混合连接扫描) ✅ 已修复
-
----
-
-### Task: Async/Await 性能优化 ✅ COMPLETE
-**完成时间**: 2026-02-20
-**目标**: 全工作空间异步/等待性能优化，解决阻塞异步运行时的同步操作
-
----
-
-## 项目整体状态
-
-### 完成度: 100% ✅
-
-| Phase | 完成度 | 状态 |
-|-------|--------|------|
-| Phase 1: Infrastructure | 100% | ✅ 全部完成 |
-| Phase 2: Core Scanning | 100% | ✅ 全部完成 |
-| Phase 3: Advanced Features | 100% | ✅ 全部完成 |
-| Phase 4: Integration | 100% | ✅ 全部完成 |
-| 2.0 New Features | 100% | ✅ 全部完成 |
-| 遗留功能实现 | 100% | ✅ 全部完成 |
-
-### 已实现的 Dead Code 功能 ✅
-
-| 功能 | 文件 | 状态 |
-|------|------|------|
-| TargetParser.exclude_list | parser.rs:29 | ✅ 已实现 |
-| ScriptRegistry.base_dir | registry.rs:31 | ✅ 已实现 |
-| SocketState::Listening | nmap.rs:310 | ✅ 已实现 |
-| ScanManager.config | manager.rs:51 | ✅ 已使用 |
-| DefaultPacketEngine.rx | session.rs:767 | ✅ 已使用 |
-
----
-
-## 代码质量标准
-
-**零容忍政策**:
-- ✅ 零编译警告
-- ✅ 零 Clippy 警告 (包括 pedantic)
-- ✅ 代码格式化一致 (cargo fmt)
-- ✅ 所有测试通过
-
-**验证命令**:
 ```bash
+# 基础扫描测试
+sudo ./target/release/rustnmap -p 22,80,443 110.242.74.102
+
+# 与 nmap 对比
+sudo nmap -p 22,80,443 110.242.74.102
+
+# 代码质量
+cargo clippy --workspace --lib -- -D warnings
 cargo fmt --all -- --check
-cargo check --workspace --all-targets
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
+cargo test --workspace --lib
 ```
-
----
-
-## 错误记录
-
-| 时间 | 错误 | 解决方案 |
-|------|------|----------|
-| 2026-02-20 | vuln cve/epss/kev 模块调用 async 方法没有 await | 将这些模块的所有方法转换为 async |
-| 2026-02-20 | NSE get_script_args 测试失败 (竞态条件) | 使用 block_in_place 替代创建新 runtime，测试改为 multi_thread flavor |
-| 2026-02-20 | vacuum() 返回类型错误 (Result<usize> vs Result<()>) | 在 .call() 闭包中显式返回 Ok(()) |

@@ -195,7 +195,9 @@ impl Default for ScanConfig {
             nse_scripts: false,
             nse_categories: Vec::new(),
             host_timeout: std::time::Duration::from_secs(900),
-            scan_delay: std::time::Duration::ZERO,
+            // Default scan delay of 1 second, also used as initial RTT timeout for scanners.
+            // Nmap T3 (Normal) uses similar timing with ~1s initial RTT estimates.
+            scan_delay: std::time::Duration::from_secs(1),
             data_payload: None,
             evasion_config: None,
             two_phase_scan: false,
