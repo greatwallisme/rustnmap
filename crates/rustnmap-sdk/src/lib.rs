@@ -11,21 +11,15 @@
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<()> {
-//!     // Create scanner
-//!     let scanner = Scanner::new()?;
+//!     // Create scanner with targets
+//!     let scanner = Scanner::new()?.with_targets("192.168.1.1");
 //!
 //!     // Run a scan
-//!     let result = scanner
-//!         .targets(["192.168.1.0/24"])
-//!         .ports("1-1000")
-//!         .syn_scan()
-//!         .service_detection(true)
-//!         .run()
-//!         .await?;
+//!     let result = scanner.run().await?;
 //!
 //!     // Process results
 //!     for host in &result.hosts {
-//!         println!("{}: {} open ports", host.ip, host.ports.len());
+//!         let _ = format!("{}: {} open ports", host.ip, host.ports.len());
 //!     }
 //!
 //!     Ok(())
