@@ -135,26 +135,30 @@ fn test_service_detection_with_mock_response() {
     };
 
     // Create a probe with this rule
-    let mut probe = ProbeDefinition::new_tcp("SSHProbe".to_string(), b"".to_vec());
+    let mut probe = ProbeDefinition::new_tcp("SSHProbe".to_string(), Vec::new());
     probe.add_match(rule);
 
-    // Test response matching
+    // Test response matching with pcre2 (bytes API)
     let response = b"SSH-2.0-OpenSSH_8.4p1\r\n";
-    let response_str = String::from_utf8_lossy(response);
 
     let regex = probe.matches[0]
         .compile_regex()
         .expect("Failed to compile regex");
-    let captures = regex.captures(&response_str);
+    let captures_result = regex.captures(response);
 
-    assert!(captures.is_some(), "Expected regex to match");
+    assert!(captures_result.is_ok(), "Expected regex to compile and match");
 
-    let captures = captures.unwrap();
+    let captures_opt = captures_result.unwrap();
+    assert!(captures_opt.is_some(), "Expected regex to match");
+
+    let captures = captures_opt.unwrap();
     let mut capture_map = HashMap::new();
-    for (i, cap) in captures.iter().enumerate() {
-        if let Some(m) = cap {
-            capture_map.insert(i, m.as_str().to_string());
-        }
+
+    // Get capture groups by index (group 0 is full match, we start from 1)
+    let mut i = 1;
+    while let Some(cap) = captures.get(i) {
+        capture_map.insert(i, cap.as_bytes().to_vec());
+        i += 1;
     }
 
     let result = probe.matches[0].apply(&capture_map);
@@ -197,9 +201,9 @@ fn test_version_template_extraction() {
     };
 
     let mut captures = HashMap::new();
-    captures.insert(1, "Apache".to_string());
-    captures.insert(2, "2.4.41".to_string());
-    captures.insert(3, "Ubuntu".to_string());
+    captures.insert(1, b"Apache".to_vec());
+    captures.insert(2, b"2.4.41".to_vec());
+    captures.insert(3, b"Ubuntu".to_vec());
 
     let result = rule.apply(&captures);
 
@@ -244,9 +248,9 @@ fn test_regex_pattern_with_flags() {
 
     let regex = rule.compile_regex().expect("Failed to compile regex");
 
-    assert!(regex.is_match("SSH-2.0-OpenSSH"));
-    assert!(regex.is_match("ssh-2.0-OpenSSH"));
-    assert!(regex.is_match("Ssh-2.0-OpenSSH"));
+    assert!(regex.is_match(b"SSH-2.0-OpenSSH").unwrap());
+    assert!(regex.is_match(b"ssh-2.0-OpenSSH").unwrap());
+    assert!(regex.is_match(b"Ssh-2.0-OpenSSH").unwrap());
 }
 
 /// Test empty capture group handling.
@@ -363,4 +367,72 @@ fn test_service_info_creation() {
 
     let info_low = ServiceInfo::new("ftp").with_confidence(0);
     assert_eq!(info_low.confidence, 0); // Min is 0
+}
+
+/// Test loading real nmap-service-probes database and checking Apache patterns.
+#[test]
+fn test_real_database_apache_patterns() {
+    use std::fs;
+    use std::path::Path;
+
+    // Try to load the user's nmap-service-probes database
+    let db_path = Path::new("/home/greatwallimse/.rustnmap/db/nmap-service-probes");
+    if !db_path.exists() {
+        println!("Skipping test - database file not found at {:?}", db_path);
+        return;
+    }
+
+    let content = fs::read_to_string(db_path).expect("Failed to read database file");
+    let db = ProbeDatabase::parse(&content).expect("Failed to parse database");
+    println!("Total probes loaded: {}", db.probe_count());
+
+    // Get GetRequest probe
+    let get_request = db.get_probe("GetRequest");
+    assert!(get_request.is_some(), "GetRequest probe should exist");
+
+    let get_request = get_request.unwrap();
+    println!("GetRequest probe has {} match rules", get_request.matches.len());
+
+    // Find Apache patterns that match the scanme.nmap.org response
+    let scanme_response = b"HTTP/1.1 200 OK\r\nDate: Sun, 22 Feb 2026 02:31:04 GMT\r\nServer: Apache/2.4.7 (Ubuntu)\r\n";
+
+    let mut apache_match_count = 0;
+    let mut total_apache_rules = 0;
+
+    // Print all "Server: Apache[/ ]" patterns to see what they look like
+    for (i, rule) in get_request.matches.iter().enumerate() {
+        if rule.pattern.contains("Apache[/ ]") {
+            total_apache_rules += 1;
+            let pattern_end = &rule.pattern[rule.pattern.len().saturating_sub(100)..];
+            println!("Rule {} with Apache[/ ]: ...{}", i + 1, pattern_end);
+
+            // Check if pattern ends with a capture group for non-CRLF characters
+            // The pattern should end with something like ([^\r\n]+) or ([^\r\n]*)
+            if rule.pattern.ends_with("+)") || rule.pattern.contains("([^\r\n]+)") {
+                apache_match_count += 1;
+                println!("  -> Contains capture group for non-CRLF chars!");
+
+                // Try to match
+                if let Ok(regex) = rule.compile_regex() {
+                    if let Ok(Some(_)) = regex.captures(scanme_response) {
+                        println!("  -> MATCHED the scanme.nmap.org response!");
+                        if let Some(ref product) = rule.product_template {
+                            println!("  -> Product: {}", product.value);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    println!("Total Apache rules: {}", total_apache_rules);
+    println!("Total Apache patterns with capture groups: {}", apache_match_count);
+
+    println!("Total Apache rules: {}", total_apache_rules);
+    println!("Total Apache patterns with capture groups: {}", apache_match_count);
+
+    assert!(
+        apache_match_count > 0,
+        "Should have at least one Apache pattern with capture groups"
+    );
 }

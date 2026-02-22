@@ -65,11 +65,13 @@ impl TcpConnectScanner {
             if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread {
                 // Clone data needed for the blocking operation
                 let target_clone = target.clone();
-                match handle.block_on(async {
-                    tokio::task::spawn_blocking(move || {
-                        Self::scan_port_impl_blocking_static(&target_clone, port, protocol)
+                match tokio::task::block_in_place(|| {
+                    handle.block_on(async {
+                        tokio::task::spawn_blocking(move || {
+                            Self::scan_port_impl_blocking_static(&target_clone, port, protocol)
+                        })
+                        .await
                     })
-                    .await
                 }) {
                     Ok(state) => return state,
                     Err(_) => return PortState::Filtered,

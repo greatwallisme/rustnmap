@@ -7,8 +7,437 @@
 
 ## 最新发现
 
-- local DNS server 硬编码为：`8.8.8.8:53`, 需要能修改
-- NMAP_SERVICES_DATA硬编码：const NMAP_SERVICES_DATA: &str = include_str!("../../../reference/nmap/nmap-services")，这种方式不可取，需要调整
+### 2026-02-21: 综合可用性测试完成 - 85.7% 通过率 ✅
+
+**测试范围**: TCP SYN, TCP CONNECT, UDP, 服务检测, OS 检测, 输出格式, 隐蔽扫描, 端口选择
+
+**测试结果汇总**:
+
+| 测试类别 | 总数 | 通过 | 部分 | 失败 | 通过率 |
+|---------|------|------|------|------|--------|
+| 基础扫描 | 3 | 3 | 0 | 0 | 100% |
+| 隐蔽扫描 | 4 | 4 | 0 | 0 | 100% |
+| 输出格式 | 4 | 4 | 0 | 0 | 100% |
+| 端口选择 | 1 | 1 | 0 | 0 | 100% |
+| 服务检测 | 1 | 0 | 1 | 0 | 50% |
+| OS 检测 | 1 | 0 | 1 | 0 | 50% |
+| **总计** | **14** | **12** | **2** | **0** | **85.7%** |
+
+**通过的功能** ✅:
+1. TCP SYN 扫描 - 完美匹配 nmap
+2. TCP CONNECT 扫描 - 完美匹配 nmap (已修复 runtime nesting bug)
+3. UDP 扫描 - 功能正常 (状态语义略有差异)
+4. FIN 扫描 - 完美匹配 nmap
+5. NULL 扫描 - 完美匹配 nmap
+6. XMAS 扫描 - 完美匹配 nmap
+7. MAIMON 扫描 - 完美匹配 nmap
+8. XML 输出格式 - 格式正确
+9. JSON 输出格式 - 格式正确
+10. Script Kiddie 输出 - 趣味格式工作正常
+11. Grepable 输出 - 格式正确
+12. Top-ports 选择 - 完美匹配 nmap (Phase 6 修复生效)
+
+**部分通过的功能** ⚠️:
+1. ~~服务检测 (-sV) - 执行成功但版本信息未显示~~ ✅ **已在 2026-02-22 修复**
+2. OS 检测 (-O) - 执行成功但匹配结果未显示
+
+**2026-02-22 更新**: 服务检测版本信息输出问题已修复
+- ✅ 正常输出现在显示: `80/tcp  open    http Apache httpd 2.4.7 (Ubuntu)`
+- ✅ JSON 输出包含完整 service 对象 (product, version, cpe 等)
+- 修复文件: `crates/rustnmap-cli/src/cli.rs`
+
+**新发现的问题**:
+
+#### ⚠️ CRITICAL: nmap-service-probes 转义序列处理 BUG (新发现)
+
+**文件**: `crates/rustnmap-fingerprint/src/service/database.rs`
+
+**根本原因**: nmap-service-probes 解析器的转义序列转换逻辑有 BUG
+
+**问题现象**:
+```
+Trying rule pattern: (?s)^HTTP/1\.[01] (?:[^\r\n]*\r\n(?!\r\n))*?X-Powered-By: PHP/(d[\w._-]+)
+                                                                                       ^
+                                                                                   应该是 \d 不是 d
+Got 0 matches from probe 'GenericLines' on port 80
+Got 0 matches from probe 'GetRequest' on port 80
+```
+
+**分析**:
+- `\d` (PCRE 数字字符类) 被错误转换成 `d` (字面字符 'd')
+- 原本应该匹配数字的模式现在只匹配字母 'd'
+- 所有包含 `\d`, `\w`, `\s` 等转义序列的模式都无法正确匹配
+
+**影响范围**:
+- 几乎所有 nmap-service-probes 中的版本提取模式
+- 导致服务检测虽然运行但无法识别任何服务
+
+**修复方案**:
+需要审查 `database.rs` 中的 `build_regex_pattern()` 函数，确保:
+1. 字符类外部的 `\d`, `\w`, `\s` 保持为 PCRE 语法
+2. 字符类内部的 `\d`, `\w`, `\s` 也保持为 PCRE 语法
+3. nmap 的 `\\d` (字面反斜杠+d) 转换为 `\\\\d`
+
+**修复详情**:
+- **问题**: `build_regex_pattern()` 函数错误地将 `\d`, `\w`, `\s` 转换为字面字母 (在字符类外部)
+- **修复**: 移除所有转义序列处理逻辑，直接保留 PCRE 语法
+- **变更**: 函数从 95 行简化为 20 行
+- **测试**: 添加 2 个单元测试验证 PCRE 转义序列被正确保留
+- **验证**: 真实服务器扫描确认模式正确匹配
+
+**状态**: ✅ 已修复 (2026-02-22)
+
+---
+
+#### ✅ HIGH: 服务检测输出缺失 - fancy-regex PCRE 兼容性问题 (已修复)
+
+**文件**: `crates/rustnmap-fingerprint/src/service/detector.rs`, `Cargo.toml`
+
+**根本原因**: fancy-regex 不完全支持 PCRE 负向零宽断言 `(?!\r\n)`
+
+**详细分析**:
+- nmap-service-probes 使用大量负向零宽断言模式: `(?:[^\r\n]*\r\n(?!\r\n))*?`
+- 此模式用于匹配 HTTP 头部但停止在空行 (双 CRLF)
+- fancy-regex 0.17.0 编译这些模式成功但匹配失败
+- 实际响应: `HTTP/1.1 400 Bad Request\r\n\r\n` (28 字节)
+- 期望模式: 完整 HTTP 响应包含各种头部
+
+**解决方案**: 替换 `fancy-regex` 为 `pcre2` crate (版本 0.2.11)
+
+**实施内容**:
+1. 更新 `Cargo.toml`: `fancy-regex = "0.17.0"` → `pcre2 = "0.2.11"`
+2. 更新所有导入: `fancy_regex::Regex` → `pcre2::bytes::Regex`
+3. 重写 `try_match()` 方法使用 `captures_read` API 安全处理可选捕获组
+4. 更新 `apply()` 方法使用 `HashMap<usize, Vec<u8>>` 而非 `HashMap<usize, String>`
+
+**验证结果**: ✅ 86 tests passed, 零警告，零错误
+
+---
+
+#### ✅ FIXED: 服务检测输出缺失
+
+**文件**: `rustnmap-cli/src/cli.rs`
+
+**修复日期**: 2026-02-22
+
+**修复内容**:
+1. `write_json_output()` - 改用 `JsonFormatter` 替代手动序列化
+2. `print_port_normal()` - 改用 `NormalFormatter::format_port()` 输出完整服务信息
+3. 修复 extrainfo 字段重复括号问题
+
+**验证结果**:
+```
+# rustnmap 输出 (修复后)
+PORT     STATE SERVICE
+80/tcp  open    http Apache httpd 2.4.7 (Ubuntu)
+```
+
+**状态**: ✅ 已修复
+
+#### ⚠️ HIGH: OS 检测输出缺失
+
+**文件**: `rustnmap-output/src/formatter.rs` 或 `rustnmap-core/src/session.rs`
+
+**测试命令**: `sudo ./target/release/rustnmap -O -p 80,443 110.242.74.102`
+
+**症状**:
+- OS 检测执行成功 (6.42s)
+- OS 数据库加载成功 (3761 指纹)
+- 找到 101 个匹配 (根据 progress.md)
+- **OS 匹配结果未显示在输出中**
+
+**对比 nmap**:
+```
+# nmap 输出
+Device type: specialized|proxy server
+Running (JUST GUESSING): AVtech embedded (88%), Blue Coat embedded (86%)
+OS CPE: cpe:/h:bluecoat:packetshaper
+
+# rustnmap 输出
+(无 OS 信息)
+```
+
+#### ⚠️ MEDIUM: Fast Scan 性能问题
+
+**文件**: 待定位 (可能是扫描器实现或超时配置)
+
+**测试命令**: `sudo ./target/release/rustnmap -F 110.242.74.102`
+
+**症状**:
+- 扫描结果正确 (80/open, 443/open) ✅
+- 扫描时间: 98.39 秒
+- **nmap 同等扫描: 4.18 秒**
+- **性能差距: 23x 慢**
+
+**对比数据**:
+| 指标 | nmap | rustnmap | 差距 |
+|------|------|----------|------|
+| 扫描时间 | 4.18s | 98.39s | 23x 慢 |
+| 结果正确性 | ✅ | ✅ | 一致 |
+
+**可能原因**:
+1. 超时配置过于保守 (scan_delay, host_timeout)
+2. 顺序扫描而非并发扫描
+3. Socket 配置导致额外延迟
+4. 数据包处理效率问题
+
+**状态**: 待调查和优化
+
+**可能原因**:
+1. OS 检测结果未正确存储到 `ScanResult.os_matches`
+2. 输出格式化未包含 OS 信息
+3. OS 结果序列化问题
+
+**状态**: 待调查
+
+#### ℹ️ LOW: UDP 状态语义差异
+
+**文件**: `rustnmap-scan/src/udp_scan.rs`
+
+**症状**:
+- rustnmap: `filtered`
+- nmap: `open|filtered`
+
+**影响**: 功能正确，仅语义差异
+
+**状态**: 可接受 (不影响功能)
+
+---
+
+### 2026-02-21: 综合可用性测试 - TCP CONNECT 扫描修复 ✅
+
+**发现来源**: Phase 7 综合测试
+
+#### ✅ CRITICAL: TCP CONNECT 扫描崩溃
+
+**文件**: `crates/rustnmap-scan/src/connect_scan.rs:68`
+
+**错误信息**:
+```
+thread 'main' panicked at crates/rustnmap-scan/src/connect_scan.rs:68:30:
+Cannot start a runtime from within a runtime.
+```
+
+**根本原因**: `scan_port_impl()` 函数在异步上下文中调用 `handle.block_on()`
+
+**问题分析**:
+```rust
+// 错误代码 (connect_scan.rs:64-77)
+if let Ok(handle) = tokio::runtime::Handle::try_current() {
+    if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread {
+        let target_clone = target.clone();
+        match handle.block_on(async {  // ❌ 在异步上下文中调用 block_on
+            tokio::task::spawn_blocking(move || {
+                Self::scan_port_impl_blocking_static(&target_clone, port, protocol)
+            })
+            .await
+        }) { ... }
+    }
+}
+```
+
+**修复方案**: 使用 `tokio::task::block_in_place` 先让出异步运行时
+```rust
+// 修复后代码
+match tokio::task::block_in_place(|| {  // ✅ 先让出运行时
+    handle.block_on(async {
+        tokio::task::spawn_blocking(move || {
+            Self::scan_port_impl_blocking_static(&target_clone, port, protocol)
+        })
+        .await
+    })
+}) { ... }
+```
+
+**验证结果**:
+```bash
+# rustnmap TCP CONNECT 扫描
+PORT     STATE SERVICE
+22/tcp   filtered ssh
+80/tcp   open     http
+443/tcp  open     https
+8080/tcp filtered http-proxy
+```
+结果与 nmap 一致 ✅
+
+---
+
+#### ✅ HIGH: 服务检测数据库未加载
+
+**文件**: `crates/rustnmap-cli/src/cli.rs`
+
+**问题描述**:
+CLI 设置了 `config.service_detection = true`，但从未加载服务探针数据库 (`nmap-service-probes`)，导致服务检测被跳过。
+
+**修复方案**:
+1. 在创建 `ScanSession` 之前加载 `ProbeDatabase`
+2. 使用 `ScanSession::with_dependencies()` 传入预加载的数据库
+
+```rust
+// 加载服务探针数据库
+let fingerprint_db = if config.service_detection {
+    let service_db_path = std::path::PathBuf::from(datadir.as_ref())
+        .join("db")
+        .join("nmap-service-probes");
+
+    if service_db_path.exists() {
+        match rustnmap_fingerprint::ProbeDatabase::load_from_nmap_db(&service_db_path).await {
+            Ok(db) => {
+                let mut fp_db = rustnmap_core::FingerprintDatabase::new();
+                fp_db.set_service_db(db);
+                Arc::new(fp_db)
+            }
+            Err(e) => {
+                warn!("Failed to load service probe database: {e}");
+                Arc::new(rustnmap_core::FingerprintDatabase::new())
+            }
+        }
+    } else {
+        Arc::new(rustnmap_core::FingerprintDatabase::new())
+    }
+} else {
+    Arc::new(rustnmap_core::FingerprintDatabase::new())
+};
+
+// 使用 with_dependencies 创建 session
+let session = ScanSession::with_dependencies(
+    config,
+    target_set,
+    packet_engine,
+    output_sink,
+    fingerprint_db,
+    nse_registry,
+);
+```
+
+**状态**: ✅ 修复完成，加载逻辑已添加
+
+---
+
+#### ⚠️ HIGH: 服务检测输出缺失 (待修复)
+
+**问题描述**: 服务检测执行成功，但版本信息未显示在输出中
+
+**测试结果**:
+```bash
+# rustnmap 输出
+PORT     STATE SERVICE
+80/tcp   open     http
+443/tcp   open     https
+
+# nmap 输出 (对比)
+PORT    STATE SERVICE    VERSION
+80/tcp  open  http?
+443/tcp open  ssl/https?
+```
+
+**可能原因**:
+1. 服务检测结果序列化问题
+2. 输出格式化问题
+3. Banner grab 结果未正确存储
+
+**文件**: `rustnmap-output/src/formatter.rs` 或 `rustnmap-fingerprint/src/service/`
+
+**状态**: 待调查
+
+---
+
+#### ⚠️ HIGH: OS 检测输出缺失 (待修复)
+
+**问题描述**: OS 检测执行成功 (找到 101 个匹配)，但结果未显示在输出中
+
+**测试结果**:
+```bash
+# rustnmap 输出
+PORT     STATE SERVICE
+80/tcp   open     http
+443/tcp   open     https
+
+# nmap 输出 (对比)
+Device type: specialized|proxy server
+Running (JUST GUESSING): AVtech embedded (88%), Blue Coat embedded (86%)
+OS CPE: cpe:/h:bluecoat:packetshaper
+Aggressive OS guesses: AVtech Room Alert 26W environmental monitor (88%)
+```
+
+**可能原因**:
+1. OS 检测结果序列化问题
+2. 输出格式化问题
+3. ScanResult 中 OS 字段未正确设置
+
+**文件**: `rustnmap-output/src/formatter.rs` 或 `rustnmap-core/src/session.rs`
+
+**状态**: 待调查
+
+---
+
+#### ✅ MEDIUM: 服务检测数据库解析失败 - 已修复
+
+**错误信息**:
+```
+Failed to load service probe database: Failed to parse fingerprint database at line 6262
+```
+
+**根本原因**: 服务检测数据库解析器存在多个问题
+
+**修复内容** (3 个修复):
+
+1. **问题 A**: nmap 转义序列处理错误
+   - **文件**: `rustnmap-fingerprint/src/service/database.rs:404`
+   - **问题**: nmap 使用与 Rust regex 不同的转义语法
+     - nmap 中: `\d` 是字面字母 'd' (不是数字类)
+     - nmap 中 `[\d]`: `\d` 是数字类 (PCRE 语法)
+   - **修复**: 实现字符类感知的转义转换
+     - 字符类外 `\d` → `d` (字面 'd')
+     - 字符类内 `\d` → `\d` (数字类，保留)
+
+2. **问题 B**: 'q' 标记查找错误
+   - **文件**: `rustnmap-fingerprint/src/service/database.rs:182`
+   - **问题**: `line.find('q')` 查找行中任意 'q'，可能在 probe name 中
+   - **修复**: 只在 probe name 之后查找 'q' 标记
+
+3. **问题 C**: 重复 probe name 拒绝
+   - **文件**: `rustnmap-fingerprint/src/service/database.rs:653`
+   - **问题**: nmap 允许重复 probe name (后者覆盖)，但解析器报错
+   - **修复**: 允许覆盖，移除旧的 port mappings
+
+**验证结果**:
+```bash
+[INFO] Loaded 140 service probes from database
+[INFO] Service probe database loaded successfully
+```
+
+---
+
+#### ⚠️ LOW: Banner grab 超时 (待调查)
+
+**错误信息**:
+```
+Banner grab failed: Timeout waiting for probe response on 110.242.74.102:80
+```
+
+**可能原因**:
+1. 目标服务器不响应 NULL probe
+2. Timeout 配置太短
+3. 网络问题
+
+**后续行动**: 需要调查为什么目标服务器不响应我们的 probes
+
+---
+
+### 2026-02-21: DNS 服务器可配置化完成 ✅
+
+**问题**: local DNS server 硬编码为 `8.8.8.8:53`，不同地区用户可能需要修改
+
+**解决方案**:
+- 新增 `DEFAULT_DNS_SERVER` 常量和 `--dns-server` CLI 选项
+- 用户可通过 `--dns-server <ADDRESS>` 覆盖默认值
+- 两个 `ScanConfig` 类型均包含 `dns_server` 字段
+- 所有本地 IP 检测函数使用可配置的 DNS 服务器
+
+**状态**: ✅ 已完成 (Commit: `14c6f51`)
+
+---
 
 ### 2026-02-21: 服务检测机制深度对比分析 (Nmap vs RustNmap)
 

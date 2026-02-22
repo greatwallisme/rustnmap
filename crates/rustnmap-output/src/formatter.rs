@@ -492,14 +492,60 @@ impl OutputFormatter for NormalFormatter {
             PortState::Unknown => "unknown",
         };
 
-        let service = port
-            .service
-            .as_ref()
-            .map_or_else(|| "unknown".to_string(), |s| s.name.clone());
+        // Build service string with version info when available
+        let service_string = if let Some(ref service) = port.service {
+            // Check if we have detailed version info (method == "probed" means we actually detected it)
+            if service.method == "probed" {
+                let mut parts = Vec::new();
+
+                // Check if we have product or version info
+                let has_version_info = service.product.is_some() || service.version.is_some();
+
+                // Add service name (with ssl/ prefix for TLS services)
+                if service.name.starts_with("ssl/") || service.name.starts_with("tls/") {
+                    parts.push(service.name.clone());
+                } else if has_version_info {
+                    // If we have product/version but name doesn't have ssl/ prefix, add it for common TLS ports
+                    if matches!(port.number, 443 | 8443 | 631) && !service.name.starts_with("ssl/") {
+                        parts.push(format!("ssl/{}", service.name));
+                    } else {
+                        parts.push(service.name.clone());
+                    }
+                } else {
+                    parts.push(service.name.clone());
+                }
+
+                // Add product if available
+                if let Some(ref product) = service.product {
+                    parts.push(product.clone());
+                }
+
+                // Add version if available
+                if let Some(ref version) = service.version {
+                    parts.push(version.clone());
+                }
+
+                // Add extra info if available (don't add extra parentheses if already present)
+                if let Some(ref extrainfo) = service.extrainfo {
+                    if extrainfo.starts_with('(') {
+                        parts.push(extrainfo.clone());
+                    } else {
+                        parts.push(format!("({})", extrainfo));
+                    }
+                }
+
+                parts.join(" ")
+            } else {
+                // Table lookup (method == "table") - just show service name
+                service.name.clone()
+            }
+        } else {
+            "unknown".to_string()
+        };
 
         Ok(format!(
             "{}/{}  {:7} {}\n",
-            port.number, proto, state, service
+            port.number, proto, state, service_string
         ))
     }
 

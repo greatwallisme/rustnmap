@@ -21,7 +21,8 @@
 use std::sync::Arc;
 
 use rustnmap_common::Result;
-use rustnmap_core::session::{PortSpec, ScanType as CoreScanType};
+use rustnmap_core::session::{DefaultOutputSink, DefaultPacketEngine, FingerprintDatabase, NseRegistry, OutputSink, PacketEngine, PortSpec, TargetSet};
+use rustnmap_core::session::{ScanType as CoreScanType};
 use rustnmap_core::{ScanConfig, ScanOrchestrator, ScanSession};
 use rustnmap_output::formatter::OutputFormatter;
 use rustnmap_output::models::{HostResult, PortResult, PortState, Protocol, ScanResult, ScanType};
@@ -403,10 +404,76 @@ async fn handle_profile_scan(args: &Args, profile_path: &std::path::Path) -> Res
     info!("Scan type: {:?}", config.scan_types);
     info!("Timing template: {:?}", config.timing_template);
 
+    // Load fingerprint databases (service and/or OS detection)
+    let mut fp_db = FingerprintDatabase::new();
+    let datadir = shellexpand::tilde(&args.datadir);
+    let db_dir = std::path::PathBuf::from(datadir.as_ref()).join("db");
+
+    // Load service probe database if service detection is enabled
+    if config.service_detection {
+        let service_db_path = db_dir.join("nmap-service-probes");
+
+        if service_db_path.exists() {
+            info!("Loading service probe database from: {}", service_db_path.display());
+            match rustnmap_fingerprint::ProbeDatabase::load_from_nmap_db(&service_db_path).await {
+                Ok(db) => {
+                    info!("Service probe database loaded successfully");
+                    fp_db.set_service_db(db);
+                }
+                Err(e) => {
+                    warn!("Failed to load service probe database: {e}");
+                    warn!("Service detection will be skipped");
+                }
+            }
+        } else {
+            warn!("Service probe database not found at: {}", service_db_path.display());
+            warn!("Service detection will be skipped");
+        }
+    }
+
+    // Load OS fingerprint database if OS detection is enabled
+    if config.os_detection {
+        let os_db_path = db_dir.join("nmap-os-db");
+
+        if os_db_path.exists() {
+            info!("Loading OS fingerprint database from: {}", os_db_path.display());
+            match tokio::task::block_in_place(|| {
+                rustnmap_fingerprint::FingerprintDatabase::load_from_nmap_db(&os_db_path)
+            }) {
+                Ok(db) => {
+                    info!("OS fingerprint database loaded successfully");
+                    fp_db.set_os_db(db);
+                }
+                Err(e) => {
+                    warn!("Failed to load OS fingerprint database: {e}");
+                    warn!("OS detection will be skipped");
+                }
+            }
+        } else {
+            warn!("OS fingerprint database not found at: {}", os_db_path.display());
+            warn!("OS detection will be skipped");
+        }
+    }
+
+    let fingerprint_db = Arc::new(fp_db);
+
     // Create scan session and run
-    let session = ScanSession::new(config, targets).map_err(|e| {
-        rustnmap_common::Error::Other(format!("Failed to create scan session: {e}"))
-    })?;
+    let target_set = Arc::new(TargetSet::from_group(targets));
+    let packet_engine: Arc<dyn PacketEngine> = Arc::new(DefaultPacketEngine::new().map_err(|e| {
+        rustnmap_common::Error::Other(format!("Failed to create packet engine: {e}"))
+    })?);
+    let output_sink: Arc<dyn OutputSink> = Arc::new(DefaultOutputSink::new());
+    let nse_registry = Arc::new(NseRegistry::new());
+
+    let session = ScanSession::with_dependencies(
+        config,
+        target_set,
+        packet_engine,
+        output_sink,
+        fingerprint_db,
+        nse_registry,
+    );
+
     let session = Arc::new(session);
 
     let orchestrator = ScanOrchestrator::new(session);
@@ -624,10 +691,76 @@ async fn run_normal_scan(args: &Args) -> Result<()> {
     info!("Scan type: {:?}", config.scan_types);
     info!("Timing template: {:?}", config.timing_template);
 
-    // Create scan session
-    let session = ScanSession::new(config, targets).map_err(|e| {
-        rustnmap_common::Error::Other(format!("Failed to create scan session: {e}"))
-    })?;
+    // Load fingerprint databases (service and/or OS detection)
+    let mut fp_db = FingerprintDatabase::new();
+    let datadir = shellexpand::tilde(&args.datadir);
+    let db_dir = std::path::PathBuf::from(datadir.as_ref()).join("db");
+
+    // Load service probe database if service detection is enabled
+    if config.service_detection {
+        let service_db_path = db_dir.join("nmap-service-probes");
+
+        if service_db_path.exists() {
+            info!("Loading service probe database from: {}", service_db_path.display());
+            match rustnmap_fingerprint::ProbeDatabase::load_from_nmap_db(&service_db_path).await {
+                Ok(db) => {
+                    info!("Service probe database loaded successfully");
+                    fp_db.set_service_db(db);
+                }
+                Err(e) => {
+                    warn!("Failed to load service probe database: {e}");
+                    warn!("Service detection will be skipped");
+                }
+            }
+        } else {
+            warn!("Service probe database not found at: {}", service_db_path.display());
+            warn!("Service detection will be skipped");
+        }
+    }
+
+    // Load OS fingerprint database if OS detection is enabled
+    if config.os_detection {
+        let os_db_path = db_dir.join("nmap-os-db");
+
+        if os_db_path.exists() {
+            info!("Loading OS fingerprint database from: {}", os_db_path.display());
+            match tokio::task::block_in_place(|| {
+                rustnmap_fingerprint::FingerprintDatabase::load_from_nmap_db(&os_db_path)
+            }) {
+                Ok(db) => {
+                    info!("OS fingerprint database loaded successfully");
+                    fp_db.set_os_db(db);
+                }
+                Err(e) => {
+                    warn!("Failed to load OS fingerprint database: {e}");
+                    warn!("OS detection will be skipped");
+                }
+            }
+        } else {
+            warn!("OS fingerprint database not found at: {}", os_db_path.display());
+            warn!("OS detection will be skipped");
+        }
+    }
+
+    let fingerprint_db = Arc::new(fp_db);
+
+    // Create scan session with dependencies
+    let target_set = Arc::new(TargetSet::from_group(targets));
+    let packet_engine: Arc<dyn PacketEngine> = Arc::new(DefaultPacketEngine::new().map_err(|e| {
+        rustnmap_common::Error::Other(format!("Failed to create packet engine: {e}"))
+    })?);
+    let output_sink: Arc<dyn OutputSink> = Arc::new(DefaultOutputSink::new());
+    let nse_registry = Arc::new(NseRegistry::new());
+
+    let session = ScanSession::with_dependencies(
+        config,
+        target_set,
+        packet_engine,
+        output_sink,
+        fingerprint_db,
+        nse_registry,
+    );
+
     let session = Arc::new(session);
 
     // Create and run orchestrator
@@ -1092,36 +1225,44 @@ fn print_host_normal<W: Write>(handle: &mut W, args: &Args, host: &HostResult) {
 
 /// Prints a single port in normal format.
 fn print_port_normal<W: Write>(handle: &mut W, _args: &Args, port: &PortResult) {
-    let protocol = match port.protocol {
-        Protocol::Tcp => "tcp",
-        Protocol::Udp => "udp",
-        Protocol::Sctp => "sctp",
-    };
+    use rustnmap_output::NormalFormatter;
 
-    let state_str = match port.state {
-        PortState::Open => "open",
-        PortState::Closed => "closed",
-        PortState::Filtered => "filtered",
-        PortState::Unfiltered => "unfiltered",
-        PortState::OpenOrFiltered => "open|filtered",
-        PortState::ClosedOrFiltered => "closed|filtered",
-        PortState::OpenOrClosed => "open|closed",
-        PortState::FilteredOrClosed => "filtered|closed",
-        PortState::Unknown => "unknown",
-    };
-
-    if let Some(ref service) = port.service {
-        let _ = writeln!(
-            handle,
-            "{}/{:<5} {:<8} {}",
-            port.number, protocol, state_str, service.name
-        );
+    let formatter = NormalFormatter::new();
+    if let Ok(output) = formatter.format_port(port) {
+        let _ = write!(handle, "{}", output);
     } else {
-        let _ = writeln!(
-            handle,
-            "{}/{:<5} {:<8} unknown",
-            port.number, protocol, state_str
-        );
+        // Fallback to simple format if formatter fails
+        let protocol = match port.protocol {
+            Protocol::Tcp => "tcp",
+            Protocol::Udp => "udp",
+            Protocol::Sctp => "sctp",
+        };
+
+        let state_str = match port.state {
+            PortState::Open => "open",
+            PortState::Closed => "closed",
+            PortState::Filtered => "filtered",
+            PortState::Unfiltered => "unfiltered",
+            PortState::OpenOrFiltered => "open|filtered",
+            PortState::ClosedOrFiltered => "closed|filtered",
+            PortState::OpenOrClosed => "open|closed",
+            PortState::FilteredOrClosed => "filtered|closed",
+            PortState::Unknown => "unknown",
+        };
+
+        if let Some(ref service) = port.service {
+            let _ = writeln!(
+                handle,
+                "{}/{:<5} {:<8} {}",
+                port.number, protocol, state_str, service.name
+            );
+        } else {
+            let _ = writeln!(
+                handle,
+                "{}/{:<5} {:<8} unknown",
+                port.number, protocol, state_str
+            );
+        }
     }
 }
 
@@ -1417,79 +1558,17 @@ fn write_markdown_output(result: &ScanResult, path: &std::path::Path, append: bo
 
 /// Writes JSON format output to file.
 fn write_json_output(result: &ScanResult, path: &std::path::Path, append: bool) -> Result<()> {
+    use rustnmap_output::JsonFormatter;
     use std::io::Write;
 
+    let formatter = JsonFormatter::new();
+    let output = formatter
+        .format_scan_result(result)
+        .map_err(|e| rustnmap_common::Error::Other(format!("Failed to format JSON: {e}")))?;
+
     let mut file = open_output_file(path, append)?;
-
-    // Simple JSON serialization
-    writeln!(file, "{{").map_err(|e| rustnmap_common::Error::Other(format!("Write error: {e}")))?;
-    writeln!(file, "  \"scanner\": \"rustnmap\",")
+    file.write_all(output.as_bytes())
         .map_err(|e| rustnmap_common::Error::Other(format!("Write error: {e}")))?;
-    writeln!(
-        file,
-        "  \"version\": \"{}\",",
-        result.metadata.scanner_version
-    )
-    .map_err(|e| rustnmap_common::Error::Other(format!("Write error: {e}")))?;
-    writeln!(file, "  \"hosts\": [")
-        .map_err(|e| rustnmap_common::Error::Other(format!("Write error: {e}")))?;
-
-    for (i, host) in result.hosts.iter().enumerate() {
-        writeln!(file, "    {{")
-            .map_err(|e| rustnmap_common::Error::Other(format!("Write error: {e}")))?;
-        writeln!(file, "      \"ip\": \"{}\",", host.ip)
-            .map_err(|e| rustnmap_common::Error::Other(format!("Write error: {e}")))?;
-
-        let status = match host.status {
-            rustnmap_output::models::HostStatus::Up => "up",
-            rustnmap_output::models::HostStatus::Down => "down",
-            rustnmap_output::models::HostStatus::Unknown => "unknown",
-        };
-        writeln!(file, "      \"status\": \"{status}\",")
-            .map_err(|e| rustnmap_common::Error::Other(format!("Write error: {e}")))?;
-        writeln!(file, "      \"ports\": [")
-            .map_err(|e| rustnmap_common::Error::Other(format!("Write error: {e}")))?;
-
-        for (j, port) in host.ports.iter().enumerate() {
-            let state = match port.state {
-                PortState::Open => "open",
-                PortState::Closed => "closed",
-                PortState::Filtered => "filtered",
-                _ => "unknown",
-            };
-            write!(
-                file,
-                "        {{\"port\": {}, \"state\": \"{}\"}}",
-                port.number, state
-            )
-            .map_err(|e| rustnmap_common::Error::Other(format!("Write error: {e}")))?;
-            if j < host.ports.len() - 1 {
-                write!(file, ",")
-                    .map_err(|e| rustnmap_common::Error::Other(format!("Write error: {e}")))?;
-            }
-            writeln!(file)
-                .map_err(|e| rustnmap_common::Error::Other(format!("Write error: {e}")))?;
-        }
-
-        write!(file, "      ]")
-            .map_err(|e| rustnmap_common::Error::Other(format!("Write error: {e}")))?;
-        if i < result.hosts.len() - 1 {
-            write!(file, ",")
-                .map_err(|e| rustnmap_common::Error::Other(format!("Write error: {e}")))?;
-        }
-        writeln!(file).map_err(|e| rustnmap_common::Error::Other(format!("Write error: {e}")))?;
-        write!(file, "    }}")
-            .map_err(|e| rustnmap_common::Error::Other(format!("Write error: {e}")))?;
-        if i < result.hosts.len() - 1 {
-            write!(file, ",")
-                .map_err(|e| rustnmap_common::Error::Other(format!("Write error: {e}")))?;
-        }
-        writeln!(file).map_err(|e| rustnmap_common::Error::Other(format!("Write error: {e}")))?;
-    }
-
-    writeln!(file, "  ]")
-        .map_err(|e| rustnmap_common::Error::Other(format!("Write error: {e}")))?;
-    writeln!(file, "}}").map_err(|e| rustnmap_common::Error::Other(format!("Write error: {e}")))?;
 
     Ok(())
 }

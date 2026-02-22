@@ -972,6 +972,9 @@ impl ScanOrchestrator {
                                     ip = %host_result.ip,
                                     port = port_result.number,
                                     service = %service_info.name,
+                                    product = ?service_info.product,
+                                    version = ?service_info.version,
+                                    confidence = service_info.confidence,
                                     "Service detected"
                                 );
 
@@ -992,6 +995,15 @@ impl ScanOrchestrator {
                                         .map(|c| vec![c])
                                         .unwrap_or_default(),
                                 });
+
+                                // Debug: print what was stored
+                                debug!(
+                                    "Stored service info for port {}: service={}, product={:?}, version={:?}",
+                                    port_result.number,
+                                    port_result.service.as_ref().map_or("None", |s| s.name.as_str()),
+                                    port_result.service.as_ref().and_then(|s| s.product.as_ref()),
+                                    port_result.service.as_ref().and_then(|s| s.version.as_ref())
+                                );
                             }
                         }
                         Err(e) => {

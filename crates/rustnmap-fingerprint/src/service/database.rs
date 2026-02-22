@@ -5,7 +5,7 @@
 
 use std::{collections::HashMap, path::Path};
 
-use regex::Regex;
+use pcre2::bytes::Regex;
 use tracing::info;
 
 use super::probe::{MatchRule, MatchTemplate, ProbeDefinition, Protocol};
@@ -62,6 +62,23 @@ impl ProbeDatabase {
         }
     }
 
+    /// Strip prefix from line in a case-insensitive manner.
+    ///
+    /// Returns None if the prefix doesn't match (case-insensitively).
+    fn strip_prefix_case_insensitive<'a>(line: &'a str, prefix: &str) -> Option<&'a str> {
+        if line.len() < prefix.len() {
+            return None;
+        }
+
+        let (line_prefix, rest) = line.split_at(prefix.len());
+
+        if line_prefix.eq_ignore_ascii_case(prefix) {
+            Some(rest)
+        } else {
+            None
+        }
+    }
+
     /// Load probes from nmap-service-probes database file.
     ///
     /// # Errors
@@ -111,32 +128,38 @@ impl ProbeDatabase {
                 continue;
             }
 
-            // Parse directive lines
-            if let Some(rest) = line.strip_prefix("Match ") {
+            // Parse directive lines (case-insensitive for "match")
+            let rest = if let Some(r) = line.strip_prefix("Match ") {
+                Some(r)
+            } else {
+                line.strip_prefix("match ")
+            };
+
+            if let Some(r) = rest {
                 if let Some(ref mut probe) = current_probe {
-                    let rule = Self::parse_match_rule(rest, line_num)?;
+                    let rule = Self::parse_match_rule(r, line_num)?;
                     probe.matches.push(rule);
                 }
-            } else if line.starts_with("softmatch ") {
+            } else if line.starts_with("softmatch ") || line.starts_with("Softmatch ") {
                 if let Some(ref mut probe) = current_probe {
                     let rule = Self::parse_match_rule(line, line_num)?;
                     probe.matches.push(rule);
                 }
-            } else if let Some(rest) = line.strip_prefix("Probe ") {
+            } else if let Some(rest) = Self::strip_prefix_case_insensitive(line, "Probe ") {
                 // Save previous probe if exists
                 if let Some(probe) = current_probe {
                     db.add_probe(probe)?;
                 }
                 current_probe = Some(Self::parse_probe_directive(rest, line_num)?);
-            } else if let Some(rest) = line.strip_prefix("Ports ") {
+            } else if let Some(rest) = Self::strip_prefix_case_insensitive(line, "Ports ") {
                 if let Some(ref mut probe) = current_probe {
                     probe.ports = Self::parse_ports(rest)?;
                 }
-            } else if let Some(rest) = line.strip_prefix("sslPorts ") {
+            } else if let Some(rest) = Self::strip_prefix_case_insensitive(line, "sslPorts ") {
                 if let Some(ref mut probe) = current_probe {
                     probe.ssl_ports = Self::parse_ports(rest)?;
                 }
-            } else if let Some(rest) = line.strip_prefix("rarity ") {
+            } else if let Some(rest) = Self::strip_prefix_case_insensitive(line, "rarity ") {
                 if let Some(ref mut probe) = current_probe {
                     probe.rarity = Self::parse_rarity(rest)?;
                 }
@@ -178,11 +201,23 @@ impl ProbeDatabase {
 
         let name = parts[1].to_string();
 
-        // Find the 'q' followed by a delimiter
-        let q_pos = line.find('q').ok_or_else(|| FingerprintError::ParseError {
-            line: line_num,
-            content: "Missing payload marker 'q'".to_string(),
-        })?;
+        // Find the 'q' followed by a delimiter AFTER the probe name
+        // We need to find 'q' that comes after the name, not just any 'q' in the line
+        let name_end_pos = line.find(&name)
+            .ok_or_else(|| FingerprintError::ParseError {
+                line: line_num,
+                content: "Could not find probe name in line".to_string(),
+            })?
+            + name.len();
+
+        // Look for 'q' after the name ends
+        let q_pos = line[name_end_pos..]
+            .find('q')
+            .ok_or_else(|| FingerprintError::ParseError {
+                line: line_num,
+                content: "Missing payload marker 'q' after probe name".to_string(),
+            })?
+            + name_end_pos;
 
         let after_q = &line[q_pos + 1..];
         if after_q.is_empty() {
@@ -401,8 +436,16 @@ impl ProbeDatabase {
     }
 
     /// Build full regex pattern with flags.
+    ///
+    /// Converts nmap regex syntax to PCRE regex syntax.
+    ///
+    /// Nmap uses PCRE syntax for all escape sequences:
+    /// - `\d`, `\w`, `\s` are always PCRE character classes (digit, word, space)
+    /// - `\D`, `\W`, `\S` are negated character classes
+    /// - `\\` represents a literal backslash
+    /// - All other PCRE escapes are preserved as-is
     fn build_regex_pattern(pattern: &str, flags: &str) -> String {
-        let mut result = String::with_capacity(pattern.len() + 10);
+        let mut result = String::with_capacity(pattern.len() * 2);
 
         // Start with (?flags) if we have any
         let mut rust_flags = String::new();
@@ -410,8 +453,7 @@ impl ProbeDatabase {
             rust_flags.push('i');
         }
         if flags.contains('s') {
-            // Rust's dot matches newlines by default in some modes,
-            // but we use (?s) for single-line mode
+            // Single-line mode: dot matches newlines
             rust_flags.push('s');
         }
 
@@ -421,7 +463,9 @@ impl ProbeDatabase {
             result.push(')');
         }
 
+        // Preserve all escape sequences as-is for PCRE
         result.push_str(pattern);
+
         result
     }
 
@@ -590,14 +634,21 @@ impl ProbeDatabase {
     }
 
     /// Add a probe to the database.
+    ///
+    /// If a probe with the same name already exists, it will be replaced
+    /// (matching nmap's behavior where later probe definitions override earlier ones).
     fn add_probe(&mut self, probe: ProbeDefinition) -> Result<()> {
         let name = probe.name.clone();
 
-        // Check for duplicate probe names
+        // Remove old probe if it exists (nmap allows duplicates, later ones override)
         if self.probes.contains_key(&name) {
-            return Err(FingerprintError::InvalidProbe {
-                reason: format!("Duplicate probe name: {name}"),
-            });
+            // Remove old port mappings for this probe
+            for port_list in self.port_mapping.values_mut() {
+                port_list.retain(|n| n != &name);
+            }
+            for level_list in self.intensity_levels.values_mut() {
+                level_list.retain(|n| n != &name);
+            }
         }
 
         // Index by port
@@ -859,5 +910,86 @@ Match http m|^Server: ([\w/]+)| p/$1/
         assert_eq!(pattern, "SSH-([\\d.]+)");
         assert_eq!(flags, "i");
         assert_eq!(remainder, " p/OpenSSH/");
+    }
+
+    #[test]
+    fn test_build_regex_pattern_preserves_pcre_escapes() {
+        // Test that PCRE character classes are preserved
+        // \d (digit), \w (word char), \s (space) should remain as-is
+        let result = ProbeDatabase::build_regex_pattern(r"PHP/(\d[\w._-]+)", "");
+        assert_eq!(result, r"PHP/(\d[\w._-]+)");
+
+        // Test with flags
+        let result = ProbeDatabase::build_regex_pattern(r"^HTTP/1\.[01] \d\d\d", "s");
+        assert_eq!(result, r"(?s)^HTTP/1\.[01] \d\d\d");
+
+        // Test mixed PCRE escapes
+        let result = ProbeDatabase::build_regex_pattern(r"(\d[-.\w]+) [\w\s]+", "");
+        assert_eq!(result, r"(\d[-.\w]+) [\w\s]+");
+
+        // Test negated character classes
+        let result = ProbeDatabase::build_regex_pattern(r"\D\S\W", "");
+        assert_eq!(result, r"\D\S\W");
+
+        // Test that other escapes are also preserved
+        let result = ProbeDatabase::build_regex_pattern(r"\n\r\t\b\^", "");
+        assert_eq!(result, r"\n\r\t\b\^");
+    }
+
+    #[test]
+    fn test_build_regex_pattern_with_flags() {
+        // Test 'i' flag (case-insensitive)
+        let result = ProbeDatabase::build_regex_pattern(r"hello", "i");
+        assert_eq!(result, "(?i)hello");
+
+        // Test 's' flag (single-line mode)
+        let result = ProbeDatabase::build_regex_pattern(r".*", "s");
+        assert_eq!(result, "(?s).*");
+
+        // Test both flags
+        let result = ProbeDatabase::build_regex_pattern(r"test", "is");
+        assert_eq!(result, "(?is)test");
+
+        // Test with pattern containing escapes
+        let result = ProbeDatabase::build_regex_pattern(r"\d+", "is");
+        assert_eq!(result, r"(?is)\d+");
+    }
+
+    #[test]
+    fn test_apache_ubuntu_pattern_matching() {
+        use pcre2::bytes::Regex;
+
+        // This is the exact pattern from line 10393 of nmap-service-probes
+        let pattern = r#"^HTTP/1\.[01] \d\d\d (?:[^\r\n]*\r\n(?!\r\n))*?Server: Apache[/ ](\d[-.\w]+) ([^\r\n]+)"#;
+        let flags = "s";
+
+        // Build regex using our function
+        let regex_pattern = ProbeDatabase::build_regex_pattern(pattern, flags);
+        assert!(regex_pattern.contains("(?s)"), "Pattern should have (?s) flag");
+
+        let regex = Regex::new(&regex_pattern).unwrap();
+
+        // This is the actual response from scanme.nmap.org
+        let response = b"HTTP/1.1 200 OK\r\nDate: Sun, 22 Feb 2026 02:31:04 GMT\r\nServer: Apache/2.4.7 (Ubuntu)\r\n";
+
+        // Test matching - pcre2 returns Result<Option<Captures>>
+        let result = regex.captures(response);
+        assert!(result.is_ok(), "Regex capture should succeed");
+
+        let captures = result.unwrap();
+        assert!(captures.is_some(), "Pattern should match the response");
+
+        // let captures = captures.unwrap();
+        let mut locs = regex.capture_locations();
+        regex.captures_read(&mut locs, response).unwrap();
+
+        let (start, end) = locs.get(1).unwrap();
+        let version = &response[start..end];
+
+        let (start, end) = locs.get(2).unwrap();
+        let info = &response[start..end];
+
+        assert_eq!(String::from_utf8_lossy(version), "2.4.7", "Version should be 2.4.7");
+        assert_eq!(String::from_utf8_lossy(info), "(Ubuntu)", "Info should be (Ubuntu)");
     }
 }

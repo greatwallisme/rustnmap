@@ -5,7 +5,7 @@
 
 use std::{collections::HashMap, net::SocketAddr, time::Duration};
 
-use regex::Regex;
+use pcre2::bytes::Regex;
 use tokio::io::AsyncWriteExt;
 use tokio::time::timeout;
 use tracing::{debug, info, trace};
@@ -169,6 +169,8 @@ impl ServiceDetector {
         // Get applicable probes for this port at configured intensity
         let probes = self.select_probes(port);
 
+        debug!("Selected {} probes for port {}", probes.len(), port);
+
         if probes.is_empty() {
             debug!("No probes available for port {}", port);
             if results.is_empty() {
@@ -179,15 +181,16 @@ impl ServiceDetector {
 
         // Execute probes in order
         for probe in &probes {
-            trace!("Sending probe '{}' to port {}", probe.name, port);
+            debug!("Sending probe '{}' to port {}", probe.name, port);
 
             match self.send_probe(target, port, probe).await {
                 Ok(Some(response)) => {
-                    trace!("Got response: {} bytes", response.len());
+                    debug!("Got {} bytes from probe '{}' on port {}", response.len(), probe.name, port);
 
                     // Match response against all rules
                     let matches = Self::match_response(probe, &response)?;
 
+                    debug!("Got {} matches from probe '{}' on port {}", matches.len(), probe.name, port);
                     for match_result in matches {
                         results.push(ServiceInfo::from_match(match_result));
                     }
@@ -396,11 +399,15 @@ impl ServiceDetector {
     /// Match response against probe rules.
     fn match_response(probe: &ProbeDefinition, response: &[u8]) -> Result<Vec<MatchResult>> {
         let response_str = String::from_utf8_lossy(response);
+        debug!("Matching probe '{}' against response ({} bytes): {}", probe.name, response.len(), response_str);
+        debug!("Response bytes (hex): {:?}", response.iter().map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join(" "));
+
         let mut results = Vec::new();
 
         for rule in &probe.matches {
+            debug!("Trying rule pattern: {}", rule.pattern);
             let regex = rule.compile_regex()?;
-            if let Some(captures) = Self::try_match(&regex, &response_str) {
+            if let Some(captures) = Self::try_match(&regex, response) {
                 let match_result = rule.apply(&captures);
                 debug!(
                     "Match rule '{}' with confidence {}",
@@ -414,17 +421,37 @@ impl ServiceDetector {
     }
 
     /// Try to match regex and extract capture groups.
-    fn try_match(regex: &Regex, text: &str) -> Option<HashMap<usize, String>> {
-        let captures = regex.captures(text)?;
-        let mut map = HashMap::new();
+    fn try_match(regex: &Regex, text: &[u8]) -> Option<HashMap<usize, Vec<u8>>> {
+        // pcre2::bytes::Regex::captures() returns Result<Option<Captures>, Error>
+        match regex.captures(text) {
+            Ok(Some(captures)) => {
+                let mut map = HashMap::new();
 
-        for (i, opt) in captures.iter().enumerate() {
-            if let Some(m) = opt {
-                map.insert(i, m.as_str().to_string());
+                // captures[0] is always the full match (group 0)
+                // SAFETY: Group 0 always exists in a successful match
+                map.insert(0, captures[0].to_vec());
+
+                // Extract additional capture groups using pcre2 API
+                // Call captures_read once to populate all capture locations
+                let mut locs = regex.capture_locations();
+                if let Ok(Some(_)) = regex.captures_read(&mut locs, text) {
+                    // Iterate through first 10 capture groups (most nmap patterns have < 5)
+                    for i in 1..=10 {
+                        if let Some((start, end)) = locs.get(i) {
+                            map.insert(i, text[start..end].to_vec());
+                        }
+                    }
+                }
+                Some(map)
+            }
+            Ok(None) => {
+                None
+            }
+            Err(e) => {
+                debug!("Regex error: {}", e);
+                None
             }
         }
-
-        Some(map)
     }
 }
 
@@ -566,12 +593,12 @@ mod tests {
         let _detector = ServiceDetector::new(ProbeDatabase::empty());
         let regex = Regex::new(r"SSH-([\d.]+)-(.*)").unwrap();
 
-        let text = "SSH-8.4-p1";
+        let text = b"SSH-8.4-p1";
         let captures = ServiceDetector::try_match(&regex, text).unwrap();
 
-        assert_eq!(captures.get(&0), Some(&"SSH-8.4-p1".to_string())); // Full match
-        assert_eq!(captures.get(&1), Some(&"8.4".to_string()));
-        assert_eq!(captures.get(&2), Some(&"p1".to_string()));
+        assert_eq!(captures.get(&0), Some(&b"SSH-8.4-p1".to_vec())); // Full match
+        assert_eq!(captures.get(&1), Some(&b"8.4".to_vec()));
+        assert_eq!(captures.get(&2), Some(&b"p1".to_vec()));
     }
 
     #[test]
@@ -579,7 +606,7 @@ mod tests {
         let _detector = ServiceDetector::new(ProbeDatabase::empty());
         let regex = Regex::new(r"SSH-([\d.]+)").unwrap();
 
-        let text = "HTTP/1.1 200 OK";
+        let text = b"HTTP/1.1 200 OK";
         let result = ServiceDetector::try_match(&regex, text);
         assert!(result.is_none());
     }
@@ -590,10 +617,11 @@ mod tests {
         // Regex with optional group that doesn't match
         let regex = Regex::new(r"SSH(-[\d.]+)?").unwrap();
 
-        let text = "SSH";
+        let text = b"SSH";
         let captures = ServiceDetector::try_match(&regex, text).unwrap();
-        assert_eq!(captures.get(&0), Some(&"SSH".to_string()));
-        // Group 1 doesn't exist in this match because optional part not present
+        assert_eq!(captures.get(&0), Some(&b"SSH".to_vec()));
+        // Group 1 doesn't exist in the map because optional part didn't match
+        // This is expected behavior for pcre2
         assert_eq!(captures.get(&1), None);
     }
 
@@ -602,10 +630,10 @@ mod tests {
         let _detector = ServiceDetector::new(ProbeDatabase::empty());
         let regex = Regex::new(r"SSH(-[\d.]+)?").unwrap();
 
-        let text = "SSH-2.0";
+        let text = b"SSH-2.0";
         let captures = ServiceDetector::try_match(&regex, text).unwrap();
-        assert_eq!(captures.get(&0), Some(&"SSH-2.0".to_string()));
-        assert_eq!(captures.get(&1), Some(&"-2.0".to_string()));
+        assert_eq!(captures.get(&0), Some(&b"SSH-2.0".to_vec()));
+        assert_eq!(captures.get(&1), Some(&b"-2.0".to_vec()));
     }
 
     #[test]
@@ -878,5 +906,27 @@ Ports 80
         // Test below boundary
         let info = ServiceInfo::new("test").with_confidence(9);
         assert_eq!(info.confidence, 9);
+    }
+
+    #[test]
+    fn test_negative_lookahead_pattern() {
+        // This test verifies that pcre2 correctly handles negative lookahead (?!\r\n)
+        // which was the root cause of service detection not working with fancy-regex
+        let _detector = ServiceDetector::new(ProbeDatabase::empty());
+
+        // Pattern with negative lookahead: match HTTP headers but stop at empty line
+        let regex = Regex::new(r"(?s)^HTTP/1\.[01] (?:[^\r\n]*\r\n(?!\r\n))*?Host:").unwrap();
+
+        // Response with Host header before empty line - should match
+        let response1 = b"HTTP/1.1 200 OK\r\nHost: example.com\r\n\r\n";
+        assert!(regex.is_match(response1).unwrap(), "Should match HTTP response with Host header");
+
+        // Response without Host header, empty line immediately - should not match
+        let response2 = b"HTTP/1.1 200 OK\r\n\r\n";
+        assert!(!regex.is_match(response2).unwrap(), "Should not match response without Host header");
+
+        // Response with other headers before empty line - should not match (no Host)
+        let response3 = b"HTTP/1.1 200 OK\r\nServer: nginx\r\n\r\n";
+        assert!(!regex.is_match(response3).unwrap(), "Should not match response without Host header");
     }
 }

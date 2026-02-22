@@ -19,8 +19,8 @@ tokio = { workspace = true }
 # Serialization
 serde = { workspace = true }
 
-# Regex for pattern matching
-regex = { workspace = true }
+# Regex for pattern matching (use pcre2 for full PCRE support including negative look-arounds)
+pcre2 = "0.2.11"
 
 # Error handling
 thiserror = { workspace = true }

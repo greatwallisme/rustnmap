@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use regex::Regex;
+use pcre2::bytes::Regex;
 use serde::{Deserialize, Serialize};
 
 use crate::Result;
@@ -190,15 +190,16 @@ impl MatchRule {
     /// # Errors
     /// Returns error if the regex pattern is invalid.
     pub fn compile_regex(&self) -> Result<Regex> {
-        Regex::new(&self.pattern).map_err(|e| crate::error::FingerprintError::InvalidRegex {
-            pattern: self.pattern.clone(),
-            reason: e.to_string(),
-        })
+        Regex::new(&self.pattern)
+            .map_err(|e| crate::error::FingerprintError::InvalidRegex {
+                pattern: self.pattern.clone(),
+                reason: e.to_string(),
+            })
     }
 
     /// Apply this match rule to a response with captured groups.
     #[must_use]
-    pub fn apply(&self, captures: &HashMap<usize, String>) -> MatchResult {
+    pub fn apply(&self, captures: &HashMap<usize, Vec<u8>>) -> MatchResult {
         let confidence = if self.soft { 5 } else { 8 };
 
         MatchResult {
@@ -217,14 +218,14 @@ impl MatchRule {
     /// Resolve a template variable using capture group values.
     fn resolve_template(
         template: Option<&MatchTemplate>,
-        captures: &HashMap<usize, String>,
+        captures: &HashMap<usize, Vec<u8>>,
     ) -> Option<String> {
         let template = template?.value.clone();
         Some(Self::substitute_template_vars(&template, captures))
     }
 
     /// Substitute template variables with captured values.
-    fn substitute_template_vars(template: &str, captures: &HashMap<usize, String>) -> String {
+    fn substitute_template_vars(template: &str, captures: &HashMap<usize, Vec<u8>>) -> String {
         let mut result = String::new();
         let mut chars = template.chars().peekable();
 
@@ -234,8 +235,12 @@ impl MatchRule {
                     if next_ch.is_ascii_digit() {
                         let _ = chars.next(); // consume the digit
                         let group_num = next_ch.to_digit(10).unwrap() as usize;
-                        let value = captures.get(&group_num).cloned().unwrap_or_default();
-                        result.push_str(&value);
+                        let value = captures.get(&group_num);
+                        if let Some(bytes) = value {
+                            if let Ok(s) = std::str::from_utf8(bytes) {
+                                result.push_str(s);
+                            }
+                        }
                     } else if next_ch == '$' {
                         let _ = chars.next();
                         result.push('$');
@@ -311,8 +316,8 @@ mod tests {
         };
 
         let mut captures = HashMap::new();
-        captures.insert(1, "8.4".to_string());
-        captures.insert(2, "p1".to_string());
+        captures.insert(1, b"8.4".to_vec());
+        captures.insert(2, b"p1".to_vec());
 
         let result = rule.apply(&captures);
         assert_eq!(result.service, "ssh");
