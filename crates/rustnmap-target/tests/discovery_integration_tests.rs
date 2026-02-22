@@ -165,6 +165,12 @@ fn test_arp_ping_discovery() {
 /// Test `HostDiscovery` engine with ICMP.
 #[test]
 fn test_host_discovery_icmp() {
+    // Skip test if running as non-root (raw sockets require CAP_NET_RAW)
+    if !std::env::var("RUSTNMAP_INTEGRATION_TEST").is_ok_and(|v| v == "1") {
+        eprintln!("Skipping test_host_discovery_icmp: set RUSTNMAP_INTEGRATION_TEST=1 to run");
+        return;
+    }
+
     let target = get_test_target();
     let config = test_config();
 
@@ -182,6 +188,12 @@ fn test_host_discovery_icmp() {
 /// Test `HostDiscovery` engine with TCP ping.
 #[test]
 fn test_host_discovery_tcp_ping() {
+    // Skip test if running as non-root (raw sockets require CAP_NET_RAW)
+    if !std::env::var("RUSTNMAP_INTEGRATION_TEST").is_ok_and(|v| v == "1") {
+        eprintln!("Skipping test_host_discovery_tcp_ping: set RUSTNMAP_INTEGRATION_TEST=1 to run");
+        return;
+    }
+
     let target = get_test_target();
     let config = test_config();
 
@@ -199,6 +211,12 @@ fn test_host_discovery_tcp_ping() {
 /// Test `HostDiscovery` engine auto-selection.
 #[test]
 fn test_host_discovery_auto() {
+    // Skip test if running as non-root (raw sockets require CAP_NET_RAW)
+    if !std::env::var("RUSTNMAP_INTEGRATION_TEST").is_ok_and(|v| v == "1") {
+        eprintln!("Skipping test_host_discovery_auto: set RUSTNMAP_INTEGRATION_TEST=1 to run");
+        return;
+    }
+
     let target = get_test_target();
     let config = test_config();
 
@@ -333,6 +351,14 @@ fn test_host_discovery_creation() {
 /// Test multiple discovery methods against same target.
 #[test]
 fn test_multiple_discovery_methods() {
+    // Skip test if running as non-root (raw sockets require CAP_NET_RAW)
+    if !std::env::var("RUSTNMAP_INTEGRATION_TEST").is_ok_and(|v| v == "1") {
+        eprintln!(
+            "Skipping test_multiple_discovery_methods: set RUSTNMAP_INTEGRATION_TEST=1 to run"
+        );
+        return;
+    }
+
     let target = get_test_target();
     let local_addr = Ipv4Addr::UNSPECIFIED;
     let timeout = Duration::from_secs(1);

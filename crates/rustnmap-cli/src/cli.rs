@@ -21,8 +21,11 @@
 use std::sync::Arc;
 
 use rustnmap_common::Result;
-use rustnmap_core::session::{DefaultOutputSink, DefaultPacketEngine, FingerprintDatabase, NseRegistry, OutputSink, PacketEngine, PortSpec, TargetSet};
-use rustnmap_core::session::{ScanType as CoreScanType};
+use rustnmap_core::session::ScanType as CoreScanType;
+use rustnmap_core::session::{
+    DefaultOutputSink, DefaultPacketEngine, FingerprintDatabase, NseRegistry, OutputSink,
+    PacketEngine, PortSpec, TargetSet,
+};
 use rustnmap_core::{ScanConfig, ScanOrchestrator, ScanSession};
 use rustnmap_output::formatter::OutputFormatter;
 use rustnmap_output::models::{HostResult, PortResult, PortState, Protocol, ScanResult, ScanType};
@@ -414,7 +417,10 @@ async fn handle_profile_scan(args: &Args, profile_path: &std::path::Path) -> Res
         let service_db_path = db_dir.join("nmap-service-probes");
 
         if service_db_path.exists() {
-            info!("Loading service probe database from: {}", service_db_path.display());
+            info!(
+                "Loading service probe database from: {}",
+                service_db_path.display()
+            );
             match rustnmap_fingerprint::ProbeDatabase::load_from_nmap_db(&service_db_path).await {
                 Ok(db) => {
                     info!("Service probe database loaded successfully");
@@ -426,7 +432,10 @@ async fn handle_profile_scan(args: &Args, profile_path: &std::path::Path) -> Res
                 }
             }
         } else {
-            warn!("Service probe database not found at: {}", service_db_path.display());
+            warn!(
+                "Service probe database not found at: {}",
+                service_db_path.display()
+            );
             warn!("Service detection will be skipped");
         }
     }
@@ -436,7 +445,10 @@ async fn handle_profile_scan(args: &Args, profile_path: &std::path::Path) -> Res
         let os_db_path = db_dir.join("nmap-os-db");
 
         if os_db_path.exists() {
-            info!("Loading OS fingerprint database from: {}", os_db_path.display());
+            info!(
+                "Loading OS fingerprint database from: {}",
+                os_db_path.display()
+            );
             match tokio::task::block_in_place(|| {
                 rustnmap_fingerprint::FingerprintDatabase::load_from_nmap_db(&os_db_path)
             }) {
@@ -450,7 +462,10 @@ async fn handle_profile_scan(args: &Args, profile_path: &std::path::Path) -> Res
                 }
             }
         } else {
-            warn!("OS fingerprint database not found at: {}", os_db_path.display());
+            warn!(
+                "OS fingerprint database not found at: {}",
+                os_db_path.display()
+            );
             warn!("OS detection will be skipped");
         }
     }
@@ -459,9 +474,10 @@ async fn handle_profile_scan(args: &Args, profile_path: &std::path::Path) -> Res
 
     // Create scan session and run
     let target_set = Arc::new(TargetSet::from_group(targets));
-    let packet_engine: Arc<dyn PacketEngine> = Arc::new(DefaultPacketEngine::new().map_err(|e| {
-        rustnmap_common::Error::Other(format!("Failed to create packet engine: {e}"))
-    })?);
+    let packet_engine: Arc<dyn PacketEngine> =
+        Arc::new(DefaultPacketEngine::new().map_err(|e| {
+            rustnmap_common::Error::Other(format!("Failed to create packet engine: {e}"))
+        })?);
     let output_sink: Arc<dyn OutputSink> = Arc::new(DefaultOutputSink::new());
     let nse_registry = Arc::new(NseRegistry::new());
 
@@ -701,7 +717,10 @@ async fn run_normal_scan(args: &Args) -> Result<()> {
         let service_db_path = db_dir.join("nmap-service-probes");
 
         if service_db_path.exists() {
-            info!("Loading service probe database from: {}", service_db_path.display());
+            info!(
+                "Loading service probe database from: {}",
+                service_db_path.display()
+            );
             match rustnmap_fingerprint::ProbeDatabase::load_from_nmap_db(&service_db_path).await {
                 Ok(db) => {
                     info!("Service probe database loaded successfully");
@@ -713,7 +732,10 @@ async fn run_normal_scan(args: &Args) -> Result<()> {
                 }
             }
         } else {
-            warn!("Service probe database not found at: {}", service_db_path.display());
+            warn!(
+                "Service probe database not found at: {}",
+                service_db_path.display()
+            );
             warn!("Service detection will be skipped");
         }
     }
@@ -723,7 +745,10 @@ async fn run_normal_scan(args: &Args) -> Result<()> {
         let os_db_path = db_dir.join("nmap-os-db");
 
         if os_db_path.exists() {
-            info!("Loading OS fingerprint database from: {}", os_db_path.display());
+            info!(
+                "Loading OS fingerprint database from: {}",
+                os_db_path.display()
+            );
             match tokio::task::block_in_place(|| {
                 rustnmap_fingerprint::FingerprintDatabase::load_from_nmap_db(&os_db_path)
             }) {
@@ -737,7 +762,10 @@ async fn run_normal_scan(args: &Args) -> Result<()> {
                 }
             }
         } else {
-            warn!("OS fingerprint database not found at: {}", os_db_path.display());
+            warn!(
+                "OS fingerprint database not found at: {}",
+                os_db_path.display()
+            );
             warn!("OS detection will be skipped");
         }
     }
@@ -746,9 +774,10 @@ async fn run_normal_scan(args: &Args) -> Result<()> {
 
     // Create scan session with dependencies
     let target_set = Arc::new(TargetSet::from_group(targets));
-    let packet_engine: Arc<dyn PacketEngine> = Arc::new(DefaultPacketEngine::new().map_err(|e| {
-        rustnmap_common::Error::Other(format!("Failed to create packet engine: {e}"))
-    })?);
+    let packet_engine: Arc<dyn PacketEngine> =
+        Arc::new(DefaultPacketEngine::new().map_err(|e| {
+            rustnmap_common::Error::Other(format!("Failed to create packet engine: {e}"))
+        })?);
     let output_sink: Arc<dyn OutputSink> = Arc::new(DefaultOutputSink::new());
     let nse_registry = Arc::new(NseRegistry::new());
 
@@ -1217,6 +1246,14 @@ fn print_host_normal<W: Write>(handle: &mut W, args: &Args, host: &HostResult) {
             for port in visible_ports {
                 print_port_normal(handle, args, port);
             }
+        }
+    }
+
+    // OS detection results
+    if !host.os_matches.is_empty() {
+        let _ = writeln!(handle, "OS detection:");
+        for os_match in &host.os_matches {
+            let _ = writeln!(handle, "{} ({}%)", os_match.name, os_match.accuracy);
         }
     }
 

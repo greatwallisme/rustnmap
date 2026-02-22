@@ -16,7 +16,7 @@
 //! XML parser for Nmap XML output format.
 //!
 //! This module provides functionality to parse Nmap XML scan results
-//! and convert them to RustNmap's `ScanResult` structure for diff
+//! and convert them to `RustNmap`'s `ScanResult` structure for diff
 //! comparison and other operations.
 
 use chrono::{TimeZone, Utc};
@@ -351,7 +351,7 @@ impl Default for XmlService {
     }
 }
 
-fn default_confidence() -> u8 {
+const fn default_confidence() -> u8 {
     3
 }
 
@@ -533,7 +533,7 @@ struct XmlHostStats {
 
 /// Parse Nmap XML output and convert to `ScanResult`.
 ///
-/// This function parses XML output from either Nmap or RustNmap
+/// This function parses XML output from either Nmap or `RustNmap`
 /// and converts it to the internal `ScanResult` format for
 /// diff comparison and other operations.
 ///
@@ -686,7 +686,7 @@ fn convert_host(xml_host: XmlHost) -> Result<HostResult> {
         .ports
         .into_iter()
         .map(convert_port)
-        .collect::<Result<Vec<_>>>()?;
+        .collect();
 
     // Convert OS matches
     let os_matches: Vec<OsMatch> = xml_host
@@ -719,7 +719,7 @@ fn convert_host(xml_host: XmlHost) -> Result<HostResult> {
 }
 
 /// Convert XML port to `PortResult`.
-fn convert_port(xml_port: XmlPort) -> Result<PortResult> {
+fn convert_port(xml_port: XmlPort) -> PortResult {
     let protocol = parse_protocol(&xml_port.protocol);
 
     let state = parse_port_state(&xml_port.state.state);
@@ -743,7 +743,7 @@ fn convert_port(xml_port: XmlPort) -> Result<PortResult> {
 
     let scripts: Vec<ScriptResult> = xml_port.scripts.into_iter().map(convert_script).collect();
 
-    Ok(PortResult {
+    PortResult {
         number: xml_port.portid,
         protocol,
         state,
@@ -751,7 +751,7 @@ fn convert_port(xml_port: XmlPort) -> Result<PortResult> {
         state_ttl: xml_port.state.reason_ttl,
         service,
         scripts,
-    })
+    }
 }
 
 /// Convert XML script to `ScriptResult`.
@@ -798,7 +798,6 @@ fn convert_os_match(xml_match: XmlOsMatch) -> OsMatch {
 /// Parse scan type string to `ScanType`.
 fn parse_scan_type(s: &str) -> ScanType {
     match s {
-        "syn" => ScanType::TcpSyn,
         "connect" => ScanType::TcpConnect,
         "fin" => ScanType::TcpFin,
         "null" => ScanType::TcpNull,
@@ -818,7 +817,6 @@ fn parse_scan_type(s: &str) -> ScanType {
 /// Parse protocol string to `Protocol`.
 fn parse_protocol(s: &str) -> Protocol {
     match s {
-        "tcp" => Protocol::Tcp,
         "udp" => Protocol::Udp,
         "sctp" => Protocol::Sctp,
         _ => Protocol::Tcp,

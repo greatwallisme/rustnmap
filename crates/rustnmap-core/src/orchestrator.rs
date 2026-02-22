@@ -21,6 +21,7 @@ use rustnmap_scan::stealth_scans::{
     TcpXmasScanner,
 };
 use rustnmap_scan::syn_scan::TcpSynScanner;
+use rustnmap_scan::ultrascan::ParallelScanEngine;
 use rustnmap_scan::udp_scan::UdpScanner;
 use rustnmap_target::discovery::{HostDiscovery, HostState as DiscoveryHostState};
 use rustnmap_target::Target;
@@ -480,18 +481,154 @@ impl ScanOrchestrator {
     }
 
     /// Runs the port scanning phase.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "Port scanning requires handling all scan types and parallel vs sequential logic in one function for performance"
+    )]
     async fn run_port_scanning(&self) -> Result<Vec<HostResult>> {
         info!("Starting port scanning phase");
 
         let targets: Vec<Target> = self.session.target_set.targets().to_vec();
         let mut host_results = Vec::new();
 
-        for target in targets {
+        // Get the primary scan type from config
+        let primary_scan_type = self
+            .session
+            .config
+            .scan_types
+            .first()
+            .copied()
+            .unwrap_or(ScanType::TcpSyn);
+
+        // Check if we should use parallel scanning (TCP SYN scan)
+        let use_parallel = matches!(primary_scan_type, ScanType::TcpSyn);
+
+        if use_parallel {
+            // Use parallel scanning for better performance
+            info!("Using parallel scanning engine for TCP SYN scan");
+            for target in &targets {
+                let ports = self.get_ports_for_scan();
+                let target_ip = match target.ip {
+                    IpAddr::V4(addr) => addr,
+                    IpAddr::V6(_) => {
+                        // IPv6 not supported by parallel engine yet, fall back to sequential
+                        warn!("IPv6 not supported by parallel engine, falling back to sequential");
+                        return self.run_port_scanning_sequential(&targets, &ports).await;
+                    }
+                };
+
+                // Create parallel scan engine
+                let local_addr = get_local_address(&self.session.config.dns_server);
+                let scanner_config = ScannerConfig {
+                    min_rtt: std::time::Duration::from_millis(50),
+                    max_rtt: std::time::Duration::from_secs(10),
+                    initial_rtt: self.session.config.scan_delay,
+                    max_retries: 2,
+                    host_timeout: self
+                        .session
+                        .config
+                        .host_timeout
+                        .as_millis()
+                        .try_into()
+                        .unwrap_or(30000),
+                    scan_delay: self.session.config.scan_delay,
+                    dns_server: self.session.config.dns_server.clone(),
+                };
+
+                #[expect(
+                    clippy::manual_let_else,
+                    reason = "Need to handle error case with early return - let...else would be less readable"
+                )]
+                let engine = if let Ok(engine) = ParallelScanEngine::new(local_addr, scanner_config) {
+                    engine
+                } else {
+                    // Raw socket creation failed (not root), fall back to sequential
+                    warn!("Raw socket creation failed, falling back to TCP Connect scan");
+                    return self.run_port_scanning_sequential(&targets, &ports).await;
+                };
+
+                // Run parallel scan
+                let scan_results = match engine.scan_ports(target_ip, &ports).await {
+                    Ok(r) => r,
+                    Err(e) => {
+                        warn!(error = %e, "Parallel scan failed, falling back to sequential");
+                        return self.run_port_scanning_sequential(&targets, &ports).await;
+                    }
+                };
+
+                // Convert scan results to port results
+                let mut port_results = Vec::new();
+                for (port, common_state) in scan_results {
+                    // Convert rustnmap_common::PortState to rustnmap_output::models::PortState
+                    let output_state = match common_state {
+                        rustnmap_common::PortState::Open => PortState::Open,
+                        rustnmap_common::PortState::Closed => PortState::Closed,
+                        _ => PortState::Filtered,
+                    };
+
+                    let port_result = PortResult {
+                        number: port,
+                        protocol: rustnmap_output::models::Protocol::Tcp,
+                        state: output_state,
+                        state_reason: "scan".to_string(),
+                        state_ttl: None,
+                        service: service_info_from_db(port, rustnmap_common::ServiceProtocol::Tcp),
+                        scripts: Vec::new(),
+                    };
+
+                    if port_result.state != PortState::Closed {
+                        port_results.push(port_result);
+                        self.session.stats.record_open_port();
+                    }
+                    self.session.stats.record_packet_sent();
+                }
+
+                let host_result = HostResult {
+                    ip: target.ip,
+                    mac: None,
+                    hostname: target.hostname.clone(),
+                    status: HostStatus::Up,
+                    status_reason: "syn-ack".to_string(),
+                    latency: std::time::Duration::from_millis(1),
+                    ports: port_results,
+                    os_matches: Vec::new(),
+                    scripts: Vec::new(),
+                    traceroute: None,
+                    times: rustnmap_output::models::HostTimes {
+                        srtt: None,
+                        rttvar: None,
+                        timeout: None,
+                    },
+                };
+
+                host_results.push(host_result);
+            }
+        } else {
+            // Use sequential scanning for other scan types
+            info!("Using sequential scanning for scan type: {:?}", primary_scan_type);
             let ports = self.get_ports_for_scan();
+            return self.run_port_scanning_sequential(&targets, &ports).await;
+        }
+
+        info!(hosts = host_results.len(), "Port scanning phase completed");
+        Ok(host_results)
+    }
+
+    /// Runs port scanning sequentially (fallback for non-SYN scans or when raw socket fails).
+    async fn run_port_scanning_sequential(
+        &self,
+        targets: &[Target],
+        ports: &[u16],
+    ) -> Result<Vec<HostResult>> {
+        info!("Starting sequential port scanning");
+
+        let mut host_results = Vec::new();
+
+        for target in targets {
             let mut port_results = Vec::new();
 
             for port in ports {
-                let port_result = self.scan_port(&target, port).await?;
+                let port_result = self.scan_port(target, *port).await?;
                 if port_result.state != PortState::Closed {
                     port_results.push(port_result);
                     self.session.stats.record_open_port();
@@ -520,7 +657,6 @@ impl ScanOrchestrator {
             host_results.push(host_result);
         }
 
-        info!(hosts = host_results.len(), "Port scanning phase completed");
         Ok(host_results)
     }
 

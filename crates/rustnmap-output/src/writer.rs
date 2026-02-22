@@ -86,13 +86,14 @@ impl OutputManager {
     }
 
     /// Set verbosity level.
+    #[expect(clippy::missing_const_for_fn, reason = "cannot be const: takes &mut self")]
     pub fn set_verbosity(&mut self, verbosity: VerbosityLevel) {
         self.verbosity = verbosity;
     }
 
     /// Get current verbosity level.
     #[must_use]
-    pub fn verbosity(&self) -> VerbosityLevel {
+    pub const fn verbosity(&self) -> VerbosityLevel {
         self.verbosity
     }
 
@@ -228,7 +229,7 @@ mod tests {
     fn test_add_file_output() {
         let mut manager = OutputManager::new();
         let path = PathBuf::from("/tmp/test.nmap");
-        manager.add_file_output(path.clone());
+        manager.add_file_output(path);
         assert_eq!(manager.destinations.len(), 1);
     }
 
@@ -255,6 +256,7 @@ mod tests {
         buf.extend_from_slice(test_data);
 
         let result = String::from_utf8(buf.clone()).unwrap();
+        drop(buf); // Drop the lock early
         assert_eq!(result, "test data");
     }
 

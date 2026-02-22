@@ -26,14 +26,13 @@
 //! use rustnmap_output::{OutputManager, NormalFormatter, ScanResult};
 //! use std::path::PathBuf;
 //!
-//! # #[tokio::main]
-//! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let mut manager = OutputManager::new();
 //! manager.add_formatter(Box::new(NormalFormatter::new()));
 //! manager.add_file_output(PathBuf::from("scan.nmap"));
 //!
 //! let scan_result = ScanResult::default();
-//! manager.output_scan_result(&scan_result).await?;
+//! manager.output_scan_result(&scan_result)?;
 //! # Ok(())
 //! # }
 //! ```

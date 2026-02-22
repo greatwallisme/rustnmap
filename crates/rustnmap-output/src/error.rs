@@ -53,7 +53,7 @@ pub enum OutputError {
 
 impl From<std::string::FromUtf8Error> for OutputError {
     fn from(err: std::string::FromUtf8Error) -> Self {
-        OutputError::InvalidData(err.to_string())
+        Self::InvalidData(err.to_string())
     }
 }
 

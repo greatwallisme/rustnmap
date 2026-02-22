@@ -190,11 +190,10 @@ impl MatchRule {
     /// # Errors
     /// Returns error if the regex pattern is invalid.
     pub fn compile_regex(&self) -> Result<Regex> {
-        Regex::new(&self.pattern)
-            .map_err(|e| crate::error::FingerprintError::InvalidRegex {
-                pattern: self.pattern.clone(),
-                reason: e.to_string(),
-            })
+        Regex::new(&self.pattern).map_err(|e| crate::error::FingerprintError::InvalidRegex {
+            pattern: self.pattern.clone(),
+            reason: e.to_string(),
+        })
     }
 
     /// Apply this match rule to a response with captured groups.

@@ -146,7 +146,10 @@ fn test_service_detection_with_mock_response() {
         .expect("Failed to compile regex");
     let captures_result = regex.captures(response);
 
-    assert!(captures_result.is_ok(), "Expected regex to compile and match");
+    assert!(
+        captures_result.is_ok(),
+        "Expected regex to compile and match"
+    );
 
     let captures_opt = captures_result.unwrap();
     assert!(captures_opt.is_some(), "Expected regex to match");
@@ -391,7 +394,10 @@ fn test_real_database_apache_patterns() {
     assert!(get_request.is_some(), "GetRequest probe should exist");
 
     let get_request = get_request.unwrap();
-    println!("GetRequest probe has {} match rules", get_request.matches.len());
+    println!(
+        "GetRequest probe has {} match rules",
+        get_request.matches.len()
+    );
 
     // Find Apache patterns that match the scanme.nmap.org response
     let scanme_response = b"HTTP/1.1 200 OK\r\nDate: Sun, 22 Feb 2026 02:31:04 GMT\r\nServer: Apache/2.4.7 (Ubuntu)\r\n";
@@ -426,10 +432,16 @@ fn test_real_database_apache_patterns() {
     }
 
     println!("Total Apache rules: {}", total_apache_rules);
-    println!("Total Apache patterns with capture groups: {}", apache_match_count);
+    println!(
+        "Total Apache patterns with capture groups: {}",
+        apache_match_count
+    );
 
     println!("Total Apache rules: {}", total_apache_rules);
-    println!("Total Apache patterns with capture groups: {}", apache_match_count);
+    println!(
+        "Total Apache patterns with capture groups: {}",
+        apache_match_count
+    );
 
     assert!(
         apache_match_count > 0,

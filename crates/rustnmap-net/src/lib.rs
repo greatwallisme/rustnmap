@@ -361,63 +361,63 @@ pub mod raw_socket {
 
         /// Sets the sequence number.
         #[must_use]
-        pub fn seq(mut self, seq: u32) -> Self {
+        pub const fn seq(mut self, seq: u32) -> Self {
             self.seq = seq;
             self
         }
 
         /// Sets the acknowledgment number.
         #[must_use]
-        pub fn ack(mut self, ack: u32) -> Self {
+        pub const fn ack(mut self, ack: u32) -> Self {
             self.ack = ack;
             self
         }
 
         /// Sets the SYN flag.
         #[must_use]
-        pub fn syn(mut self) -> Self {
+        pub const fn syn(mut self) -> Self {
             self.flags |= 0x02;
             self
         }
 
         /// Sets the ACK flag.
         #[must_use]
-        pub fn ack_flag(mut self) -> Self {
+        pub const fn ack_flag(mut self) -> Self {
             self.flags |= 0x10;
             self
         }
 
         /// Sets the RST flag.
         #[must_use]
-        pub fn rst(mut self) -> Self {
+        pub const fn rst(mut self) -> Self {
             self.flags |= 0x04;
             self
         }
 
         /// Sets the FIN flag.
         #[must_use]
-        pub fn fin(mut self) -> Self {
+        pub const fn fin(mut self) -> Self {
             self.flags |= 0x01;
             self
         }
 
         /// Sets the PSH (Push) flag.
         #[must_use]
-        pub fn psh(mut self) -> Self {
+        pub const fn psh(mut self) -> Self {
             self.flags |= 0x08;
             self
         }
 
         /// Sets the URG (Urgent) flag.
         #[must_use]
-        pub fn urg(mut self) -> Self {
+        pub const fn urg(mut self) -> Self {
             self.flags |= 0x20;
             self
         }
 
         /// Sets the window size.
         #[must_use]
-        pub fn window(mut self, window: u16) -> Self {
+        pub const fn window(mut self, window: u16) -> Self {
             self.window = window;
             self
         }
@@ -609,7 +609,7 @@ pub mod raw_socket {
     impl TcpOptions {
         /// Create empty TCP options.
         #[must_use]
-        pub fn new() -> Self {
+        pub const fn new() -> Self {
             Self {
                 mss: None,
                 wscale: None,
@@ -1312,14 +1312,14 @@ pub mod raw_socket {
 
         /// Sets the ICMP identifier.
         #[must_use]
-        pub fn identifier(mut self, identifier: u16) -> Self {
+        pub const fn identifier(mut self, identifier: u16) -> Self {
             self.identifier = identifier;
             self
         }
 
         /// Sets the ICMP sequence number.
         #[must_use]
-        pub fn sequence(mut self, sequence: u16) -> Self {
+        pub const fn sequence(mut self, sequence: u16) -> Self {
             self.sequence = sequence;
             self
         }
@@ -1789,7 +1789,7 @@ pub mod raw_socket {
     impl ArpPacketBuilder {
         /// Creates a new ARP packet builder.
         #[must_use]
-        pub fn new(
+        pub const fn new(
             src_mac: rustnmap_common::MacAddr,
             src_ip: Ipv4Addr,
             target_ip: Ipv4Addr,
@@ -1948,7 +1948,7 @@ pub mod raw_socket {
     impl Ipv6UdpPacketBuilder {
         /// Creates a new IPv6 UDP packet builder.
         #[must_use]
-        pub fn new(
+        pub const fn new(
             src_ip: std::net::Ipv6Addr,
             dst_ip: std::net::Ipv6Addr,
             src_port: Port,
@@ -1974,14 +1974,14 @@ pub mod raw_socket {
 
         /// Sets the flow label (20 bits, will be masked).
         #[must_use]
-        pub fn flow_label(mut self, flow_label: u32) -> Self {
+        pub const fn flow_label(mut self, flow_label: u32) -> Self {
             self.flow_label = flow_label & 0x000F_FFFF;
             self
         }
 
         /// Sets the hop limit.
         #[must_use]
-        pub fn hop_limit(mut self, hop_limit: u8) -> Self {
+        pub const fn hop_limit(mut self, hop_limit: u8) -> Self {
             self.hop_limit = hop_limit;
             self
         }
@@ -2254,7 +2254,7 @@ pub mod raw_socket {
     impl Icmpv6PacketBuilder {
         /// Creates a new `ICMPv6` packet builder for echo request.
         #[must_use]
-        pub fn new(src_ip: std::net::Ipv6Addr, dst_ip: std::net::Ipv6Addr) -> Self {
+        pub const fn new(src_ip: std::net::Ipv6Addr, dst_ip: std::net::Ipv6Addr) -> Self {
             Self {
                 src_ip,
                 dst_ip,
@@ -2270,14 +2270,14 @@ pub mod raw_socket {
 
         /// Sets the `ICMPv6` identifier.
         #[must_use]
-        pub fn identifier(mut self, identifier: u16) -> Self {
+        pub const fn identifier(mut self, identifier: u16) -> Self {
             self.identifier = identifier;
             self
         }
 
         /// Sets the `ICMPv6` sequence number.
         #[must_use]
-        pub fn sequence(mut self, sequence: u16) -> Self {
+        pub const fn sequence(mut self, sequence: u16) -> Self {
             self.sequence = sequence;
             self
         }
@@ -2291,14 +2291,14 @@ pub mod raw_socket {
 
         /// Sets the flow label (20 bits, will be masked).
         #[must_use]
-        pub fn flow_label(mut self, flow_label: u32) -> Self {
+        pub const fn flow_label(mut self, flow_label: u32) -> Self {
             self.flow_label = flow_label & 0x000F_FFFF;
             self
         }
 
         /// Sets the hop limit.
         #[must_use]
-        pub fn hop_limit(mut self, hop_limit: u8) -> Self {
+        pub const fn hop_limit(mut self, hop_limit: u8) -> Self {
             self.hop_limit = hop_limit;
             self
         }
@@ -2576,7 +2576,7 @@ pub mod raw_socket {
     impl Ipv6TcpPacketBuilder {
         /// Creates a new IPv6 TCP packet builder.
         #[must_use]
-        pub fn new(
+        pub const fn new(
             src_ip: std::net::Ipv6Addr,
             dst_ip: std::net::Ipv6Addr,
             src_port: Port,
@@ -2599,56 +2599,56 @@ pub mod raw_socket {
 
         /// Sets the sequence number.
         #[must_use]
-        pub fn seq(mut self, seq: u32) -> Self {
+        pub const fn seq(mut self, seq: u32) -> Self {
             self.seq = seq;
             self
         }
 
         /// Sets the acknowledgment number.
         #[must_use]
-        pub fn ack(mut self, ack: u32) -> Self {
+        pub const fn ack(mut self, ack: u32) -> Self {
             self.ack = ack;
             self
         }
 
         /// Sets the SYN flag.
         #[must_use]
-        pub fn syn(mut self) -> Self {
+        pub const fn syn(mut self) -> Self {
             self.flags |= 0x02;
             self
         }
 
         /// Sets the ACK flag.
         #[must_use]
-        pub fn ack_flag(mut self) -> Self {
+        pub const fn ack_flag(mut self) -> Self {
             self.flags |= 0x10;
             self
         }
 
         /// Sets the RST flag.
         #[must_use]
-        pub fn rst(mut self) -> Self {
+        pub const fn rst(mut self) -> Self {
             self.flags |= 0x04;
             self
         }
 
         /// Sets the FIN flag.
         #[must_use]
-        pub fn fin(mut self) -> Self {
+        pub const fn fin(mut self) -> Self {
             self.flags |= 0x01;
             self
         }
 
         /// Sets the PSH (Push) flag.
         #[must_use]
-        pub fn psh(mut self) -> Self {
+        pub const fn psh(mut self) -> Self {
             self.flags |= 0x08;
             self
         }
 
         /// Sets the window size.
         #[must_use]
-        pub fn window(mut self, window: u16) -> Self {
+        pub const fn window(mut self, window: u16) -> Self {
             self.window = window;
             self
         }
@@ -2662,14 +2662,14 @@ pub mod raw_socket {
 
         /// Sets the flow label (20 bits, will be masked).
         #[must_use]
-        pub fn flow_label(mut self, flow_label: u32) -> Self {
+        pub const fn flow_label(mut self, flow_label: u32) -> Self {
             self.flow_label = flow_label & 0x000F_FFFF;
             self
         }
 
         /// Sets the hop limit.
         #[must_use]
-        pub fn hop_limit(mut self, hop_limit: u8) -> Self {
+        pub const fn hop_limit(mut self, hop_limit: u8) -> Self {
             self.hop_limit = hop_limit;
             self
         }

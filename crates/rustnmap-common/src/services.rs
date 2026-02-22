@@ -131,14 +131,11 @@ impl ServiceDatabase {
 
     /// Loads from a runtime file, falling back to embedded data.
     fn load_with_fallback(custom_data_dir: Option<&Path>) -> Self {
-        let file_path = if let Some(dir) = custom_data_dir {
-            Some(dir.join(DB_SUBDIR).join(SERVICES_FILENAME))
-        } else {
-            Self::default_services_path()
-        };
+        let file_path = custom_data_dir
+            .map_or_else(Self::default_services_path, |dir| Some(dir.join(DB_SUBDIR).join(SERVICES_FILENAME)));
 
         // Try loading from runtime file
-        if let Some(ref path) = file_path {
+        if let Some(path) = &file_path {
             if path.exists() {
                 if let Ok(content) = std::fs::read_to_string(path) {
                     let mut db = Self::parse(&content);
@@ -169,7 +166,7 @@ impl ServiceDatabase {
 
     /// Returns where this database was loaded from.
     #[must_use]
-    pub fn source(&self) -> &DatabaseSource {
+    pub const fn source(&self) -> &DatabaseSource {
         &self.source
     }
 

@@ -185,12 +185,22 @@ impl ServiceDetector {
 
             match self.send_probe(target, port, probe).await {
                 Ok(Some(response)) => {
-                    debug!("Got {} bytes from probe '{}' on port {}", response.len(), probe.name, port);
+                    debug!(
+                        "Got {} bytes from probe '{}' on port {}",
+                        response.len(),
+                        probe.name,
+                        port
+                    );
 
                     // Match response against all rules
                     let matches = Self::match_response(probe, &response)?;
 
-                    debug!("Got {} matches from probe '{}' on port {}", matches.len(), probe.name, port);
+                    debug!(
+                        "Got {} matches from probe '{}' on port {}",
+                        matches.len(),
+                        probe.name,
+                        port
+                    );
                     for match_result in matches {
                         results.push(ServiceInfo::from_match(match_result));
                     }
@@ -399,8 +409,20 @@ impl ServiceDetector {
     /// Match response against probe rules.
     fn match_response(probe: &ProbeDefinition, response: &[u8]) -> Result<Vec<MatchResult>> {
         let response_str = String::from_utf8_lossy(response);
-        debug!("Matching probe '{}' against response ({} bytes): {}", probe.name, response.len(), response_str);
-        debug!("Response bytes (hex): {:?}", response.iter().map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join(" "));
+        debug!(
+            "Matching probe '{}' against response ({} bytes): {}",
+            probe.name,
+            response.len(),
+            response_str
+        );
+        debug!(
+            "Response bytes (hex): {:?}",
+            response
+                .iter()
+                .map(|b| format!("{:02x}", b))
+                .collect::<Vec<_>>()
+                .join(" ")
+        );
 
         let mut results = Vec::new();
 
@@ -444,9 +466,7 @@ impl ServiceDetector {
                 }
                 Some(map)
             }
-            Ok(None) => {
-                None
-            }
+            Ok(None) => None,
             Err(e) => {
                 debug!("Regex error: {}", e);
                 None
@@ -919,14 +939,23 @@ Ports 80
 
         // Response with Host header before empty line - should match
         let response1 = b"HTTP/1.1 200 OK\r\nHost: example.com\r\n\r\n";
-        assert!(regex.is_match(response1).unwrap(), "Should match HTTP response with Host header");
+        assert!(
+            regex.is_match(response1).unwrap(),
+            "Should match HTTP response with Host header"
+        );
 
         // Response without Host header, empty line immediately - should not match
         let response2 = b"HTTP/1.1 200 OK\r\n\r\n";
-        assert!(!regex.is_match(response2).unwrap(), "Should not match response without Host header");
+        assert!(
+            !regex.is_match(response2).unwrap(),
+            "Should not match response without Host header"
+        );
 
         // Response with other headers before empty line - should not match (no Host)
         let response3 = b"HTTP/1.1 200 OK\r\nServer: nginx\r\n\r\n";
-        assert!(!regex.is_match(response3).unwrap(), "Should not match response without Host header");
+        assert!(
+            !regex.is_match(response3).unwrap(),
+            "Should not match response without Host header"
+        );
     }
 }

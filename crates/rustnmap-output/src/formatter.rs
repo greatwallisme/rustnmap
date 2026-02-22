@@ -35,7 +35,7 @@ pub struct NdjsonFormatter;
 impl NdjsonFormatter {
     /// Create new NDJSON formatter.
     #[must_use]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self
     }
 }
@@ -90,7 +90,7 @@ pub struct MarkdownFormatter;
 impl MarkdownFormatter {
     /// Create new Markdown formatter.
     #[must_use]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self
     }
 }
@@ -172,7 +172,7 @@ impl OutputFormatter for MarkdownFormatter {
         // Host header
         let _ = writeln!(output, "### {}\n\n", host.ip);
 
-        if let Some(ref hostname) = host.hostname {
+        if let Some(hostname) = &host.hostname {
             let _ = writeln!(output, "- **Hostname**: {hostname}");
         }
         let _ = writeln!(output, "- **Status**: {:?}", host.status);
@@ -335,13 +335,13 @@ pub struct NormalFormatter {
 impl NormalFormatter {
     /// Create new normal formatter with default settings.
     #[must_use]
-    pub fn new() -> Self {
-        Self::default()
+    pub const fn new() -> Self {
+        Self { verbosity: VerbosityLevel::Normal }
     }
 
     /// Create normal formatter with specified verbosity.
     #[must_use]
-    pub fn with_verbosity(verbosity: VerbosityLevel) -> Self {
+    pub const fn with_verbosity(verbosity: VerbosityLevel) -> Self {
         Self { verbosity }
     }
 }
@@ -385,7 +385,7 @@ impl OutputFormatter for NormalFormatter {
         // Host line
         let _ = writeln!(output, "Nmap scan report for {}", host.ip);
 
-        if let Some(ref hostname) = host.hostname {
+        if let Some(hostname) = &host.hostname {
             let _ = writeln!(output, "rDNS record for {}: {}", host.ip, hostname);
         }
 
@@ -403,7 +403,7 @@ impl OutputFormatter for NormalFormatter {
         );
 
         // MAC address
-        if let Some(ref mac) = host.mac {
+        if let Some(mac) = &host.mac {
             let vendor = mac.vendor.as_deref().unwrap_or("unknown");
             let _ = writeln!(output, "MAC Address: {} ({})", mac.address, vendor);
         }
@@ -449,7 +449,7 @@ impl OutputFormatter for NormalFormatter {
         }
 
         // Traceroute
-        if let Some(ref trace) = host.traceroute {
+        if let Some(trace) = &host.traceroute {
             let _ = writeln!(
                 output,
                 "TRACEROUTE (using port {}/{} )",
@@ -493,7 +493,8 @@ impl OutputFormatter for NormalFormatter {
         };
 
         // Build service string with version info when available
-        let service_string = if let Some(ref service) = port.service {
+        #[expect(clippy::option_if_let_else, reason = "if let/else is more readable than map_or_else for this complex conditional logic")]
+        let service_string = if let Some(service) = &port.service {
             // Check if we have detailed version info (method == "probed" means we actually detected it)
             if service.method == "probed" {
                 let mut parts = Vec::new();
@@ -506,7 +507,8 @@ impl OutputFormatter for NormalFormatter {
                     parts.push(service.name.clone());
                 } else if has_version_info {
                     // If we have product/version but name doesn't have ssl/ prefix, add it for common TLS ports
-                    if matches!(port.number, 443 | 8443 | 631) && !service.name.starts_with("ssl/") {
+                    if matches!(port.number, 443 | 8443 | 631) && !service.name.starts_with("ssl/")
+                    {
                         parts.push(format!("ssl/{}", service.name));
                     } else {
                         parts.push(service.name.clone());
@@ -516,21 +518,21 @@ impl OutputFormatter for NormalFormatter {
                 }
 
                 // Add product if available
-                if let Some(ref product) = service.product {
+                if let Some(product) = &service.product {
                     parts.push(product.clone());
                 }
 
                 // Add version if available
-                if let Some(ref version) = service.version {
+                if let Some(version) = &service.version {
                     parts.push(version.clone());
                 }
 
                 // Add extra info if available (don't add extra parentheses if already present)
-                if let Some(ref extrainfo) = service.extrainfo {
+                if let Some(extrainfo) = &service.extrainfo {
                     if extrainfo.starts_with('(') {
                         parts.push(extrainfo.clone());
                     } else {
-                        parts.push(format!("({})", extrainfo));
+                        parts.push(format!("({extrainfo})"));
                     }
                 }
 
@@ -577,7 +579,7 @@ pub struct XmlFormatter;
 impl XmlFormatter {
     /// Create new XML formatter.
     #[must_use]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self
     }
 }
@@ -693,11 +695,11 @@ impl OutputFormatter for XmlFormatter {
 }
 
 impl XmlFormatter {
-    fn get_verbosity_level() -> i8 {
+    const fn get_verbosity_level() -> i8 {
         0
     }
 
-    fn get_debug_level() -> u8 {
+    const fn get_debug_level() -> u8 {
         0
     }
 
@@ -742,11 +744,11 @@ impl XmlFormatter {
             .map_err(OutputError::from)?;
 
         // MAC
-        if let Some(ref mac) = host.mac {
+        if let Some(mac) = &host.mac {
             let mut mac_elem = BytesStart::new("address");
             mac_elem.push_attribute(("addr", mac.address.as_str()));
             mac_elem.push_attribute(("addrtype", "mac"));
-            if let Some(ref vendor) = mac.vendor {
+            if let Some(vendor) = &mac.vendor {
                 mac_elem.push_attribute(("vendor", vendor.as_str()));
             }
             writer
@@ -755,7 +757,7 @@ impl XmlFormatter {
         }
 
         // Hostnames
-        if let Some(ref hostname) = host.hostname {
+        if let Some(hostname) = &host.hostname {
             writer.write_event(Event::Start(BytesStart::new("hostnames")))?;
             let mut hostname_elem = BytesStart::new("hostname");
             hostname_elem.push_attribute(("name", hostname.as_str()));
@@ -825,7 +827,7 @@ impl XmlFormatter {
             .write_event(Event::Empty(state_elem))
             .map_err(OutputError::from)?;
 
-        if let Some(ref service) = port.service {
+        if let Some(service) = &port.service {
             Self::write_service(writer, service)?;
         }
 
@@ -843,16 +845,16 @@ impl XmlFormatter {
         service_start.push_attribute(("method", service.method.as_str()));
         service_start.push_attribute(("conf", service.confidence.to_string().as_str()));
 
-        if let Some(ref product) = service.product {
+        if let Some(product) = &service.product {
             service_start.push_attribute(("product", product.as_str()));
         }
-        if let Some(ref version) = service.version {
+        if let Some(version) = &service.version {
             service_start.push_attribute(("version", version.as_str()));
         }
-        if let Some(ref ostype) = service.ostype {
+        if let Some(ostype) = &service.ostype {
             service_start.push_attribute(("ostype", ostype.as_str()));
         }
-        if let Some(ref extrainfo) = service.extrainfo {
+        if let Some(extrainfo) = &service.extrainfo {
             service_start.push_attribute(("extrainfo", extrainfo.as_str()));
         }
 
@@ -906,7 +908,7 @@ impl XmlFormatter {
 
         writer.write_event(Event::Start(os_start))?;
 
-        if let Some(ref os_family) = os_match.os_family {
+        if let Some(os_family) = &os_match.os_family {
             let mut osclass = BytesStart::new("osclass");
             osclass.push_attribute(("type", "general purpose"));
             osclass.push_attribute(("vendor", ""));
@@ -940,13 +942,13 @@ pub struct JsonFormatter {
 impl JsonFormatter {
     /// Create new JSON formatter with pretty printing enabled.
     #[must_use]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self { pretty: true }
     }
 
     /// Create JSON formatter with specified pretty print setting.
     #[must_use]
-    pub fn with_pretty(pretty: bool) -> Self {
+    pub const fn with_pretty(pretty: bool) -> Self {
         Self { pretty }
     }
 }
@@ -997,7 +999,7 @@ pub struct GrepableFormatter;
 impl GrepableFormatter {
     /// Create new grepable formatter.
     #[must_use]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self
     }
 }
@@ -1093,7 +1095,7 @@ pub struct ScriptKiddieFormatter;
 impl ScriptKiddieFormatter {
     /// Create new script kiddie formatter.
     #[must_use]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self
     }
 }
@@ -1115,7 +1117,7 @@ impl OutputFormatter for ScriptKiddieFormatter {
 
         // Header
         let _ = write!(output, "{} ({})", host.ip, host.ip);
-        if let Some(ref hostname) = host.hostname {
+        if let Some(hostname) = &host.hostname {
             let _ = write!(output, " [{hostname}]");
         }
         output.push('\n');

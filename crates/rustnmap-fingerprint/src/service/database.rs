@@ -203,7 +203,8 @@ impl ProbeDatabase {
 
         // Find the 'q' followed by a delimiter AFTER the probe name
         // We need to find 'q' that comes after the name, not just any 'q' in the line
-        let name_end_pos = line.find(&name)
+        let name_end_pos = line
+            .find(&name)
             .ok_or_else(|| FingerprintError::ParseError {
                 line: line_num,
                 content: "Could not find probe name in line".to_string(),
@@ -965,7 +966,10 @@ Match http m|^Server: ([\w/]+)| p/$1/
 
         // Build regex using our function
         let regex_pattern = ProbeDatabase::build_regex_pattern(pattern, flags);
-        assert!(regex_pattern.contains("(?s)"), "Pattern should have (?s) flag");
+        assert!(
+            regex_pattern.contains("(?s)"),
+            "Pattern should have (?s) flag"
+        );
 
         let regex = Regex::new(&regex_pattern).unwrap();
 
@@ -989,7 +993,15 @@ Match http m|^Server: ([\w/]+)| p/$1/
         let (start, end) = locs.get(2).unwrap();
         let info = &response[start..end];
 
-        assert_eq!(String::from_utf8_lossy(version), "2.4.7", "Version should be 2.4.7");
-        assert_eq!(String::from_utf8_lossy(info), "(Ubuntu)", "Info should be (Ubuntu)");
+        assert_eq!(
+            String::from_utf8_lossy(version),
+            "2.4.7",
+            "Version should be 2.4.7"
+        );
+        assert_eq!(
+            String::from_utf8_lossy(info),
+            "(Ubuntu)",
+            "Info should be (Ubuntu)"
+        );
     }
 }

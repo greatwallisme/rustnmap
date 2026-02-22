@@ -81,7 +81,7 @@ impl TargetParser {
     /// let mut parser = TargetParser::new();
     /// // Parse exclusion string and set as exclude list
     /// let exclude_group = parser.parse("192.168.1.100").unwrap();
-    /// parser.set_exclude_list(exclude_group.into_targets());
+    /// parser.set_exclude_list(exclude_group.targets);
     /// ```
     pub fn set_exclude_list(&mut self, excludes: Vec<Target>) {
         self.exclude_list = excludes

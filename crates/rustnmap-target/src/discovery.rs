@@ -2126,6 +2126,12 @@ mod tests {
 
     #[test]
     fn test_tcp_syn_ping_discover_localhost() {
+        // Skip test if running as non-root (raw sockets require CAP_NET_RAW)
+        if !std::env::var("RUSTNMAP_INTEGRATION_TEST").is_ok_and(|v| v == "1") {
+            eprintln!("Skipping test_tcp_syn_ping_discover_localhost: set RUSTNMAP_INTEGRATION_TEST=1 to run");
+            return;
+        }
+
         let local_addr = Ipv4Addr::LOCALHOST;
         let timeout = Duration::from_secs(1);
 
@@ -2149,6 +2155,12 @@ mod tests {
 
     #[test]
     fn test_icmp_ping_discover_localhost() {
+        // Skip test if running as non-root (raw sockets require CAP_NET_RAW)
+        if !std::env::var("RUSTNMAP_INTEGRATION_TEST").is_ok_and(|v| v == "1") {
+            eprintln!("Skipping test_icmp_ping_discover_localhost: set RUSTNMAP_INTEGRATION_TEST=1 to run");
+            return;
+        }
+
         let local_addr = Ipv4Addr::LOCALHOST;
         let timeout = Duration::from_secs(1);
 

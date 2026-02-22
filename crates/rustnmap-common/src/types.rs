@@ -229,6 +229,7 @@ impl PortRange {
     /// # Errors
     ///
     /// Returns an error if start > end or if either is 0.
+    #[expect(clippy::missing_const_for_fn, reason = "cannot be const: returns Result and constructs Error variants")]
     pub fn new(start: Port, end: Port) -> crate::Result<Self> {
         if start == 0 || end == 0 {
             return Err(Error::Target(TargetError::PortOutOfRange {
@@ -291,13 +292,13 @@ pub enum PortSelector {
 impl PortSelector {
     /// Scan the default top 1000 ports.
     #[must_use]
-    pub fn top_1000() -> Self {
+    pub const fn top_1000() -> Self {
         Self::Top(1000)
     }
 
     /// Returns the estimated number of ports to scan.
     #[must_use]
-    pub fn estimated_count(&self) -> usize {
+    pub const fn estimated_count(&self) -> usize {
         match self {
             Self::Specific(list) => list.len(),
             Self::Top(n) => *n,
@@ -340,13 +341,13 @@ impl FromIterator<Port> for PortList {
 impl PortList {
     /// Returns the number of ports in this list.
     #[must_use]
-    pub fn len(&self) -> usize {
+    pub const fn len(&self) -> usize {
         self.ports.len()
     }
 
     /// Returns true if this list is empty.
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.ports.is_empty()
     }
 
@@ -363,7 +364,7 @@ impl PortList {
 
     /// Creates a new port list from a vector of ports.
     #[must_use]
-    pub fn from_ports(ports: Vec<Port>) -> Self {
+    pub const fn from_ports(ports: Vec<Port>) -> Self {
         Self { ports }
     }
 }

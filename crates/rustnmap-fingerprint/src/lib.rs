@@ -24,7 +24,7 @@
 //! use std::net::SocketAddr;
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-//! let db = ProbeDatabase::load_from_nmap_db("nmap-service-probes")?;
+//! let db = ProbeDatabase::load_from_nmap_db("nmap-service-probes").await?;
 //! let detector = ServiceDetector::new(db);
 //!
 //! let target: SocketAddr = "127.0.0.1:80".parse().unwrap();

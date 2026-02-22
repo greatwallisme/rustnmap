@@ -87,7 +87,6 @@ pub struct Args {
     // ============================================
     /// TCP SYN scan (default with root)
     #[arg(
-        short = 's',
         long,
         help_heading = "Scan Types",
         conflicts_with_all = ["scan_connect", "scan_udp", "scan_fin",
@@ -97,7 +96,6 @@ pub struct Args {
 
     /// TCP Connect scan (default without root)
     #[arg(
-        short = 's',
         long,
         help_heading = "Scan Types",
         conflicts_with_all = ["scan_syn", "scan_udp", "scan_fin",
@@ -107,7 +105,6 @@ pub struct Args {
 
     /// UDP scan
     #[arg(
-        short = 's',
         long,
         help_heading = "Scan Types",
         conflicts_with_all = ["scan_syn", "scan_connect", "scan_fin",
@@ -117,7 +114,6 @@ pub struct Args {
 
     /// TCP FIN scan
     #[arg(
-        short = 's',
         long,
         help_heading = "Scan Types",
         conflicts_with_all = ["scan_syn", "scan_connect", "scan_udp",
@@ -127,7 +123,6 @@ pub struct Args {
 
     /// TCP NULL scan
     #[arg(
-        short = 's',
         long,
         help_heading = "Scan Types",
         conflicts_with_all = ["scan_syn", "scan_connect", "scan_udp",
@@ -137,7 +132,6 @@ pub struct Args {
 
     /// TCP XMAS scan
     #[arg(
-        short = 's',
         long,
         help_heading = "Scan Types",
         conflicts_with_all = ["scan_syn", "scan_connect", "scan_udp",
@@ -147,7 +141,6 @@ pub struct Args {
 
     /// TCP MAIMON scan
     #[arg(
-        short = 's',
         long,
         help_heading = "Scan Types",
         conflicts_with_all = ["scan_syn", "scan_connect", "scan_udp",
@@ -170,7 +163,6 @@ pub struct Args {
 
     /// Scan all 65535 ports
     #[arg(
-        short = 'p',
         long,
         help_heading = "Port Specification",
         conflicts_with_all = ["ports", "top_ports", "fast_scan"]
@@ -196,19 +188,14 @@ pub struct Args {
     pub fast_scan: bool,
 
     /// Scan the specified protocol
-    #[arg(
-        short = 's',
-        long,
-        help_heading = "Port Specification",
-        value_name = "PROTOCOL"
-    )]
+    #[arg(long, help_heading = "Port Specification", value_name = "PROTOCOL")]
     pub protocol: Option<String>,
 
     // ============================================
     // Service/OS Detection
     // ============================================
     /// Probe open ports to determine service/version info
-    #[arg(short = 's', long, help_heading = "Service/OS Detection")]
+    #[arg(long, help_heading = "Service/OS Detection")]
     pub service_detection: bool,
 
     /// Intensity level of service detection (0-9)
@@ -329,7 +316,6 @@ pub struct Args {
     // ============================================
     /// Normal output to file
     #[arg(
-        short = 'o',
         long,
         help_heading = "Output",
         value_name = "FILE",
@@ -339,7 +325,6 @@ pub struct Args {
 
     /// XML output to file
     #[arg(
-        short = 'o',
         long,
         help_heading = "Output",
         value_name = "FILE",
@@ -349,7 +334,6 @@ pub struct Args {
 
     /// Grepable output to file
     #[arg(
-        short = 'o',
         long,
         help_heading = "Output",
         value_name = "FILE",
@@ -359,7 +343,6 @@ pub struct Args {
 
     /// JSON output to file
     #[arg(
-        short = 'o',
         long,
         help_heading = "Output",
         value_name = "FILE",
@@ -369,7 +352,6 @@ pub struct Args {
 
     /// NDJSON output to file (newline-delimited JSON for pipelines)
     #[arg(
-        short = 'o',
         long,
         help_heading = "Output",
         value_name = "FILE",
@@ -379,7 +361,6 @@ pub struct Args {
 
     /// Markdown output to file
     #[arg(
-        short = 'o',
         long,
         help_heading = "Output",
         value_name = "FILE",
@@ -389,7 +370,6 @@ pub struct Args {
 
     /// Output all formats to basename
     #[arg(
-        short = 'o',
         long,
         help_heading = "Output",
         value_name = "BASENAME",
@@ -400,7 +380,7 @@ pub struct Args {
     pub output_all: Option<PathBuf>,
 
     /// Script Kiddie output
-    #[arg(short = 'o', long, help_heading = "Output")]
+    #[arg(long, help_heading = "Output")]
     pub output_script_kiddie: bool,
 
     /// No output (suppress default output)

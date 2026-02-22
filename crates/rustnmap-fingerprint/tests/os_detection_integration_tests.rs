@@ -90,6 +90,12 @@ fn test_fingerprint_database_load_invalid_path() {
 /// may not respond to OS detection probes as expected.
 #[tokio::test]
 async fn test_os_detection_localhost() {
+    // Skip test if running as non-root (raw sockets require CAP_NET_RAW)
+    if !std::env::var("RUSTNMAP_INTEGRATION_TEST").is_ok_and(|v| v == "1") {
+        eprintln!("Skipping test_os_detection_localhost: set RUSTNMAP_INTEGRATION_TEST=1 to run");
+        return;
+    }
+
     let db = FingerprintDatabase::empty();
     let local_addr = Ipv4Addr::LOCALHOST;
     let detector = OsDetector::new(db, local_addr)
