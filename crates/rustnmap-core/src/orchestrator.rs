@@ -563,8 +563,14 @@ impl ScanOrchestrator {
                     let output_state = match common_state {
                         rustnmap_common::PortState::Open => PortState::Open,
                         rustnmap_common::PortState::Closed => PortState::Closed,
-                        _ => PortState::Filtered,
+                        rustnmap_common::PortState::Filtered => PortState::Filtered,
+                        rustnmap_common::PortState::Unfiltered => PortState::Unfiltered,
+                        rustnmap_common::PortState::OpenOrFiltered => PortState::OpenOrFiltered,
+                        rustnmap_common::PortState::ClosedOrFiltered => PortState::ClosedOrFiltered,
+                        rustnmap_common::PortState::OpenOrClosed => PortState::OpenOrClosed,
                     };
+
+                    let is_open = output_state == PortState::Open;
 
                     let port_result = PortResult {
                         number: port,
@@ -578,6 +584,8 @@ impl ScanOrchestrator {
 
                     if port_result.state != PortState::Closed {
                         port_results.push(port_result);
+                    }
+                    if is_open {
                         self.session.stats.record_open_port();
                     }
                     self.session.stats.record_packet_sent();
@@ -629,8 +637,11 @@ impl ScanOrchestrator {
 
             for port in ports {
                 let port_result = self.scan_port(target, *port).await?;
+                let is_open = port_result.state == PortState::Open;
                 if port_result.state != PortState::Closed {
                     port_results.push(port_result);
+                }
+                if is_open {
                     self.session.stats.record_open_port();
                 }
                 self.session.stats.record_packet_sent();
@@ -966,7 +977,18 @@ impl ScanOrchestrator {
                 rustnmap_common::PortState::Filtered => {
                     (PortState::Filtered, "no-response".to_string())
                 }
-                _ => (PortState::Filtered, "unknown".to_string()),
+                rustnmap_common::PortState::Unfiltered => {
+                    (PortState::Unfiltered, "no-response".to_string())
+                }
+                rustnmap_common::PortState::OpenOrFiltered => {
+                    (PortState::OpenOrFiltered, "no-response".to_string())
+                }
+                rustnmap_common::PortState::ClosedOrFiltered => {
+                    (PortState::ClosedOrFiltered, "no-response".to_string())
+                }
+                rustnmap_common::PortState::OpenOrClosed => {
+                    (PortState::OpenOrClosed, "ambiguous".to_string())
+                }
             };
 
             let protocol = match primary_scan_type {

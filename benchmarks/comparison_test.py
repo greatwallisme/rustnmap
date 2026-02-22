@@ -13,7 +13,7 @@ import sys
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import toml
 from dotenv import load_dotenv
@@ -40,7 +40,7 @@ class TestConfig:
 
     # Target configuration
     target_ip: str = "45.33.32.156"
-    secondary_target_ip: Optional[str] = None
+    secondary_target_ip: str | None = None
 
     # Scanner paths
     rustnmap_release: str = "./target/release/rustnmap"
@@ -66,7 +66,7 @@ class TestConfig:
     enable_advanced_scans: bool = True
 
     @classmethod
-    def from_env(cls, env_file: Optional[Path] = None) -> "TestConfig":
+    def from_env(cls, env_file: Path|None = None) -> "TestConfig":
         """Load configuration from .env file."""
         if env_file is None:
             env_file = Path(__file__).parent.parent / ".env"

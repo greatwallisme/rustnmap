@@ -897,11 +897,24 @@ fn build_scan_config(args: &Args) -> Result<ScanConfig> {
     // Host discovery
     config.host_discovery = !args.disable_ping;
 
-    // Service detection
-    config.service_detection = args.service_detection;
+    // Aggressive scan (-A) enables: OS detection, service detection, vuln scripts, T4 timing
+    if args.aggressive_scan {
+        config.service_detection = true;
+        config.os_detection = true;
+        config.nse_scripts = true;
+        config.nse_categories = vec!["vuln".to_string()];
+        config.timing_template = TimingTemplate::Aggressive;
+    }
 
-    // OS detection
-    config.os_detection = args.os_detection;
+    // Service detection (explicit -sV overrides aggressive default)
+    if args.service_detection {
+        config.service_detection = true;
+    }
+
+    // OS detection (explicit -O overrides aggressive default)
+    if args.os_detection {
+        config.os_detection = true;
+    }
 
     // Traceroute
     config.traceroute = args.traceroute;

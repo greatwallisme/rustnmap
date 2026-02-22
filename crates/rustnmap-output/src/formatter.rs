@@ -440,8 +440,24 @@ impl OutputFormatter for NormalFormatter {
             }
         }
 
-        // OS detection
+        // OS detection - match nmap format
         if !host.os_matches.is_empty() {
+            // Output "OS details:" line (nmap format for the best match)
+            if let Some(best_match) = host.os_matches.first() {
+                let _ = writeln!(output, "OS details: {}", best_match.name);
+            }
+
+            // Output OS CPE if available
+            for os_match in &host.os_matches {
+                if !os_match.cpe.is_empty() {
+                    for cpe in &os_match.cpe {
+                        let _ = writeln!(output, "OS CPE: {}", cpe);
+                    }
+                    break; // Only show CPE for first match
+                }
+            }
+
+            // Output all OS matches under "OS detection:" section
             output.push_str("OS detection:\n");
             for os_match in &host.os_matches {
                 let _ = writeln!(output, "{} ({}%)", os_match.name, os_match.accuracy);

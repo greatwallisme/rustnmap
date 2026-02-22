@@ -194,6 +194,14 @@ pub struct Args {
     // ============================================
     // Service/OS Detection
     // ============================================
+    /// Aggressive scan options (enables OS detection, service detection, version scanning, and scripts)
+    #[arg(
+        short = 'A',
+        long,
+        help_heading = "Service/OS Detection"
+    )]
+    pub aggressive_scan: bool,
+
     /// Probe open ports to determine service/version info
     #[arg(long, help_heading = "Service/OS Detection")]
     pub service_detection: bool,
