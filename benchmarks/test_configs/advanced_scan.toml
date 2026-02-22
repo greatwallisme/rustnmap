@@ -1,0 +1,44 @@
+# Advanced Scan Configuration
+# Tests advanced scanning techniques and evasion
+# Uses nmap-style flags - will be translated to rustnmap flags
+
+[config]
+name = "Advanced Scans"
+description = "Compare advanced scanning capabilities"
+category = "advanced"
+
+[[test_case]]
+name = "FIN Scan"
+description = "TCP FIN scan"
+command_template = "{scanner} -sF -p {ports} {target}"
+expected_fields = ["PORT", "STATE", "SERVICE"]
+
+[[test_case]]
+name = "NULL Scan"
+description = "TCP NULL scan"
+command_template = "{scanner} -sN -p {ports} {target}"
+expected_fields = ["PORT", "STATE", "SERVICE"]
+
+[[test_case]]
+name = "XMAS Scan"
+description = "TCP XMAS scan"
+command_template = "{scanner} -sX -p {ports} {target}"
+expected_fields = ["PORT", "STATE", "SERVICE"]
+
+[[test_case]]
+name = "MAIMON Scan"
+description = "TCP MAIMON scan"
+command_template = "{scanner} -sM -p {ports} {target}"
+expected_fields = ["PORT", "STATE", "SERVICE"]
+
+[[test_case]]
+name = "Timing Template"
+description = "Scan with timing template T4"
+command_template = "{scanner} -sS -T4 -p {ports} {target}"
+expected_fields = ["PORT", "STATE", "SERVICE"]
+
+[[test_case]]
+name = "Min/Max Rate"
+description = "Scan with rate limiting"
+command_template = "{scanner} -sS --min-rate 100 --max-rate 500 -p {ports} {target}"
+expected_fields = ["PORT", "STATE", "SERVICE"]

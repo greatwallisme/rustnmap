@@ -343,3 +343,44 @@ bench-fingerprint:
 
 bench-nse:
     cargo bench --package rustnmap-benchmarks nse_benchmarks
+
+# Comparison tests (rustnmap vs nmap)
+# Install Python dependencies for comparison tests
+bench-compare-install:
+    cd benchmarks && uv sync
+
+# Run all comparison tests
+bench-compare *args="":
+    cd benchmarks && uv run python comparison_test.py {{args}}
+
+# Run basic scan comparison
+bench-compare-basic:
+    cd benchmarks && uv run python comparison_test.py --suite basic
+
+# Run service detection comparison
+bench-compare-service:
+    cd benchmarks && uv run python comparison_test.py --suite service
+
+# Run OS detection comparison
+bench-compare-os:
+    cd benchmarks && uv run python comparison_test.py --suite os
+
+# Run advanced scan comparison
+bench-compare-advanced:
+    cd benchmarks && uv run python comparison_test.py --suite advanced
+
+# Run comparison tests with custom target
+bench-compare-target target:
+    cd benchmarks && uv run python comparison_test.py --target {{target}}
+
+# Run comparison tests (text report only)
+bench-compare-text:
+    cd benchmarks && uv run python comparison_test.py --format text
+
+# Run comparison tests (JSON report only)
+bench-compare-json:
+    cd benchmarks && uv run python comparison_test.py --format json
+
+# Run comparison tests with verbose output
+bench-compare-verbose:
+    cd benchmarks && uv run python comparison_test.py -v

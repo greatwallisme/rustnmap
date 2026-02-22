@@ -1,0 +1,26 @@
+# Service Detection Configuration
+# Tests service and version detection capabilities
+# Uses nmap-style flags - will be translated to rustnmap flags
+
+[config]
+name = "Service Detection"
+description = "Compare service/version detection capabilities"
+category = "detection"
+
+[[test_case]]
+name = "Version Detection"
+description = "Probe open ports to determine service/version"
+command_template = "{scanner} -sV -p {ports} {target}"
+expected_fields = ["PORT", "STATE", "SERVICE", "VERSION"]
+
+[[test_case]]
+name = "Version Detection Intensity"
+description = "Version detection with intensity level"
+command_template = "{scanner} -sV --version-intensity 5 -p {ports} {target}"
+expected_fields = ["PORT", "STATE", "SERVICE", "VERSION"]
+
+[[test_case]]
+name = "Aggressive Scan"
+description = "Enable OS detection and version detection"
+command_template = "{scanner} -A -p {ports} {target}"
+expected_fields = ["PORT", "STATE", "SERVICE", "VERSION"]

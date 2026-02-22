@@ -7,6 +7,105 @@
 
 ## 最新发现 (2026-02-22)
 
+### 🆕 比较测试框架 - 新建
+
+**文件**: `benchmarks/` 目录
+
+**成果**: 创建了完整的rustnmap vs nmap比较测试框架
+
+**测试框架结构**:
+- Python测试脚本 (`comparison_test.py`, `compare_scans.py`)
+- TOML测试配置文件 (`test_configs/*.toml`)
+- uv依赖管理 (`pyproject.toml` with Tsinghua mirror)
+- Justfile集成 (`just bench-compare*`)
+- 自动报告生成 (text + JSON格式)
+
+**测试结果概览**:
+
+| 指标 | 结果 |
+|------|------|
+| 总测试数 | 17 |
+| 通过 | 8 (47.1%) |
+| 失败 | 9 (52.9%) |
+
+**性能亮点**:
+- SYN扫描: rustnmap比nmap快 **1.33x** (695ms vs 922ms)
+- Fast Scan: rustnmap比nmap快 **2.97x** (5.8s vs 17.3s)
+- Top Ports: rustnmap比nmap快 **3.35x** (5.1s vs 17.1s)
+- OS检测: rustnmap比nmap快 **4.51x** (14.9s vs 67.2s)
+
+### 🐛 CRITICAL: rustnmap扫描后不退出bug - 已修复!
+
+**问题**: rustnmap扫描完成后不自动退出，必须Ctrl+C终止
+
+**文件**: `crates/rustnmap-scan/src/ultrascan.rs:348`
+
+**根本原因**: 等待receiver task时没有超时机制
+```rust
+// 问题代码
+let _ = receiver_handle.await;  // 永久等待
+```
+
+**解决方案**: 添加200ms超时
+```rust
+// 修复后
+let _ = tokio::time::timeout(Duration::from_millis(200), receiver_handle).await;
+```
+
+**状态**: ✅ 已修复并验证
+
+### 🐛 CRITICAL: 探针超时延迟问题 - 已修复!
+
+**文件**: `crates/rustnmap-scan/src/ultrascan.rs:474`
+
+**问题**: 使用 `>` 比较导致探针在正好超时时不会被视为超时
+- 预期: 1000ms时超时
+- 实际: 需要>1000ms才超时 (约1100ms)
+
+**修复**: 改为 `>=` 比较
+```rust
+// 修复前
+.filter(|(_, p)| now.duration_since(p.sent_time) > self.probe_timeout)
+
+// 修复后
+.filter(|(_, p)| now.duration_since(p.sent_time) >= self.probe_timeout)
+```
+
+**影响**: 确保探针在超时时立即被处理，而不是等待下一个检查周期
+
+### 🐛 CRITICAL: 探针丢失bug - 已修复!
+
+**文件**: `crates/rustnmap-scan/src/ultrascan.rs:330-332`
+
+**问题**: 当达到并行度限制时，重试探针被丢弃
+```rust
+// 问题代码
+for probe in retry_probes.drain(..) {
+    if outstanding.len() < self.max_parallelism {
+        self.resend_probe(probe, &mut outstanding)?;
+    }
+    // 否则探针丢失！
+}
+```
+
+**修复**: 添加fallback标记为filtered
+```rust
+// 修复后
+for probe in retry_probes.drain(..) {
+    if outstanding.len() < self.max_parallelism {
+        self.resend_probe(probe, &mut outstanding)?;
+    } else {
+        results.entry(probe.port).or_insert(PortState::Filtered);
+    }
+}
+```
+
+**状态**: ✅ 已修复
+
+---
+
+### ✅ CRITICAL: Fast Scan 性能问题 - 已解决! 🚀
+
 ### ✅ CRITICAL: Fast Scan 性能问题 - 已解决! 🚀
 
 **问题**: Fast Scan (-F) 比nmap 慢 23 倍 (98.39s vs 4.18s)

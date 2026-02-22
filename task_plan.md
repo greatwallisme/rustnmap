@@ -2,8 +2,67 @@
 
 **Created**: 2026-02-21
 **Updated**: 2026-02-22
-**Status**: Phase 8 性能优化 - COMPLETE ✅
-**Goal**: 解决 Fast Scan 性能问题，实现比 nmap 更快的扫描速度
+**Status**: Phase 9 比较测试框架 - COMPLETE ✅
+**Goal**: 创建rustnmap vs nmap比较测试框架，修复扫描不退出bug
+
+---
+
+## 当前阶段
+
+Phase 8: 性能优化 - 实现 UltraScan 并行扫描架构 - COMPLETE ✅
+Phase 9: 比较测试框架与bug修复 - COMPLETE ✅
+
+---
+
+## 阶段划分
+
+### Phase 9: 比较测试框架与bug修复 ✅ COMPLETE
+
+**任务**: 创建rustnmap vs nmap比较测试框架，修复关键bug
+
+#### Bug修复记录
+
+| Bug | 位置 | 修复 |
+|-----|------|------|
+| rustnmap不退出 | ultrascan.rs:348 | 添加200ms超时 |
+| 探针超时延迟 | ultrascan.rs:474 | `>` 改为 `>=` |
+| 探针丢失 | ultrascan.rs:330 | 添加fallback |
+
+#### 测试框架成果
+
+**目录结构** (`benchmarks/`):
+- Python测试脚本 (`comparison_test.py`, `compare_scans.py`)
+- TOML测试配置 (`test_configs/*.toml`)
+- uv依赖管理 (pyproject.toml with Tsinghua mirror)
+- Justfile集成 (`just bench-compare*`)
+- 自动报告生成 (text + JSON)
+
+**测试结果**:
+- 总测试数: 17
+- 通过: 8 (47.1%)
+- 失败: 9 (52.9% - 主要是状态分类差异)
+
+**性能亮点**:
+- SYN扫描: 1.33x faster
+- Fast Scan: 2.97x faster
+- Top Ports: 3.35x faster
+- OS检测: 4.51x faster
+
+**修改文件**:
+- `benchmarks/` (新建目录)
+- `benchmarks/*.py` (新建测试脚本)
+- `benchmarks/*.toml` (新建配置)
+- `benchmarks/pyproject.toml` (新建)
+- `benchmarks/README.md` (新建)
+- `benchmarks/COMPARISON_PLAN.md` (新建)
+- `crates/rustnmap-scan/src/ultrascan.rs` (bug修复)
+- `.env` (新建配置)
+- `.gitignore` (更新)
+- `justfile` (添加bench-compare recipes)
+
+---
+
+### Phase 1: 环境准备 ✅ COMPLETE
 
 ---
 

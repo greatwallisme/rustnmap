@@ -3,3 +3,10 @@ target
 .env
 .env.local
 .env.*.local
+
+# Python
+benchmarks/.venv
+benchmarks/uv.lock
+benchmarks/__pycache__
+benchmarks/reports/*.txt
+benchmarks/reports/*.json

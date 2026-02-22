@@ -1,0 +1,26 @@
+# OS Detection Configuration
+# Tests operating system detection capabilities
+# Uses nmap-style flags - will be translated to rustnmap flags
+
+[config]
+name = "OS Detection"
+description = "Compare OS detection capabilities"
+category = "detection"
+
+[[test_case]]
+name = "OS Detection"
+description = "Detect operating system"
+command_template = "{scanner} -O {target}"
+expected_fields = ["OS details", "Service detection"]
+
+[[test_case]]
+name = "OS Detection Limit"
+description = "Limit OS detection to promising targets"
+command_template = "{scanner} -O --osscan-limit {target}"
+expected_fields = ["OS details"]
+
+[[test_case]]
+name = "OS Detection Guess"
+description = "Guess OS more aggressively"
+command_template = "{scanner} -O --osscan-guess {target}"
+expected_fields = ["OS details", "OS guesses"]

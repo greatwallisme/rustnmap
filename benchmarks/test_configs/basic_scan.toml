@@ -1,0 +1,38 @@
+# Basic Scan Configuration
+# Tests fundamental port scanning functionality
+# Uses nmap-style flags - will be translated to rustnmap flags
+
+[config]
+name = "Basic Port Scans"
+description = "Compare basic port scanning capabilities"
+category = "basic"
+
+[[test_case]]
+name = "SYN Scan"
+description = "TCP SYN scan (default with root)"
+command_template = "{scanner} -sS -p {ports} {target}"
+expected_fields = ["PORT", "STATE", "SERVICE"]
+
+[[test_case]]
+name = "Connect Scan"
+description = "TCP Connect scan (default without root)"
+command_template = "{scanner} -sT -p {ports} {target}"
+expected_fields = ["PORT", "STATE", "SERVICE"]
+
+[[test_case]]
+name = "UDP Scan"
+description = "UDP port scan"
+command_template = "{scanner} -sU -p {ports} {target}"
+expected_fields = ["PORT", "STATE", "SERVICE"]
+
+[[test_case]]
+name = "Fast Scan"
+description = "Scan fewer ports (top 100)"
+command_template = "{scanner} -F {target}"
+expected_fields = ["PORT", "STATE", "SERVICE"]
+
+[[test_case]]
+name = "Top Ports"
+description = "Scan top N most common ports"
+command_template = "{scanner} --top-ports {top_ports} {target}"
+expected_fields = ["PORT", "STATE", "SERVICE"]

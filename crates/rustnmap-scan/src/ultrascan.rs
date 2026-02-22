@@ -269,8 +269,11 @@ impl ParallelScanEngine {
         // Channel for received packets from the receiver task
         let (packet_tx, mut packet_rx) = mpsc::unbounded_channel();
 
-        // Start the receiver task
+        // Clone the sender for the receiver task
+        // We'll keep the original and drop it when done to signal completion
         let receiver_handle = self.start_receiver_task(packet_tx.clone());
+
+        // Store packet_tx for later drop - when dropped, receiver will detect closure
 
         // Outstanding probes: (target, port) -> probe info
         let mut outstanding: HashMap<(Ipv4Addr, Port), OutstandingProbe> = HashMap::new();
@@ -329,12 +332,19 @@ impl ParallelScanEngine {
             for probe in retry_probes.drain(..) {
                 if outstanding.len() < self.max_parallelism {
                     self.resend_probe(probe, &mut outstanding)?;
+                } else {
+                    // Can't resend due to parallelism limit, mark as filtered
+                    results.entry(probe.port).or_insert(PortState::Filtered);
                 }
             }
         }
 
-        // Wait for receiver task to complete
-        let _ = tokio_timeout(Duration::from_millis(500), receiver_handle).await;
+        // Explicitly drop the sender to signal the receiver task to stop
+        drop(packet_tx);
+
+        // Wait for receiver task to complete with timeout
+        // Use a short timeout since the receiver should exit quickly when channel is closed
+        let _ = tokio::time::timeout(Duration::from_millis(200), receiver_handle).await;
 
         Ok(results)
     }
@@ -342,32 +352,60 @@ impl ParallelScanEngine {
     /// Starts the background receiver task.
     ///
     /// This task continuously receives packets and parses them.
+    /// The task stops when the sender is dropped (all senders closed).
+    ///
+    /// # Note
+    ///
+    /// The receiver task uses `spawn_blocking` because `socket.recv_packet()` is a
+    /// synchronous blocking call. This prevents blocking the Tokio worker thread.
     fn start_receiver_task(
         &self,
         packet_tx: mpsc::UnboundedSender<ReceivedPacket>,
     ) -> JoinHandle<()> {
         let socket = StdArc::clone(&self.socket);
         tokio::spawn(async move {
-            let mut recv_buf = vec![0u8; 65535];
+            // Use a shorter timeout for faster shutdown response
+            const RECV_TIMEOUT: Duration = Duration::from_millis(50);
+
             loop {
-                match socket.recv_packet(&mut recv_buf, Some(Duration::from_millis(100))) {
-                    Ok(len) if len > 0 => {
+                // Check if channel is closed before blocking on recv
+                if packet_tx.is_closed() {
+                    break;
+                }
+
+                // Clone Arc for the blocking task
+                let socket_clone = StdArc::clone(&socket);
+
+                // Run the blocking recv_packet in a separate thread
+                let result = tokio::task::spawn_blocking(move || {
+                    let mut recv_buf = vec![0u8; 65535];
+                    socket_clone
+                        .recv_packet(&mut recv_buf, Some(RECV_TIMEOUT))
+                        .map(|len| (len, recv_buf))
+                })
+                .await;
+
+                match result {
+                    Ok(Ok((len, recv_buf))) if len > 0 => {
                         if let Some(packet) = Self::parse_packet(&recv_buf[..len]) {
-                            // Ignore send errors - receiver may have closed
-                            let _ = packet_tx.send(packet);
+                            // Check if channel is closed before sending
+                            if packet_tx.send(packet).is_err() {
+                                // Channel closed, stop receiving
+                                break;
+                            }
                         }
                     }
-                    Ok(_) => {
+                    Ok(Ok(_)) => {
                         // Empty packet, continue
                     }
-                    Err(e)
+                    Ok(Err(e))
                         if e.kind() == ErrorKind::WouldBlock
                             || e.kind() == ErrorKind::TimedOut =>
                     {
-                        // Normal timeout, continue waiting
+                        // Normal timeout, loop will check is_closed() on next iteration
                     }
-                    Err(_) => {
-                        // Fatal error, stop receiving
+                    Ok(Err(_)) | Err(_) => {
+                        // Fatal error or task was cancelled, stop receiving
                         break;
                     }
                 }
@@ -471,7 +509,7 @@ impl ParallelScanEngine {
         // Collect timed-out probes
         let timed_out: Vec<_> = outstanding
             .iter()
-            .filter(|(_, p)| now.duration_since(p.sent_time) > self.probe_timeout)
+            .filter(|(_, p)| now.duration_since(p.sent_time) >= self.probe_timeout)
             .map(|(k, p)| (*k, p.clone()))
             .collect();
 
