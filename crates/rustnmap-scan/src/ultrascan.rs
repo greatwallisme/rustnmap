@@ -96,8 +96,7 @@ struct ReceivedPacket {
     src_port: Port,
     /// TCP flags from the response.
     flags: u8,
-    /// Sequence number from the response (used for debugging and validation).
-    #[expect(dead_code, reason = "sequence number is useful for debugging and future extensions")]
+    /// Sequence number from the response (available for debugging via `seq()`).
     seq: u32,
     /// ACK number from the response.
     ack: u32,
@@ -114,6 +113,14 @@ impl ReceivedPacket {
             seq,
             ack,
         }
+    }
+
+    /// Returns the sequence number from the response.
+    ///
+    /// This is primarily used for debugging and validation purposes.
+    #[must_use]
+    const fn seq(&self) -> u32 {
+        self.seq
     }
 
     /// Determines the port state from TCP flags.
@@ -309,10 +316,12 @@ impl ParallelScanEngine {
                     if let Some(probe) = outstanding.remove(&probe_key) {
                         // Verify the ACK matches our sequence number
                         let expected_ack = probe.seq.wrapping_add(1);
-                        if packet.ack == expected_ack {
+                        // Also verify the response has a valid sequence number (non-zero)
+                        let valid_response = packet.ack == expected_ack && packet.seq() != 0;
+                        if valid_response {
                             results.insert(packet.src_port, packet.port_state());
                         } else {
-                            // Unexpected ACK - put the probe back
+                            // Unexpected ACK or invalid seq - put the probe back
                             outstanding.insert(probe_key, probe);
                         }
                     }
