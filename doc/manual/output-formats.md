@@ -41,7 +41,7 @@ Normal output is the default console output format. It provides human-readable s
 # RustNmap 1.0.0 scan initiated Mon Feb 16 10:30:00 2026
 # rustnmap -sS 192.168.1.1
 
-Nmap scan report for 192.168.1.1
+RustNmap scan report for 192.168.1.1
 Host is up (0.0005s latency).
 
 PORT    STATE SERVICE
@@ -49,7 +49,7 @@ PORT    STATE SERVICE
 80/tcp  open  http
 443/tcp open  https
 
-Nmap done: 1 IP address (1 host up) scanned in 2.34 seconds
+RustNmap done: 1 IP address (1 host up) scanned in 2.34 seconds
 ```
 
 ### With Service Detection / 带服务检测
@@ -58,7 +58,7 @@ Nmap done: 1 IP address (1 host up) scanned in 2.34 seconds
 # RustNmap 1.0.0 scan initiated Mon Feb 16 10:30:00 2026
 # rustnmap -sS -sV 192.168.1.1
 
-Nmap scan report for 192.168.1.1
+RustNmap scan report for 192.168.1.1
 Host is up (0.0005s latency).
 
 PORT    STATE SERVICE VERSION
@@ -66,7 +66,7 @@ PORT    STATE SERVICE VERSION
 80/tcp  open  http    Apache httpd 2.4.41
 443/tcp open  https   Apache httpd 2.4.41
 
-Nmap done: 1 IP address (1 host up) scanned in 8.76 seconds
+RustNmap done: 1 IP address (1 host up) scanned in 8.76 seconds
 ```
 
 ### With OS Detection / 带操作系统检测
@@ -75,7 +75,7 @@ Nmap done: 1 IP address (1 host up) scanned in 8.76 seconds
 # RustNmap 1.0.0 scan initiated Mon Feb 16 10:30:00 2026
 # rustnmap -sS -O 192.168.1.1
 
-Nmap scan report for 192.168.1.1
+RustNmap scan report for 192.168.1.1
 Host is up (0.0005s latency).
 PORT    STATE SERVICE
 22/tcp  open  ssh
@@ -87,7 +87,7 @@ Running: Linux 5.X
 OS details: Linux 5.4 - 5.10
 Network Distance: 1 hop
 
-Nmap done: 1 IP address (1 host up) scanned in 12.45 seconds
+RustNmap done: 1 IP address (1 host up) scanned in 12.45 seconds
 ```
 
 ### Usage Examples / 用法示例

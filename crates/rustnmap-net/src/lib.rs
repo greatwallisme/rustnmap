@@ -283,24 +283,6 @@ pub mod raw_socket {
                 )
             };
 
-            // Reset timeout to default (blocking)
-            if timeout.is_some() {
-                let tv = libc::timeval {
-                    tv_sec: 0,
-                    tv_usec: 0,
-                };
-                // SAFETY: setsockopt with valid fd and valid timeval pointer
-                unsafe {
-                    libc::setsockopt(
-                        self.fd.as_raw_fd(),
-                        libc::SOL_SOCKET,
-                        libc::SO_RCVTIMEO,
-                        (&raw const tv).cast::<libc::c_void>(),
-                        std::mem::size_of::<libc::timeval>() as libc::socklen_t,
-                    );
-                }
-            }
-
             if result < 0 {
                 return Err(io::Error::last_os_error());
             }
@@ -1653,11 +1635,13 @@ pub mod raw_socket {
             );
 
             // Extract original destination port from UDP/TCP header
+            // UDP/TCP header: src_port (2 bytes) + dst_port (2 bytes) + ...
+            // We need dst_port, so offset by 2 from transport_start
             let orig_transport_start = orig_ip_start + orig_ip_header_len;
-            let orig_dst_port = if packet.len() >= orig_transport_start + 2 {
+            let orig_dst_port = if packet.len() >= orig_transport_start + 4 {
                 u16::from_be_bytes([
-                    packet[orig_transport_start],
-                    packet[orig_transport_start + 1],
+                    packet[orig_transport_start + 2],
+                    packet[orig_transport_start + 3],
                 ])
             } else {
                 0
@@ -1695,11 +1679,13 @@ pub mod raw_socket {
             );
 
             // Extract original destination port from UDP/TCP header
+            // UDP/TCP header: src_port (2 bytes) + dst_port (2 bytes) + ...
+            // We need dst_port, so offset by 2 from transport_start
             let orig_transport_start = orig_ip_start + orig_ip_header_len;
-            let orig_dst_port = if packet.len() >= orig_transport_start + 2 {
+            let orig_dst_port = if packet.len() >= orig_transport_start + 4 {
                 u16::from_be_bytes([
-                    packet[orig_transport_start],
-                    packet[orig_transport_start + 1],
+                    packet[orig_transport_start + 2],
+                    packet[orig_transport_start + 3],
                 ])
             } else {
                 0

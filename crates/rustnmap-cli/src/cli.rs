@@ -1192,7 +1192,7 @@ fn print_normal_output(args: &Args, result: &ScanResult) {
     // Footer
     let _ = writeln!(
         &mut handle,
-        "Nmap done: {} IP address{} ({} host{} up) scanned in {:.2} seconds",
+        "RustNmap done: {} IP address{} ({} host{} up) scanned in {:.2} seconds",
         result.statistics.total_hosts,
         if result.statistics.total_hosts == 1 {
             ""
@@ -1211,7 +1211,7 @@ fn print_normal_output(args: &Args, result: &ScanResult) {
 
 /// Prints a single host in normal format.
 fn print_host_normal<W: Write>(handle: &mut W, args: &Args, host: &HostResult) {
-    let _ = writeln!(handle, "Nmap scan report for {}", host.ip);
+    let _ = writeln!(handle, "RustNmap scan report for {}", host.ip);
 
     if let Some(ref hostname) = host.hostname {
         let _ = writeln!(handle, "rDNS record for {}: {}", host.ip, hostname);
@@ -1413,7 +1413,7 @@ fn write_normal_output(result: &ScanResult, path: &std::path::Path, append: bool
 
     // Write host results
     for host in &result.hosts {
-        writeln!(file, "Nmap scan report for {}", host.ip)
+        writeln!(file, "RustNmap scan report for {}", host.ip)
             .map_err(|e| rustnmap_common::Error::Other(format!("Write error: {e}")))?;
 
         let status_str = match host.status {
@@ -1443,7 +1443,7 @@ fn write_normal_output(result: &ScanResult, path: &std::path::Path, append: bool
     // Write footer
     writeln!(
         file,
-        "Nmap done: {} IP address{} ({} host{} up) scanned in {:.2} seconds",
+        "RustNmap done: {} IP address{} ({} host{} up) scanned in {:.2} seconds",
         result.statistics.total_hosts,
         if result.statistics.total_hosts == 1 {
             ""

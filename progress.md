@@ -1,7 +1,80 @@
 # Progress
 
 **Created**: 2026-02-19
-**Updated**: 2026-02-22
+**Updated**: 2026-02-23
+
+---
+
+### 2026-02-23: UDP扫描远程主机状态错误 - 已修复! ✅
+
+**任务**: 修复UDP扫描在远程主机上显示`open|filtered`而非`closed`的问题
+
+**根本原因**:
+- Linux的raw socket机制：协议特定的raw socket (IPPROTO_ICMP) 无法接收与该协议无关的ICMP错误响应
+- UDP探测的ICMP Port Unreachable错误需要通过数据包捕获接口(pcap/AF_PACKET)接收
+
+**解决方案**:
+- 集成`rustnmap-packet` crate的`AfPacketEngine` (PACKET_MMAP V3零拷贝引擎)
+- 添加`packet_engine_v4: Option<AfPacketEngine>`字段
+- 优先使用`AF_PACKET`接收ICMP错误，回退到raw socket
+
+**代码变更** (`crates/rustnmap-scan/src/udp_scan.rs`):
+1. 添加`packet_engine_v4`字段和相关导入
+2. 实现`create_packet_engine()` - 创建AF_PACKET引擎，检测网络接口
+3. 实现`recv_icmp_from_packet_engine()` - 从PACKET_MMAP接收并解析ICMP
+4. 实现`get_interface_for_ip()` - 检测正确的网络接口
+5. 更新`send_udp_probe_v4()` - 优先使用AF_PACKET (最小500ms超时)
+
+**验证结果**:
+- 本地主机: Port 53显示`closed` ✅
+- 远程主机(45.33.32.156): Port 53显示`closed` (之前`open|filtered`) ✅
+- 开放端口: 仍正确识别为`open|filtered` ✅
+- 零警告, 零错误 ✅
+- 所有测试通过 ✅
+
+**文件修改**:
+- `crates/rustnmap-scan/src/udp_scan.rs` - 集成PACKET_MMAP V3引擎
+
+**状态**: ✅ 已修复
+
+---
+
+### 2026-02-22 13:30: 隐蔽扫描超时和状态分类修复 ✅ COMPLETE
+
+**问题**: 隐蔽扫描 (FIN/NULL/XMAS/MAIMON) 和 UDP 扫描存在超时和状态分类错误
+
+**修复内容**:
+1. **orchestrator.rs**: 使用 timing template 的实际超时值而非 scan_delay
+   - 将 `scan_delay` 改为 `timing_config.initial_rtt`
+   - Normal timing: 100ms 超时
+
+2. **stealth_scans.rs**: 添加响应过滤逻辑
+   - 添加源 IP 地址检查 (防止接受其他主机的响应)
+   - 添加响应接收循环 (处理非匹配响应)
+   - 修改 `handle_icmp_response` 返回 `Option<PortState>` (None 表示非匹配)
+
+3. **lib.rs**: 修复 socket 超时重置问题
+   - 移除 `recv_packet` 后的 socket 超时重置代码
+   - 保持超时设置以便循环正确工作
+
+4. **orchestrator.rs**: 移除 Closed 端口过滤
+   - 显示所有端口状态，包括 Closed
+   - 与 nmap 输出格式一致
+
+**验证结果**:
+- FIN 扫描: `open|filtered` 正确 ✅
+- NULL 扫描: `open|filtered` 正确 ✅
+- XMAS 扫描: `open|filtered` 正确 ✅
+- MAIMON 扫描: `open|filtered` 正确 ✅
+- UDP 扫描: `open|filtered` 正确 ✅
+- 本地 Closed 端口: 正确识别 ✅
+
+**测试**: 90 tests passed, 0 clippy warnings
+
+**对比测试验证** (2026-02-22 22:06):
+- 使用 `just bench-compare` 运行完整对比测试
+- 成功率: 47.1% → 70.6% (+23.5%)
+- FIN/NULL/XMAS/MAIMON 扫描: 全部 PASS ✅
 
 ---
 

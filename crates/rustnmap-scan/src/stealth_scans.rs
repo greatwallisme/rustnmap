@@ -149,69 +149,95 @@ impl TcpFinScanner {
         let mut recv_buf = vec![0u8; 65535];
         let timeout = self.config.initial_rtt;
 
-        match self
-            .socket
-            .recv_packet(recv_buf.as_mut_slice(), Some(timeout))
-        {
-            Ok(len) if len > 0 => {
-                // Check for TCP response first
-                if let Some((flags, _seq, _ack, src_port, _src_ip)) =
-                    parse_tcp_response(&recv_buf[..len])
+        // Use a receive loop to filter out non-matching responses
+        let start = std::time::Instant::now();
+
+        loop {
+            // Calculate remaining timeout
+            let elapsed = start.elapsed();
+            let remaining_timeout = if elapsed >= timeout {
+                return Ok(PortState::OpenOrFiltered); // Timeout exceeded
+            } else {
+                timeout - elapsed
+            };
+
+            match self.socket.recv_packet(
+                recv_buf.as_mut_slice(),
+                Some(remaining_timeout),
+            ) {
+                Ok(len) if len > 0 => {
+                    // Check for TCP response first
+                    if let Some((flags, _seq, _ack, src_port, src_ip)) =
+                        parse_tcp_response(&recv_buf[..len])
+                    {
+                        // Only process responses from our target for our destination port
+                        if src_ip == dst_addr && src_port == dst_port {
+                            if (flags & tcp_flags::RST) != 0 {
+                                return Ok(PortState::Closed);
+                            }
+                            // Non-RST response (shouldn't happen for FIN scan)
+                            return Ok(PortState::Filtered);
+                        }
+                        // Response for different host/port - continue waiting
+                    } else if let Some(icmp_resp) = parse_icmp_response(&recv_buf[..len]) {
+                        // Check if this ICMP response is for our probe
+                        if let Some(state) = Self::handle_icmp_response(icmp_resp, dst_addr, dst_port) {
+                            return Ok(state);
+                        }
+                        // ICMP response for different probe - continue waiting
+                    } else {
+                        // Unknown packet type - continue waiting
+                    }
+                    // Loop continues to next iteration
+                }
+                Ok(_) => {
+                    // Empty response (shouldn't happen)
+                    return Ok(PortState::OpenOrFiltered);
+                }
+                Err(e)
+                    if e.kind() == io::ErrorKind::WouldBlock
+                        || e.kind() == io::ErrorKind::TimedOut =>
                 {
-                    if src_port != dst_port {
-                        return Ok(PortState::Filtered);
-                    }
-
-                    if (flags & tcp_flags::RST) != 0 {
-                        return Ok(PortState::Closed);
-                    }
-
-                    return Ok(PortState::Filtered);
+                    // Timeout - no response received
+                    return Ok(PortState::OpenOrFiltered);
                 }
-
-                // Check for ICMP response
-                if let Some(icmp_resp) = parse_icmp_response(&recv_buf[..len]) {
-                    return Ok(Self::handle_icmp_response(icmp_resp, dst_addr, dst_port));
+                Err(e) => {
+                    return Err(rustnmap_common::ScanError::Network(
+                        rustnmap_common::Error::Network(
+                            rustnmap_common::error::NetworkError::ReceiveError { source: e },
+                        ),
+                    ))
                 }
-
-                Ok(PortState::Filtered)
             }
-            Ok(_) => Ok(PortState::OpenOrFiltered),
-            Err(e)
-                if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut =>
-            {
-                Ok(PortState::OpenOrFiltered)
-            }
-            Err(e) => Err(rustnmap_common::ScanError::Network(
-                rustnmap_common::Error::Network(
-                    rustnmap_common::error::NetworkError::ReceiveError { source: e },
-                ),
-            )),
         }
     }
 
     /// Handles ICMP response to determine port state.
+    ///
+    /// Returns `None` if the ICMP response is not for our probe (caller should continue waiting).
+    /// Returns `Some(state)` if the ICMP response is for our probe.
     fn handle_icmp_response(
         icmp_resp: IcmpResponse,
         expected_dst_ip: Ipv4Addr,
         expected_dst_port: Port,
-    ) -> PortState {
+    ) -> Option<PortState> {
         match icmp_resp {
             IcmpResponse::DestinationUnreachable {
                 code,
                 original_dst_ip,
                 original_dst_port,
             } => {
+                // Verify this ICMP response is for our probe
                 if original_dst_ip != expected_dst_ip || original_dst_port != expected_dst_port {
-                    return PortState::Filtered;
+                    return None; // Not for our probe - continue waiting
                 }
 
                 match code {
-                    IcmpUnreachableCode::PortUnreachable => PortState::Closed,
-                    _ => PortState::Filtered,
+                    IcmpUnreachableCode::PortUnreachable => Some(PortState::Closed),
+                    _ => Some(PortState::Filtered),
                 }
             }
-            IcmpResponse::Other { .. } | IcmpResponse::TimeExceeded { .. } => PortState::Filtered,
+            IcmpResponse::Other { .. } | IcmpResponse::TimeExceeded { .. } => None,
         }
     }
 
@@ -346,69 +372,95 @@ impl TcpNullScanner {
         let mut recv_buf = vec![0u8; 65535];
         let timeout = self.config.initial_rtt;
 
-        match self
-            .socket
-            .recv_packet(recv_buf.as_mut_slice(), Some(timeout))
-        {
-            Ok(len) if len > 0 => {
-                // Check for TCP response first
-                if let Some((flags, _seq, _ack, src_port, _src_ip)) =
-                    parse_tcp_response(&recv_buf[..len])
+        // Use a receive loop to filter out non-matching responses
+        let start = std::time::Instant::now();
+
+        loop {
+            // Calculate remaining timeout
+            let elapsed = start.elapsed();
+            let remaining_timeout = if elapsed >= timeout {
+                return Ok(PortState::OpenOrFiltered); // Timeout exceeded
+            } else {
+                timeout - elapsed
+            };
+
+            match self.socket.recv_packet(
+                recv_buf.as_mut_slice(),
+                Some(remaining_timeout),
+            ) {
+                Ok(len) if len > 0 => {
+                    // Check for TCP response first
+                    if let Some((flags, _seq, _ack, src_port, src_ip)) =
+                        parse_tcp_response(&recv_buf[..len])
+                    {
+                        // Only process responses from our target for our destination port
+                        if src_ip == dst_addr && src_port == dst_port {
+                            if (flags & tcp_flags::RST) != 0 {
+                                return Ok(PortState::Closed);
+                            }
+                            // Non-RST response (shouldn't happen for FIN scan)
+                            return Ok(PortState::Filtered);
+                        }
+                        // Response for different host/port - continue waiting
+                    } else if let Some(icmp_resp) = parse_icmp_response(&recv_buf[..len]) {
+                        // Check if this ICMP response is for our probe
+                        if let Some(state) = Self::handle_icmp_response(icmp_resp, dst_addr, dst_port) {
+                            return Ok(state);
+                        }
+                        // ICMP response for different probe - continue waiting
+                    } else {
+                        // Unknown packet type - continue waiting
+                    }
+                    // Loop continues to next iteration
+                }
+                Ok(_) => {
+                    // Empty response (shouldn't happen)
+                    return Ok(PortState::OpenOrFiltered);
+                }
+                Err(e)
+                    if e.kind() == io::ErrorKind::WouldBlock
+                        || e.kind() == io::ErrorKind::TimedOut =>
                 {
-                    if src_port != dst_port {
-                        return Ok(PortState::Filtered);
-                    }
-
-                    if (flags & tcp_flags::RST) != 0 {
-                        return Ok(PortState::Closed);
-                    }
-
-                    return Ok(PortState::Filtered);
+                    // Timeout - no response received
+                    return Ok(PortState::OpenOrFiltered);
                 }
-
-                // Check for ICMP response
-                if let Some(icmp_resp) = parse_icmp_response(&recv_buf[..len]) {
-                    return Ok(Self::handle_icmp_response(icmp_resp, dst_addr, dst_port));
+                Err(e) => {
+                    return Err(rustnmap_common::ScanError::Network(
+                        rustnmap_common::Error::Network(
+                            rustnmap_common::error::NetworkError::ReceiveError { source: e },
+                        ),
+                    ))
                 }
-
-                Ok(PortState::Filtered)
             }
-            Ok(_) => Ok(PortState::OpenOrFiltered),
-            Err(e)
-                if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut =>
-            {
-                Ok(PortState::OpenOrFiltered)
-            }
-            Err(e) => Err(rustnmap_common::ScanError::Network(
-                rustnmap_common::Error::Network(
-                    rustnmap_common::error::NetworkError::ReceiveError { source: e },
-                ),
-            )),
         }
     }
 
     /// Handles ICMP response to determine port state.
+    ///
+    /// Returns `None` if the ICMP response is not for our probe (caller should continue waiting).
+    /// Returns `Some(state)` if the ICMP response is for our probe.
     fn handle_icmp_response(
         icmp_resp: IcmpResponse,
         expected_dst_ip: Ipv4Addr,
         expected_dst_port: Port,
-    ) -> PortState {
+    ) -> Option<PortState> {
         match icmp_resp {
             IcmpResponse::DestinationUnreachable {
                 code,
                 original_dst_ip,
                 original_dst_port,
             } => {
+                // Verify this ICMP response is for our probe
                 if original_dst_ip != expected_dst_ip || original_dst_port != expected_dst_port {
-                    return PortState::Filtered;
+                    return None; // Not for our probe - continue waiting
                 }
 
                 match code {
-                    IcmpUnreachableCode::PortUnreachable => PortState::Closed,
-                    _ => PortState::Filtered,
+                    IcmpUnreachableCode::PortUnreachable => Some(PortState::Closed),
+                    _ => Some(PortState::Filtered),
                 }
             }
-            IcmpResponse::Other { .. } | IcmpResponse::TimeExceeded { .. } => PortState::Filtered,
+            IcmpResponse::Other { .. } | IcmpResponse::TimeExceeded { .. } => None,
         }
     }
 
@@ -546,69 +598,95 @@ impl TcpXmasScanner {
         let mut recv_buf = vec![0u8; 65535];
         let timeout = self.config.initial_rtt;
 
-        match self
-            .socket
-            .recv_packet(recv_buf.as_mut_slice(), Some(timeout))
-        {
-            Ok(len) if len > 0 => {
-                // Check for TCP response first
-                if let Some((flags, _seq, _ack, src_port, _src_ip)) =
-                    parse_tcp_response(&recv_buf[..len])
+        // Use a receive loop to filter out non-matching responses
+        let start = std::time::Instant::now();
+
+        loop {
+            // Calculate remaining timeout
+            let elapsed = start.elapsed();
+            let remaining_timeout = if elapsed >= timeout {
+                return Ok(PortState::OpenOrFiltered); // Timeout exceeded
+            } else {
+                timeout - elapsed
+            };
+
+            match self.socket.recv_packet(
+                recv_buf.as_mut_slice(),
+                Some(remaining_timeout),
+            ) {
+                Ok(len) if len > 0 => {
+                    // Check for TCP response first
+                    if let Some((flags, _seq, _ack, src_port, src_ip)) =
+                        parse_tcp_response(&recv_buf[..len])
+                    {
+                        // Only process responses from our target for our destination port
+                        if src_ip == dst_addr && src_port == dst_port {
+                            if (flags & tcp_flags::RST) != 0 {
+                                return Ok(PortState::Closed);
+                            }
+                            // Non-RST response (shouldn't happen for FIN scan)
+                            return Ok(PortState::Filtered);
+                        }
+                        // Response for different host/port - continue waiting
+                    } else if let Some(icmp_resp) = parse_icmp_response(&recv_buf[..len]) {
+                        // Check if this ICMP response is for our probe
+                        if let Some(state) = Self::handle_icmp_response(icmp_resp, dst_addr, dst_port) {
+                            return Ok(state);
+                        }
+                        // ICMP response for different probe - continue waiting
+                    } else {
+                        // Unknown packet type - continue waiting
+                    }
+                    // Loop continues to next iteration
+                }
+                Ok(_) => {
+                    // Empty response (shouldn't happen)
+                    return Ok(PortState::OpenOrFiltered);
+                }
+                Err(e)
+                    if e.kind() == io::ErrorKind::WouldBlock
+                        || e.kind() == io::ErrorKind::TimedOut =>
                 {
-                    if src_port != dst_port {
-                        return Ok(PortState::Filtered);
-                    }
-
-                    if (flags & tcp_flags::RST) != 0 {
-                        return Ok(PortState::Closed);
-                    }
-
-                    return Ok(PortState::Filtered);
+                    // Timeout - no response received
+                    return Ok(PortState::OpenOrFiltered);
                 }
-
-                // Check for ICMP response
-                if let Some(icmp_resp) = parse_icmp_response(&recv_buf[..len]) {
-                    return Ok(Self::handle_icmp_response(icmp_resp, dst_addr, dst_port));
+                Err(e) => {
+                    return Err(rustnmap_common::ScanError::Network(
+                        rustnmap_common::Error::Network(
+                            rustnmap_common::error::NetworkError::ReceiveError { source: e },
+                        ),
+                    ))
                 }
-
-                Ok(PortState::Filtered)
             }
-            Ok(_) => Ok(PortState::OpenOrFiltered),
-            Err(e)
-                if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut =>
-            {
-                Ok(PortState::OpenOrFiltered)
-            }
-            Err(e) => Err(rustnmap_common::ScanError::Network(
-                rustnmap_common::Error::Network(
-                    rustnmap_common::error::NetworkError::ReceiveError { source: e },
-                ),
-            )),
         }
     }
 
     /// Handles ICMP response to determine port state.
+    ///
+    /// Returns `None` if the ICMP response is not for our probe (caller should continue waiting).
+    /// Returns `Some(state)` if the ICMP response is for our probe.
     fn handle_icmp_response(
         icmp_resp: IcmpResponse,
         expected_dst_ip: Ipv4Addr,
         expected_dst_port: Port,
-    ) -> PortState {
+    ) -> Option<PortState> {
         match icmp_resp {
             IcmpResponse::DestinationUnreachable {
                 code,
                 original_dst_ip,
                 original_dst_port,
             } => {
+                // Verify this ICMP response is for our probe
                 if original_dst_ip != expected_dst_ip || original_dst_port != expected_dst_port {
-                    return PortState::Filtered;
+                    return None; // Not for our probe - continue waiting
                 }
 
                 match code {
-                    IcmpUnreachableCode::PortUnreachable => PortState::Closed,
-                    _ => PortState::Filtered,
+                    IcmpUnreachableCode::PortUnreachable => Some(PortState::Closed),
+                    _ => Some(PortState::Filtered),
                 }
             }
-            IcmpResponse::Other { .. } | IcmpResponse::TimeExceeded { .. } => PortState::Filtered,
+            IcmpResponse::Other { .. } | IcmpResponse::TimeExceeded { .. } => None,
         }
     }
 
@@ -924,69 +1002,95 @@ impl TcpMaimonScanner {
         let mut recv_buf = vec![0u8; 65535];
         let timeout = self.config.initial_rtt;
 
-        match self
-            .socket
-            .recv_packet(recv_buf.as_mut_slice(), Some(timeout))
-        {
-            Ok(len) if len > 0 => {
-                // Check for TCP response first
-                if let Some((flags, _seq, _ack, src_port, _src_ip)) =
-                    parse_tcp_response(&recv_buf[..len])
+        // Use a receive loop to filter out non-matching responses
+        let start = std::time::Instant::now();
+
+        loop {
+            // Calculate remaining timeout
+            let elapsed = start.elapsed();
+            let remaining_timeout = if elapsed >= timeout {
+                return Ok(PortState::OpenOrFiltered); // Timeout exceeded
+            } else {
+                timeout - elapsed
+            };
+
+            match self.socket.recv_packet(
+                recv_buf.as_mut_slice(),
+                Some(remaining_timeout),
+            ) {
+                Ok(len) if len > 0 => {
+                    // Check for TCP response first
+                    if let Some((flags, _seq, _ack, src_port, src_ip)) =
+                        parse_tcp_response(&recv_buf[..len])
+                    {
+                        // Only process responses from our target for our destination port
+                        if src_ip == dst_addr && src_port == dst_port {
+                            if (flags & tcp_flags::RST) != 0 {
+                                return Ok(PortState::Closed);
+                            }
+                            // Non-RST response (shouldn't happen for FIN scan)
+                            return Ok(PortState::Filtered);
+                        }
+                        // Response for different host/port - continue waiting
+                    } else if let Some(icmp_resp) = parse_icmp_response(&recv_buf[..len]) {
+                        // Check if this ICMP response is for our probe
+                        if let Some(state) = Self::handle_icmp_response(icmp_resp, dst_addr, dst_port) {
+                            return Ok(state);
+                        }
+                        // ICMP response for different probe - continue waiting
+                    } else {
+                        // Unknown packet type - continue waiting
+                    }
+                    // Loop continues to next iteration
+                }
+                Ok(_) => {
+                    // Empty response (shouldn't happen)
+                    return Ok(PortState::OpenOrFiltered);
+                }
+                Err(e)
+                    if e.kind() == io::ErrorKind::WouldBlock
+                        || e.kind() == io::ErrorKind::TimedOut =>
                 {
-                    if src_port != dst_port {
-                        return Ok(PortState::Filtered);
-                    }
-
-                    if (flags & tcp_flags::RST) != 0 {
-                        return Ok(PortState::Closed);
-                    }
-
-                    return Ok(PortState::Filtered);
+                    // Timeout - no response received
+                    return Ok(PortState::OpenOrFiltered);
                 }
-
-                // Check for ICMP response
-                if let Some(icmp_resp) = parse_icmp_response(&recv_buf[..len]) {
-                    return Ok(Self::handle_icmp_response(icmp_resp, dst_addr, dst_port));
+                Err(e) => {
+                    return Err(rustnmap_common::ScanError::Network(
+                        rustnmap_common::Error::Network(
+                            rustnmap_common::error::NetworkError::ReceiveError { source: e },
+                        ),
+                    ))
                 }
-
-                Ok(PortState::Filtered)
             }
-            Ok(_) => Ok(PortState::OpenOrFiltered),
-            Err(e)
-                if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut =>
-            {
-                Ok(PortState::OpenOrFiltered)
-            }
-            Err(e) => Err(rustnmap_common::ScanError::Network(
-                rustnmap_common::Error::Network(
-                    rustnmap_common::error::NetworkError::ReceiveError { source: e },
-                ),
-            )),
         }
     }
 
     /// Handles ICMP response to determine port state.
+    ///
+    /// Returns `None` if the ICMP response is not for our probe (caller should continue waiting).
+    /// Returns `Some(state)` if the ICMP response is for our probe.
     fn handle_icmp_response(
         icmp_resp: IcmpResponse,
         expected_dst_ip: Ipv4Addr,
         expected_dst_port: Port,
-    ) -> PortState {
+    ) -> Option<PortState> {
         match icmp_resp {
             IcmpResponse::DestinationUnreachable {
                 code,
                 original_dst_ip,
                 original_dst_port,
             } => {
+                // Verify this ICMP response is for our probe
                 if original_dst_ip != expected_dst_ip || original_dst_port != expected_dst_port {
-                    return PortState::Filtered;
+                    return None; // Not for our probe - continue waiting
                 }
 
                 match code {
-                    IcmpUnreachableCode::PortUnreachable => PortState::Closed,
-                    _ => PortState::Filtered,
+                    IcmpUnreachableCode::PortUnreachable => Some(PortState::Closed),
+                    _ => Some(PortState::Filtered),
                 }
             }
-            IcmpResponse::Other { .. } | IcmpResponse::TimeExceeded { .. } => PortState::Filtered,
+            IcmpResponse::Other { .. } | IcmpResponse::TimeExceeded { .. } => None,
         }
     }
 
@@ -1359,7 +1463,7 @@ mod tests {
         };
 
         let result = TcpFinScanner::handle_icmp_response(icmp_resp, dst_ip, dst_port);
-        assert_eq!(result, PortState::Closed);
+        assert_eq!(result, Some(PortState::Closed));
     }
 
     #[test]
@@ -1374,7 +1478,7 @@ mod tests {
         };
 
         let result = TcpFinScanner::handle_icmp_response(icmp_resp, dst_ip, dst_port);
-        assert_eq!(result, PortState::Filtered);
+        assert_eq!(result, Some(PortState::Filtered));
     }
 
     #[test]
@@ -1389,7 +1493,8 @@ mod tests {
         };
 
         let result = TcpFinScanner::handle_icmp_response(icmp_resp, dst_ip, dst_port);
-        assert_eq!(result, PortState::Filtered);
+        // Non-matching ICMP responses return None to continue waiting
+        assert_eq!(result, None);
     }
 
     #[test]

@@ -1,11 +1,84 @@
 # Findings - RustNmap 项目分析
 
 **Created**: 2026-02-19
-**Updated**: 2026-02-22
+**Updated**: 2026-02-23
 
 ---
 
-## 最新发现 (2026-02-22)
+## 最新发现 (2026-02-23)
+
+### ✅ CRITICAL: UDP扫描远程主机状态错误 - 已修复!
+
+**文件**: `crates/rustnmap-scan/src/udp_scan.rs`
+
+**问题**: UDP扫描在远程主机上显示 `open|filtered` 而不是 `closed`
+
+**症状**:
+- localhost测试: 正确显示 `closed` ✅
+- 远程主机: 显示 `open|filtered` ❌
+- nmap对同一目标: 正确显示 `closed`
+
+**测试结果** (修复后):
+```
+# localhost (工作正常)
+$ sudo ./target/release/rustnmap --scan-udp -p 53 127.0.0.1
+Not shown: 1 closed ports  ✅
+
+# 远程主机 (已修复!)
+$ sudo ./target/release/rustnmap --scan-udp -p 53 45.33.32.156
+53/udp  closed domain  ✅
+
+# nmap对比
+$ sudo nmap -sU -p 53 45.33.32.156
+53/udp  closed domain  ✅
+```
+
+**根本原因** (已确认):
+1. **nmap使用libpcap**: nmap使用`pcap_open_live()`捕获所有以太网帧，包括ICMP错误响应
+2. **rustnmap使用raw socket**: 使用`IPPROTO_ICMP (1)`的raw socket只能接收直接发往本机的ICMP数据包
+3. **ICMP错误响应传递机制**: ICMP Port Unreachable错误响应不是通过协议特定的raw socket接收的
+
+**修复方案**:
+- 集成`rustnmap-packet` crate的`AfPacketEngine` (PACKET_MMAP V3零拷贝引擎)
+- 添加`packet_engine_v4`字段到`UdpScanner`
+- 优先使用`AF_PACKET`接收ICMP错误响应，回退到raw socket方式
+
+**代码变更**:
+1. 添加`packet_engine_v4: Option<AfPacketEngine>`字段
+2. 实现`create_packet_engine()` - 创建AF_PACKET引擎
+3. 实现`recv_icmp_from_packet_engine()` - 从PACKET_MMAP接收ICMP
+4. 实现`get_interface_for_ip()` - 检测网络接口
+5. 更新`send_udp_probe_v4()` - 优先使用AF_PACKET
+
+**优先级**: HIGH - UDP扫描是核心功能
+
+**状态**: ✅ 已修复
+
+---
+
+### 🐛 MEDIUM: 服务名后出现`$`字符
+
+**文件**: 输出格式相关
+
+**症状**: 使用`cat -A`查看输出时，服务名后出现`$`字符
+
+**实际观察**:
+```
+$ sudo ./target/release/rustnmap --os-detection 45.33.32.156 | cat -A
+22/tcp  open    ssh$
+80/tcp  open    http$
+```
+
+**分析**:
+- `$`是`cat -A`显示行尾的方式（表示换行符`\n`）
+- 这是正常的，不是bug
+- 真正的问题是UDP扫描的状态分类
+
+**状态**: ✅ 非问题 - cat -A的正常行为
+
+---
+
+## 历史发现 (2026-02-22)
 
 ### 🆕 比较测试框架 - 新建
 
@@ -167,7 +240,56 @@ if args.aggressive_scan {
 
 **状态**: ✅ 已修复并编译通过
 
-### 🐛 CRITICAL: UDP扫描状态分类错误
+### ✅ CRITICAL: 隐蔽扫描超时和响应过滤错误 - 已修复! (2026-02-22)
+
+**文件**: `crates/rustnmap-scan/src/stealth_scans.rs`, `crates/rustnmap-core/src/orchestrator.rs`, `crates/rustnmap-net/src/lib.rs`
+
+**问题**: 隐蔽扫描的超时和响应处理存在多个错误
+
+**根本原因**:
+1. orchestrator 使用 `scan_delay` 作为 `initial_rtt`，但 `scan_delay` 是探测间延迟而非超时
+2. stealth scanner 只检查端口不检查源IP，可能接受其他主机的响应
+3. `recv_packet` 每次调用后重置socket为阻塞模式，导致循环超时不工作
+4. orchestrator 过滤掉所有 `Closed` 端口不显示
+
+**修复内容**:
+1. `orchestrator.rs` (line 815-822): 使用 timing template 的实际超时值
+   ```rust
+   let timing_config = self.session.config.timing_template.scan_config();
+   let scanner_config = ScannerConfig {
+       initial_rtt: timing_config.initial_rtt,  // 100ms for Normal timing
+       ...
+   };
+   ```
+
+2. `stealth_scans.rs` (line 170-187): 添加源IP检查和响应过滤循环
+   ```rust
+   if let Some((flags, _seq, _ack, src_port, src_ip)) = parse_tcp_response(&recv_buf[..len]) {
+       // 只处理来自目标主机且端口匹配的响应
+       if src_ip == dst_addr && src_port == dst_port {
+           if (flags & tcp_flags::RST) != 0 {
+               return Ok(PortState::Closed);
+           }
+           return Ok(PortState::Filtered);
+       }
+       // 其他响应 - 继续等待
+   }
+   ```
+
+3. `lib.rs` (line 286-302): 移除 socket 超时重置代码，保持超时设置
+
+4. `orchestrator.rs` (line 645, 589, 732): 移除 Closed 端口过滤，显示所有状态
+
+**状态**: ✅ 已修复并验证
+
+**对比测试验证** (2026-02-22 22:06):
+- 成功率: 47.1% → 70.6% (+23.5%)
+- FIN Scan: PASS ✅ (4.74x faster than nmap)
+- NULL Scan: PASS ✅ (5.86x faster than nmap)
+- XMAS Scan: PASS ✅ (4.53x faster than nmap)
+- MAIMON Scan: PASS ✅ (3.16x faster than nmap)
+
+### 🐛 MEDIUM: UDP 扫描状态差异 - 新问题 (2026-02-22)
 
 **文件**: `crates/rustnmap-scan/src/scanners/udp_scanner.rs`
 

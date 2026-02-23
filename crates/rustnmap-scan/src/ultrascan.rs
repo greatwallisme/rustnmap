@@ -97,7 +97,7 @@ struct ReceivedPacket {
     /// TCP flags from the response.
     flags: u8,
     /// Sequence number from the response (used for debugging and validation).
-    #[expect(dead_code, reason = "Sequence number is useful for debugging and future extensions")]
+    #[expect(dead_code, reason = "sequence number is useful for debugging and future extensions")]
     seq: u32,
     /// ACK number from the response.
     ack: u32,

@@ -519,11 +519,15 @@ impl ScanOrchestrator {
 
                 // Create parallel scan engine
                 let local_addr = get_local_address(&self.session.config.dns_server);
+
+                // Get timing parameters from the timing template
+                let timing_config = self.session.config.timing_template.scan_config();
+
                 let scanner_config = ScannerConfig {
-                    min_rtt: std::time::Duration::from_millis(50),
-                    max_rtt: std::time::Duration::from_secs(10),
-                    initial_rtt: self.session.config.scan_delay,
-                    max_retries: 2,
+                    min_rtt: timing_config.min_rtt,
+                    max_rtt: timing_config.max_rtt,
+                    initial_rtt: timing_config.initial_rtt,
+                    max_retries: timing_config.max_retries,
                     host_timeout: self
                         .session
                         .config
@@ -582,9 +586,7 @@ impl ScanOrchestrator {
                         scripts: Vec::new(),
                     };
 
-                    if port_result.state != PortState::Closed {
-                        port_results.push(port_result);
-                    }
+                    port_results.push(port_result);
                     if is_open {
                         self.session.stats.record_open_port();
                     }
@@ -638,9 +640,7 @@ impl ScanOrchestrator {
             for port in ports {
                 let port_result = self.scan_port(target, *port).await?;
                 let is_open = port_result.state == PortState::Open;
-                if port_result.state != PortState::Closed {
-                    port_results.push(port_result);
-                }
+                port_results.push(port_result);
                 if is_open {
                     self.session.stats.record_open_port();
                 }
@@ -729,8 +729,9 @@ impl ScanOrchestrator {
             for port in all_ports {
                 if !first_phase_ports.contains(&port) {
                     let port_result = self.scan_port(&target, port).await?;
-                    if port_result.state != PortState::Closed {
-                        phase2_port_results.push(port_result);
+                    let is_open = port_result.state == PortState::Open;
+                    phase2_port_results.push(port_result);
+                    if is_open {
                         self.session.stats.record_open_port();
                     }
                     self.session.stats.record_packet_sent();
@@ -807,12 +808,15 @@ impl ScanOrchestrator {
             .copied()
             .unwrap_or(ScanType::TcpSyn);
 
+        // Get timing parameters from the timing template
+        let timing_config = self.session.config.timing_template.scan_config();
+
         // Create scanner configuration from session config
         let scanner_config = ScannerConfig {
-            min_rtt: std::time::Duration::from_millis(50),
-            max_rtt: std::time::Duration::from_secs(10),
-            initial_rtt: self.session.config.scan_delay,
-            max_retries: 2,
+            min_rtt: timing_config.min_rtt,
+            max_rtt: timing_config.max_rtt,
+            initial_rtt: timing_config.initial_rtt,
+            max_retries: timing_config.max_retries,
             host_timeout: self
                 .session
                 .config

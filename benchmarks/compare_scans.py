@@ -12,7 +12,7 @@ import tempfile
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import lxml.etree as ET
 
@@ -27,7 +27,7 @@ class ScanResult:
     duration_ms: int
     stdout: str
     stderr: str
-    output_path: Optional[Path] = None
+    output_path: Path | None = None
     raw_output: bytes = b""
 
     @property

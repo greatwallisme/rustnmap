@@ -370,7 +370,7 @@ impl OutputFormatter for NormalFormatter {
         let total = result.statistics.total_hosts;
         let _ = writeln!(
             output,
-            "Nmap done: {} IP address ({} host up) scanned in {:.2} seconds",
+            "RustNmap done: {} IP address ({} host up) scanned in {:.2} seconds",
             total,
             up_count,
             result.metadata.elapsed.as_secs_f64()
@@ -383,7 +383,7 @@ impl OutputFormatter for NormalFormatter {
         let mut output = String::new();
 
         // Host line
-        let _ = writeln!(output, "Nmap scan report for {}", host.ip);
+        let _ = writeln!(output, "RustNmap scan report for {}", host.ip);
 
         if let Some(hostname) = &host.hostname {
             let _ = writeln!(output, "rDNS record for {}: {}", host.ip, hostname);
@@ -458,7 +458,7 @@ impl OutputFormatter for NormalFormatter {
             }
 
             // Output all OS matches under "OS detection:" section
-            output.push_str("OS detection:\n");
+            output.push_str("\n\nOS detection:\n");
             for os_match in &host.os_matches {
                 let _ = writeln!(output, "{} ({}%)", os_match.name, os_match.accuracy);
             }
@@ -1043,7 +1043,7 @@ impl OutputFormatter for GrepableFormatter {
         // Statistics
         let _ = writeln!(
             output,
-            "# Nmap done at {} -- {} IP address ({} host up) scanned in {:.2} seconds",
+            "# RustNmap done at {} -- {} IP address ({} host up) scanned in {:.2} seconds",
             result.metadata.end_time.format("%a %b %d %H:%M:%S %Y"),
             result.statistics.total_hosts,
             result.statistics.hosts_up,

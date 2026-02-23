@@ -52,7 +52,7 @@
 # RustNmap 1.0.0 scan initiated Wed Feb 11 01:56:58 2026 as:
 # rustnmap -sS -sV -O -p- 192.168.1.1
 
-Nmap scan report for 192.168.1.1
+RustNmap scan report for 192.168.1.1
 Host is up (0.0023s latency).
 MAC Address: AA:BB:CC:DD:EE:FF (Router Manufacturer)
 Not shown: 65532 closed ports
@@ -80,7 +80,7 @@ HOP RTT     ADDRESS
 1   2.3 ms  192.168.1.1
 
 Service detection performed. Please report any incorrect results.
-Nmap done: 1 IP address (1 host up) scanned in 45.23 seconds
+RustNmap done: 1 IP address (1 host up) scanned in 45.23 seconds
 ```
 
 ```

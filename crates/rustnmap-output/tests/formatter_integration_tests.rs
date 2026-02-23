@@ -248,7 +248,7 @@ fn test_normal_formatter_empty_scan() {
     let output = formatter.format_scan_result(&result).unwrap();
 
     assert!(output.contains("RustNmap"));
-    assert!(output.contains("Nmap done:"));
+    assert!(output.contains("RustNmap done:"));
     assert!(output.contains("0 IP address"));
 }
 
@@ -531,7 +531,7 @@ fn test_grepable_formatter_empty_scan() {
     let output = formatter.format_scan_result(&result).unwrap();
 
     assert!(output.contains("# rustnmap"));
-    assert!(output.contains("Nmap done at"));
+    assert!(output.contains("RustNmap done at"));
     assert!(output.contains("0 IP address"));
 }
 
@@ -557,7 +557,7 @@ fn test_grepable_formatter_with_ports() {
     assert!(output.contains("Ports: 443//tcp/filtered/https/"));
 
     // Check footer
-    assert!(output.contains("Nmap done at"));
+    assert!(output.contains("RustNmap done at"));
     assert!(output.contains("1 IP address"));
 }
 
@@ -812,7 +812,7 @@ fn test_normal_formatter_format_host() {
 
     let output = formatter.format_host(&host).unwrap();
 
-    assert!(output.contains("Nmap scan report for 192.168.1.100"));
+    assert!(output.contains("RustNmap scan report for 192.168.1.100"));
     assert!(output.contains("Host is up"));
     assert!(output.contains("rDNS record"));
     assert!(output.contains("testhost.local"));
