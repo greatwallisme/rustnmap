@@ -351,11 +351,12 @@ impl OutputFormatter for NormalFormatter {
         let mut output = String::new();
 
         // Header
+        let local_time = result.metadata.start_time.with_timezone(&chrono::Local);
         let _ = writeln!(
             output,
             "# RustNmap {} scan initiated {} as:",
             result.metadata.scanner_version,
-            result.metadata.start_time.format("%a %b %d %H:%M:%S %Y")
+            local_time.format("%a %b %d %H:%M:%S %Y")
         );
         let _ = writeln!(output, "# {}\n\n", result.metadata.command_line);
 
@@ -410,29 +411,19 @@ impl OutputFormatter for NormalFormatter {
 
         // Ports
         if !host.ports.is_empty() {
-            let open_ports: Vec<_> = host
-                .ports
-                .iter()
-                .filter(|p| matches!(p.state, PortState::Open))
-                .collect();
-
-            let closed_count = host
-                .ports
-                .iter()
-                .filter(|p| matches!(p.state, PortState::Closed))
-                .count();
-
-            if closed_count > 0 {
-                let _ = writeln!(output, "Not shown: {closed_count} closed ports");
-            }
-
             output.push_str("PORT     STATE SERVICE\n");
 
             for port in &host.ports {
                 output.push_str(&self.format_port(port)?);
             }
 
-            // Scripts
+            // Scripts for open ports
+            let open_ports: Vec<_> = host
+                .ports
+                .iter()
+                .filter(|p| matches!(p.state, PortState::Open))
+                .collect();
+
             for port in &open_ports {
                 for script in &port.scripts {
                     output.push_str(&self.format_script(script)?);
@@ -1025,11 +1016,12 @@ impl OutputFormatter for GrepableFormatter {
         let mut output = String::new();
 
         // Header
+        let local_start = result.metadata.start_time.with_timezone(&chrono::Local);
         let _ = writeln!(
             output,
             "# rustnmap {} scan initiated {} as: {}",
             result.metadata.scanner_version,
-            result.metadata.start_time.format("%a %b %d %H:%M:%S %Y"),
+            local_start.format("%a %b %d %H:%M:%S %Y"),
             result.metadata.command_line
         );
 
@@ -1041,10 +1033,11 @@ impl OutputFormatter for GrepableFormatter {
         }
 
         // Statistics
+        let local_end = result.metadata.end_time.with_timezone(&chrono::Local);
         let _ = writeln!(
             output,
             "# RustNmap done at {} -- {} IP address ({} host up) scanned in {:.2} seconds",
-            result.metadata.end_time.format("%a %b %d %H:%M:%S %Y"),
+            local_end.format("%a %b %d %H:%M:%S %Y"),
             result.statistics.total_hosts,
             result.statistics.hosts_up,
             result.metadata.elapsed.as_secs_f64()

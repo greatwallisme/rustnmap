@@ -500,7 +500,11 @@ async fn handle_profile_scan(args: &Args, profile_path: &std::path::Path) -> Res
         .await
         .map_err(|e| rustnmap_common::Error::Other(format!("Scan failed: {e}")))?;
 
-    output_results(args, &scan_result)?;
+    // Build command line string for output
+    let command_line = build_command_line_string(args);
+
+    // Output results
+    output_results(args, &scan_result, &command_line)?;
 
     info!("Scan completed successfully");
     Ok(())
@@ -801,8 +805,11 @@ async fn run_normal_scan(args: &Args) -> Result<()> {
         .await
         .map_err(|e| rustnmap_common::Error::Other(format!("Scan failed: {e}")))?;
 
+    // Build command line string for output
+    let command_line = build_command_line_string(args);
+
     // Output results
-    output_results(args, &scan_result)?;
+    output_results(args, &scan_result, &command_line)?;
 
     info!("Scan completed successfully");
     Ok(())
@@ -1127,8 +1134,44 @@ const fn map_scan_type(scan_type: crate::args::ScanType) -> CoreScanType {
     }
 }
 
+/// Builds command line string from arguments for output.
+fn build_command_line_string(args: &Args) -> String {
+    use std::fmt::Write;
+
+    let mut cmd = String::from("rustnmap");
+
+    // Add scan type
+    match args.scan_type() {
+        crate::args::ScanType::Syn => cmd.push_str(" -sS"),
+        crate::args::ScanType::Connect => cmd.push_str(" -sT"),
+        crate::args::ScanType::Udp => cmd.push_str(" -sU"),
+        crate::args::ScanType::Fin => cmd.push_str(" -sF"),
+        crate::args::ScanType::Null => cmd.push_str(" -sN"),
+        crate::args::ScanType::Xmas => cmd.push_str(" -sX"),
+        crate::args::ScanType::Maimon => cmd.push_str(" -sM"),
+    }
+
+    // Add ports
+    if let Some(ports) = &args.ports {
+        let _ = write!(cmd, " -p{ports}");
+    } else if args.port_range_all {
+        cmd.push_str(" -p-");
+    } else if args.fast_scan {
+        cmd.push_str(" -F");
+    } else if let Some(top) = args.top_ports {
+        let _ = write!(cmd, " --top-ports {top}");
+    }
+
+    // Add targets
+    for target in &args.targets {
+        let _ = write!(cmd, " {target}");
+    }
+
+    cmd
+}
+
 /// Outputs scan results based on command-line arguments.
-fn output_results(args: &Args, result: &ScanResult) -> Result<()> {
+fn output_results(args: &Args, result: &ScanResult, command_line: &str) -> Result<()> {
     // Handle quiet mode
     if args.quiet || args.no_output {
         return Ok(());
@@ -1138,7 +1181,7 @@ fn output_results(args: &Args, result: &ScanResult) -> Result<()> {
     if args.output_script_kiddie {
         print_script_kiddie_output(result);
     } else {
-        print_normal_output(args, result);
+        print_normal_output(args, result, command_line);
     }
 
     // Write to output files if specified
@@ -1169,19 +1212,20 @@ fn output_results(args: &Args, result: &ScanResult) -> Result<()> {
 }
 
 /// Prints normal formatted output to console.
-fn print_normal_output(args: &Args, result: &ScanResult) {
+fn print_normal_output(args: &Args, result: &ScanResult, command_line: &str) {
     use std::io::Write;
     let stdout = std::io::stdout();
     let mut handle = stdout.lock();
 
     // Header
+    let local_time = result.metadata.start_time.with_timezone(&chrono::Local);
     let _ = writeln!(
         &mut handle,
         "# RustNmap {} scan initiated {}",
         result.metadata.scanner_version,
-        result.metadata.start_time.format("%c")
+        local_time.format("%a %b %d %H:%M:%S %Y")
     );
-    let _ = writeln!(&mut handle, "# rustnmap <targets>");
+    let _ = writeln!(&mut handle, "# {command_line}");
     let _ = writeln!(&mut handle);
 
     // Host results
@@ -1237,28 +1281,9 @@ fn print_host_normal<W: Write>(handle: &mut W, args: &Args, host: &HostResult) {
 
     // Port information
     if !host.ports.is_empty() {
-        // Show all non-closed ports (open, filtered, etc.)
-        let visible_ports: Vec<&PortResult> = host
-            .ports
-            .iter()
-            .filter(|p| !matches!(p.state, PortState::Closed))
-            .collect();
-
-        let closed_count = host
-            .ports
-            .iter()
-            .filter(|p| matches!(p.state, PortState::Closed))
-            .count();
-
-        if closed_count > 0 {
-            let _ = writeln!(handle, "Not shown: {closed_count} closed ports");
-        }
-
-        if !visible_ports.is_empty() {
-            let _ = writeln!(handle, "PORT     STATE SERVICE");
-            for port in visible_ports {
-                print_port_normal(handle, args, port);
-            }
+        let _ = writeln!(handle, "PORT     STATE SERVICE");
+        for port in &host.ports {
+            print_port_normal(handle, args, port);
         }
     }
 
