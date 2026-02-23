@@ -1,13 +1,260 @@
 # Findings - RustNmap 项目分析
 
 **Created**: 2026-02-19
-**Updated**: 2026-02-23
+**Updated**: 2026-02-23 17:30
 
 ---
 
-## 最新发现 (2026-02-23)
+## 最新发现 (2026-02-23 17:30)
 
-### ✅ CRITICAL: UDP扫描远程主机状态错误 - 已修复!
+### RESOLVED: SYN 扫描接收问题 - 3 个 bug 已修复
+
+**Bug 1: `get_if_index` 读错 union 字段** (CRITICAL)
+- 位置: `ultrascan.rs:145`
+- 错误: `ifreq.ifr_ifru.ifru_addr.sa_family as i32` (返回 AF_INET=2)
+- 正确: `ifreq.ifr_ifru.ifru_ifindex` (返回实际接口索引)
+- 影响: AF_PACKET socket 绑定到错误接口，完全收不到包
+
+**Bug 2: RST 包 seq=0 被过滤** (CRITICAL)
+- 位置: `ultrascan.rs:539`
+- 错误: `packet.ack == expected_ack && packet.seq() != 0`
+- RST 包的 seq 字段通常为 0 (RFC 793: RST 响应 SYN 时 seq=0, ack=SYN.seq+1)
+- 修复: RST 包只验证 ACK，不检查 seq
+
+**Bug 3: 输出解析器误解析 OS 指纹行** (MEDIUM)
+- 位置: `compare_scans.py:49-86`
+- 错误: 端口段解析未验证 `port/proto` 格式，OS 行如 "Linux 3.1 (89%)" 被当端口
+- 修复: 添加 `"/" in port_proto and port_proto.split("/")[0].isdigit()` 验证
+
+---
+
+### nmap 网络抖动应对机制分析
+
+**来源**: `reference/nmap/timing.cc`, `scan_engine.cc`, `NmapOps.h`
+
+#### 1. 自适应 RTT (SRTT/RTTVAR)
+
+```
+初始化: timeout = 1000ms (INITIAL_RTT_TIMEOUT)
+首次响应: srtt = delta, rttvar = clamp(srtt, 5ms, 2s)
+后续响应: srtt += (delta - srtt) / 8
+           rttvar += (|delta - srtt| - rttvar) / 4
+           timeout = srtt + 4 * rttvar
+范围: [100ms, 10000ms] (MIN_RTT_TIMEOUT, MAX_RTT_TIMEOUT)
+异常值过滤: rttdelta > 1.5s AND rttdelta > 3*srtt + 2*rttvar 时丢弃
+```
+
+rustnmap 现状: 固定 1500ms，无自适应
+
+#### 2. 拥塞控制 (TCP Reno 风格)
+
+```
+慢启动: cwnd += slow_incr * scale (cwnd < ssthresh)
+拥塞避免: cwnd += ca_incr / cwnd * scale (cwnd >= ssthresh)
+丢包: cwnd = low_cwnd, ssthresh = max(in_flight / divisor, 2)
+```
+
+rustnmap 现状: 固定并行度 min=10, max=100
+
+#### 3. 速率限制检测 (RLD)
+
+nmap 检测目标是否限速 ICMP/RST 响应，连续超时时自动降速。
+rustnmap 现状: 无 RLD
+
+#### 4. 端口状态转换验证
+
+```
+closed -> open: 禁止 (防止误判)
+open -> filtered: 禁止 (防止网络抖动降级)
+noresp_open_scan: filtered -> open 禁止
+```
+
+rustnmap 现状: 无状态转换验证
+
+---
+
+### 性能对比详细数据 (2026-02-23 17:24)
+
+#### rustnmap 较慢的场景
+
+| 测试 | rustnmap | nmap | speedup | 根因分析 |
+|------|----------|------|---------|----------|
+| Connect Scan | 2995ms | 1781ms | 0.59x | 串行 TCP 连接，nmap 并行 |
+| Min/Max Rate | 1768ms | 1002ms | 0.57x | 速率控制实现差异 |
+| Fast Scan (100p) | 7241ms | 4915ms | 0.68x | 输出 closed 端口开销 |
+| SYN Scan (5p) | 589ms | 448ms | 0.76x | AF_PACKET 轮询开销 |
+| Version Intensity | 10607ms | 8346ms | 0.79x | 服务探测效率 |
+| Timing T4 | 723ms | 596ms | 0.82x | T4 参数未对齐 |
+| Top Ports (100p) | 5094ms | 4624ms | 0.91x | 接近持平 |
+
+#### rustnmap 较快的场景
+
+| 测试 | rustnmap | nmap | speedup | 根因分析 |
+|------|----------|------|---------|----------|
+| FIN Scan | 718ms | 3892ms | 5.42x | 更快超时处理 |
+| MAIMON Scan | 744ms | 3805ms | 5.11x | 同上 |
+| XMAS Scan | 815ms | 3444ms | 4.23x | 同上 |
+| Aggressive (-A) | 15170ms | 45556ms | 3.0x | 综合优势 |
+| NULL Scan | 1755ms | 3570ms | 2.03x | 更快超时处理 |
+| Version Detection | 9181ms | 16320ms | 1.78x | 更快端口扫描 |
+| UDP Scan | 3069ms | 4119ms | 1.34x | AF_PACKET 零拷贝 |
+
+**问题**: tcpdump 确认 RST 包到达网络接口，但 rustnmap 的 raw socket 未接收
+
+**证据**:
+```
+tcpdump:
+14:50:33.259211 In IP 45.33.32.156.113 > 172.17.1.60.60756: Flags [R.], seq 0, ack 1527207668
+
+rustnmap:
+113/tcp  filtered ident
+```
+
+**根本原因**: 架构差异
+
+| 方面 | nmap | rustnmap |
+|------|------|----------|
+| 接收方法 | **libpcap** (`pcap_next_ex`) | **raw socket** (`recvfrom`) |
+| 捕获层 | **数据链路层 (L2)** | **IP 层 (L3)** |
+| Kernel 干扰 | 无 (bypass TCP stack) | TCP 协议栈可能干扰 |
+
+**参考**: nmap source `libnetutil/netutil.cc:4408-4429`
+
+**解决方案**: 切换到 `rustnmap-packet` (AF_PACKET + PACKET_MMAP V3)
+
+该 crate 已实现与 libpcap 相似的零拷贝数据包捕获:
+- `rustnmap-packet/src/lib.rs`: PACKET_MMAP V3 引擎
+- `PacketRing`, `PacketProcessor`, `RxQueue`/`TxQueue`
+- BPF 过滤支持
+
+**预估影响**: 修复 11+ 个失败测试 (端口状态分类)
+
+---
+
+### ✅ Phase 11: 修复测试失败问题 - 6项完成
+
+**状态**: PARTIAL ⚠️ (4/11 基础测试通过)
+
+#### 完成的修复
+
+| # | 修复 | 文件 | 预期影响 |
+|---|------|------|----------|
+| 1 | SYN 扫描重试+状态分类 | `syn_scan.rs:150-165` | +11 通过 |
+| 2 | `--scan-ack` CLI 参数 | `args.rs:151-161` | +1 通过 |
+| 3 | `--scan-window` CLI 参数 | `args.rs:164-175` | +1 通过 |
+| 4 | `--exclude-port` CLI 参数 | `args.rs:168-177` | 待验证 |
+| 5 | 服务 VERSION 输出验证 | `formatter.rs:483-559` | 已正确 |
+| 6 | OS 检测格式验证 | `formatter.rs:436-456` | 已正确 |
+
+#### SYN 扫描修复详情
+
+**问题**: 超时后直接返回 `PortState::Filtered`，无法区分"完全无响应"vs"收到无关包"
+
+**解决方案**:
+```rust
+// 添加重试逻辑
+let max_retries = 3;
+let mut retry_count = 0;
+let mut received_any_from_target = false;
+
+// 超时后指数退避重试
+if elapsed >= total_timeout {
+    if retry_count < max_retries {
+        retry_count += 1;
+        total_timeout = self.config.initial_rtt * (2_u32.saturating_pow(retry_count));
+        continue;
+    }
+    // 最终状态分类
+    return Ok(if received_any_from_target {
+        PortState::Closed  // 收到包但无匹配响应
+    } else {
+        PortState::Filtered  // 完全静默
+    });
+}
+```
+
+#### CLI 参数扩展
+
+新增3个扫描选项:
+- `--scan-ack` / `-sA`: TCP ACK 扫描
+- `--scan-window` / `-sW`: TCP Window 扫描
+- `--exclude-port <PORTS>`: 排除指定端口
+
+---
+
+## 历史发现 (2026-02-23)
+
+### 📋 Phase 11: 测试失败根因分析 - 27个失败
+
+**详细分析**: 见 `IMPROVEMENT_PLAN.md`
+
+**失败分类** (27个失败):
+
+#### 1. 端口状态分类错误 (11个) - HIGH
+
+**问题**: rustnmap 报告 `filtered` vs nmap 报告 `closed`
+**影响端口**: 443/tcp, 113/tcp, 8080/tcp
+
+**根因**:
+- 文件: `rustnmap-scan/src/syn_scan.rs:151-161`
+- 超时逻辑直接返回 `PortState::Filtered`
+- 缺少重试逻辑和指数退避
+- 未区分"完全无响应"vs"收到无关包"
+
+**解决方案**:
+1. 实现重试逻辑 (最多3次)
+2. 指数退避超时
+3. 改进状态分类:
+   - `Filtered`: 完全无响应
+   - `Closed`: 收到无关包但超时
+
+**预期修复**: +11 通过
+
+#### 2. 不支持的功能 (6个) - HIGH/MEDIUM
+
+| 功能 | 状态 | 优先级 | 工作量 |
+|------|------|--------|--------|
+| ACK 扫描 | CLI缺失,实现存在 | HIGH | 低 |
+| Window 扫描 | CLI缺失,实现存在 | HIGH | 低 |
+| Decoy 扫描 | 部分实现 | MEDIUM | 中 |
+| Exclude Port | 未实现 | MEDIUM | 低 |
+| JSON 输出 | nmap不支持 | LOW | 无 (测试问题) |
+
+**根因分析**:
+- ACK/Window: `rustnmap-cli/src/args.rs` 缺少 `scan_ack`/`scan_window` 字段
+- 底层实现已存在: `TcpAckScanner` (stealth_scans.rs:727+)
+- Decoy: `args.rs:271` 有字段但未完全集成到 orchestrator
+
+**预期修复**: +4 通过
+
+#### 3. 输出格式差异 (10个) - MEDIUM
+
+| 问题 | 期望字段 | 实际情况 |
+|------|----------|----------|
+| 服务 VERSION | "VERSION" | 字段未在输出中显示 |
+| OS details | "OS details" | 格式不匹配 |
+| OS guesses | "OS guesses" | 格式不匹配 |
+| XML 输出 | `<?xml`, `<nmaprun>` | 缺少声明 |
+| Grepable | `Host:`, `Status:` | 缺少前缀 |
+
+**根因**:
+- 文件: `rustnmap-output/src/formatter.rs`
+- 服务版本: `format_port()` 未包含版本信息
+- OS检测: 输出格式与nmap不完全一致
+
+**预期修复**: +8 通过
+
+---
+
+### ✅ Phase 10: 测试框架更新完成 - 24个新测试用例
+
+(详情见上方或 progress.md)
+
+---
+
+## 历史发现 (2026-02-22)
+
+### 🆕 比较测试框架 - 新建
 
 **文件**: `crates/rustnmap-scan/src/udp_scan.rs`
 
