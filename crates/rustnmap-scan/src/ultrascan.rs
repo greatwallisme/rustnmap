@@ -37,16 +37,199 @@
 #![warn(missing_docs)]
 
 use std::collections::HashMap;
-use std::io::ErrorKind;
+use std::io::{self, ErrorKind};
 use std::net::{Ipv4Addr, SocketAddr};
+use std::os::fd::{AsRawFd, FromRawFd};
 use std::sync::Arc as StdArc;
 use std::time::{Duration, Instant};
+use std::sync::Arc;
+use std::ptr;
+use std::mem;
 
 use rustnmap_common::{Port, PortState, ScanConfig};
 use rustnmap_net::raw_socket::{parse_tcp_response, RawSocket, TcpPacketBuilder};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio::time::timeout as tokio_timeout;
+
+/// Simple `AF_PACKET` socket for L2 packet capture.
+/// Uses standard `recvfrom` (not `PACKET_MMAP`) for simplicity.
+#[derive(Debug)]
+struct SimpleAfPacket {
+    #[expect(dead_code, reason = "Interface index stored for potential future use")]
+    if_index: i32,
+    fd: std::os::fd::OwnedFd,
+}
+
+impl SimpleAfPacket {
+    /// Creates a new `AF_PACKET` socket bound to the specified interface.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if socket creation, interface lookup, or binding fails.
+    fn new(if_name: &str) -> io::Result<Self> {
+        // SAFETY: Creating an AF_PACKET raw socket with valid libc constants.
+        // The returned fd is checked for errors before use.
+        let fd = unsafe {
+            libc::socket(
+                libc::AF_PACKET,
+                libc::SOCK_RAW,
+                i32::from(libc::htons(ETH_P_ALL)),
+            )
+        };
+        if fd < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: fd is a valid, non-negative file descriptor returned by socket().
+        // OwnedFd takes ownership and will close it on drop.
+        let fd = unsafe { std::os::fd::OwnedFd::from_raw_fd(fd) };
+
+        let if_index = Self::get_if_index(fd.as_raw_fd(), if_name)?;
+
+        // SAFETY: zeroed memory is valid for sockaddr_ll (POD struct with integer fields).
+        let mut addr: libc::sockaddr_ll = unsafe { mem::zeroed() };
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "AF_PACKET (17) fits in u16"
+        )]
+        {
+            addr.sll_family = libc::AF_PACKET as u16;
+        };
+        addr.sll_protocol = ETH_P_ALL.to_be();
+        addr.sll_ifindex = if_index;
+
+        // SAFETY: fd is a valid AF_PACKET socket. addr is properly initialized with
+        // family, protocol, and interface index. Size matches the struct.
+        let ret = unsafe {
+            libc::bind(
+                fd.as_raw_fd(),
+                (&raw const addr).cast::<libc::sockaddr>(),
+                u32::try_from(mem::size_of::<libc::sockaddr_ll>())
+                    .unwrap_or(u32::MAX),
+            )
+        };
+        if ret < 0 {
+            return Err(io::Error::last_os_error());
+        }
+
+        // SAFETY: fd is a valid open file descriptor. F_GETFL returns current flags.
+        let flags = unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_GETFL) };
+        if flags < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: fd is valid, flags is the current flag set from F_GETFL.
+        // Adding O_NONBLOCK is a safe flag modification.
+        let ret = unsafe {
+            libc::fcntl(fd.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK)
+        };
+        if ret < 0 {
+            return Err(io::Error::last_os_error());
+        }
+
+        // SAFETY: zeroed memory is valid for packet_mreq (POD struct).
+        let mut mreq: libc::packet_mreq = unsafe { mem::zeroed() };
+        mreq.mr_ifindex = if_index;
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "PACKET_MR_PROMISC (1) fits in u16"
+        )]
+        {
+            mreq.mr_type = libc::PACKET_MR_PROMISC as u16;
+        };
+        // SAFETY: fd is a valid AF_PACKET socket. mreq is properly initialized.
+        // PACKET_ADD_MEMBERSHIP enables promiscuous mode on the interface.
+        let ret = unsafe {
+            libc::setsockopt(
+                fd.as_raw_fd(),
+                libc::SOL_PACKET,
+                libc::PACKET_ADD_MEMBERSHIP,
+                (&raw const mreq).cast::<libc::c_void>(),
+                u32::try_from(mem::size_of::<libc::packet_mreq>())
+                    .unwrap_or(u32::MAX),
+            )
+        };
+        if ret < 0 {
+            // Non-fatal: promiscuous mode is helpful but not required
+        }
+
+        Ok(Self { if_index, fd })
+    }
+
+    fn get_if_index(fd: i32, if_name: &str) -> io::Result<i32> {
+        // SAFETY: zeroed memory is valid for ifreq (all-zero is a valid bit pattern
+        // for this POD struct containing integers and a char array).
+        let mut ifreq: libc::ifreq = unsafe { mem::zeroed() };
+        let bytes = if_name.as_bytes();
+        if bytes.len() >= libc::IFNAMSIZ {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "interface name too long",
+            ));
+        }
+        for (i, &b) in bytes.iter().enumerate() {
+            #[expect(
+                clippy::cast_possible_wrap,
+                reason = "ASCII interface name bytes (0-127) fit safely in i8"
+            )]
+            {
+                ifreq.ifr_name[i] = b as i8;
+            };
+        }
+        // SAFETY: fd is a valid open socket, ifreq is properly initialized with
+        // the interface name. SIOCGIFINDEX populates ifru_ifindex on success.
+        let ret = unsafe { libc::ioctl(fd, libc::SIOCGIFINDEX, &raw mut ifreq) };
+        if ret < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: After successful SIOCGIFINDEX ioctl, the kernel has populated
+        // the ifru_ifindex field of the ifreq union with the interface index.
+        Ok(unsafe { ifreq.ifr_ifru.ifru_ifindex })
+    }
+
+    /// Receives a packet from the `AF_PACKET` socket.
+    ///
+    /// Returns `Ok(Some(data))` if a packet was received,
+    /// `Ok(None)` if no packet is available (non-blocking), or `Err` on error.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `recvfrom` fails with an error other than `WouldBlock`.
+    fn recv_packet(&self) -> io::Result<Option<Vec<u8>>> {
+        let mut buffer = vec![0u8; 65_535];
+        // SAFETY: fd is a valid AF_PACKET socket. buffer is a properly allocated
+        // mutable slice. recvfrom with null src_addr/addrlen is valid and simply
+        // discards the sender address information.
+        let ret = unsafe {
+            libc::recvfrom(
+                self.fd.as_raw_fd(),
+                buffer.as_mut_ptr().cast::<libc::c_void>(),
+                buffer.len(),
+                0,
+                ptr::null_mut(),
+                ptr::null_mut(),
+            )
+        };
+        if ret < 0 {
+            let err = io::Error::last_os_error();
+            if err.kind() == io::ErrorKind::WouldBlock {
+                return Ok(None);
+            }
+            return Err(err);
+        }
+        #[expect(
+            clippy::cast_sign_loss,
+            reason = "ret is non-negative (checked above), safe to cast to usize"
+        )]
+        let len = ret as usize;
+        buffer.truncate(len);
+        Ok(Some(buffer))
+    }
+}
+
+/// Ethernet protocol for all traffic.
+const ETH_P_ALL: u16 = 0x0003;
+/// Ethernet header size.
+const ETH_HDR_SIZE: usize = 14;
 
 /// Default minimum number of probes to send in parallel.
 ///
@@ -59,7 +242,12 @@ pub const DEFAULT_MIN_PARALLELISM: usize = 10;
 pub const DEFAULT_MAX_PARALLELISM: usize = 100;
 
 /// Default timeout for waiting on a single probe response.
-pub const DEFAULT_PROBE_TIMEOUT: Duration = Duration::from_secs(1);
+/// Default timeout for a single probe before retry.
+///
+/// Nmap uses different timeouts based on timing templates. For Normal timing (T3),
+/// the initial RTT timeout is typically 1000ms with exponential backoff.
+/// We use a longer base timeout to handle network delays better.
+pub const DEFAULT_PROBE_TIMEOUT: Duration = Duration::from_millis(1500);
 
 /// Default timeout for the entire scan operation.
 pub const DEFAULT_SCAN_TIMEOUT: Duration = Duration::from_secs(300);
@@ -163,6 +351,8 @@ pub struct ParallelScanEngine {
     local_addr: Ipv4Addr,
     /// Raw socket for packet transmission.
     socket: StdArc<RawSocket>,
+    /// `AF_PACKET` engine for receiving TCP responses (L2 capture).
+    packet_socket: Option<Arc<SimpleAfPacket>>,
     /// Scanner configuration (reserved for future use).
     #[expect(dead_code, reason = "Configuration is reserved for future timing extensions")]
     config: ScanConfig,
@@ -195,22 +385,98 @@ impl ParallelScanEngine {
     /// - The system runs out of file descriptors
     pub fn new(local_addr: Ipv4Addr, config: ScanConfig) -> Result<Self, rustnmap_common::ScanError> {
         let socket = StdArc::new(
-            RawSocket::with_protocol(6).map_err(|e| {
+            // Use IPPROTO_RAW to receive all IP packets, not just TCP.
+        // This prevents kernel TCP stack from interfering with packet reception.
+        // We manually filter for TCP responses in parse_packet().
+        RawSocket::with_protocol(255).map_err(|e| {
                 rustnmap_common::ScanError::PermissionDenied {
                     operation: format!("create raw socket: {e}"),
                 }
             })?,
         );
 
+        // Try to create AF_PACKET socket for L2 packet capture
+        // This is critical for receiving TCP RST responses that raw socket misses
+        let packet_socket = Self::create_packet_socket(local_addr);
+
         Ok(Self {
             local_addr,
             socket,
+            packet_socket,
             config,
             min_parallelism: DEFAULT_MIN_PARALLELISM,
             max_parallelism: DEFAULT_MAX_PARALLELISM,
             probe_timeout: DEFAULT_PROBE_TIMEOUT,
             scan_timeout: DEFAULT_SCAN_TIMEOUT,
         })
+    }
+
+    /// Creates an `AF_PACKET` socket for TCP response capture.
+    ///
+    /// This is critical for receiving TCP RST responses that raw socket misses.
+    /// The socket captures at L2 (data link layer) like libpcap, ensuring all
+    /// TCP responses are received regardless of kernel TCP stack behavior.
+    ///
+    /// # Note
+    ///
+    /// This is optional - if creation fails, returns `None` and the scanner
+    /// falls back to raw socket only (which may miss some responses).
+    fn create_packet_socket(local_addr: Ipv4Addr) -> Option<Arc<SimpleAfPacket>> {
+        // Get the network interface name for the local address
+        let if_name = Self::get_interface_for_ip(local_addr)?;
+
+        match SimpleAfPacket::new(&if_name) {
+            Ok(socket) => Some(Arc::new(socket)),
+            Err(e) => {
+                // Log the error but continue with raw socket fallback
+                let _ = e;
+                None
+            }
+        }
+    }
+
+    /// Gets the network interface name for the given local IP address.
+    ///
+    /// This function tries to find the interface that has the given local IP address.
+    /// For localhost, returns "lo". For other addresses, reads from /proc/net/route
+    /// to find the default route interface.
+    fn get_interface_for_ip(local_addr: Ipv4Addr) -> Option<String> {
+        // For localhost, use lo
+        if local_addr == Ipv4Addr::LOCALHOST || local_addr.is_loopback() {
+            return Some("lo".to_string());
+        }
+
+        // Read /proc/net/route to find the default route interface
+        // This is the most reliable way to find the main network interface
+        if let Ok(route_data) = std::fs::read_to_string("/proc/net/route") {
+            for line in route_data.lines().skip(1) {
+                // Format: Iface Destination Gateway Flags ...
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() >= 2 {
+                    let iface = parts[0];
+                    let dest = parts[1];
+                    // Dest 00000000 means default route
+                    if dest == "00000000" {
+                        // Found the default route interface, return it directly
+                        // without trying to verify with AfPacketEngine (which may fail)
+                        return Some(iface.to_string());
+                    }
+                }
+            }
+        }
+
+        // Fallback: try common interface names in order of likelihood
+        for if_name in [
+            "wlp3s0", "wlan0", "wlp2s0", "wlp1s0",  // Wireless
+            "eth0", "eth1", "ens33", "ens34", "enp0s3", "enp0s8",  // Wired
+        ] {
+            // Check if interface exists by reading /sys/class/net/
+            let path = format!("/sys/class/net/{if_name}/operstate");
+            if std::path::Path::new(&path).exists() {
+                return Some(if_name.to_string());
+            }
+        }
+        None
     }
 
     /// Sets the minimum parallelism.
@@ -314,10 +580,17 @@ impl ParallelScanEngine {
                     // Match the packet to an outstanding probe
                     let probe_key = (packet.src_ip, packet.src_port);
                     if let Some(probe) = outstanding.remove(&probe_key) {
-                        // Verify the ACK matches our sequence number
+                        // For SYN-ACK responses, verify the ACK matches our sequence number.
+                        // For RST responses, seq is typically 0 -- only validate ACK.
                         let expected_ack = probe.seq.wrapping_add(1);
-                        // Also verify the response has a valid sequence number (non-zero)
-                        let valid_response = packet.ack == expected_ack && packet.seq() != 0;
+                        let rst_received = (packet.flags & 0x04) != 0;
+                        let valid_response = if rst_received {
+                            // RST packets: accept if ACK matches (seq may be 0)
+                            packet.ack == expected_ack
+                        } else {
+                            // SYN-ACK and other responses: validate both ACK and non-zero seq
+                            packet.ack == expected_ack && packet.seq() != 0
+                        };
                         if valid_response {
                             results.insert(packet.src_port, packet.port_state());
                         } else {
@@ -367,14 +640,18 @@ impl ParallelScanEngine {
     ///
     /// The receiver task uses `spawn_blocking` because `socket.recv_packet()` is a
     /// synchronous blocking call. This prevents blocking the Tokio worker thread.
+    ///
+    /// When `packet_socket` is available, it will use `AF_PACKET` for L2 capture,
+    /// which properly receives TCP RST responses that raw socket may miss.
     fn start_receiver_task(
         &self,
         packet_tx: mpsc::UnboundedSender<ReceivedPacket>,
     ) -> JoinHandle<()> {
         let socket = StdArc::clone(&self.socket);
+        let packet_socket = self.packet_socket.clone();
         tokio::spawn(async move {
-            // Use a shorter timeout for faster shutdown response
-            const RECV_TIMEOUT: Duration = Duration::from_millis(50);
+            // Polling interval when using non-blocking socket
+            const POLL_INTERVAL: Duration = Duration::from_millis(10);
 
             loop {
                 // Check if channel is closed before blocking on recv
@@ -382,17 +659,43 @@ impl ParallelScanEngine {
                     break;
                 }
 
-                // Clone Arc for the blocking task
-                let socket_clone = StdArc::clone(&socket);
+                // Try AF_PACKET socket first (L2 capture - receives all TCP responses)
+                // Fall back to raw socket if packet socket is not available
+                let use_packet_socket = packet_socket.is_some();
 
-                // Run the blocking recv_packet in a separate thread
-                let result = tokio::task::spawn_blocking(move || {
-                    let mut recv_buf = vec![0u8; 65535];
-                    socket_clone
-                        .recv_packet(&mut recv_buf, Some(RECV_TIMEOUT))
-                        .map(|len| (len, recv_buf))
-                })
-                .await;
+                let result = if let Some(ref pkt_sock) = packet_socket {
+                    // Use AF_PACKET socket for L2 capture
+                    let pkt_sock = Arc::clone(pkt_sock);
+                    tokio::task::spawn_blocking(move || {
+                        match pkt_sock.recv_packet() {
+                            Ok(Some(data)) => {
+                                // Skip Ethernet header (14 bytes) to get to IP header
+                                if data.len() > ETH_HDR_SIZE {
+                                    let ip_data = data[ETH_HDR_SIZE..].to_vec();
+                                    Ok((ip_data.len(), ip_data))
+                                } else {
+                                    Ok((data.len(), data))
+                                }
+                            }
+                            Ok(None) => {
+                                // No packet available (non-blocking), return empty
+                                Ok((0, Vec::new()))
+                            }
+                            Err(e) => Err(e),
+                        }
+                    })
+                    .await
+                } else {
+                    // Fall back to raw socket (L3 capture - may miss some TCP responses)
+                    let socket_clone = StdArc::clone(&socket);
+                    tokio::task::spawn_blocking(move || {
+                        let mut recv_buf = vec![0u8; 65535];
+                        socket_clone
+                            .recv_packet(&mut recv_buf, Some(Duration::from_millis(50)))
+                            .map(|len| (len, recv_buf))
+                    })
+                    .await
+                };
 
                 match result {
                     Ok(Ok((len, recv_buf))) if len > 0 => {
@@ -405,7 +708,10 @@ impl ParallelScanEngine {
                         }
                     }
                     Ok(Ok(_)) => {
-                        // Empty packet, continue
+                        // Empty packet (no data available), add small delay to avoid busy-wait
+                        if use_packet_socket {
+                            tokio::time::sleep(POLL_INTERVAL).await;
+                        }
                     }
                     Ok(Err(e))
                         if e.kind() == ErrorKind::WouldBlock

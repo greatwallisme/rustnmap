@@ -248,6 +248,20 @@ class ComparisonTestRunner:
             "-O": "--os-detection",
             "-F": "--fast-scan",
             "-v": "--verbose",
+            "-oX": "--output-xml",
+            "-oG": "--output-grepable",
+            "-oN": "--output-normal",
+            "--output-json": "--output-json",
+            "-T0": "--timing 0",
+            "-T1": "--timing 1",
+            "-T2": "--timing 2",
+            "-T3": "--timing 3",
+            "-T4": "--timing 4",
+            "-T5": "--timing 5",
+            "--min-rate": "--min-rate",
+            "--max-rate": "--max-rate",
+            "--host-timeout": "--host-timeout",
+            "--exclude-port": "--exclude-port",
         }
 
         result = command
@@ -309,12 +323,16 @@ class ComparisonTestRunner:
         """Run all configured test suites."""
         results = []
 
-        # Load all test configuration files
+        # Load all test configuration files (including new test suites)
         config_files = [
             self.test_configs_dir / "basic_scan.toml",
             self.test_configs_dir / "service_detection.toml",
             self.test_configs_dir / "os_detection.toml",
             self.test_configs_dir / "advanced_scan.toml",
+            self.test_configs_dir / "timing_tests.toml",
+            self.test_configs_dir / "output_formats.toml",
+            self.test_configs_dir / "multi_target.toml",
+            self.test_configs_dir / "stealth_extended.toml",
         ]
 
         for config_file in config_files:
@@ -337,6 +355,10 @@ class ComparisonTestRunner:
             if category == "advanced" and not self.config.enable_advanced_scans:
                 logger.info(f"Skipping {suite_config['config']['name']} (advanced scans disabled)")
                 continue
+
+            # New categories - always enabled for comprehensive testing
+            if category in ("timing", "output", "multi_target"):
+                logger.info(f"Running {suite_config['config']['name']} ({category} test)")
 
             suite_result = await self.run_test_suite(suite_config)
             results.append(suite_result)
@@ -467,7 +489,7 @@ async def main():
     )
     parser.add_argument(
         "--suite",
-        help="Run specific test suite (basic, service, os, advanced)",
+        help="Run specific test suite (basic, service, os, advanced, timing, output, multi, stealth)",
     )
     parser.add_argument(
         "--format",
@@ -532,6 +554,10 @@ async def main():
             "service": "service_detection.toml",
             "os": "os_detection.toml",
             "advanced": "advanced_scan.toml",
+            "timing": "timing_tests.toml",
+            "output": "output_formats.toml",
+            "multi": "multi_target.toml",
+            "stealth": "stealth_extended.toml",
         }
         config_file = runner.test_configs_dir / suite_map.get(args.suite, args.suite + ".toml")
         if not config_file.exists():

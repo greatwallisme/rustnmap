@@ -351,36 +351,66 @@ bench-compare-install:
 
 # Run all comparison tests
 bench-compare *args="":
+    cargo build --release
     cd benchmarks && uv run python comparison_test.py {{args}}
 
 # Run basic scan comparison
 bench-compare-basic:
+    cargo build --release
     cd benchmarks && uv run python comparison_test.py --suite basic
 
 # Run service detection comparison
 bench-compare-service:
+    cargo build --release
     cd benchmarks && uv run python comparison_test.py --suite service
 
 # Run OS detection comparison
 bench-compare-os:
+    cargo build --release
     cd benchmarks && uv run python comparison_test.py --suite os
 
 # Run advanced scan comparison
 bench-compare-advanced:
+    cargo build --release
     cd benchmarks && uv run python comparison_test.py --suite advanced
 
 # Run comparison tests with custom target
 bench-compare-target target:
+    cargo build --release
     cd benchmarks && uv run python comparison_test.py --target {{target}}
 
 # Run comparison tests (text report only)
 bench-compare-text:
+    cargo build --release
     cd benchmarks && uv run python comparison_test.py --format text
 
 # Run comparison tests (JSON report only)
 bench-compare-json:
+    cargo build --release
     cd benchmarks && uv run python comparison_test.py --format json
 
 # Run comparison tests with verbose output
 bench-compare-verbose:
+    cargo build --release
     cd benchmarks && uv run python comparison_test.py -v
+
+# Run timing template comparison
+bench-compare-timing:
+    cargo build --release
+    cd benchmarks && uv run python comparison_test.py --suite timing
+
+# Run output format comparison
+bench-compare-output:
+    cargo build --release
+    cd benchmarks && uv run python comparison_test.py --suite output
+
+# Run multi-target comparison
+bench-compare-multi:
+    cargo build --release
+    cd benchmarks && uv run python comparison_test.py --suite multi
+
+# Run extended stealth scan comparison
+bench-compare-stealth:
+    cargo build --release
+    cd benchmarks && uv run python comparison_test.py --suite stealth
+

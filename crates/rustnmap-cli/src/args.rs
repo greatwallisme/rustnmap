@@ -148,6 +148,24 @@ pub struct Args {
     )]
     pub scan_maimon: bool,
 
+    /// TCP ACK scan
+    #[arg(
+        long,
+        help_heading = "Scan Types",
+        conflicts_with_all = ["scan_syn", "scan_connect", "scan_udp",
+                             "scan_fin", "scan_null", "scan_xmas", "scan_maimon"]
+    )]
+    pub scan_ack: bool,
+
+    /// TCP Window scan
+    #[arg(
+        long,
+        help_heading = "Scan Types",
+        conflicts_with_all = ["scan_syn", "scan_connect", "scan_udp",
+                             "scan_fin", "scan_null", "scan_xmas", "scan_maimon"]
+    )]
+    pub scan_window: bool,
+
     // ============================================
     // Port Specification
     // ============================================
@@ -168,6 +186,14 @@ pub struct Args {
         conflicts_with_all = ["ports", "top_ports", "fast_scan"]
     )]
     pub port_range_all: bool,
+
+    /// Exclude specified ports from scan (e.g., -p 1-100 --exclude-port 22,80)
+    #[arg(
+        long,
+        help_heading = "Port Specification",
+        value_name = "PORTS"
+    )]
+    pub exclude_port: Option<String>,
 
     /// Top `<N>` most common ports
     #[arg(
@@ -699,6 +725,10 @@ impl Args {
             ScanType::Xmas
         } else if self.scan_maimon {
             ScanType::Maimon
+        } else if self.scan_ack {
+            ScanType::Ack
+        } else if self.scan_window {
+            ScanType::Window
         } else if self.scan_connect {
             ScanType::Connect
         } else {
@@ -724,6 +754,10 @@ pub enum ScanType {
     Xmas,
     /// TCP MAIMON scan
     Maimon,
+    /// TCP ACK scan
+    Ack,
+    /// TCP Window scan
+    Window,
 }
 
 #[cfg(test)]

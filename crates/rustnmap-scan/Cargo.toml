@@ -21,6 +21,7 @@ tokio = { workspace = true }
 pnet = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }
+libc = "0.2"
 
 [dev-dependencies]
 proptest = { workspace = true }

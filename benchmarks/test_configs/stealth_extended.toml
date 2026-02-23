@@ -1,0 +1,50 @@
+# Extended Stealth Scans Configuration
+# Tests additional stealth scan types and behaviors
+# Uses nmap-style flags - will be translated to rustnmap flags
+
+[config]
+name = "Extended Stealth Scans"
+description = "Compare extended stealth scanning capabilities"
+category = "advanced"
+
+[[test_case]]
+name = "FIN Scan"
+description = "TCP FIN scan (firewall evasion)"
+command_template = "{scanner} -sF -p {ports} {target}"
+expected_fields = ["PORT", "STATE", "SERVICE"]
+
+[[test_case]]
+name = "NULL Scan"
+description = "TCP NULL scan (firewall evasion)"
+command_template = "{scanner} -sN -p {ports} {target}"
+expected_fields = ["PORT", "STATE", "SERVICE"]
+
+[[test_case]]
+name = "XMAS Scan"
+description = "TCP XMAS scan (firewall evasion)"
+command_template = "{scanner} -sX -p {ports} {target}"
+expected_fields = ["PORT", "STATE", "SERVICE"]
+
+[[test_case]]
+name = "MAIMON Scan"
+description = "TCP MAIMON scan (BSD-derived)"
+command_template = "{scanner} -sM -p {ports} {target}"
+expected_fields = ["PORT", "STATE", "SERVICE"]
+
+[[test_case]]
+name = "ACK Scan"
+description = "TCP ACK scan (firewall rule detection)"
+command_template = "{scanner} -sA -p {ports} {target}"
+expected_fields = ["PORT", "STATE", "SERVICE"]
+
+[[test_case]]
+name = "Window Scan"
+description = "TCP Window scan (firewall evasion)"
+command_template = "{scanner} -sW -p {ports} {target}"
+expected_fields = ["PORT", "STATE", "SERVICE"]
+
+[[test_case]]
+name = "Stealth with Decoys"
+description = "Stealth scan with decoy hosts (if supported)"
+command_template = "{scanner} -sS -D RND:10 -p {ports} {target}"
+expected_fields = ["PORT", "STATE", "SERVICE"]

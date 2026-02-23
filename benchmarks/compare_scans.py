@@ -57,27 +57,42 @@ class ScanResult:
         for line in lines:
             line = line.strip()
 
-            # Detect port section
+            # Detect port section - handle both "PORT" and "STATE" on same line
             if "PORT" in line and "STATE" in line:
                 in_port_section = True
                 continue
 
+            # Exit port section on blank line, summary line, or non-port content
             if in_port_section:
-                # Parse port line: PORT    STATE    SERVICE
-                # Example: 22/tcp  open  ssh
-                if not line or line.startswith(("=", "|", "_")):
+                if not line:
+                    in_port_section = False
+                    continue
+                if "done:" in line.lower() or "scanned in" in line.lower():
+                    break
+                # Exit on OS detection, service info, traceroute, or other sections
+                if line.startswith(("=", "|", "_", "OS ", "Service Info:",
+                                    "Device type:", "Running:", "Aggressive",
+                                    "Network Distance:", "TRACEROUTE", "HOP",
+                                    "No exact OS", "Too many fingerprints")):
+                    in_port_section = False
                     continue
 
+                # Parse port line: PORT    STATE    SERVICE
+                # Example: 22/tcp  open  ssh
                 parts = line.split()
                 if len(parts) >= 2:
                     port_proto = parts[0]
-                    state = parts[1]
-                    service = parts[2] if len(parts) > 2 else "unknown"
-
-                    ports[port_proto] = {
-                        "state": state,
-                        "service": service,
-                    }
+                    # Validate port format: must be number/protocol
+                    if "/" in port_proto and port_proto.split("/")[0].isdigit():
+                        state = parts[1]
+                        service = parts[2] if len(parts) > 2 else "unknown"
+                        ports[port_proto] = {
+                            "state": state,
+                            "service": service,
+                        }
+                    else:
+                        # Not a port line, exit port section
+                        in_port_section = False
 
         return ports
 
@@ -120,15 +135,21 @@ class ScanResult:
 
             # Parse service version line
             # Example: 22/tcp  open  ssh  OpenSSH 8.4p1 Debian 5+deb11u3
-            if "open" in line and ("ssh" in line or "http" in line or "ftp" in line or "telnet" in line):
+            # Updated format may include version info after service name
+            if "open" in line:
                 parts = line.split()
-                if len(parts) >= 4:
-                    services.append({
-                        "port": parts[0],
-                        "state": parts[1],
-                        "service": parts[2],
-                        "version": " ".join(parts[3:]),
-                    })
+                if len(parts) >= 3:
+                    # Look for common service names
+                    common_services = ["ssh", "http", "https", "ftp", "telnet", "smtp", "dns", "pop3", "imap"]
+                    if any(svc in line.lower() for svc in common_services):
+                        service_info = {
+                            "port": parts[0],
+                            "state": parts[1],
+                            "service": parts[2],
+                        }
+                        if len(parts) >= 4:
+                            service_info["version"] = " ".join(parts[3:])
+                        services.append(service_info)
 
         return services
 
@@ -146,18 +167,29 @@ class ScanResult:
         for line in lines:
             line = line.strip()
 
-            if "OS details" in line or "Running" in line:
+            # Handle both nmap and rustnmap OS detection output formats
+            if "OS details" in line or "Running" in line or "OS guesses" in line:
                 os_info["detected"] = True
                 in_os_section = True
                 # Extract OS info
                 if "OS details:" in line:
                     os_str = line.split("OS details:")[-1].strip()
                     os_info["os_matches"].append(os_str)
+                elif "Running:" in line:
+                    os_str = line.split("Running:")[-1].strip()
+                    os_info["os_matches"].append(os_str)
 
-            if in_os_section and "OS CPE:" in line:
-                cpe = line.split("OS CPE:")[-1].strip()
-                if os_info["os_matches"]:
+            if in_os_section and ("OS CPE:" in line or "OS guess" in line):
+                cpe = line.split("OS CPE:")[-1].strip() if "OS CPE:" in line else ""
+                guess = line.split("OS guess")[-1].strip() if "OS guess" in line else ""
+                if cpe and os_info["os_matches"]:
                     os_info["os_matches"][-1] += f" (CPE: {cpe})"
+                if guess:
+                    os_info["os_matches"].append(guess)
+
+            # Exit OS section when we hit other sections
+            if in_os_section and ("PORT" in line or "Service detection" in line):
+                break
 
         return os_info
 

@@ -1,0 +1,32 @@
+# Output Formats Configuration
+# Tests all output format options
+# Uses nmap-style flags - will be translated to rustnmap flags
+
+[config]
+name = "Output Formats"
+description = "Compare output format capabilities"
+category = "output"
+
+[[test_case]]
+name = "Normal Output"
+description = "Default normal output format"
+command_template = "{scanner} -sS -p {ports} {target}"
+expected_fields = ["PORT", "STATE", "SERVICE"]
+
+[[test_case]]
+name = "XML Output"
+description = "XML output format for machine parsing"
+command_template = "{scanner} -sS -p {ports} {target} -oX /tmp/rustnmap_test.xml"
+expected_fields = ["<?xml", "<nmaprun"]
+
+[[test_case]]
+name = "JSON Output"
+description = "JSON output format"
+command_template = "{scanner} -sS -p {ports} {target} --output-json /tmp/rustnmap_test.json"
+expected_fields = ["{", "scanner", "hosts"]
+
+[[test_case]]
+name = "Grepable Output"
+description = "Grepable output format"
+command_template = "{scanner} -sS -p {ports} {target} -oG /tmp/rustnmap_test.gnmap"
+expected_fields = ["Host:", "Status:"]

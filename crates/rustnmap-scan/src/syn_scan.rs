@@ -147,19 +147,35 @@ impl TcpSynScanner {
                 ))
             })?;
 
-        // Wait for response with timeout, looping until we get a valid response or timeout
-        let total_timeout = self.config.initial_rtt;
+        // Wait for response with timeout and retry logic
+        let max_retries = 3;
+        let mut retry_count = 0;
+        let mut total_timeout = self.config.initial_rtt;
         let start_time = std::time::Instant::now();
         let mut recv_buf = vec![0u8; 65535];
+        let mut received_any_from_target = false;
 
         loop {
             // Calculate remaining timeout
             let elapsed = start_time.elapsed();
             if elapsed >= total_timeout {
-                // Total timeout expired - port is filtered or host is down
-                return Ok(PortState::Filtered);
+                // Timeout expired - check if we should retry
+                if retry_count < max_retries {
+                    retry_count += 1;
+                    // Exponential backoff: double the timeout each retry
+                    total_timeout = self.config.initial_rtt * (2_u32.saturating_pow(retry_count));
+                    continue;
+                }
+                // All retries exhausted - classify based on what we received
+                // If we received any packet from the target, likely Closed (RST lost/delayed)
+                // If completely silent, likely Filtered
+                return Ok(if received_any_from_target {
+                    PortState::Closed
+                } else {
+                    PortState::Filtered
+                });
             }
-            let remaining_timeout = total_timeout - elapsed;
+            let remaining_timeout = total_timeout.saturating_sub(elapsed);
 
             match self
                 .socket
@@ -175,6 +191,8 @@ impl TcpSynScanner {
                             // Response from wrong IP, this is unrelated traffic - continue waiting
                             continue;
                         }
+                        // Mark that we received at least one packet from the target
+                        received_any_from_target = true;
 
                         // Verify this is a response to our probe (correct source port)
                         if resp_src_port != dst_port {

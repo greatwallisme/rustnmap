@@ -1131,6 +1131,8 @@ const fn map_scan_type(scan_type: crate::args::ScanType) -> CoreScanType {
         crate::args::ScanType::Null => CoreScanType::TcpNull,
         crate::args::ScanType::Xmas => CoreScanType::TcpXmas,
         crate::args::ScanType::Maimon => CoreScanType::TcpMaimon,
+        crate::args::ScanType::Ack => CoreScanType::TcpAck,
+        crate::args::ScanType::Window => CoreScanType::TcpWindow,
     }
 }
 
@@ -1149,6 +1151,8 @@ fn build_command_line_string(args: &Args) -> String {
         crate::args::ScanType::Null => cmd.push_str(" -sN"),
         crate::args::ScanType::Xmas => cmd.push_str(" -sX"),
         crate::args::ScanType::Maimon => cmd.push_str(" -sM"),
+        crate::args::ScanType::Ack => cmd.push_str(" -sA"),
+        crate::args::ScanType::Window => cmd.push_str(" -sW"),
     }
 
     // Add ports

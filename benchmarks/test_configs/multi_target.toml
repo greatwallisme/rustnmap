@@ -1,0 +1,38 @@
+# Multi-Target Configuration
+# Tests scanning multiple targets and target specification
+# Uses nmap-style flags - will be translated to rustnmap flags
+
+[config]
+name = "Multi-Target Scans"
+description = "Compare multi-target scanning capabilities"
+category = "multi_target"
+
+[[test_case]]
+name = "Two Targets"
+description = "Scan two IP addresses"
+command_template = "{scanner} -sS -p {ports} {target} 127.0.0.1"
+expected_fields = ["PORT", "STATE", "SERVICE"]
+
+[[test_case]]
+name = "Port Range"
+description = "Scan a range of ports"
+command_template = "{scanner} -sS -p 1-100 {target}"
+expected_fields = ["PORT", "STATE", "SERVICE"]
+
+[[test_case]]
+name = "Exclude Port"
+description = "Scan all ports except excluded one"
+command_template = "{scanner} -sS -p {ports} --exclude-port 22 {target}"
+expected_fields = ["PORT", "STATE", "SERVICE"]
+
+[[test_case]]
+name = "Fast Scan + Top Ports"
+description = "Fast scan with top ports specification"
+command_template = "{scanner} -sS -F --top-ports 50 {target}"
+expected_fields = ["PORT", "STATE", "SERVICE"]
+
+[[test_case]]
+name = "IPv6 Target"
+description = "Scan IPv6 address (if supported)"
+command_template = "{scanner} -sS -p {ports} ::1"
+expected_fields = ["PORT", "STATE", "SERVICE"]

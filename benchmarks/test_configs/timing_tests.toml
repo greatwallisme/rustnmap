@@ -1,0 +1,56 @@
+# Timing Templates Configuration
+# Tests all timing templates (T0-T5)
+# Uses nmap-style flags - will be translated to rustnmap flags
+
+[config]
+name = "Timing Templates"
+description = "Compare timing template behaviors"
+category = "timing"
+
+[[test_case]]
+name = "T0 Paranoid"
+description = "Very slow serial scan for IDS evasion"
+command_template = "{scanner} -sS -T0 -p {ports} {target}"
+expected_fields = ["PORT", "STATE", "SERVICE"]
+
+[[test_case]]
+name = "T1 Sneaky"
+description = "Slow serial scan for IDS evasion"
+command_template = "{scanner} -sS -T1 -p {ports} {target}"
+expected_fields = ["PORT", "STATE", "SERVICE"]
+
+[[test_case]]
+name = "T2 Polite"
+description = "Polite scan to reduce bandwidth usage"
+command_template = "{scanner} -sS -T2 -p {ports} {target}"
+expected_fields = ["PORT", "STATE", "SERVICE"]
+
+[[test_case]]
+name = "T3 Normal"
+description = "Default timing template"
+command_template = "{scanner} -sS -T3 -p {ports} {target}"
+expected_fields = ["PORT", "STATE", "SERVICE"]
+
+[[test_case]]
+name = "T4 Aggressive"
+description = "Aggressive scan for faster results"
+command_template = "{scanner} -sS -T4 -p {ports} {target}"
+expected_fields = ["PORT", "STATE", "SERVICE"]
+
+[[test_case]]
+name = "T5 Insane"
+description = "Very fast scan sacrificing accuracy"
+command_template = "{scanner} -sS -T5 -p {ports} {target}"
+expected_fields = ["PORT", "STATE", "SERVICE"]
+
+[[test_case]]
+name = "Min/Max Rate Limiting"
+description = "Rate limiting for bandwidth control"
+command_template = "{scanner} -sS --min-rate 50 --max-rate 200 -p {ports} {target}"
+expected_fields = ["PORT", "STATE", "SERVICE"]
+
+[[test_case]]
+name = "Host Timeout"
+description = "Set host timeout to 30 seconds"
+command_template = "{scanner} -sS --host-timeout 30000 -p {ports} {target}"
+expected_fields = ["PORT", "STATE", "SERVICE"]
