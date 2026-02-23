@@ -52,6 +52,163 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio::time::timeout as tokio_timeout;
 
+// ============================================================================
+// Internal Congestion Control (minimal implementation for ultrascan)
+// ============================================================================
+
+/// Internal congestion statistics for adaptive timing.
+///
+/// Uses EWMA (Exponentially Weighted Moving Average) for RTT tracking,
+/// following RFC 2988: SRTT = (1-1/8)*SRTT + (1/8)*RTT
+#[derive(Debug, Default)]
+struct InternalCongestionStats {
+    /// Smoothed RTT in microseconds.
+    srtt_micros: std::sync::atomic::AtomicU64,
+    /// RTT variance in microseconds.
+    rttvar_micros: std::sync::atomic::AtomicU64,
+    /// Total packets sent.
+    packets_sent: std::sync::atomic::AtomicU64,
+    /// Total packets acknowledged.
+    packets_acked: std::sync::atomic::AtomicU64,
+}
+
+impl InternalCongestionStats {
+    /// Creates new congestion statistics with default values.
+    fn new() -> Self {
+        Self {
+            srtt_micros: std::sync::atomic::AtomicU64::new(100_000), // 100ms default
+            rttvar_micros: std::sync::atomic::AtomicU64::new(50_000), // 50ms default
+            packets_sent: std::sync::atomic::AtomicU64::new(0),
+            packets_acked: std::sync::atomic::AtomicU64::new(0),
+        }
+    }
+
+    /// Updates RTT estimate using EWMA.
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "RTT values are bounded to reasonable network latencies (< 30s)"
+    )]
+    fn update_rtt(&self, rtt: Duration) {
+        use std::sync::atomic::Ordering;
+
+        let rtt_micros = rtt.as_micros() as u64;
+        let old_srtt = self.srtt_micros.load(Ordering::Relaxed);
+        let old_rttvar = self.rttvar_micros.load(Ordering::Relaxed);
+
+        // RFC 2988: SRTT = (7/8)*SRTT + (1/8)*RTT
+        let new_srtt = (7 * old_srtt + rtt_micros) / 8;
+        // RTTVAR = (3/4)*RTTVAR + (1/4)*|SRTT-RTT|
+        let diff = new_srtt.abs_diff(rtt_micros);
+        let new_rttvar = (3 * old_rttvar + diff) / 4;
+
+        // Clamp to reasonable bounds
+        let clamped_srtt = new_srtt.clamp(1_000, 10_000_000); // 1ms to 10s
+        let clamped_rttvar = new_rttvar.clamp(500, 5_000_000); // 0.5ms to 5s
+
+        self.srtt_micros.store(clamped_srtt, Ordering::Relaxed);
+        self.rttvar_micros.store(clamped_rttvar, Ordering::Relaxed);
+    }
+
+    /// Returns the recommended timeout: SRTT + 4*RTTVAR.
+    fn recommended_timeout(&self) -> Duration {
+        use std::sync::atomic::Ordering;
+        let srtt = self.srtt_micros.load(Ordering::Relaxed);
+        let rttvar = self.rttvar_micros.load(Ordering::Relaxed);
+        let timeout_micros = srtt.saturating_add(4 * rttvar);
+        Duration::from_micros(timeout_micros.min(30_000_000)) // Cap at 30s
+    }
+
+    /// Records a packet sent.
+    fn record_sent(&self) {
+        use std::sync::atomic::Ordering;
+        self.packets_sent.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Records a packet acknowledged.
+    fn record_acked(&self) {
+        use std::sync::atomic::Ordering;
+        self.packets_acked.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// Internal congestion controller for adaptive parallelism.
+///
+/// Implements TCP Reno-style congestion control with slow start and
+/// congestion avoidance phases.
+#[derive(Debug)]
+pub struct InternalCongestionController {
+    stats: std::sync::Arc<InternalCongestionStats>,
+    cwnd: std::sync::atomic::AtomicUsize,
+    ssthresh: std::sync::atomic::AtomicUsize,
+    min_cwnd: usize,
+    max_cwnd: usize,
+}
+
+impl InternalCongestionController {
+    /// Creates a new congestion controller.
+    fn new(max_cwnd: usize) -> Self {
+        let initial_cwnd = (max_cwnd / 4).max(1);
+        Self {
+            stats: std::sync::Arc::new(InternalCongestionStats::new()),
+            cwnd: std::sync::atomic::AtomicUsize::new(initial_cwnd),
+            ssthresh: std::sync::atomic::AtomicUsize::new(max_cwnd / 2),
+            min_cwnd: 1,
+            max_cwnd,
+        }
+    }
+
+    /// Returns current congestion window.
+    fn cwnd(&self) -> usize {
+        use std::sync::atomic::Ordering;
+        self.cwnd.load(Ordering::Relaxed)
+    }
+
+    /// Called when a packet is sent.
+    fn on_packet_sent(&self) {
+        self.stats.record_sent();
+    }
+
+    /// Called when a packet is acknowledged.
+    fn on_packet_acked(&self, rtt: Option<Duration>) {
+        use std::sync::atomic::Ordering;
+
+        self.stats.record_acked();
+        if let Some(rtt) = rtt {
+            self.stats.update_rtt(rtt);
+        }
+
+        let current_cwnd = self.cwnd.load(Ordering::Relaxed);
+        let ssthresh = self.ssthresh.load(Ordering::Relaxed);
+
+        if current_cwnd < ssthresh {
+            // Slow start: exponential growth
+            let new_cwnd = (current_cwnd * 2).min(self.max_cwnd);
+            self.cwnd.store(new_cwnd, Ordering::Relaxed);
+        } else {
+            // Congestion avoidance: linear growth
+            let new_cwnd = (current_cwnd + 1).min(self.max_cwnd);
+            self.cwnd.store(new_cwnd, Ordering::Relaxed);
+        }
+    }
+
+    /// Called when packet loss is detected.
+    fn on_packet_lost(&self) {
+        use std::sync::atomic::Ordering;
+
+        let current_cwnd = self.cwnd.load(Ordering::Relaxed);
+        let new_ssthresh = (current_cwnd / 2).max(self.min_cwnd);
+        let new_cwnd = new_ssthresh;
+
+        self.ssthresh.store(new_ssthresh, Ordering::Relaxed);
+        self.cwnd.store(new_cwnd, Ordering::Relaxed);
+    }
+
+    /// Returns recommended timeout.
+    fn recommended_timeout(&self) -> Duration {
+        self.stats.recommended_timeout()
+    }
+}
+
 /// Simple `AF_PACKET` socket for L2 packet capture.
 /// Uses standard `recvfrom` (not `PACKET_MMAP`) for simplicity.
 #[derive(Debug)]
@@ -231,23 +388,11 @@ const ETH_P_ALL: u16 = 0x0003;
 /// Ethernet header size.
 const ETH_HDR_SIZE: usize = 14;
 
-/// Default minimum number of probes to send in parallel.
-///
-/// Nmap uses 1 by default but increases based on network conditions.
-pub const DEFAULT_MIN_PARALLELISM: usize = 10;
-
 /// Default maximum number of probes to have outstanding at once.
 ///
 /// Nmap's default varies by timing template (T3=20, T4=40, T5=200+).
+/// The actual parallelism is now controlled by the congestion controller.
 pub const DEFAULT_MAX_PARALLELISM: usize = 100;
-
-/// Default timeout for waiting on a single probe response.
-/// Default timeout for a single probe before retry.
-///
-/// Nmap uses different timeouts based on timing templates. For Normal timing (T3),
-/// the initial RTT timeout is typically 1000ms with exponential backoff.
-/// We use a longer base timeout to handle network delays better.
-pub const DEFAULT_PROBE_TIMEOUT: Duration = Duration::from_millis(1500);
 
 /// Default timeout for the entire scan operation.
 pub const DEFAULT_SCAN_TIMEOUT: Duration = Duration::from_secs(300);
@@ -339,6 +484,7 @@ impl ReceivedPacket {
 /// 2. **Async Receiving**: Background task continuously receives packets
 /// 3. **Response Matching**: Correlates responses to outstanding probes
 /// 4. **Timeout Handling**: Retries or times out probes that don't respond
+/// 5. **Congestion Control**: TCP-like adaptive timeout and parallelism
 ///
 /// # Performance
 ///
@@ -353,15 +499,13 @@ pub struct ParallelScanEngine {
     socket: StdArc<RawSocket>,
     /// `AF_PACKET` engine for receiving TCP responses (L2 capture).
     packet_socket: Option<Arc<SimpleAfPacket>>,
-    /// Scanner configuration (reserved for future use).
-    #[expect(dead_code, reason = "Configuration is reserved for future timing extensions")]
+    /// Scanner configuration (reserved for future timing extensions).
+    #[expect(dead_code, reason = "Reserved for future timing template integration")]
     config: ScanConfig,
-    /// Minimum parallelism (probes to send before waiting).
-    min_parallelism: usize,
+    /// Congestion controller for adaptive timing.
+    congestion: Arc<InternalCongestionController>,
     /// Maximum parallelism (max outstanding probes).
     max_parallelism: usize,
-    /// Timeout for individual probes.
-    probe_timeout: Duration,
     /// Timeout for the entire scan.
     scan_timeout: Duration,
 }
@@ -399,14 +543,18 @@ impl ParallelScanEngine {
         // This is critical for receiving TCP RST responses that raw socket misses
         let packet_socket = Self::create_packet_socket(local_addr);
 
+        let max_parallel = DEFAULT_MAX_PARALLELISM;
+
+        // Create internal congestion controller for adaptive timing
+        let congestion = Arc::new(InternalCongestionController::new(max_parallel));
+
         Ok(Self {
             local_addr,
             socket,
             packet_socket,
             config,
-            min_parallelism: DEFAULT_MIN_PARALLELISM,
-            max_parallelism: DEFAULT_MAX_PARALLELISM,
-            probe_timeout: DEFAULT_PROBE_TIMEOUT,
+            congestion,
+            max_parallelism: max_parallel,
             scan_timeout: DEFAULT_SCAN_TIMEOUT,
         })
     }
@@ -479,37 +627,38 @@ impl ParallelScanEngine {
         None
     }
 
-    /// Sets the minimum parallelism.
-    ///
-    /// # Arguments
-    ///
-    /// * `value` - Minimum number of probes to have outstanding
-    #[must_use]
-    pub const fn with_min_parallelism(mut self, value: usize) -> Self {
-        self.min_parallelism = value;
-        self
-    }
-
     /// Sets the maximum parallelism.
     ///
     /// # Arguments
     ///
     /// * `value` - Maximum number of probes to have outstanding
     #[must_use]
-    pub const fn with_max_parallelism(mut self, value: usize) -> Self {
+    pub fn with_max_parallelism(mut self, value: usize) -> Self {
         self.max_parallelism = value;
+        // Recreate congestion controller with new max
+        self.congestion = Arc::new(InternalCongestionController::new(value));
         self
     }
 
-    /// Sets the probe timeout.
+    /// Returns the adaptive probe timeout based on current network conditions.
     ///
-    /// # Arguments
-    ///
-    /// * `value` - Timeout for waiting on individual probe responses
+    /// Uses the congestion controller's recommended timeout which is calculated
+    /// as: SRTT + 4 * RTTVAR (RFC 2988 formula).
     #[must_use]
-    pub const fn with_probe_timeout(mut self, value: Duration) -> Self {
-        self.probe_timeout = value;
-        self
+    pub fn adaptive_probe_timeout(&self) -> Duration {
+        self.congestion.recommended_timeout()
+    }
+
+    /// Returns the current congestion window (adaptive parallelism).
+    #[must_use]
+    pub fn current_cwnd(&self) -> usize {
+        self.congestion.cwnd()
+    }
+
+    /// Returns a reference to the congestion controller.
+    #[must_use]
+    pub fn congestion(&self) -> &InternalCongestionController {
+        &self.congestion
     }
 
     /// Scans multiple ports on a target in parallel.
@@ -565,10 +714,15 @@ impl ParallelScanEngine {
                 break;
             }
 
-            // Send more probes if we haven't reached max parallelism
-            while outstanding.len() < self.max_parallelism {
+            // Get adaptive parallelism from congestion controller
+            let current_cwnd = self.congestion.cwnd();
+
+            // Send more probes if we haven't reached congestion window
+            while outstanding.len() < current_cwnd && outstanding.len() < self.max_parallelism {
                 if let Some(port) = ports_iter.next() {
                     self.send_probe(target, port, &mut outstanding)?;
+                    // Record packet sent for congestion stats
+                    self.congestion.on_packet_sent();
                 } else {
                     break;
                 }
@@ -592,6 +746,10 @@ impl ParallelScanEngine {
                             packet.ack == expected_ack && packet.seq() != 0
                         };
                         if valid_response {
+                            // Calculate RTT for this probe
+                            let rtt = probe.sent_time.elapsed();
+                            // Record successful response with RTT for congestion control
+                            self.congestion.on_packet_acked(Some(rtt));
                             results.insert(packet.src_port, packet.port_state());
                         } else {
                             // Unexpected ACK or invalid seq - put the probe back
@@ -612,7 +770,8 @@ impl ParallelScanEngine {
 
             // Re-send retry probes
             for probe in retry_probes.drain(..) {
-                if outstanding.len() < self.max_parallelism {
+                let current_cwnd = self.congestion.cwnd();
+                if outstanding.len() < current_cwnd && outstanding.len() < self.max_parallelism {
                     self.resend_probe(probe, &mut outstanding)?;
                 } else {
                     // Can't resend due to parallelism limit, mark as filtered
@@ -812,6 +971,9 @@ impl ParallelScanEngine {
     }
 
     /// Checks for timed-out probes and handles retries.
+    ///
+    /// Uses adaptive timeout from congestion controller based on SRTT + 4*RTTVAR.
+    /// Records packet loss for congestion control when timeouts occur.
     fn check_timeouts(
         &self,
         outstanding: &mut HashMap<(Ipv4Addr, Port), OutstandingProbe>,
@@ -821,10 +983,13 @@ impl ParallelScanEngine {
         let now = Instant::now();
         let max_retries = 2;
 
+        // Get adaptive probe timeout from congestion controller
+        let probe_timeout = self.congestion.recommended_timeout();
+
         // Collect timed-out probes
         let timed_out: Vec<_> = outstanding
             .iter()
-            .filter(|(_, p)| now.duration_since(p.sent_time) >= self.probe_timeout)
+            .filter(|(_, p)| now.duration_since(p.sent_time) >= probe_timeout)
             .map(|(k, p)| (*k, p.clone()))
             .collect();
 
@@ -833,10 +998,14 @@ impl ParallelScanEngine {
                 // Retry the probe
                 outstanding.remove(&key);
                 retry_probes.push(probe);
+                // Record packet loss for congestion control
+                self.congestion.on_packet_lost();
             } else {
                 // Max retries reached, mark as filtered
                 outstanding.remove(&key);
                 results.entry(probe.port).or_insert(PortState::Filtered);
+                // Record packet loss for congestion control
+                self.congestion.on_packet_lost();
             }
         }
     }
@@ -878,8 +1047,9 @@ mod tests {
         // May fail if not running as root
         if let Ok(engine) = result {
             assert_eq!(engine.local_addr, local_addr);
-            assert_eq!(engine.min_parallelism, DEFAULT_MIN_PARALLELISM);
             assert_eq!(engine.max_parallelism, DEFAULT_MAX_PARALLELISM);
+            // Verify congestion controller is initialized
+            assert!(engine.current_cwnd() > 0);
         }
     }
 
@@ -889,12 +1059,22 @@ mod tests {
         let config = ScanConfig::default();
 
         if let Ok(engine) = ParallelScanEngine::new(local_addr, config) {
-            let engine = engine
-                .with_min_parallelism(20)
-                .with_max_parallelism(200);
+            let engine = engine.with_max_parallelism(200);
 
-            assert_eq!(engine.min_parallelism, 20);
             assert_eq!(engine.max_parallelism, 200);
+        }
+    }
+
+    #[test]
+    fn test_adaptive_timeout() {
+        let local_addr = Ipv4Addr::LOCALHOST;
+        let config = ScanConfig::default();
+
+        if let Ok(engine) = ParallelScanEngine::new(local_addr, config) {
+            // Adaptive timeout should be within reasonable bounds
+            let timeout = engine.adaptive_probe_timeout();
+            assert!(timeout.as_millis() >= 100); // At least 100ms
+            assert!(timeout.as_secs() <= 30); // At most 30 seconds
         }
     }
 

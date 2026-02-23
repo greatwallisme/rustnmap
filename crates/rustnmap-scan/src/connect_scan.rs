@@ -10,8 +10,13 @@
 use crate::scanner::{PortScanner, ScanResult};
 use rustnmap_common::{Port, PortState, Protocol, ScanConfig};
 use rustnmap_target::Target;
+use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::Duration;
+
+/// Default maximum parallel connections.
+const DEFAULT_MAX_PARALLELISM: usize = 100;
 
 /// TCP Connect scanner.
 ///
@@ -21,6 +26,8 @@ use std::time::Duration;
 pub struct TcpConnectScanner {
     /// Connection timeout for individual port probes.
     connect_timeout: Duration,
+    /// Maximum number of parallel connections.
+    max_parallelism: usize,
 }
 
 impl TcpConnectScanner {
@@ -38,6 +45,106 @@ impl TcpConnectScanner {
     pub fn new(_local_addr: Option<rustnmap_common::Ipv4Addr>, _config: ScanConfig) -> Self {
         Self {
             connect_timeout: Duration::from_secs(5),
+            max_parallelism: DEFAULT_MAX_PARALLELISM,
+        }
+    }
+
+    /// Sets the maximum parallelism for batch scanning.
+    ///
+    /// # Arguments
+    ///
+    /// * `value` - Maximum number of concurrent connections
+    #[must_use]
+    pub const fn with_max_parallelism(mut self, value: usize) -> Self {
+        self.max_parallelism = value;
+        self
+    }
+
+    /// Scans multiple ports on a target in parallel.
+    ///
+    /// This is significantly faster than scanning ports sequentially,
+    /// especially when many ports are closed or filtered.
+    ///
+    /// # Arguments
+    ///
+    /// * `target` - Target host to scan
+    /// * `ports` - Slice of port numbers to probe
+    ///
+    /// # Returns
+    ///
+    /// A map of port numbers to their states.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rustnmap_scan::connect_scan::TcpConnectScanner;
+    /// use rustnmap_target::Target;
+    /// use rustnmap_common::ScanConfig;
+    ///
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let scanner = TcpConnectScanner::new(None, ScanConfig::default());
+    /// let target = Target::from_str("192.168.1.1")?;
+    /// let ports = vec![22, 80, 443];
+    /// let results = scanner.scan_ports_parallel(&target, &ports).await;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn scan_ports_parallel(
+        &self,
+        target: &Target,
+        ports: &[Port],
+    ) -> HashMap<Port, PortState> {
+        let target = Arc::new(target.clone());
+        let timeout = self.connect_timeout;
+        let max_parallel = self.max_parallelism;
+
+        let mut results = HashMap::new();
+
+        // Process ports in batches to limit concurrency
+        for chunk in ports.chunks(max_parallel) {
+            let mut handles = Vec::new();
+
+            for &port in chunk {
+                let target_clone = Arc::clone(&target);
+                let handle = tokio::task::spawn_blocking(move || {
+                    let state = Self::scan_single_port(&target_clone, port, timeout);
+                    (port, state)
+                });
+                handles.push(handle);
+            }
+
+            // Wait for all connections in this batch
+            for handle in handles {
+                if let Ok((port, state)) = handle.await {
+                    results.insert(port, state);
+                }
+            }
+        }
+
+        results
+    }
+
+    /// Scans a single port synchronously.
+    fn scan_single_port(target: &Target, port: Port, timeout: Duration) -> PortState {
+        // Get target socket address
+        let socket_addr = match target.ip {
+            rustnmap_common::IpAddr::V4(addr) => SocketAddr::new(std::net::IpAddr::V4(addr), port),
+            rustnmap_common::IpAddr::V6(_) => return PortState::Filtered,
+        };
+
+        // Attempt connection with timeout
+        let result = std::net::TcpStream::connect_timeout(&socket_addr, timeout);
+
+        match result {
+            Ok(_stream) => PortState::Open,
+            Err(e)
+                if e.kind() == std::io::ErrorKind::ConnectionRefused
+                    || e.kind() == std::io::ErrorKind::ConnectionReset =>
+            {
+                PortState::Closed
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::TimedOut => PortState::Filtered,
+            Err(_e) => PortState::Filtered,
         }
     }
 
@@ -65,10 +172,11 @@ impl TcpConnectScanner {
             if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread {
                 // Clone data needed for the blocking operation
                 let target_clone = target.clone();
+                let timeout = self.connect_timeout;
                 match tokio::task::block_in_place(|| {
                     handle.block_on(async {
                         tokio::task::spawn_blocking(move || {
-                            Self::scan_port_impl_blocking_static(&target_clone, port, protocol)
+                            Self::scan_single_port(&target_clone, port, timeout)
                         })
                         .await
                     })
@@ -80,84 +188,7 @@ impl TcpConnectScanner {
         }
 
         // No multi-threaded runtime, do blocking operation directly
-        self.scan_port_impl_blocking(target, port, protocol)
-    }
-
-    /// Blocking implementation of TCP connect scan.
-    ///
-    /// This function performs the actual blocking TCP connection.
-    /// It is called within `block_in_place` to avoid blocking the async runtime.
-    fn scan_port_impl_blocking(
-        &self,
-        target: &Target,
-        port: Port,
-        _protocol: Protocol,
-    ) -> PortState {
-        // Get target socket address
-        let socket_addr = match target.ip {
-            rustnmap_common::IpAddr::V4(addr) => SocketAddr::new(std::net::IpAddr::V4(addr), port),
-            rustnmap_common::IpAddr::V6(_) => return PortState::Filtered,
-        };
-
-        // Attempt connection with timeout
-        let result = std::net::TcpStream::connect_timeout(&socket_addr, self.connect_timeout);
-
-        match result {
-            Ok(_stream) => {
-                // Connection succeeded: port is open
-                // We close the stream immediately since we only wanted to check if it's open
-                PortState::Open
-            }
-            Err(e)
-                if e.kind() == std::io::ErrorKind::ConnectionRefused
-                    || e.kind() == std::io::ErrorKind::ConnectionReset =>
-            {
-                // Connection refused/reset: port is closed
-                PortState::Closed
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {
-                // Connection timed out: port is likely filtered
-                PortState::Filtered
-            }
-            Err(_e) => {
-                // Other errors: treat as filtered
-                PortState::Filtered
-            }
-        }
-    }
-
-    /// Static version of blocking TCP connect scan for use with `spawn_blocking`.
-    ///
-    /// This is a standalone function that doesn't require `self`,
-    /// making it suitable for use with `spawn_blocking` which requires `Send + 'static` closures.
-    fn scan_port_impl_blocking_static(
-        target: &Target,
-        port: Port,
-        _protocol: Protocol,
-    ) -> PortState {
-        // Get target socket address
-        let socket_addr = match target.ip {
-            rustnmap_common::IpAddr::V4(addr) => SocketAddr::new(std::net::IpAddr::V4(addr), port),
-            rustnmap_common::IpAddr::V6(_) => return PortState::Filtered,
-        };
-
-        // Use default timeout for static version
-        let timeout = Duration::from_secs(10);
-
-        // Attempt connection with timeout
-        let result = std::net::TcpStream::connect_timeout(&socket_addr, timeout);
-
-        match result {
-            Ok(_stream) => PortState::Open,
-            Err(e)
-                if e.kind() == std::io::ErrorKind::ConnectionRefused
-                    || e.kind() == std::io::ErrorKind::ConnectionReset =>
-            {
-                PortState::Closed
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::TimedOut => PortState::Filtered,
-            Err(_e) => PortState::Filtered,
-        }
+        Self::scan_single_port(target, port, self.connect_timeout)
     }
 }
 
@@ -193,5 +224,18 @@ mod tests {
     fn test_scanner_default_timeout() {
         let scanner = TcpConnectScanner::new(None, ScanConfig::default());
         assert_eq!(scanner.connect_timeout, Duration::from_secs(5));
+    }
+
+    #[test]
+    fn test_scanner_default_parallelism() {
+        let scanner = TcpConnectScanner::new(None, ScanConfig::default());
+        assert_eq!(scanner.max_parallelism, DEFAULT_MAX_PARALLELISM);
+    }
+
+    #[test]
+    fn test_scanner_custom_parallelism() {
+        let scanner = TcpConnectScanner::new(None, ScanConfig::default())
+            .with_max_parallelism(50);
+        assert_eq!(scanner.max_parallelism, 50);
     }
 }

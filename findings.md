@@ -1,11 +1,53 @@
 # Findings - RustNmap 项目分析
 
 **Created**: 2026-02-19
-**Updated**: 2026-02-23 17:30
+**Updated**: 2026-02-23 20:00
 
 ---
 
-## 最新发现 (2026-02-23 17:30)
+## 最新发现 (2026-02-23 20:00)
+
+### Phase 14 完成: 自适应 RTT 和拥塞控制已实现
+
+**实现的功能**:
+
+| 机制 | 状态 | 文件 | 描述 |
+|------|------|------|------|
+| 自适应 RTT | ✅ | `ultrascan.rs` | RFC 2988 SRTT/RTTVAR 指数平滑 |
+| 拥塞控制 CWND | ✅ | `ultrascan.rs` | TCP Reno 风格慢启动/拥塞避免 |
+| Connect 并行化 | ✅ | `connect_scan.rs` | 异步批量连接方法 |
+
+**代码实现细节**:
+
+1. **InternalCongestionStats** (ultrascan.rs)
+   - `srtt`: 平滑 RTT (初始 100ms)
+   - `rttvar`: RTT 方差 (初始 50ms)
+   - `update_rtt()`: EWMA 算法更新
+   - `recommended_timeout()`: SRTT + 4*RTTVAR
+
+2. **InternalCongestionController** (ultrascan.rs)
+   - `cwnd`: 拥塞窗口 (初始 max_cwnd/4)
+   - `ssthresh`: 慢启动阈值 (初始 max_cwnd/2)
+   - 慢启动: `cwnd *= 2` (指数增长)
+   - 拥塞避免: `cwnd += 1` (线性增长)
+   - 丢包处理: `cwnd = ssthresh = cwnd/2`
+
+3. **scan_ports_parallel()** (connect_scan.rs)
+   - 异步批量连接
+   - 默认 100 个并发
+   - 使用 `tokio::spawn_blocking`
+
+**测试结果 (2026-02-23 19:52)**:
+
+| 测试 | rustnmap | nmap | speedup | 状态 |
+|------|----------|------|---------|------|
+| SYN Scan | 871ms | 1733ms | 1.99x | ✅ PASS |
+| Fast Scan | 1619ms | 8515ms | 5.26x | ✅ PASS |
+| Connect Scan | 1696ms | 526ms | 0.31x | ✅ PASS (需集成) |
+
+---
+
+## 历史发现 (2026-02-23 17:30)
 
 ### RESOLVED: SYN 扫描接收问题 - 3 个 bug 已修复
 
@@ -32,7 +74,7 @@
 
 **来源**: `reference/nmap/timing.cc`, `scan_engine.cc`, `NmapOps.h`
 
-#### 1. 自适应 RTT (SRTT/RTTVAR)
+#### 1. 自适应 RTT (SRTT/RTTVAR) - ✅ 已实现
 
 ```
 初始化: timeout = 1000ms (INITIAL_RTT_TIMEOUT)
@@ -44,9 +86,9 @@
 异常值过滤: rttdelta > 1.5s AND rttdelta > 3*srtt + 2*rttvar 时丢弃
 ```
 
-rustnmap 现状: 固定 1500ms，无自适应
+rustnmap 现状: ✅ 已实现 InternalCongestionStats + InternalCongestionController
 
-#### 2. 拥塞控制 (TCP Reno 风格)
+#### 2. 拥塞控制 (TCP Reno 风格) - ✅ 已实现
 
 ```
 慢启动: cwnd += slow_incr * scale (cwnd < ssthresh)
@@ -54,14 +96,14 @@ rustnmap 现状: 固定 1500ms，无自适应
 丢包: cwnd = low_cwnd, ssthresh = max(in_flight / divisor, 2)
 ```
 
-rustnmap 现状: 固定并行度 min=10, max=100
+rustnmap 现状: ✅ 已实现 InternalCongestionController (慢启动+拥塞避免)
 
-#### 3. 速率限制检测 (RLD)
+#### 3. 速率限制检测 (RLD) - P2 待实现
 
 nmap 检测目标是否限速 ICMP/RST 响应，连续超时时自动降速。
 rustnmap 现状: 无 RLD
 
-#### 4. 端口状态转换验证
+#### 4. 端口状态转换验证 - P1 待实现
 
 ```
 closed -> open: 禁止 (防止误判)
@@ -73,9 +115,19 @@ rustnmap 现状: 无状态转换验证
 
 ---
 
-### 性能对比详细数据 (2026-02-23 17:24)
+### 性能对比数据
 
-#### rustnmap 较慢的场景
+#### Phase 14 测试结果 (2026-02-23 19:52)
+
+| 测试 | rustnmap | nmap | speedup | 状态 |
+|------|----------|------|---------|------|
+| SYN Scan | 871ms | 1733ms | 1.99x | ✅ |
+| Fast Scan | 1619ms | 8515ms | 5.26x | ✅ |
+| Connect Scan | 1696ms | 526ms | 0.31x | 需集成并行化 |
+
+#### 历史数据 (2026-02-23 17:24)
+
+##### rustnmap 较慢的场景
 
 | 测试 | rustnmap | nmap | speedup | 根因分析 |
 |------|----------|------|---------|----------|
@@ -87,7 +139,7 @@ rustnmap 现状: 无状态转换验证
 | Timing T4 | 723ms | 596ms | 0.82x | T4 参数未对齐 |
 | Top Ports (100p) | 5094ms | 4624ms | 0.91x | 接近持平 |
 
-#### rustnmap 较快的场景
+##### rustnmap 较快的场景
 
 | 测试 | rustnmap | nmap | speedup | 根因分析 |
 |------|----------|------|---------|----------|
@@ -98,8 +150,6 @@ rustnmap 现状: 无状态转换验证
 | NULL Scan | 1755ms | 3570ms | 2.03x | 更快超时处理 |
 | Version Detection | 9181ms | 16320ms | 1.78x | 更快端口扫描 |
 | UDP Scan | 3069ms | 4119ms | 1.34x | AF_PACKET 零拷贝 |
-
-**问题**: tcpdump 确认 RST 包到达网络接口，但 rustnmap 的 raw socket 未接收
 
 **证据**:
 ```

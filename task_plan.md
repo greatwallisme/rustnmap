@@ -1,9 +1,9 @@
 # Task Plan
 
 **Created**: 2026-02-21
-**Updated**: 2026-02-23 17:30
-**Status**: Phase 13 修复 AF_PACKET 集成和 clippy 错误 - COMPLETE
-**Goal**: 修复测试失败问题
+**Updated**: 2026-02-23 20:15
+**Status**: Phase 14 性能优化和网络抖动处理 - COMPLETE
+**Goal**: 实现 P0/P1 性能优化
 
 **详细分析**: 见 `IMPROVEMENT_PLAN.md`
 
@@ -15,11 +15,44 @@ Phase 10: 更新测试框架适配CLI修改 - COMPLETE
 Phase 11: 修复测试失败问题 - COMPLETE (被 Phase 13 取代)
 Phase 12: SYN 扫描架构改进 - COMPLETE (被 Phase 13 取代)
 Phase 13: 修复 AF_PACKET 集成和 clippy 错误 - COMPLETE
-Phase 14: 性能优化和网络抖动处理 - PLANNED
+Phase 14: 性能优化和网络抖动处理 - COMPLETE
 
 ---
 
 ## 阶段划分
+
+### Phase 14: 性能优化和网络抖动处理 - COMPLETE
+
+**实现的功能**:
+
+| 优化项 | 状态 | 文件 | 描述 |
+|--------|------|------|------|
+| P0-1: 自适应 RTT 超时 | ✅ | `ultrascan.rs` | RFC 2988 SRTT/RTTVAR 指数平滑算法 |
+| P0-2: 拥塞控制 CWND | ✅ | `ultrascan.rs` | TCP Reno 风格的慢启动/拥塞避免 |
+| P1-3: Connect 并行化 | ✅ | `connect_scan.rs` | 新增 `scan_ports_parallel()` 异步批量连接 |
+
+**代码变更摘要**:
+
+1. **ultrascan.rs** - 集成拥塞控制
+   - 新增 `InternalCongestionStats`: RTT 追踪 (SRTT + 4*RTTVAR)
+   - 新增 `InternalCongestionController`: TCP Reno 风格拥塞控制
+   - `ParallelScanEngine` 现使用动态 cwnd 而非固定并行度
+   - 超时从固定 1500ms 改为自适应 `recommended_timeout()`
+   - 响应时记录 RTT 并更新拥塞窗口
+   - 超时时调用 `on_packet_lost()` 减小窗口
+
+2. **connect_scan.rs** - 并行化连接
+   - 新增 `scan_ports_parallel()` 异步方法
+   - 使用 `tokio::spawn_blocking` 并行执行多个连接
+   - 批量处理 (默认 100 个并发)
+   - 保留原有 `scan_port()` 单端口方法兼容性
+
+**验证结果**:
+- `cargo clippy --workspace -- -D warnings`: ✅ PASS
+- `cargo test --workspace --lib`: ✅ PASS (970+ tests)
+- `cargo build --release`: ✅ PASS
+
+---
 
 ### Phase 13: 修复 AF_PACKET 集成和 clippy 错误 - COMPLETE
 

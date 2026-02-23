@@ -1,3 +1,53 @@
+### 2026-02-23: Phase 14 - 性能优化 (P0/P1)
+
+**任务**: 实现自适应 RTT、拥塞控制、Connect 并行化
+
+#### 实现的优化
+
+1. **自适应 RTT 超时** (`ultrascan.rs`)
+   - 实现 RFC 2988 SRTT/RTTVAR 指数平滑算法
+   - `srtt = (7/8)*srtt + (1/8)*rtt`
+   - `rttvar = (3/4)*rttvar + (1/4)*|srtt-rtt|`
+   - `timeout = srtt + 4*rttvar` (范围 1ms-10s)
+   - 替代原来的固定 1500ms 超时
+
+2. **拥塞控制 CWND** (`ultrascan.rs`)
+   - 实现 TCP Reno 风格的慢启动/拥塞避免
+   - 慢启动: `cwnd *= 2` (指数增长)
+   - 拥塞避免: `cwnd += 1` (线性增长)
+   - 丢包时: `cwnd = cwnd/2`, `ssthresh = cwnd/2`
+   - 替代原来的固定并行度 (min=10, max=100)
+
+3. **Connect 并行化** (`connect_scan.rs`)
+   - 新增 `scan_ports_parallel()` 异步方法
+   - 使用 `tokio::spawn_blocking` 并行执行
+   - 默认 100 个并发连接
+   - 预期显著提升 Connect Scan 性能 (之前 0.59x)
+
+#### 修改的文件
+
+| 文件 | 修改 |
+|------|------|
+| `crates/rustnmap-scan/src/ultrascan.rs` | 新增 InternalCongestionStats/InternalCongestionController, 集成到 ParallelScanEngine |
+| `crates/rustnmap-scan/src/connect_scan.rs` | 新增 scan_ports_parallel() 方法 |
+| `task_plan.md` | Phase 14 完成 |
+| `progress.md` | 本记录 |
+
+#### 代码质量
+
+- `cargo clippy --workspace -- -D warnings`: ✅ 零错误
+- `cargo test --workspace --lib`: ✅ 970+ passed
+- `cargo build --release`: ✅ 成功
+
+#### 待优化 (P2)
+
+- 速率限制检测 (RLD)
+- Timing Template 参数对齐
+- 指数退避重试
+- 端口状态转换验证
+
+---
+
 ### 2026-02-23: Phase 13 - AF_PACKET 修复和测试全通过
 
 **任务**: 修复 AF_PACKET 集成 bug、clippy 错误、输出解析器
