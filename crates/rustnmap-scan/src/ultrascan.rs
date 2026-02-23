@@ -74,10 +74,16 @@ struct InternalCongestionStats {
 
 impl InternalCongestionStats {
     /// Creates new congestion statistics with default values.
+    ///
+    /// Uses nmap T3 (Normal) defaults:
+    /// - Initial SRTT: 1000ms (`INITIAL_RTT_TIMEOUT`)
+    /// - Initial RTTVAR: 1000ms (clamped between 5ms-2000ms, based on SRTT)
     fn new() -> Self {
         Self {
-            srtt_micros: std::sync::atomic::AtomicU64::new(100_000), // 100ms default
-            rttvar_micros: std::sync::atomic::AtomicU64::new(50_000), // 50ms default
+            // Nmap INITIAL_RTT_TIMEOUT = 1000ms
+            srtt_micros: std::sync::atomic::AtomicU64::new(1_000_000),
+            // Nmap: rttvar = box(5000, 2000000, srtt) = clamp(srtt, 5ms, 2000ms)
+            rttvar_micros: std::sync::atomic::AtomicU64::new(1_000_000),
             packets_sent: std::sync::atomic::AtomicU64::new(0),
             packets_acked: std::sync::atomic::AtomicU64::new(0),
         }
@@ -101,21 +107,25 @@ impl InternalCongestionStats {
         let diff = new_srtt.abs_diff(rtt_micros);
         let new_rttvar = (3 * old_rttvar + diff) / 4;
 
-        // Clamp to reasonable bounds
-        let clamped_srtt = new_srtt.clamp(1_000, 10_000_000); // 1ms to 10s
-        let clamped_rttvar = new_rttvar.clamp(500, 5_000_000); // 0.5ms to 5s
+        // Clamp RTTVAR to nmap's bounds: 5ms to 2000ms
+        let clamped_rttvar = new_rttvar.clamp(5_000, 2_000_000);
 
-        self.srtt_micros.store(clamped_srtt, Ordering::Relaxed);
+        self.srtt_micros.store(new_srtt, Ordering::Relaxed);
         self.rttvar_micros.store(clamped_rttvar, Ordering::Relaxed);
     }
 
     /// Returns the recommended timeout: SRTT + 4*RTTVAR.
+    ///
+    /// The result is clamped to nmap's bounds: `MIN_RTT_TIMEOUT` (100ms) to
+    /// `MAX_RTT_TIMEOUT` (10000ms).
     fn recommended_timeout(&self) -> Duration {
         use std::sync::atomic::Ordering;
         let srtt = self.srtt_micros.load(Ordering::Relaxed);
         let rttvar = self.rttvar_micros.load(Ordering::Relaxed);
         let timeout_micros = srtt.saturating_add(4 * rttvar);
-        Duration::from_micros(timeout_micros.min(30_000_000)) // Cap at 30s
+        // Clamp to nmap's MIN_RTT_TIMEOUT (100ms) and MAX_RTT_TIMEOUT (10000ms)
+        let clamped = timeout_micros.clamp(100_000, 10_000_000);
+        Duration::from_micros(clamped)
     }
 
     /// Records a packet sent.
@@ -499,8 +509,7 @@ pub struct ParallelScanEngine {
     socket: StdArc<RawSocket>,
     /// `AF_PACKET` engine for receiving TCP responses (L2 capture).
     packet_socket: Option<Arc<SimpleAfPacket>>,
-    /// Scanner configuration (reserved for future timing extensions).
-    #[expect(dead_code, reason = "Reserved for future timing template integration")]
+    /// Scanner configuration for timing parameters.
     config: ScanConfig,
     /// Congestion controller for adaptive timing.
     congestion: Arc<InternalCongestionController>,
@@ -569,7 +578,16 @@ impl ParallelScanEngine {
     ///
     /// This is optional - if creation fails, returns `None` and the scanner
     /// falls back to raw socket only (which may miss some responses).
+    ///
+    /// For localhost addresses, returns `None` because `AF_PACKET` on loopback
+    /// interface cannot capture responses from raw socket probes. The raw
+    /// socket fallback handles localhost correctly.
     fn create_packet_socket(local_addr: Ipv4Addr) -> Option<Arc<SimpleAfPacket>> {
+        // Skip AF_PACKET for localhost - it cannot capture raw socket responses on lo
+        if local_addr == Ipv4Addr::LOCALHOST || local_addr.is_loopback() {
+            return None;
+        }
+
         // Get the network interface name for the local address
         let if_name = Self::get_interface_for_ip(local_addr)?;
 
@@ -981,7 +999,8 @@ impl ParallelScanEngine {
         results: &mut HashMap<Port, PortState>,
     ) {
         let now = Instant::now();
-        let max_retries = 2;
+        // Use max_retries from config (nmap default: 10, i.e., 11 probes max)
+        let max_retries = u32::from(self.config.max_retries);
 
         // Get adaptive probe timeout from congestion controller
         let probe_timeout = self.congestion.recommended_timeout();

@@ -31,10 +31,10 @@ pub struct ScanConfig {
 impl Default for ScanConfig {
     fn default() -> Self {
         Self {
-            min_rtt: Duration::from_millis(50),
-            max_rtt: Duration::from_secs(10),
-            initial_rtt: crate::timeout::INITIAL_RTT,
-            max_retries: 2,
+            min_rtt: Duration::from_millis(100), // Nmap MIN_RTT_TIMEOUT
+            max_rtt: Duration::from_secs(10),    // Nmap MAX_RTT_TIMEOUT
+            initial_rtt: Duration::from_millis(1000), // Nmap INITIAL_RTT_TIMEOUT
+            max_retries: 10, // Nmap MAX_RETRANSMISSIONS (11 probes max)
             host_timeout: 900_000,
             scan_delay: Duration::ZERO,
             dns_server: crate::DEFAULT_DNS_SERVER.to_string(),
@@ -61,60 +61,60 @@ pub enum TimingTemplate {
 
 impl TimingTemplate {
     /// Returns the timing parameters for this template.
+    ///
+    /// These values are based on nmap's `timing.cc` implementation:
+    /// - T0 (Paranoid): 5min `scan_delay`, 5min `initial_rtt`
+    /// - T1 (Sneaky): 15s `scan_delay`, 15s `initial_rtt`
+    /// - T2 (Polite): 400ms `scan_delay`
+    /// - T3 (Normal): defaults (1s `initial_rtt`, 10 `max_retries`)
+    /// - T4 (Aggressive): 500ms `initial_rtt`, 6 `max_retries`
+    /// - T5 (Insane): 250ms `initial_rtt`, 2 `max_retries`
     #[must_use]
     pub fn scan_config(&self) -> ScanConfig {
         match self {
             Self::Paranoid => ScanConfig {
                 min_rtt: Duration::from_millis(100),
-                max_rtt: Duration::from_secs(30),
-                initial_rtt: crate::timeout::INITIAL_RTT,
+                max_rtt: Duration::from_secs(300), // 5 minutes
+                initial_rtt: Duration::from_secs(300), // 5 minutes
                 max_retries: 10,
                 host_timeout: 900_000,
-                scan_delay: Duration::from_millis(500),
+                scan_delay: Duration::from_millis(300_000), // 5 minutes
                 ..Default::default()
             },
             Self::Sneaky => ScanConfig {
                 min_rtt: Duration::from_millis(100),
                 max_rtt: Duration::from_secs(15),
-                initial_rtt: crate::timeout::INITIAL_RTT,
-                max_retries: 8,
+                initial_rtt: Duration::from_secs(15),
+                max_retries: 10,
                 host_timeout: 900_000,
-                scan_delay: Duration::from_millis(400),
+                scan_delay: Duration::from_millis(15_000), // 15 seconds
                 ..Default::default()
             },
             Self::Polite => ScanConfig {
                 min_rtt: Duration::from_millis(100),
                 max_rtt: Duration::from_secs(10),
-                initial_rtt: crate::timeout::INITIAL_RTT,
-                max_retries: 6,
+                initial_rtt: Duration::from_millis(1000),
+                max_retries: 10,
                 host_timeout: 900_000,
-                scan_delay: Duration::from_millis(100),
+                scan_delay: Duration::from_millis(400),
                 ..Default::default()
             },
-            Self::Normal => ScanConfig {
-                min_rtt: Duration::from_millis(50),
-                max_rtt: Duration::from_secs(5),
-                initial_rtt: crate::timeout::INITIAL_RTT,
-                max_retries: 2,
-                host_timeout: 900_000,
-                scan_delay: Duration::ZERO,
-                ..Default::default()
-            },
+            Self::Normal => ScanConfig::default(),
             Self::Aggressive => ScanConfig {
-                min_rtt: Duration::from_millis(20),
+                min_rtt: Duration::from_millis(100),
                 max_rtt: Duration::from_millis(1250),
-                initial_rtt: crate::timeout::INITIAL_RTT,
-                max_retries: 1,
+                initial_rtt: Duration::from_millis(500),
+                max_retries: 6,
                 host_timeout: 900_000,
                 scan_delay: Duration::ZERO,
                 ..Default::default()
             },
             Self::Insane => ScanConfig {
-                min_rtt: Duration::from_millis(5),
+                min_rtt: Duration::from_millis(50),
                 max_rtt: Duration::from_millis(300),
-                initial_rtt: crate::timeout::INITIAL_RTT,
-                max_retries: 0,
-                host_timeout: 300_000,
+                initial_rtt: Duration::from_millis(250),
+                max_retries: 2,
+                host_timeout: 300_000, // 15 minutes (nmap: host_timeout = 900000)
                 scan_delay: Duration::ZERO,
                 ..Default::default()
             },
@@ -164,20 +164,36 @@ mod tests {
     #[test]
     fn test_timing_template_normal() {
         let config = TimingTemplate::Normal.scan_config();
-        assert_eq!(config.max_retries, 2);
+        // Nmap MAX_RETRANSMISSIONS = 10 (11 probes max)
+        assert_eq!(config.max_retries, 10);
+        // Nmap INITIAL_RTT_TIMEOUT = 1000ms
+        assert_eq!(config.initial_rtt, Duration::from_millis(1000));
     }
 
     #[test]
     fn test_timing_template_insane() {
         let config = TimingTemplate::Insane.scan_config();
-        assert_eq!(config.max_retries, 0);
+        // Nmap T5: max_retransmissions = 2
+        assert_eq!(config.max_retries, 2);
+        // Nmap T5: initial_rtt = 250ms
+        assert_eq!(config.initial_rtt, Duration::from_millis(250));
+    }
+
+    #[test]
+    fn test_timing_template_aggressive() {
+        let config = TimingTemplate::Aggressive.scan_config();
+        // Nmap T4: max_retransmissions = 6
+        assert_eq!(config.max_retries, 6);
+        // Nmap T4: initial_rtt = 500ms
+        assert_eq!(config.initial_rtt, Duration::from_millis(500));
     }
 
     #[test]
     fn test_scan_config_default() {
         let config = ScanConfig::default();
-        assert_eq!(config.max_retries, 2);
+        assert_eq!(config.max_retries, 10);
         assert_eq!(config.host_timeout, 900_000);
+        assert_eq!(config.initial_rtt, Duration::from_millis(1000));
     }
 
     #[test]

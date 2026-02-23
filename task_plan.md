@@ -1,9 +1,9 @@
 # Task Plan
 
 **Created**: 2026-02-21
-**Updated**: 2026-02-23 20:15
-**Status**: Phase 14 性能优化和网络抖动处理 - COMPLETE
-**Goal**: 实现 P0/P1 性能优化
+**Updated**: 2026-02-23 20:20
+**Status**: Phase 15 P2 优化和端口状态修复 - IN PROGRESS
+**Goal**: 修复端口状态分类问题、对齐 Timing Template 参数
 
 **详细分析**: 见 `IMPROVEMENT_PLAN.md`
 
@@ -16,6 +16,7 @@ Phase 11: 修复测试失败问题 - COMPLETE (被 Phase 13 取代)
 Phase 12: SYN 扫描架构改进 - COMPLETE (被 Phase 13 取代)
 Phase 13: 修复 AF_PACKET 集成和 clippy 错误 - COMPLETE
 Phase 14: 性能优化和网络抖动处理 - COMPLETE
+Phase 15: P2 优化和端口状态修复 - IN PROGRESS
 
 ---
 
@@ -84,6 +85,99 @@ Phase 14: 性能优化和网络抖动处理 - COMPLETE
 | Advanced Scans | 6/6 | 0/6 | +6 |
 | Service Detection | 3/3 | 0/3 | +3 |
 | **合计** | **14/14** | **4/14** | **+10** |
+
+---
+
+### Phase 15: P2 优化和端口状态修复 - IN PROGRESS
+
+**目标**: 修复端口状态分类问题，提升测试通过率
+
+**测试结果 (2026-02-23 20:16)**:
+- 总测试: 41
+- 通过: 28
+- 失败: 13
+- 通过率: 68.3%
+
+#### P0 修复完成 (2026-02-23 20:48)
+
+**修改内容**:
+
+1. **ultrascan.rs - 初始 SRTT 修复**:
+   - 初始 SRTT: 100ms → 1000ms (与 nmap INITIAL_RTT_TIMEOUT 一致)
+   - 初始 RTTVAR: 50ms → 1000ms (与 nmap 一致)
+
+2. **ultrascan.rs - Timeout 边界修复**:
+   - min timeout: 1ms → 100ms (与 nmap MIN_RTT_TIMEOUT 一致)
+   - max timeout: 30s → 10s (与 nmap MAX_RTT_TIMEOUT 一致)
+
+3. **ultrascan.rs - max_retries 修复**:
+   - 从硬编码 2 改为使用 `config.max_retries`
+   - 默认值从 2 改为 10 (与 nmap MAX_RETRANSMISSIONS 一致)
+
+4. **scan.rs - Timing Template 对齐**:
+   - T3 Normal: initial_rtt=1000ms, max_retries=10
+   - T4 Aggressive: initial_rtt=500ms, max_retries=6
+   - T5 Insane: initial_rtt=250ms, max_retries=2
+   - T0/T1/T2: 对齐 nmap 的 scan_delay 和 initial_rtt
+
+**验证结果**:
+```
+rustnmap SYN Scan:
+- 22/tcp  open    ssh       ✅
+- 80/tcp  open    http      ✅
+- 113/tcp closed  ident     ✅
+- 443/tcp closed  https     ✅
+- 8080/tcp closed  http-proxy ✅
+```
+
+与 nmap 结果完全匹配!
+
+#### 待验证
+
+- [x] 运行完整比较测试验证通过率 ✅
+- [x] 修复 localhost 扫描问题 ✅
+
+**Localhost 扫描修复 (2026-02-23 23:41)**:
+
+问题: AF_PACKET 和 raw socket 在 loopback 接口上无法捕获响应
+
+根因:
+- Linux 内核对 localhost 流量的处理不同
+- raw socket 发送的 SYN 包响应不会回传到 raw socket
+- AF_PACKET 绑定 "lo" 也无法捕获这些响应
+
+解决方案:
+- 在 orchestrator 中检测 localhost 目标
+- 自动回退到 TCP Connect 扫描
+- Connect 扫描使用内核 TCP 栈，能正确处理 localhost
+
+验证结果:
+```
+rustnmap --scan-syn 127.0.0.1 --ports 22,80,38263,631
+- 22/tcp  closed
+- 80/tcp  closed
+- 38263/tcp  open
+- 631/tcp  open
+耗时: 0.01s (修复前: 62s)
+```
+
+**测试结果 (2026-02-23 21:08)**:
+- 总测试: 41
+- 通过: **34** (修复前: 28)
+- 失败: 7 (修复前: 13)
+- 通过率: **82.9%** (修复前: 68.3%, **+14.6%**)
+
+**剩余失败测试分析**:
+
+| 测试 | 问题 | 优先级 | 根因 |
+|------|------|--------|------|
+| OS Detection Guess | OS结果不匹配 | P2 | 非timing问题，OS检测差异 |
+| T0 Paranoid | nmap超时300s | P3 | nmap本身很慢，rustnmap比nmap快 |
+| Host Timeout | nmap exit 1 | P3 | 参数格式差异 |
+| JSON Output | nmap不支持 | P3 | 测试配置问题，非代码bug |
+| Two Targets | 65s扫描 | P1 | 多目标扫描优化 |
+| Fast Scan + Top Ports | 互斥选项 | P2 | CLI验证逻辑 |
+| Decoy Scan | 功能未实现 | P2 | 需要实现-D选项 |
 
 ---
 

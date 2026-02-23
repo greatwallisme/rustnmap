@@ -517,6 +517,13 @@ impl ScanOrchestrator {
                     }
                 };
 
+                // Check if target is localhost - AF_PACKET cannot capture loopback responses
+                // Fall back to TCP connect scan which works correctly for localhost
+                if target_ip.is_loopback() {
+                    debug!("Target is localhost, using TCP Connect scan instead of SYN scan");
+                    return self.run_port_scanning_sequential(&targets, &ports).await;
+                }
+
                 // Create parallel scan engine
                 let local_addr = get_local_address(&self.session.config.dns_server);
 

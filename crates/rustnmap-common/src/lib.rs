@@ -36,13 +36,14 @@ pub mod timeout {
 
     /// Default initial round-trip time estimate.
     ///
-    /// Based on Nmap's initial RTT of approximately 100ms for LAN scanning.
-    pub const INITIAL_RTT: Duration = Duration::from_millis(100);
+    /// Based on Nmap's `INITIAL_RTT_TIMEOUT` = 1000ms (1 second).
+    /// This allows adequate time for packet responses on most networks.
+    pub const INITIAL_RTT: Duration = Duration::from_millis(1000);
 
     /// Minimum timeout for any probe.
     ///
-    /// Even on very fast networks, we need some minimum time to process responses.
-    pub const MIN_TIMEOUT: Duration = Duration::from_millis(10);
+    /// Based on Nmap's `MIN_RTT_TIMEOUT` = 100ms.
+    pub const MIN_TIMEOUT: Duration = Duration::from_millis(100);
 
     /// Maximum timeout for a single probe.
     ///
