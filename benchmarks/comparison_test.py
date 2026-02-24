@@ -309,6 +309,7 @@ class ComparisonTestRunner:
             rustnmap_result,
             nmap_result,
             test_case.get("expected_fields", []),
+            test_case.get("expected_differences"),
         )
 
         return TestCaseResult(

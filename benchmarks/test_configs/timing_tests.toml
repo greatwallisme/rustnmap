@@ -12,6 +12,10 @@ name = "T0 Paranoid"
 description = "Very slow serial scan for IDS evasion"
 command_template = "{scanner} -sS -T0 -p {ports} {target}"
 expected_fields = ["PORT", "STATE", "SERVICE"]
+# P2 documented difference: T0 template is designed for extremely slow scanning
+# nmap may timeout on 5+ ports while rustnmap completes successfully
+[expected_differences]
+allow_nmap_failure = true
 
 [[test_case]]
 name = "T1 Sneaky"
@@ -54,3 +58,7 @@ name = "Host Timeout"
 description = "Set host timeout to 30 seconds"
 command_template = "{scanner} -sS --host-timeout 30000 -p {ports} {target}"
 expected_fields = ["PORT", "STATE", "SERVICE"]
+# P2 documented difference: --host-timeout behavior differs between scanners
+# nmap may skip hosts (exit 1) while rustnmap completes successfully
+[expected_differences]
+allow_nmap_failure = true

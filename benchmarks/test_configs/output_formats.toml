@@ -21,9 +21,12 @@ expected_fields = ["<?xml", "<nmaprun"]
 
 [[test_case]]
 name = "JSON Output"
-description = "JSON output format"
+description = "JSON output format (rustnmap extension)"
+# Note: nmap doesn't support --output-json, this is a rustnmap extension
 command_template = "{scanner} -sS -p {ports} {target} --output-json /tmp/rustnmap_test.json"
 expected_fields = ["{", "scanner", "hosts"]
+# Mark as rustnmap_only since nmap doesn't support JSON
+rustnmap_only = true
 
 [[test_case]]
 name = "Grepable Output"

@@ -17,7 +17,33 @@
 | 失败数 | 6 |
 | 通过率 | 84.2% |
 
-### 新发现 (2026-02-24 12:30)
+### 新发现 (2026-02-24 13:30)
+
+**P2: 测试配置修正 - 已完成 ✅**
+- 更新 `benchmarks/compare_scans.py` 支持 `expected_differences` 参数
+  - `allow_nmap_failure`: 允许 nmap 失败而 rustnmap 成功
+  - `state_remaps`: 允许端口状态差异 (UDP closed vs open|filtered)
+- 更新 `benchmarks/test_configs/basic_scan.toml`: 添加 UDP 状态差异文档
+- 更新 `benchmarks/test_configs/timing_tests.toml`: 添加 T0/Host Timeout 差异文档
+- 更新 `benchmarks/test_configs/output_formats.toml`: 标记 JSON 为 rustnmap 扩展
+- 更新 `benchmarks/comparison_test.py`: 传递 expected_differences 到比较函数
+
+**P1: Decoy Scan integration - 文档完成** 🔍
+- CLI `-D` 参数: **已存在** (args.rs line 283-290)
+- CLI 解析: **已实现** (parse_decoy_ips, build_evasion_config)
+- 扫描引擎集成: **缺失** - DecoyScheduler 未被使用
+- 技术限制: Raw socket spoofing 无法接收对伪造 IP 的响应
+- 建议: **移至 P2** - 需要单独 Phase 进行完整实现
+
+**P1: Stealth Scans parallelization - 分析完成** 🔍
+- 当前架构: 串行扫描 (send_probe -> wait_response -> repeat)
+- 性能影响: 30-40% 慢于 nmap
+- 代码位置: `crates/rustnmap-scan/src/stealth_scans.rs`
+  - `TcpFinScanner`: 行 129-215 `send_fin_probe()`
+  - `TcpNullScanner`: 行 354-440 `send_null_probe()`
+  - `TcpXmasScanner`: 行 579-668 `send_xmas_probe()`
+  - `TcpMaimonScanner`: 行 986-1074 `send_maimon_probe()`
+- 建议: **移至 P2** - 需要单独 Phase 进行架构改进
 
 **P0: Multi-target parallel scanning - 已修复 ✅**
 - 修改 orchestrator.rs 以并行扫描多个目标
@@ -45,25 +71,24 @@
   4. Raw socket spoofing 限制: 无法接收对伪造 IP 的响应
 - 建议: 需要 P2 或单独 Phase 完整实现
 
-**P1: Stealth Scans parallelization - 调查中** 🔍
+**P1: Stealth Scans parallelization - 分析完成** 🔍
 - 当前架构: 串行扫描 (send_probe -> wait_response -> repeat)
 - 性能影响: 30-40% 慢于 nmap
-- 并行化选项:
-  1. 扩展 ParallelScanEngine 支持 FIN/NULL/XMAS/MAIMON flags
-  2. 实现 batch sending (发送 N 个探针，收集所有响应)
-  3. 文档当前状态，移至 P2 或单独 Phase
-  - 创建 `rustnmap-common/src/rate.rs` 模块，移动 `RateLimiter` 到共享 crate
-  - 在 `ScanConfig` 添加 `min_rate` 和 `max_rate` 字段
-  - 在 `ParallelScanEngine` 集成 `RateLimiter`
-  - 在发送探针前检查速率限制 (`check_rate()`)
-  - 在发送探针后记录发送 (`record_sent()`)
-- 修改的文件:
-  - `crates/rustnmap-common/src/scan.rs` - 添加 min_rate/max_rate 字段
-  - `crates/rustnmap-common/src/rate.rs` - 新建 RateLimiter 模块
-  - `crates/rustnmap-common/src/lib.rs` - 导出 rate 模块
-  - `crates/rustnmap-scan/src/ultrascan.rs` - 集成 RateLimiter
-  - `crates/rustnmap-core/src/congestion.rs` - 重新导出 RateLimiter
-  - `crates/rustnmap-core/src/orchestrator.rs` - 传递 min_rate/max_rate 配置
+- 代码位置: `crates/rustnmap-scan/src/stealth_scans.rs`
+  - `TcpFinScanner`: 行 129-215 `send_fin_probe()`
+  - `TcpNullScanner`: 行 354-440 `send_null_probe()`
+  - `TcpXmasScanner`: 行 579-668 `send_xmas_probe()`
+  - `TcpMaimonScanner`: 行 986-1074 `send_maimon_probe()`
+- 串行模式: 每个端口阻塞等待 `initial_rtt` 超时 (默认 1000ms)
+- 并行化复杂性:
+  1. ParallelScanEngine 设计用于 SYN 扫描 (SYN/ACK 握手)
+  2. 隐蔽扫描使用不同 TCP 标志 (FIN/NULL/XMAS/MAIMON)
+  3. 响应处理逻辑不同 (RST=closed vs no response=open|filtered)
+  4. 需要显著的 ParallelScanEngine 重构
+- 建议: **移至 P2** - 需要单独 Phase 进行架构改进
+  - 选项 A: 扩展 ParallelScanEngine 支持自定义 TCP 标志
+  - 选项 B: 实现专用的 `StealthScanEngine`
+  - 选项 C: 实现 batch sending (发送 N 个探针，收集所有响应)
 
 **性能差异分析**:
 - 某些目标本身扫描慢 (110.242.74.102: 64.52s vs nmap 1.38s = 47x)

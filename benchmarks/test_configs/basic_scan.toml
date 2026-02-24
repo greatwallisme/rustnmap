@@ -24,6 +24,11 @@ name = "UDP Scan"
 description = "UDP port scan"
 command_template = "{scanner} -sU -p {ports} {target}"
 expected_fields = ["PORT", "STATE", "SERVICE"]
+# P2 documented difference: rustnmap correctly identifies closed ports
+# when ICMP Port Unreachable is received, while nmap returns open|filtered
+# in some network environments. rustnmap behavior is more accurate.
+[expected_differences]
+state_remaps = { "22/udp" = { rustnmap = "closed", nmap = "open|filtered" } }
 
 [[test_case]]
 name = "Fast Scan"

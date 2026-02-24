@@ -1,8 +1,8 @@
 # Task Plan
 
 **Created**: 2026-02-21
-**Updated**: 2026-02-24 12:30
-**Status**: Phase 15 P0/P1 优化修复 - 进行中
+**Updated**: 2026-02-24 14:00
+**Status**: Phase 15 P0/P2 完成，P1 待实现
 **Goal**: 修复性能问题、集成 RateLimiter
 
 ---
@@ -36,24 +36,32 @@ Phase 15: P0/P1 优化修复 - IN PROGRESS
    - 在 `ParallelScanEngine` 集成 `RateLimiter`
    - 在发送探针前检查速率限制
 
-### P1 修复 - IN PROGRESS
+### P1 修复 - 待实现 ❌
 
 1. **Stealth Scans parallelization**
-   - 当前: FIN/NULL/XMAS/MAIMON 使用串行扫描
-   - 调查: 需要 batch sending 或扩展 ParallelScanEngine
-   - 状态: 调查中 - 需要架构改进，建议 P2 或单独 Phase
+   - 问题: FIN/NULL/XMAS/MAIMON 使用串行扫描，比 nmap 慢 30-40%
+   - 代码位置: `crates/rustnmap-scan/src/stealth_scans.rs`
+   - 需要的工作: 重写 4 个扫描器，实现并行扫描
+   - 状态: **未实现**
 
 2. **Decoy Scan integration**
-   - 当前: CLI `-D` 参数存在，但未集成到扫描引擎
-   - 需要: 集成 DecoyScheduler 到 ParallelScanEngine 和 stealth scans
-   - 状态: 调查完成 - 需要复杂集成工作 (raw socket spoofing 限制)
+   - 问题: CLI `-D` 参数存在，但扫描引擎没有使用 DecoyScheduler
+   - 代码位置: `crates/rustnmap-evasion/src/decoy.rs`（API 已存在）
+   - 需要的工作: 集成到 orchestrator 和扫描引擎
+   - 状态: **未实现**
 
-### P2 修复 - PENDING
+### P2 修复 - COMPLETE ✅
 
 1. **测试配置修正**
-   - UDP state: closed vs open|filtered
-   - JSON output: nmap 不支持
-   - T0/Host Timeout: nmap 失败但 rustnmap 成功
+   - UDP state: closed vs open|filtered - 已文档差异
+   - JSON output: 标记为 rustnmap 扩展
+   - T0/Host Timeout: 允许 nmap 失败差异
+   - 修改文件:
+     - `benchmarks/compare_scans.py` - 添加 expected_differences 支持
+     - `benchmarks/comparison_test.py` - 传递 expected_differences
+     - `benchmarks/test_configs/basic_scan.toml` - UDP 状态差异
+     - `benchmarks/test_configs/timing_tests.toml` - T0/Host Timeout
+     - `benchmarks/test_configs/output_formats.toml` - JSON 扩展
 
 ---
 
