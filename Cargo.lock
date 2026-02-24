@@ -2774,6 +2774,7 @@ dependencies = [
  "pnet",
  "proptest",
  "rustnmap-common",
+ "rustnmap-evasion",
  "rustnmap-net",
  "rustnmap-packet",
  "rustnmap-target",

@@ -1,12 +1,39 @@
 # Findings - RustNmap 项目分析
 
 **Created**: 2026-02-19
-**Updated**: 2026-02-24 15:25
-**Status**: Phase 15 P0/P1/P2 完成 - 性能优化已实现
+**Updated**: 2026-02-24 17:56
+**Status**: Phase 17 - Bug Investigation & Fixes
 
 ---
 
 ## 最新发现 (2026-02-24)
+
+### Phase 16/17 调查发现 (2026-02-24 17:56)
+
+**1. Decoy Scan 集成 - 已修复 ✅**
+- 问题: `scan_port()` 函数未将 `evasion_config` 传递给隐身扫描器
+- 根因: `DecoyScheduler` 仅在 `run_port_scanning_batch()` 中创建
+- 修复:
+  - 添加 `create_decoy_scheduler()` 辅助函数 (orchestrator.rs:60-80)
+  - 更新 `scan_port()` 函数使用 `with_decoy()` 代替 `new()`
+  - 所有隐身扫描器 (FIN/NULL/XMAS/Maimon) 现在正确接收 decoy 配置
+- 验证: cargo check/clippy/test 全部通过
+
+**2. MAC 地址输出缺失** 🔍
+- 现象: `rustnmap -sF -p80,443 192.168.12.1` 无 MAC 地址输出
+- 基础设施分析:
+  - `MacAddr` 类型存在 (`rustnmap-common`)
+  - `parse_arp_reply()` 函数存在 (`rustnmap-fingerprint/database/mac.rs`)
+  - `HostResult.mac: Option<MacAddr>` 字段存在
+- 根因: `orchestrator.rs` 中所有 `HostResult` 创建时 `mac: None`
+- 修复: 需要 ARP 请求/响应处理逻辑
+
+**3. FIN 扫描端口状态差异** 🔍
+- 现象:
+  - rustnmap: `80/tcp  open|filtered`
+  - nmap: `80/tcp  closed`
+- 分析: 隐蔽扫描对 closed 端口应收到 RST 响应
+- 可能原因: 响应过滤或超时逻辑问题
 
 ### 性能优化 - 已完成 ✅ (2026-02-24 15:25)
 

@@ -33,12 +33,13 @@
 
 use std::collections::HashMap;
 use std::io;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::time::Instant;
 
 use crate::scanner::{PortScanner, ScanResult};
 use rustnmap_common::ScanConfig;
 use rustnmap_common::{Ipv4Addr, Port, PortState, Protocol};
+use rustnmap_evasion::DecoyScheduler;
 use rustnmap_net::raw_socket::{
     parse_icmp_response, parse_tcp_response, parse_tcp_response_full, IcmpResponse,
     IcmpUnreachableCode, RawSocket, TcpPacketBuilder,
@@ -77,6 +78,8 @@ pub struct TcpFinScanner {
     socket: RawSocket,
     /// Scanner configuration.
     config: ScanConfig,
+    /// Optional decoy scheduler for decoy scanning.
+    decoy_scheduler: Option<DecoyScheduler>,
 }
 
 impl TcpFinScanner {
@@ -98,6 +101,32 @@ impl TcpFinScanner {
     /// - The process lacks `CAP_NET_RAW` capability (requires root)
     /// - The system runs out of file descriptors
     pub fn new(local_addr: Ipv4Addr, config: ScanConfig) -> ScanResult<Self> {
+        Self::with_decoy(local_addr, config, None)
+    }
+
+    /// Creates a new TCP FIN scanner with optional decoy support.
+    ///
+    /// # Arguments
+    ///
+    /// * `local_addr` - Local IP address to use for probes (real IP)
+    /// * `config` - Scanner configuration
+    /// * `decoy_scheduler` - Optional decoy scheduler for decoy scanning
+    ///
+    /// # Returns
+    ///
+    /// A `ScanResult` containing the new `TcpFinScanner` instance, or an error
+    /// if the raw socket cannot be created.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The process lacks `CAP_NET_RAW` capability (requires root)
+    /// - The system runs out of file descriptors
+    pub fn with_decoy(
+        local_addr: Ipv4Addr,
+        config: ScanConfig,
+        decoy_scheduler: Option<DecoyScheduler>,
+    ) -> ScanResult<Self> {
         // Use IPPROTO_TCP (6) for receiving TCP responses
         let socket = RawSocket::with_protocol(6).map_err(|e| {
             rustnmap_common::ScanError::PermissionDenied {
@@ -109,6 +138,7 @@ impl TcpFinScanner {
             local_addr,
             socket,
             config,
+            decoy_scheduler,
         })
     }
 
@@ -277,6 +307,10 @@ impl TcpFinScanner {
     /// This method sends all probes first, then collects responses,
     /// providing significant performance improvement over serial scanning.
     ///
+    /// When decoy scanning is enabled, each port receives multiple probes
+    /// (one from each decoy IP + one from the real IP). Only responses to
+    /// probes sent from the real IP are tracked and processed.
+    ///
     /// # Arguments
     ///
     /// * `dst_addr` - Target IP address
@@ -291,6 +325,7 @@ impl TcpFinScanner {
     /// For scanning N ports:
     /// - Serial: ~N * `initial_rtt` (e.g., N * 1000ms)
     /// - Batch: ~`initial_rtt` (e.g., 1000ms total)
+    /// - With D decoys: ~`initial_rtt` (same batch time, D+1x packets)
     ///
     /// # Errors
     ///
@@ -325,27 +360,60 @@ impl TcpFinScanner {
             let src_port = Self::generate_source_port();
             let seq = Self::generate_sequence_number();
 
-            let packet = TcpPacketBuilder::new(self.local_addr, dst_addr, src_port, *dst_port)
-                .seq(seq)
-                .fin()
-                .window(65535)
-                .build();
+            // Handle decoy scanning: send from multiple source IPs
+            if let Some(scheduler) = &self.decoy_scheduler {
+                let mut scheduler = scheduler.clone();
+                scheduler.reset();
 
-            let port_sockaddr = SocketAddr::new(std::net::IpAddr::V4(dst_addr), *dst_port);
-            self.socket
-                .send_packet(&packet, &port_sockaddr)
-                .map_err(|e| {
-                    rustnmap_common::ScanError::Network(rustnmap_common::Error::Network(
-                        rustnmap_common::error::NetworkError::SendError { source: e },
-                    ))
-                })?;
+                while let Some(src_ip) = scheduler.next_source() {
+                    let src_ipv4 = match src_ip {
+                        IpAddr::V4(addr) => addr,
+                        IpAddr::V6(_) => continue, // Skip IPv6 for now
+                    };
 
-            // Track: (dst_port, src_port) -> (seq, sent_time)
-            outstanding.insert((*dst_port, src_port), (seq, Instant::now()));
-            // O(1) reverse lookup for TCP responses
-            src_to_dst.insert(src_port, *dst_port);
-            // O(1) lookup for ICMP responses (multiple src_ports per dst_port)
-            port_srcs.entry(*dst_port).or_default().insert(src_port);
+                    let packet = TcpPacketBuilder::new(src_ipv4, dst_addr, src_port, *dst_port)
+                        .seq(seq)
+                        .fin()
+                        .window(65535)
+                        .build();
+
+                    let port_sockaddr = SocketAddr::new(std::net::IpAddr::V4(dst_addr), *dst_port);
+                    self.socket
+                        .send_packet(&packet, &port_sockaddr)
+                        .map_err(|e| {
+                            rustnmap_common::ScanError::Network(rustnmap_common::Error::Network(
+                                rustnmap_common::error::NetworkError::SendError { source: e },
+                            ))
+                        })?;
+
+                    // Only track probes sent from the real IP
+                    if scheduler.is_real_ip(&src_ip) {
+                        outstanding.insert((*dst_port, src_port), (seq, Instant::now()));
+                        src_to_dst.insert(src_port, *dst_port);
+                        port_srcs.entry(*dst_port).or_default().insert(src_port);
+                    }
+                }
+            } else {
+                // No decoy: original behavior
+                let packet = TcpPacketBuilder::new(self.local_addr, dst_addr, src_port, *dst_port)
+                    .seq(seq)
+                    .fin()
+                    .window(65535)
+                    .build();
+
+                let port_sockaddr = SocketAddr::new(std::net::IpAddr::V4(dst_addr), *dst_port);
+                self.socket
+                    .send_packet(&packet, &port_sockaddr)
+                    .map_err(|e| {
+                        rustnmap_common::ScanError::Network(rustnmap_common::Error::Network(
+                            rustnmap_common::error::NetworkError::SendError { source: e },
+                        ))
+                    })?;
+
+                outstanding.insert((*dst_port, src_port), (seq, Instant::now()));
+                src_to_dst.insert(src_port, *dst_port);
+                port_srcs.entry(*dst_port).or_default().insert(src_port);
+            }
         }
 
         // Phase 2: Collect responses until timeout
@@ -470,6 +538,8 @@ pub struct TcpNullScanner {
     socket: RawSocket,
     /// Scanner configuration.
     config: ScanConfig,
+    /// Optional decoy scheduler for decoy scanning.
+    decoy_scheduler: Option<DecoyScheduler>,
 }
 
 impl TcpNullScanner {
@@ -491,6 +561,32 @@ impl TcpNullScanner {
     /// - The process lacks `CAP_NET_RAW` capability (requires root)
     /// - The system runs out of file descriptors
     pub fn new(local_addr: Ipv4Addr, config: ScanConfig) -> ScanResult<Self> {
+        Self::with_decoy(local_addr, config, None)
+    }
+
+    /// Creates a new TCP NULL scanner with optional decoy support.
+    ///
+    /// # Arguments
+    ///
+    /// * `local_addr` - Local IP address to use for probes (real IP)
+    /// * `config` - Scanner configuration
+    /// * `decoy_scheduler` - Optional decoy scheduler for decoy scanning
+    ///
+    /// # Returns
+    ///
+    /// A `ScanResult` containing the new `TcpNullScanner` instance, or an error
+    /// if the raw socket cannot be created.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The process lacks `CAP_NET_RAW` capability (requires root)
+    /// - The system runs out of file descriptors
+    pub fn with_decoy(
+        local_addr: Ipv4Addr,
+        config: ScanConfig,
+        decoy_scheduler: Option<DecoyScheduler>,
+    ) -> ScanResult<Self> {
         // Use IPPROTO_TCP (6) for receiving TCP responses
         let socket = RawSocket::with_protocol(6).map_err(|e| {
             rustnmap_common::ScanError::PermissionDenied {
@@ -502,6 +598,7 @@ impl TcpNullScanner {
             local_addr,
             socket,
             config,
+            decoy_scheduler,
         })
     }
 
@@ -674,6 +771,10 @@ impl TcpNullScanner {
     /// Returns an error if:
     /// - Packet transmission fails due to network issues
     /// - Raw socket receive fails with a non-timeout error
+    #[expect(
+        clippy::too_many_lines,
+        reason = "Batch scanning requires handling send, receive, and result collection in one method for clarity"
+    )]
     pub fn scan_ports_batch(
         &self,
         dst_addr: Ipv4Addr,
@@ -696,23 +797,58 @@ impl TcpNullScanner {
             let src_port = Self::generate_source_port();
             let seq = Self::generate_sequence_number();
 
-            let packet = TcpPacketBuilder::new(self.local_addr, dst_addr, src_port, *dst_port)
-                .seq(seq)
-                .window(65535)
-                .build();
+            // Handle decoy scanning: send from multiple source IPs
+            if let Some(scheduler) = &self.decoy_scheduler {
+                let mut scheduler = scheduler.clone();
+                scheduler.reset();
 
-            let port_sockaddr = SocketAddr::new(std::net::IpAddr::V4(dst_addr), *dst_port);
-            self.socket
-                .send_packet(&packet, &port_sockaddr)
-                .map_err(|e| {
-                    rustnmap_common::ScanError::Network(rustnmap_common::Error::Network(
-                        rustnmap_common::error::NetworkError::SendError { source: e },
-                    ))
-                })?;
+                while let Some(src_ip) = scheduler.next_source() {
+                    let src_ipv4 = match src_ip {
+                        IpAddr::V4(addr) => addr,
+                        IpAddr::V6(_) => continue,
+                    };
 
-            outstanding.insert((*dst_port, src_port), (seq, Instant::now()));
-            src_to_dst.insert(src_port, *dst_port);
-            port_srcs.entry(*dst_port).or_default().insert(src_port);
+                    let packet = TcpPacketBuilder::new(src_ipv4, dst_addr, src_port, *dst_port)
+                        .seq(seq)
+                        .window(65535)
+                        .build();
+
+                    let port_sockaddr = SocketAddr::new(std::net::IpAddr::V4(dst_addr), *dst_port);
+                    self.socket
+                        .send_packet(&packet, &port_sockaddr)
+                        .map_err(|e| {
+                            rustnmap_common::ScanError::Network(rustnmap_common::Error::Network(
+                                rustnmap_common::error::NetworkError::SendError { source: e },
+                            ))
+                        })?;
+
+                    // Only track probes sent from the real IP
+                    if scheduler.is_real_ip(&src_ip) {
+                        outstanding.insert((*dst_port, src_port), (seq, Instant::now()));
+                        src_to_dst.insert(src_port, *dst_port);
+                        port_srcs.entry(*dst_port).or_default().insert(src_port);
+                    }
+                }
+            } else {
+                // No decoy: original behavior
+                let packet = TcpPacketBuilder::new(self.local_addr, dst_addr, src_port, *dst_port)
+                    .seq(seq)
+                    .window(65535)
+                    .build();
+
+                let port_sockaddr = SocketAddr::new(std::net::IpAddr::V4(dst_addr), *dst_port);
+                self.socket
+                    .send_packet(&packet, &port_sockaddr)
+                    .map_err(|e| {
+                        rustnmap_common::ScanError::Network(rustnmap_common::Error::Network(
+                            rustnmap_common::error::NetworkError::SendError { source: e },
+                        ))
+                    })?;
+
+                outstanding.insert((*dst_port, src_port), (seq, Instant::now()));
+                src_to_dst.insert(src_port, *dst_port);
+                port_srcs.entry(*dst_port).or_default().insert(src_port);
+            }
         }
 
         // Phase 2: Collect responses
@@ -827,6 +963,8 @@ pub struct TcpXmasScanner {
     socket: RawSocket,
     /// Scanner configuration.
     config: ScanConfig,
+    /// Optional decoy scheduler for decoy scanning.
+    decoy_scheduler: Option<DecoyScheduler>,
 }
 
 impl TcpXmasScanner {
@@ -848,6 +986,32 @@ impl TcpXmasScanner {
     /// - The process lacks `CAP_NET_RAW` capability (requires root)
     /// - The system runs out of file descriptors
     pub fn new(local_addr: Ipv4Addr, config: ScanConfig) -> ScanResult<Self> {
+        Self::with_decoy(local_addr, config, None)
+    }
+
+    /// Creates a new TCP Xmas scanner with optional decoy support.
+    ///
+    /// # Arguments
+    ///
+    /// * `local_addr` - Local IP address to use for probes (real IP)
+    /// * `config` - Scanner configuration
+    /// * `decoy_scheduler` - Optional decoy scheduler for decoy scanning
+    ///
+    /// # Returns
+    ///
+    /// A `ScanResult` containing the new `TcpXmasScanner` instance, or an error
+    /// if the raw socket cannot be created.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The process lacks `CAP_NET_RAW` capability (requires root)
+    /// - The system runs out of file descriptors
+    pub fn with_decoy(
+        local_addr: Ipv4Addr,
+        config: ScanConfig,
+        decoy_scheduler: Option<DecoyScheduler>,
+    ) -> ScanResult<Self> {
         // Use IPPROTO_TCP (6) for receiving TCP responses
         let socket = RawSocket::with_protocol(6).map_err(|e| {
             rustnmap_common::ScanError::PermissionDenied {
@@ -859,6 +1023,7 @@ impl TcpXmasScanner {
             local_addr,
             socket,
             config,
+            decoy_scheduler,
         })
     }
 
@@ -1057,26 +1222,64 @@ impl TcpXmasScanner {
             let src_port = Self::generate_source_port();
             let seq = Self::generate_sequence_number();
 
-            let packet = TcpPacketBuilder::new(self.local_addr, dst_addr, src_port, *dst_port)
-                .seq(seq)
-                .fin()
-                .psh()
-                .urg()
-                .window(65535)
-                .build();
+            // Handle decoy scanning: send from multiple source IPs
+            if let Some(scheduler) = &self.decoy_scheduler {
+                let mut scheduler = scheduler.clone();
+                scheduler.reset();
 
-            let port_sockaddr = SocketAddr::new(std::net::IpAddr::V4(dst_addr), *dst_port);
-            self.socket
-                .send_packet(&packet, &port_sockaddr)
-                .map_err(|e| {
-                    rustnmap_common::ScanError::Network(rustnmap_common::Error::Network(
-                        rustnmap_common::error::NetworkError::SendError { source: e },
-                    ))
-                })?;
+                while let Some(src_ip) = scheduler.next_source() {
+                    let src_ipv4 = match src_ip {
+                        IpAddr::V4(addr) => addr,
+                        IpAddr::V6(_) => continue,
+                    };
 
-            outstanding.insert((*dst_port, src_port), (seq, Instant::now()));
-            src_to_dst.insert(src_port, *dst_port);
-            port_srcs.entry(*dst_port).or_default().insert(src_port);
+                    let packet = TcpPacketBuilder::new(src_ipv4, dst_addr, src_port, *dst_port)
+                        .seq(seq)
+                        .fin()
+                        .psh()
+                        .urg()
+                        .window(65535)
+                        .build();
+
+                    let port_sockaddr = SocketAddr::new(std::net::IpAddr::V4(dst_addr), *dst_port);
+                    self.socket
+                        .send_packet(&packet, &port_sockaddr)
+                        .map_err(|e| {
+                            rustnmap_common::ScanError::Network(rustnmap_common::Error::Network(
+                                rustnmap_common::error::NetworkError::SendError { source: e },
+                            ))
+                        })?;
+
+                    // Only track probes sent from the real IP
+                    if scheduler.is_real_ip(&src_ip) {
+                        outstanding.insert((*dst_port, src_port), (seq, Instant::now()));
+                        src_to_dst.insert(src_port, *dst_port);
+                        port_srcs.entry(*dst_port).or_default().insert(src_port);
+                    }
+                }
+            } else {
+                // No decoy: original behavior
+                let packet = TcpPacketBuilder::new(self.local_addr, dst_addr, src_port, *dst_port)
+                    .seq(seq)
+                    .fin()
+                    .psh()
+                    .urg()
+                    .window(65535)
+                    .build();
+
+                let port_sockaddr = SocketAddr::new(std::net::IpAddr::V4(dst_addr), *dst_port);
+                self.socket
+                    .send_packet(&packet, &port_sockaddr)
+                    .map_err(|e| {
+                        rustnmap_common::ScanError::Network(rustnmap_common::Error::Network(
+                            rustnmap_common::error::NetworkError::SendError { source: e },
+                        ))
+                    })?;
+
+                outstanding.insert((*dst_port, src_port), (seq, Instant::now()));
+                src_to_dst.insert(src_port, *dst_port);
+                port_srcs.entry(*dst_port).or_default().insert(src_port);
+            }
         }
 
         // Phase 2: Collect responses
@@ -1369,6 +1572,8 @@ pub struct TcpMaimonScanner {
     socket: RawSocket,
     /// Scanner configuration.
     config: ScanConfig,
+    /// Optional decoy scheduler for decoy scanning.
+    decoy_scheduler: Option<DecoyScheduler>,
 }
 
 impl TcpMaimonScanner {
@@ -1390,6 +1595,32 @@ impl TcpMaimonScanner {
     /// - The process lacks `CAP_NET_RAW` capability (requires root)
     /// - The system runs out of file descriptors
     pub fn new(local_addr: Ipv4Addr, config: ScanConfig) -> ScanResult<Self> {
+        Self::with_decoy(local_addr, config, None)
+    }
+
+    /// Creates a new TCP Maimon scanner with optional decoy support.
+    ///
+    /// # Arguments
+    ///
+    /// * `local_addr` - Local IP address to use for probes (real IP)
+    /// * `config` - Scanner configuration
+    /// * `decoy_scheduler` - Optional decoy scheduler for decoy scanning
+    ///
+    /// # Returns
+    ///
+    /// A `ScanResult` containing the new `TcpMaimonScanner` instance, or an error
+    /// if the raw socket cannot be created.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The process lacks `CAP_NET_RAW` capability (requires root)
+    /// - The system runs out of file descriptors
+    pub fn with_decoy(
+        local_addr: Ipv4Addr,
+        config: ScanConfig,
+        decoy_scheduler: Option<DecoyScheduler>,
+    ) -> ScanResult<Self> {
         // Use IPPROTO_TCP (6) for receiving TCP responses
         let socket = RawSocket::with_protocol(6).map_err(|e| {
             rustnmap_common::ScanError::PermissionDenied {
@@ -1401,6 +1632,7 @@ impl TcpMaimonScanner {
             local_addr,
             socket,
             config,
+            decoy_scheduler,
         })
     }
 
@@ -1598,25 +1830,62 @@ impl TcpMaimonScanner {
             let src_port = Self::generate_source_port();
             let seq = Self::generate_sequence_number();
 
-            let packet = TcpPacketBuilder::new(self.local_addr, dst_addr, src_port, *dst_port)
-                .seq(seq)
-                .fin()
-                .ack_flag()
-                .window(65535)
-                .build();
+            // Handle decoy scanning: send from multiple source IPs
+            if let Some(scheduler) = &self.decoy_scheduler {
+                let mut scheduler = scheduler.clone();
+                scheduler.reset();
 
-            let port_sockaddr = SocketAddr::new(std::net::IpAddr::V4(dst_addr), *dst_port);
-            self.socket
-                .send_packet(&packet, &port_sockaddr)
-                .map_err(|e| {
-                    rustnmap_common::ScanError::Network(rustnmap_common::Error::Network(
-                        rustnmap_common::error::NetworkError::SendError { source: e },
-                    ))
-                })?;
+                while let Some(src_ip) = scheduler.next_source() {
+                    let src_ipv4 = match src_ip {
+                        IpAddr::V4(addr) => addr,
+                        IpAddr::V6(_) => continue,
+                    };
 
-            outstanding.insert((*dst_port, src_port), (seq, Instant::now()));
-            src_to_dst.insert(src_port, *dst_port);
-            port_srcs.entry(*dst_port).or_default().insert(src_port);
+                    let packet = TcpPacketBuilder::new(src_ipv4, dst_addr, src_port, *dst_port)
+                        .seq(seq)
+                        .fin()
+                        .ack_flag()
+                        .window(65535)
+                        .build();
+
+                    let port_sockaddr = SocketAddr::new(std::net::IpAddr::V4(dst_addr), *dst_port);
+                    self.socket
+                        .send_packet(&packet, &port_sockaddr)
+                        .map_err(|e| {
+                            rustnmap_common::ScanError::Network(rustnmap_common::Error::Network(
+                                rustnmap_common::error::NetworkError::SendError { source: e },
+                            ))
+                        })?;
+
+                    // Only track probes sent from the real IP
+                    if scheduler.is_real_ip(&src_ip) {
+                        outstanding.insert((*dst_port, src_port), (seq, Instant::now()));
+                        src_to_dst.insert(src_port, *dst_port);
+                        port_srcs.entry(*dst_port).or_default().insert(src_port);
+                    }
+                }
+            } else {
+                // No decoy: original behavior
+                let packet = TcpPacketBuilder::new(self.local_addr, dst_addr, src_port, *dst_port)
+                    .seq(seq)
+                    .fin()
+                    .ack_flag()
+                    .window(65535)
+                    .build();
+
+                let port_sockaddr = SocketAddr::new(std::net::IpAddr::V4(dst_addr), *dst_port);
+                self.socket
+                    .send_packet(&packet, &port_sockaddr)
+                    .map_err(|e| {
+                        rustnmap_common::ScanError::Network(rustnmap_common::Error::Network(
+                            rustnmap_common::error::NetworkError::SendError { source: e },
+                        ))
+                    })?;
+
+                outstanding.insert((*dst_port, src_port), (seq, Instant::now()));
+                src_to_dst.insert(src_port, *dst_port);
+                port_srcs.entry(*dst_port).or_default().insert(src_port);
+            }
         }
 
         // Phase 2: Collect responses

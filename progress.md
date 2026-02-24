@@ -1,4 +1,47 @@
-### 2026-02-24: Phase 15 P1/P2 + 性能优化 - 当前会话
+### 2026-02-24: Phase 16-17 Decoy Scan & Bug Investigation - 当前会话
+
+**用户请求**: 实现 Decoy Scan 集成，测试效果，调查 MAC 地址问题
+
+**完成工作**:
+
+1. **Decoy Scan 集成代码实现** ✅
+   - 修改 `stealth_scans.rs`: 添加 decoy_scheduler 字段和 with_decoy() 构造函数
+   - 修改 `orchestrator.rs`: 从 evasion_config 创建 DecoyScheduler
+   - 修改 `Cargo.toml`: 添加 rustnmap-evasion 依赖
+   - 编译/测试: 零警告, 168 tests PASS
+
+2. **Decoy Scan 功能验证** ⚠️ → ✅ **已修复**
+   - 问题: tcpdump 抓包显示数据包仍从真实 IP 发送
+   - 根因: `scan_port()` 函数未将 `evasion_config` 传递给扫描器
+   - 修复: 添加 `create_decoy_scheduler()` 辅助函数，更新所有扫描器使用 `with_decoy()`
+   - 验证: cargo check/clippy/test 全部通过
+
+3. **MAC 地址问题调查** 🔍
+   - 用户报告: rustnmap 不显示目标 MAC 地址
+   - 发现: 基础设施完整 (MacAddr, parse_arp_reply, HostResult.mac)
+   - 根因: orchestrator.rs 中 HostResult 创建时 mac: None
+   - 需要: 添加 ARP 请求/响应处理
+
+4. **FIN 扫描结果差异** 🔍
+   - rustnmap: 80/tcp open|filtered
+   - nmap: 80/tcp closed
+   - 需要调查: RST 响应处理逻辑
+
+**本次修改的文件**:
+```
+crates/rustnmap-scan/Cargo.toml          | +1 (添加 evasion 依赖)
+crates/rustnmap-scan/src/stealth_scans.rs | +150 (decoy 支持)
+crates/rustnmap-core/src/orchestrator.rs  | +30 (DecoyScheduler 创建 + fix)
+```
+
+**待解决问题**:
+- [HIGH] ~~Decoy Scan 功能验证失败~~ ✅ 已修复
+- [MEDIUM] MAC 地址输出缺失
+- [LOW] FIN 扫描端口状态不准确
+
+---
+
+### 2026-02-24: Phase 15 P1/P2 + 性能优化 - 前序会话
 
 **用户请求**: 修复选中的 P1 和 P2 任务，要求性能超过 nmap
 

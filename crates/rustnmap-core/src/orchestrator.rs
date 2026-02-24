@@ -12,6 +12,7 @@ use std::sync::Arc;
 
 use futures_util::future::join_all;
 use rustnmap_common::ScanConfig as ScannerConfig;
+use rustnmap_evasion::DecoyScheduler;
 use rustnmap_output::models::PortState;
 use rustnmap_output::models::{HostResult, HostStatus, PortResult, ScanResult, ScanStatistics};
 use rustnmap_scan::connect_scan::TcpConnectScanner;
@@ -54,6 +55,28 @@ fn get_local_address(dns_server: &str) -> std::net::Ipv4Addr {
     // Fallback to localhost if detection fails
     debug!("Failed to detect local address, using LOCALHOST");
     std::net::Ipv4Addr::LOCALHOST
+}
+
+/// Creates a decoy scheduler from the session's evasion configuration.
+///
+/// # Arguments
+///
+/// * `session` - The scan session containing the evasion configuration
+/// * `local_addr` - The local (real) IPv4 address
+///
+/// # Returns
+///
+/// `Some(DecoyScheduler)` if decoys are configured, `None` otherwise.
+fn create_decoy_scheduler(
+    session: &ScanSession,
+    local_addr: std::net::Ipv4Addr,
+) -> Option<DecoyScheduler> {
+    session.config.evasion_config.as_ref().and_then(|evasion| {
+        evasion.decoys.as_ref().map(|decoy_config| {
+            DecoyScheduler::new(decoy_config.clone(), IpAddr::V4(local_addr))
+                .expect("Failed to create DecoyScheduler")
+        })
+    })
 }
 
 /// Scan phase enumeration.
@@ -783,6 +806,14 @@ impl ScanOrchestrator {
             max_rate: self.session.config.max_rate,
         };
 
+        // Create decoy scheduler if evasion config has decoys
+        let decoy_scheduler: Option<DecoyScheduler> =
+            create_decoy_scheduler(&self.session, local_addr);
+
+        if decoy_scheduler.is_some() {
+            info!("Decoy scanning enabled");
+        }
+
         let mut host_results = Vec::new();
 
         for target in targets {
@@ -797,15 +828,25 @@ impl ScanOrchestrator {
 
             // Run batch scan based on scan type
             let scan_results = match scan_type {
-                ScanType::TcpFin => match TcpFinScanner::new(local_addr, scanner_config.clone()) {
-                    Ok(scanner) => scanner.scan_ports_batch(target_ip, ports),
-                    Err(e) => {
-                        warn!(error = %e, "Failed to create FIN scanner");
-                        continue;
+                ScanType::TcpFin => {
+                    match TcpFinScanner::with_decoy(
+                        local_addr,
+                        scanner_config.clone(),
+                        decoy_scheduler.clone(),
+                    ) {
+                        Ok(scanner) => scanner.scan_ports_batch(target_ip, ports),
+                        Err(e) => {
+                            warn!(error = %e, "Failed to create FIN scanner");
+                            continue;
+                        }
                     }
-                },
+                }
                 ScanType::TcpNull => {
-                    match TcpNullScanner::new(local_addr, scanner_config.clone()) {
+                    match TcpNullScanner::with_decoy(
+                        local_addr,
+                        scanner_config.clone(),
+                        decoy_scheduler.clone(),
+                    ) {
                         Ok(scanner) => scanner.scan_ports_batch(target_ip, ports),
                         Err(e) => {
                             warn!(error = %e, "Failed to create NULL scanner");
@@ -814,7 +855,11 @@ impl ScanOrchestrator {
                     }
                 }
                 ScanType::TcpXmas => {
-                    match TcpXmasScanner::new(local_addr, scanner_config.clone()) {
+                    match TcpXmasScanner::with_decoy(
+                        local_addr,
+                        scanner_config.clone(),
+                        decoy_scheduler.clone(),
+                    ) {
                         Ok(scanner) => scanner.scan_ports_batch(target_ip, ports),
                         Err(e) => {
                             warn!(error = %e, "Failed to create XMAS scanner");
@@ -823,7 +868,11 @@ impl ScanOrchestrator {
                     }
                 }
                 ScanType::TcpMaimon => {
-                    match TcpMaimonScanner::new(local_addr, scanner_config.clone()) {
+                    match TcpMaimonScanner::with_decoy(
+                        local_addr,
+                        scanner_config.clone(),
+                        decoy_scheduler.clone(),
+                    ) {
                         Ok(scanner) => scanner.scan_ports_batch(target_ip, ports),
                         Err(e) => {
                             warn!(error = %e, "Failed to create Maimon scanner");
@@ -1084,6 +1133,10 @@ impl ScanOrchestrator {
         let local_addr = get_local_address(&self.session.config.dns_server);
         debug!(local_addr = %local_addr, "Using local address for scanner");
 
+        // Create decoy scheduler if evasion config has decoys
+        let decoy_scheduler: Option<DecoyScheduler> =
+            create_decoy_scheduler(&self.session, local_addr);
+
         // Get target IP address
         let target_ip = match target.ip {
             std::net::IpAddr::V4(addr) => addr,
@@ -1133,19 +1186,31 @@ impl ScanOrchestrator {
                     let connect_scanner = TcpConnectScanner::new(Some(local_addr), scanner_config);
                     connect_scanner.scan_port(&common_target, port, rustnmap_common::Protocol::Tcp)
                 }
-                ScanType::TcpFin => match TcpFinScanner::new(local_addr, scanner_config) {
+                ScanType::TcpFin => match TcpFinScanner::with_decoy(
+                    local_addr,
+                    scanner_config,
+                    decoy_scheduler.clone(),
+                ) {
                     Ok(scanner) => {
                         scanner.scan_port(&common_target, port, rustnmap_common::Protocol::Tcp)
                     }
                     Err(_) => return self.scan_port_connect(target, port).await,
                 },
-                ScanType::TcpNull => match TcpNullScanner::new(local_addr, scanner_config) {
+                ScanType::TcpNull => match TcpNullScanner::with_decoy(
+                    local_addr,
+                    scanner_config,
+                    decoy_scheduler.clone(),
+                ) {
                     Ok(scanner) => {
                         scanner.scan_port(&common_target, port, rustnmap_common::Protocol::Tcp)
                     }
                     Err(_) => return self.scan_port_connect(target, port).await,
                 },
-                ScanType::TcpXmas => match TcpXmasScanner::new(local_addr, scanner_config) {
+                ScanType::TcpXmas => match TcpXmasScanner::with_decoy(
+                    local_addr,
+                    scanner_config,
+                    decoy_scheduler.clone(),
+                ) {
                     Ok(scanner) => {
                         scanner.scan_port(&common_target, port, rustnmap_common::Protocol::Tcp)
                     }
@@ -1163,7 +1228,11 @@ impl ScanOrchestrator {
                     }
                     Err(_) => return self.scan_port_connect(target, port).await,
                 },
-                ScanType::TcpMaimon => match TcpMaimonScanner::new(local_addr, scanner_config) {
+                ScanType::TcpMaimon => match TcpMaimonScanner::with_decoy(
+                    local_addr,
+                    scanner_config,
+                    decoy_scheduler.clone(),
+                ) {
                     Ok(scanner) => {
                         scanner.scan_port(&common_target, port, rustnmap_common::Protocol::Tcp)
                     }

@@ -17,6 +17,7 @@ rustnmap-common = { path = "../rustnmap-common" }
 rustnmap-net = { path = "../rustnmap-net" }
 rustnmap-packet = { path = "../rustnmap-packet" }
 rustnmap-target = { path = "../rustnmap-target" }
+rustnmap-evasion = { path = "../rustnmap-evasion" }
 tokio = { workspace = true }
 pnet = { workspace = true }
 thiserror = { workspace = true }
