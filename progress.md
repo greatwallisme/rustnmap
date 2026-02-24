@@ -48,6 +48,52 @@
 
 ---
 
+### 2026-02-24: Phase 15 P0/P1 优化修复 (部分完成)
+
+**任务**: 继续修复、优化系统
+
+#### 完成的修复
+
+1. **Multi-target parallel scanning** (`orchestrator.rs`) ✅
+   - 修改 `run_port_scanning()` 使用 `futures_util::future::join_all`
+   - 为每个目标创建异步任务并发执行
+   - 共享 `Arc<ParallelScanEngine>` 跨目标任务
+   - 验证: 两个目标扫描比顺序扫描快 18.66s
+   - 文件: `crates/rustnmap-core/src/orchestrator.rs`
+
+2. **Fast Scan + Top Ports mutual exclusion** (`args.rs`, `cli.rs`) ✅
+   - 移除 `fast_scan` 与 `top_ports` 的冲突
+   - 更新 `parse_port_spec()` 优先检查 `top_ports`
+   - 验证: `-F --top-ports 50` 成功执行，扫描 50 端口
+   - 文件: `crates/rustnmap-cli/src/args.rs`, `cli.rs`
+
+#### 发现的问题
+
+**Min/Max Rate 性能问题** 🔍
+- 根因: `ParallelScanEngine` 未集成 `RateLimiter`
+- session config 有 `min_rate/max_rate` 字段，但 ultrascan.rs 不读取
+- 状态: 需要集成 RateLimiter 到 ParallelScanEngine (P0 待完成)
+
+**某些目标扫描慢** 📊
+- 110.242.74.102: rustnmap 64.52s vs nmap 1.38s (47x 慢)
+- 45.33.32.156: rustnmap 0.78s vs nmap 0.60s (正常)
+- 可能原因: 超时设置、重试逻辑、网络条件
+
+#### 待完成
+
+- [P0] Min/Max Rate 集成到 ParallelScanEngine
+- [P1] Stealth Scans 并行化
+- [P1] Decoy Scan 完整实现 (需要集成 DecoyScheduler)
+- [P2] 测试配置修正 (UDP state, JSON output, T0/Host Timeout)
+
+#### 代码质量
+
+- `cargo clippy -p rustnmap-core -- -D warnings`: ✅ PASS
+- `cargo clippy -p rustnmap-cli -- -D warnings`: ✅ PASS
+- `cargo test -p rustnmap-core --lib`: ✅ 53 passed
+
+---
+
 ### 2026-02-23: Phase 13 - AF_PACKET 修复和测试全通过
 
 **任务**: 修复 AF_PACKET 集成 bug、clippy 错误、输出解析器

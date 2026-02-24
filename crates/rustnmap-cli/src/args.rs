@@ -209,7 +209,7 @@ pub struct Args {
         short = 'F',
         long,
         help_heading = "Port Specification",
-        conflicts_with_all = ["ports", "port_range_all", "top_ports"]
+        conflicts_with_all = ["ports", "port_range_all"]
     )]
     pub fast_scan: bool,
 

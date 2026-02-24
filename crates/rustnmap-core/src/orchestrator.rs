@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 
+use futures_util::future::join_all;
 use rustnmap_common::ScanConfig as ScannerConfig;
 use rustnmap_output::models::PortState;
 use rustnmap_output::models::{HostResult, HostStatus, PortResult, ScanResult, ScanStatistics};
@@ -506,118 +507,146 @@ impl ScanOrchestrator {
         if use_parallel {
             // Use parallel scanning for better performance
             info!("Using parallel scanning engine for TCP SYN scan");
-            for target in &targets {
+
+            // Check for IPv6 targets or localhost targets - these require fallback
+            let has_ipv6 = targets.iter().any(|t| matches!(t.ip, IpAddr::V6(_)));
+            let has_localhost = targets.iter().any(|t| {
+                matches!(t.ip, IpAddr::V4(addr) if addr.is_loopback())
+            });
+
+            if has_ipv6 {
+                warn!("IPv6 not supported by parallel engine, falling back to sequential");
                 let ports = self.get_ports_for_scan();
-                let target_ip = match target.ip {
-                    IpAddr::V4(addr) => addr,
-                    IpAddr::V6(_) => {
-                        // IPv6 not supported by parallel engine yet, fall back to sequential
-                        warn!("IPv6 not supported by parallel engine, falling back to sequential");
-                        return self.run_port_scanning_sequential(&targets, &ports).await;
+                return self.run_port_scanning_sequential(&targets, &ports).await;
+            }
+
+            if has_localhost {
+                debug!("Localhost detected, using TCP Connect scan instead of SYN scan");
+                let ports = self.get_ports_for_scan();
+                return self.run_port_scanning_sequential(&targets, &ports).await;
+            }
+
+            // Create parallel scan engine (shared across all targets)
+            let local_addr = get_local_address(&self.session.config.dns_server);
+
+            // Get timing parameters from the timing template
+            let timing_config = self.session.config.timing_template.scan_config();
+
+            let scanner_config = ScannerConfig {
+                min_rtt: timing_config.min_rtt,
+                max_rtt: timing_config.max_rtt,
+                initial_rtt: timing_config.initial_rtt,
+                max_retries: timing_config.max_retries,
+                host_timeout: self
+                    .session
+                    .config
+                    .host_timeout
+                    .as_millis()
+                    .try_into()
+                    .unwrap_or(30000),
+                scan_delay: self.session.config.scan_delay,
+                dns_server: self.session.config.dns_server.clone(),
+            };
+
+            let engine = if let Ok(engine) = ParallelScanEngine::new(local_addr, scanner_config) {
+                Arc::new(engine)
+            } else {
+                // Raw socket creation failed (not root), fall back to sequential
+                warn!("Raw socket creation failed, falling back to TCP Connect scan");
+                let ports = self.get_ports_for_scan();
+                return self.run_port_scanning_sequential(&targets, &ports).await;
+            };
+
+            let ports = self.get_ports_for_scan();
+            let session = Arc::clone(&self.session);
+
+            // Spawn async tasks for each target to scan in parallel
+            let scan_futures: Vec<_> = targets
+                .iter()
+                .map(|target| {
+                    let engine = Arc::clone(&engine);
+                    let ports = ports.clone();
+                    let session = Arc::clone(&session);
+                    let target = target.clone();
+
+                    async move {
+                        let target_ip = match target.ip {
+                            IpAddr::V4(addr) => addr,
+                            IpAddr::V6(_) => {
+                                // Should have been filtered earlier, but handle anyway
+                                warn!("IPv6 target in parallel scan");
+                                return None;
+                            }
+                        };
+
+                        // Run parallel scan for this target
+                        let scan_results = match engine.scan_ports(target_ip, &ports).await {
+                            Ok(r) => r,
+                            Err(e) => {
+                                warn!(ip = %target.ip, error = %e, "Parallel scan failed for target");
+                                return None;
+                            }
+                        };
+
+                        // Convert scan results to port results
+                        let mut port_results = Vec::new();
+                        for (port, common_state) in scan_results {
+                            // Convert rustnmap_common::PortState to rustnmap_output::models::PortState
+                            let output_state = match common_state {
+                                rustnmap_common::PortState::Open => PortState::Open,
+                                rustnmap_common::PortState::Closed => PortState::Closed,
+                                rustnmap_common::PortState::Filtered => PortState::Filtered,
+                                rustnmap_common::PortState::Unfiltered => PortState::Unfiltered,
+                                rustnmap_common::PortState::OpenOrFiltered => PortState::OpenOrFiltered,
+                                rustnmap_common::PortState::ClosedOrFiltered => PortState::ClosedOrFiltered,
+                                rustnmap_common::PortState::OpenOrClosed => PortState::OpenOrClosed,
+                            };
+
+                            let is_open = output_state == PortState::Open;
+
+                            let port_result = PortResult {
+                                number: port,
+                                protocol: rustnmap_output::models::Protocol::Tcp,
+                                state: output_state,
+                                state_reason: "scan".to_string(),
+                                state_ttl: None,
+                                service: service_info_from_db(port, rustnmap_common::ServiceProtocol::Tcp),
+                                scripts: Vec::new(),
+                            };
+
+                            port_results.push(port_result);
+                            if is_open {
+                                session.stats.record_open_port();
+                            }
+                            session.stats.record_packet_sent();
+                        }
+
+                        Some(HostResult {
+                            ip: target.ip,
+                            mac: None,
+                            hostname: target.hostname.clone(),
+                            status: HostStatus::Up,
+                            status_reason: "syn-ack".to_string(),
+                            latency: std::time::Duration::from_millis(1),
+                            ports: port_results,
+                            os_matches: Vec::new(),
+                            scripts: Vec::new(),
+                            traceroute: None,
+                            times: rustnmap_output::models::HostTimes {
+                                srtt: None,
+                                rttvar: None,
+                                timeout: None,
+                            },
+                        })
                     }
-                };
+                })
+                .collect();
 
-                // Check if target is localhost - AF_PACKET cannot capture loopback responses
-                // Fall back to TCP connect scan which works correctly for localhost
-                if target_ip.is_loopback() {
-                    debug!("Target is localhost, using TCP Connect scan instead of SYN scan");
-                    return self.run_port_scanning_sequential(&targets, &ports).await;
-                }
+            // Execute all target scans concurrently and collect results
+            let results = join_all(scan_futures).await;
 
-                // Create parallel scan engine
-                let local_addr = get_local_address(&self.session.config.dns_server);
-
-                // Get timing parameters from the timing template
-                let timing_config = self.session.config.timing_template.scan_config();
-
-                let scanner_config = ScannerConfig {
-                    min_rtt: timing_config.min_rtt,
-                    max_rtt: timing_config.max_rtt,
-                    initial_rtt: timing_config.initial_rtt,
-                    max_retries: timing_config.max_retries,
-                    host_timeout: self
-                        .session
-                        .config
-                        .host_timeout
-                        .as_millis()
-                        .try_into()
-                        .unwrap_or(30000),
-                    scan_delay: self.session.config.scan_delay,
-                    dns_server: self.session.config.dns_server.clone(),
-                };
-
-                #[expect(
-                    clippy::manual_let_else,
-                    reason = "Need to handle error case with early return - let...else would be less readable"
-                )]
-                let engine = if let Ok(engine) = ParallelScanEngine::new(local_addr, scanner_config) {
-                    engine
-                } else {
-                    // Raw socket creation failed (not root), fall back to sequential
-                    warn!("Raw socket creation failed, falling back to TCP Connect scan");
-                    return self.run_port_scanning_sequential(&targets, &ports).await;
-                };
-
-                // Run parallel scan
-                let scan_results = match engine.scan_ports(target_ip, &ports).await {
-                    Ok(r) => r,
-                    Err(e) => {
-                        warn!(error = %e, "Parallel scan failed, falling back to sequential");
-                        return self.run_port_scanning_sequential(&targets, &ports).await;
-                    }
-                };
-
-                // Convert scan results to port results
-                let mut port_results = Vec::new();
-                for (port, common_state) in scan_results {
-                    // Convert rustnmap_common::PortState to rustnmap_output::models::PortState
-                    let output_state = match common_state {
-                        rustnmap_common::PortState::Open => PortState::Open,
-                        rustnmap_common::PortState::Closed => PortState::Closed,
-                        rustnmap_common::PortState::Filtered => PortState::Filtered,
-                        rustnmap_common::PortState::Unfiltered => PortState::Unfiltered,
-                        rustnmap_common::PortState::OpenOrFiltered => PortState::OpenOrFiltered,
-                        rustnmap_common::PortState::ClosedOrFiltered => PortState::ClosedOrFiltered,
-                        rustnmap_common::PortState::OpenOrClosed => PortState::OpenOrClosed,
-                    };
-
-                    let is_open = output_state == PortState::Open;
-
-                    let port_result = PortResult {
-                        number: port,
-                        protocol: rustnmap_output::models::Protocol::Tcp,
-                        state: output_state,
-                        state_reason: "scan".to_string(),
-                        state_ttl: None,
-                        service: service_info_from_db(port, rustnmap_common::ServiceProtocol::Tcp),
-                        scripts: Vec::new(),
-                    };
-
-                    port_results.push(port_result);
-                    if is_open {
-                        self.session.stats.record_open_port();
-                    }
-                    self.session.stats.record_packet_sent();
-                }
-
-                let host_result = HostResult {
-                    ip: target.ip,
-                    mac: None,
-                    hostname: target.hostname.clone(),
-                    status: HostStatus::Up,
-                    status_reason: "syn-ack".to_string(),
-                    latency: std::time::Duration::from_millis(1),
-                    ports: port_results,
-                    os_matches: Vec::new(),
-                    scripts: Vec::new(),
-                    traceroute: None,
-                    times: rustnmap_output::models::HostTimes {
-                        srtt: None,
-                        rttvar: None,
-                        timeout: None,
-                    },
-                };
-
+            // Filter out None results (failed scans) and collect successes
+            for host_result in results.into_iter().flatten() {
                 host_results.push(host_result);
             }
         } else {

@@ -1077,10 +1077,11 @@ fn parse_data_payload(args: &Args) -> Result<Option<Vec<u8>>> {
 fn parse_port_spec(args: &Args) -> Result<PortSpec> {
     if args.port_range_all {
         Ok(PortSpec::All)
+    } else if let Some(top) = args.top_ports {
+        // top_ports takes precedence over fast_scan
+        Ok(PortSpec::Top(top as usize))
     } else if args.fast_scan {
         Ok(PortSpec::Top(100))
-    } else if let Some(top) = args.top_ports {
-        Ok(PortSpec::Top(top as usize))
     } else if let Some(ports) = &args.ports {
         parse_port_string(ports)
     } else {
