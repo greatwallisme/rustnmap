@@ -297,6 +297,10 @@ impl TcpFinScanner {
     /// Returns an error if:
     /// - Packet transmission fails due to network issues
     /// - Raw socket receive fails with a non-timeout error
+    #[expect(
+        clippy::too_many_lines,
+        reason = "Batch scanning requires handling send, receive, and result collection in one method for clarity"
+    )]
     pub fn scan_ports_batch(
         &self,
         dst_addr: Ipv4Addr,
@@ -310,7 +314,12 @@ impl TcpFinScanner {
         let ports_to_scan: Vec<Port> = ports.iter().copied().take(MAX_BATCH_SIZE).collect();
 
         // Phase 1: Send all probes
+        // Forward map: (dst_port, src_port) -> (seq, sent_time)
         let mut outstanding: HashMap<(Port, u16), (u32, Instant)> = HashMap::new();
+        // Reverse map: src_port -> dst_port for O(1) TCP response matching
+        let mut src_to_dst: HashMap<u16, Port> = HashMap::new();
+        // Port tracking: dst_port -> set of src_ports for O(1) ICMP matching
+        let mut port_srcs: HashMap<Port, std::collections::HashSet<u16>> = HashMap::new();
 
         for dst_port in &ports_to_scan {
             let src_port = Self::generate_source_port();
@@ -333,6 +342,10 @@ impl TcpFinScanner {
 
             // Track: (dst_port, src_port) -> (seq, sent_time)
             outstanding.insert((*dst_port, src_port), (seq, Instant::now()));
+            // O(1) reverse lookup for TCP responses
+            src_to_dst.insert(src_port, *dst_port);
+            // O(1) lookup for ICMP responses (multiple src_ports per dst_port)
+            port_srcs.entry(*dst_port).or_default().insert(src_port);
         }
 
         // Phase 2: Collect responses until timeout
@@ -340,7 +353,7 @@ impl TcpFinScanner {
         let deadline = Instant::now() + self.config.initial_rtt;
         let mut recv_buf = vec![0u8; 65535];
 
-        while Instant::now() < deadline && results.len() < ports_to_scan.len() {
+        while Instant::now() < deadline && !outstanding.is_empty() {
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
                 break;
@@ -356,19 +369,23 @@ impl TcpFinScanner {
                         parse_tcp_response(&recv_buf[..len])
                     {
                         if src_ip == dst_addr {
-                            // Find matching probe by src_port (response port = our dst_port)
-                            if let Some((dst_port, _)) =
-                                outstanding.keys().find(|(_, sp)| *sp == src_port)
-                            {
-                                let port = *dst_port;
+                            // O(1) lookup by src_port instead of O(n) linear search
+                            if let Some(dst_port) = src_to_dst.remove(&src_port) {
                                 let state = if (flags & tcp_flags::RST) != 0 {
                                     PortState::Closed
                                 } else {
                                     PortState::Filtered
                                 };
-                                results.entry(port).or_insert(state);
-                                // Remove from outstanding - we got a response
-                                outstanding.retain(|(p, _), _| *p != port);
+                                results.insert(dst_port, state);
+                                // O(1) removal instead of O(n) retain
+                                outstanding.remove(&(dst_port, src_port));
+                                // Also remove from port_srcs
+                                if let Some(srcs) = port_srcs.get_mut(&dst_port) {
+                                    srcs.remove(&src_port);
+                                    if srcs.is_empty() {
+                                        port_srcs.remove(&dst_port);
+                                    }
+                                }
                             }
                         }
                     } else if let Some(IcmpResponse::DestinationUnreachable {
@@ -377,16 +394,20 @@ impl TcpFinScanner {
                         original_dst_port,
                     }) = parse_icmp_response(&recv_buf[..len])
                     {
-                        // Check ICMP for any matching probe
-                        if original_dst_ip == dst_addr
-                            && outstanding.keys().any(|(p, _)| *p == original_dst_port)
-                        {
-                            let state = match code {
-                                IcmpUnreachableCode::PortUnreachable => PortState::Closed,
-                                _ => PortState::Filtered,
-                            };
-                            results.entry(original_dst_port).or_insert(state);
-                            outstanding.retain(|(p, _), _| *p != original_dst_port);
+                        // O(1) check if we have probes for this port
+                        if original_dst_ip == dst_addr {
+                            if let Some(srcs) = port_srcs.remove(&original_dst_port) {
+                                let state = match code {
+                                    IcmpUnreachableCode::PortUnreachable => PortState::Closed,
+                                    _ => PortState::Filtered,
+                                };
+                                results.insert(original_dst_port, state);
+                                // Remove all src_ports for this dst_port
+                                for src_port in srcs {
+                                    outstanding.remove(&(original_dst_port, src_port));
+                                    src_to_dst.remove(&src_port);
+                                }
+                            }
                         }
                     }
                 }
@@ -511,7 +532,7 @@ impl TcpNullScanner {
         // Build TCP packet with NO flags set
         let packet = TcpPacketBuilder::new(self.local_addr, dst_addr, src_port, dst_port)
             .seq(seq)
-            .window(65535)
+            .window(65_535)
             .build();
 
         let dst_sockaddr = SocketAddr::new(std::net::IpAddr::V4(dst_addr), dst_port);
@@ -663,7 +684,12 @@ impl TcpNullScanner {
         }
 
         let ports_to_scan: Vec<Port> = ports.iter().copied().take(MAX_BATCH_SIZE).collect();
+        // Forward map: (dst_port, src_port) -> (seq, sent_time)
         let mut outstanding: HashMap<(Port, u16), (u32, Instant)> = HashMap::new();
+        // Reverse map: src_port -> dst_port for O(1) TCP response matching
+        let mut src_to_dst: HashMap<u16, Port> = HashMap::new();
+        // Port tracking: dst_port -> set of src_ports for O(1) ICMP matching
+        let mut port_srcs: HashMap<Port, std::collections::HashSet<u16>> = HashMap::new();
 
         // Phase 1: Send all probes (NULL = no flags)
         for dst_port in &ports_to_scan {
@@ -685,6 +711,8 @@ impl TcpNullScanner {
                 })?;
 
             outstanding.insert((*dst_port, src_port), (seq, Instant::now()));
+            src_to_dst.insert(src_port, *dst_port);
+            port_srcs.entry(*dst_port).or_default().insert(src_port);
         }
 
         // Phase 2: Collect responses
@@ -692,7 +720,7 @@ impl TcpNullScanner {
         let deadline = Instant::now() + self.config.initial_rtt;
         let mut recv_buf = vec![0u8; 65535];
 
-        while Instant::now() < deadline && results.len() < ports_to_scan.len() {
+        while Instant::now() < deadline && !outstanding.is_empty() {
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
                 break;
@@ -707,17 +735,21 @@ impl TcpNullScanner {
                         parse_tcp_response(&recv_buf[..len])
                     {
                         if src_ip == dst_addr {
-                            if let Some((dst_port, _)) =
-                                outstanding.keys().find(|(_, sp)| *sp == src_port)
-                            {
-                                let port = *dst_port;
+                            // O(1) lookup
+                            if let Some(dst_port) = src_to_dst.remove(&src_port) {
                                 let state = if (flags & tcp_flags::RST) != 0 {
                                     PortState::Closed
                                 } else {
                                     PortState::Filtered
                                 };
-                                results.entry(port).or_insert(state);
-                                outstanding.retain(|(p, _), _| *p != port);
+                                results.insert(dst_port, state);
+                                outstanding.remove(&(dst_port, src_port));
+                                if let Some(srcs) = port_srcs.get_mut(&dst_port) {
+                                    srcs.remove(&src_port);
+                                    if srcs.is_empty() {
+                                        port_srcs.remove(&dst_port);
+                                    }
+                                }
                             }
                         }
                     } else if let Some(IcmpResponse::DestinationUnreachable {
@@ -726,15 +758,18 @@ impl TcpNullScanner {
                         original_dst_port,
                     }) = parse_icmp_response(&recv_buf[..len])
                     {
-                        if original_dst_ip == dst_addr
-                            && outstanding.keys().any(|(p, _)| *p == original_dst_port)
-                        {
-                            let state = match code {
-                                IcmpUnreachableCode::PortUnreachable => PortState::Closed,
-                                _ => PortState::Filtered,
-                            };
-                            results.entry(original_dst_port).or_insert(state);
-                            outstanding.retain(|(p, _), _| *p != original_dst_port);
+                        if original_dst_ip == dst_addr {
+                            if let Some(srcs) = port_srcs.remove(&original_dst_port) {
+                                let state = match code {
+                                    IcmpUnreachableCode::PortUnreachable => PortState::Closed,
+                                    _ => PortState::Filtered,
+                                };
+                                results.insert(original_dst_port, state);
+                                for src_port in srcs {
+                                    outstanding.remove(&(original_dst_port, src_port));
+                                    src_to_dst.remove(&src_port);
+                                }
+                            }
                         }
                     }
                 }
@@ -999,6 +1034,10 @@ impl TcpXmasScanner {
     /// Returns an error if:
     /// - Packet transmission fails due to network issues
     /// - Raw socket receive fails with a non-timeout error
+    #[expect(
+        clippy::too_many_lines,
+        reason = "Batch scanning requires handling send, receive, and result collection in one method for clarity"
+    )]
     pub fn scan_ports_batch(
         &self,
         dst_addr: Ipv4Addr,
@@ -1010,6 +1049,8 @@ impl TcpXmasScanner {
 
         let ports_to_scan: Vec<Port> = ports.iter().copied().take(MAX_BATCH_SIZE).collect();
         let mut outstanding: HashMap<(Port, u16), (u32, Instant)> = HashMap::new();
+        let mut src_to_dst: HashMap<u16, Port> = HashMap::new();
+        let mut port_srcs: HashMap<Port, std::collections::HashSet<u16>> = HashMap::new();
 
         // Phase 1: Send all probes (XMAS = FIN+PSH+URG)
         for dst_port in &ports_to_scan {
@@ -1034,6 +1075,8 @@ impl TcpXmasScanner {
                 })?;
 
             outstanding.insert((*dst_port, src_port), (seq, Instant::now()));
+            src_to_dst.insert(src_port, *dst_port);
+            port_srcs.entry(*dst_port).or_default().insert(src_port);
         }
 
         // Phase 2: Collect responses
@@ -1041,7 +1084,7 @@ impl TcpXmasScanner {
         let deadline = Instant::now() + self.config.initial_rtt;
         let mut recv_buf = vec![0u8; 65535];
 
-        while Instant::now() < deadline && results.len() < ports_to_scan.len() {
+        while Instant::now() < deadline && !outstanding.is_empty() {
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
                 break;
@@ -1056,17 +1099,20 @@ impl TcpXmasScanner {
                         parse_tcp_response(&recv_buf[..len])
                     {
                         if src_ip == dst_addr {
-                            if let Some((dst_port, _)) =
-                                outstanding.keys().find(|(_, sp)| *sp == src_port)
-                            {
-                                let port = *dst_port;
+                            if let Some(dst_port) = src_to_dst.remove(&src_port) {
                                 let state = if (flags & tcp_flags::RST) != 0 {
                                     PortState::Closed
                                 } else {
                                     PortState::Filtered
                                 };
-                                results.entry(port).or_insert(state);
-                                outstanding.retain(|(p, _), _| *p != port);
+                                results.insert(dst_port, state);
+                                outstanding.remove(&(dst_port, src_port));
+                                if let Some(srcs) = port_srcs.get_mut(&dst_port) {
+                                    srcs.remove(&src_port);
+                                    if srcs.is_empty() {
+                                        port_srcs.remove(&dst_port);
+                                    }
+                                }
                             }
                         }
                     } else if let Some(IcmpResponse::DestinationUnreachable {
@@ -1075,15 +1121,18 @@ impl TcpXmasScanner {
                         original_dst_port,
                     }) = parse_icmp_response(&recv_buf[..len])
                     {
-                        if original_dst_ip == dst_addr
-                            && outstanding.keys().any(|(p, _)| *p == original_dst_port)
-                        {
-                            let state = match code {
-                                IcmpUnreachableCode::PortUnreachable => PortState::Closed,
-                                _ => PortState::Filtered,
-                            };
-                            results.entry(original_dst_port).or_insert(state);
-                            outstanding.retain(|(p, _), _| *p != original_dst_port);
+                        if original_dst_ip == dst_addr {
+                            if let Some(srcs) = port_srcs.remove(&original_dst_port) {
+                                let state = match code {
+                                    IcmpUnreachableCode::PortUnreachable => PortState::Closed,
+                                    _ => PortState::Filtered,
+                                };
+                                results.insert(original_dst_port, state);
+                                for src_port in srcs {
+                                    outstanding.remove(&(original_dst_port, src_port));
+                                    src_to_dst.remove(&src_port);
+                                }
+                            }
                         }
                     }
                 }
@@ -1526,6 +1575,10 @@ impl TcpMaimonScanner {
     /// Returns an error if:
     /// - Packet transmission fails due to network issues
     /// - Raw socket receive fails with a non-timeout error
+    #[expect(
+        clippy::too_many_lines,
+        reason = "Batch scanning requires handling send, receive, and result collection in one method for clarity"
+    )]
     pub fn scan_ports_batch(
         &self,
         dst_addr: Ipv4Addr,
@@ -1537,6 +1590,8 @@ impl TcpMaimonScanner {
 
         let ports_to_scan: Vec<Port> = ports.iter().copied().take(MAX_BATCH_SIZE).collect();
         let mut outstanding: HashMap<(Port, u16), (u32, Instant)> = HashMap::new();
+        let mut src_to_dst: HashMap<u16, Port> = HashMap::new();
+        let mut port_srcs: HashMap<Port, std::collections::HashSet<u16>> = HashMap::new();
 
         // Phase 1: Send all probes (Maimon = FIN+ACK)
         for dst_port in &ports_to_scan {
@@ -1560,6 +1615,8 @@ impl TcpMaimonScanner {
                 })?;
 
             outstanding.insert((*dst_port, src_port), (seq, Instant::now()));
+            src_to_dst.insert(src_port, *dst_port);
+            port_srcs.entry(*dst_port).or_default().insert(src_port);
         }
 
         // Phase 2: Collect responses
@@ -1567,7 +1624,7 @@ impl TcpMaimonScanner {
         let deadline = Instant::now() + self.config.initial_rtt;
         let mut recv_buf = vec![0u8; 65535];
 
-        while Instant::now() < deadline && results.len() < ports_to_scan.len() {
+        while Instant::now() < deadline && !outstanding.is_empty() {
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
                 break;
@@ -1582,17 +1639,20 @@ impl TcpMaimonScanner {
                         parse_tcp_response(&recv_buf[..len])
                     {
                         if src_ip == dst_addr {
-                            if let Some((dst_port, _)) =
-                                outstanding.keys().find(|(_, sp)| *sp == src_port)
-                            {
-                                let port = *dst_port;
+                            if let Some(dst_port) = src_to_dst.remove(&src_port) {
                                 let state = if (flags & tcp_flags::RST) != 0 {
                                     PortState::Closed
                                 } else {
                                     PortState::Filtered
                                 };
-                                results.entry(port).or_insert(state);
-                                outstanding.retain(|(p, _), _| *p != port);
+                                results.insert(dst_port, state);
+                                outstanding.remove(&(dst_port, src_port));
+                                if let Some(srcs) = port_srcs.get_mut(&dst_port) {
+                                    srcs.remove(&src_port);
+                                    if srcs.is_empty() {
+                                        port_srcs.remove(&dst_port);
+                                    }
+                                }
                             }
                         }
                     } else if let Some(IcmpResponse::DestinationUnreachable {
@@ -1601,15 +1661,18 @@ impl TcpMaimonScanner {
                         original_dst_port,
                     }) = parse_icmp_response(&recv_buf[..len])
                     {
-                        if original_dst_ip == dst_addr
-                            && outstanding.keys().any(|(p, _)| *p == original_dst_port)
-                        {
-                            let state = match code {
-                                IcmpUnreachableCode::PortUnreachable => PortState::Closed,
-                                _ => PortState::Filtered,
-                            };
-                            results.entry(original_dst_port).or_insert(state);
-                            outstanding.retain(|(p, _), _| *p != original_dst_port);
+                        if original_dst_ip == dst_addr {
+                            if let Some(srcs) = port_srcs.remove(&original_dst_port) {
+                                let state = match code {
+                                    IcmpUnreachableCode::PortUnreachable => PortState::Closed,
+                                    _ => PortState::Filtered,
+                                };
+                                results.insert(original_dst_port, state);
+                                for src_port in srcs {
+                                    outstanding.remove(&(original_dst_port, src_port));
+                                    src_to_dst.remove(&src_port);
+                                }
+                            }
                         }
                     }
                 }

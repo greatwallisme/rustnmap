@@ -27,8 +27,7 @@ expected_fields = ["PORT", "STATE", "SERVICE"]
 # P2 documented difference: rustnmap correctly identifies closed ports
 # when ICMP Port Unreachable is received, while nmap returns open|filtered
 # in some network environments. rustnmap behavior is more accurate.
-[expected_differences]
-state_remaps = { "22/udp" = { rustnmap = "closed", nmap = "open|filtered" } }
+expected_differences = { state_remaps = { "22/udp" = { rustnmap = "closed", nmap = "open|filtered" } } }
 
 [[test_case]]
 name = "Fast Scan"
