@@ -687,7 +687,7 @@ mod tests {
         assert_eq!(String::from_utf8(decoded).unwrap(), original);
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
     async fn test_get_script_args_empty() {
         let mut lua = NseLua::new_default().unwrap();
         register(&mut lua).unwrap();
@@ -705,7 +705,7 @@ mod tests {
         assert_eq!(len, 0);
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
     async fn test_get_script_args_with_values() {
         let mut lua = NseLua::new_default().unwrap();
         register(&mut lua).unwrap();
@@ -739,7 +739,7 @@ mod tests {
         assert_eq!(timeout_val, "30");
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
     async fn test_get_script_arg_helper() {
         let mut args = HashMap::new();
         args.insert("key1".to_string(), "value1".to_string());

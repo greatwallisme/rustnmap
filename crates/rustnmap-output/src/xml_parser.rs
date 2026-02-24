@@ -681,12 +681,7 @@ fn convert_host(xml_host: XmlHost) -> Result<HostResult> {
     };
 
     // Convert ports
-    let ports: Vec<PortResult> = xml_host
-        .ports
-        .ports
-        .into_iter()
-        .map(convert_port)
-        .collect();
+    let ports: Vec<PortResult> = xml_host.ports.ports.into_iter().map(convert_port).collect();
 
     // Convert OS matches
     let os_matches: Vec<OsMatch> = xml_host

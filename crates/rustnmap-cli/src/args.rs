@@ -188,11 +188,7 @@ pub struct Args {
     pub port_range_all: bool,
 
     /// Exclude specified ports from scan (e.g., -p 1-100 --exclude-port 22,80)
-    #[arg(
-        long,
-        help_heading = "Port Specification",
-        value_name = "PORTS"
-    )]
+    #[arg(long, help_heading = "Port Specification", value_name = "PORTS")]
     pub exclude_port: Option<String>,
 
     /// Top `<N>` most common ports
@@ -221,11 +217,7 @@ pub struct Args {
     // Service/OS Detection
     // ============================================
     /// Aggressive scan options (enables OS detection, service detection, version scanning, and scripts)
-    #[arg(
-        short = 'A',
-        long,
-        help_heading = "Service/OS Detection"
-    )]
+    #[arg(short = 'A', long, help_heading = "Service/OS Detection")]
     pub aggressive_scan: bool,
 
     /// Probe open ports to determine service/version info

@@ -15,8 +15,8 @@ pub mod scanner;
 pub mod stealth_scans;
 pub mod syn_scan;
 pub mod timeout;
-pub mod ultrascan;
 pub mod udp_scan;
+pub mod ultrascan;
 
 // Re-exports
 pub use connect_scan::TcpConnectScanner;
@@ -30,8 +30,8 @@ pub use stealth_scans::{
 };
 pub use syn_scan::TcpSynScanner;
 pub use timeout::TimeoutTracker;
-pub use ultrascan::ParallelScanEngine;
 pub use udp_scan::UdpScanner;
+pub use ultrascan::ParallelScanEngine;
 
 // Re-export ScanConfig and ScanError from rustnmap_common
 pub use rustnmap_common::{ScanConfig, ScanError};

@@ -17,20 +17,53 @@
 | 失败数 | 6 |
 | 通过率 | 84.2% |
 
-### 新发现 (2026-02-24 12:00)
+### 新发现 (2026-02-24 12:30)
 
-**P0: Multi-target parallel scanning - 部分修复 ✅**
+**P0: Multi-target parallel scanning - 已修复 ✅**
 - 修改 orchestrator.rs 以并行扫描多个目标
 - 使用 `futures_util::future::join_all` 并发处理目标
 - 共享 ParallelScanEngine 使用 Arc 包装
 - 结果: 扫描两个目标比顺序扫描更快 (-18.66s overhead)
 
-**P0: Min/Max Rate 限制性能问题 - 根因发现 🔍**
-- 现象: 8x 慢于 nmap
+**P0: Min/Max Rate 限制性能问题 - 已修复 ✅**
 - 根因: **ParallelScanEngine 未集成 RateLimiter**
-- ultrascan.rs 完全不使用 RateLimiter
-- session config 有 min_rate/max_rate 字段，但扫描引擎不读取
-- 状态: 需要集成 RateLimiter 到 ParallelScanEngine
+- 修复内容:
+  - 创建 `rustnmap-common/src/rate.rs` 模块，移动 `RateLimiter` 到共享 crate
+  - 在 `ScanConfig` 添加 `min_rate` 和 `max_rate` 字段
+  - 在 `ParallelScanEngine` 集成 `RateLimiter`
+  - 在发送探针前检查速率限制 (`check_rate()`)
+  - 在发送探针后记录发送 (`record_sent()`)
+
+**P1: Decoy Scan integration - 调查完成** 🔍
+- CLI `-D` 参数: **已存在** (args.rs line 283-290)
+- CLI 解析: **已实现** (parse_decoy_ips, build_evasion_config)
+- 扫描引擎集成: **缺失** - DecoyScheduler 未被使用
+- 集成要求:
+  1. 为每个端口发送多个探针 (每个 decoy IP + real IP 各一个)
+  2. 只处理 real IP 的响应 (decoy IP 不会响应)
+  3. 跟踪 real vs decoy 探针
+  4. Raw socket spoofing 限制: 无法接收对伪造 IP 的响应
+- 建议: 需要 P2 或单独 Phase 完整实现
+
+**P1: Stealth Scans parallelization - 调查中** 🔍
+- 当前架构: 串行扫描 (send_probe -> wait_response -> repeat)
+- 性能影响: 30-40% 慢于 nmap
+- 并行化选项:
+  1. 扩展 ParallelScanEngine 支持 FIN/NULL/XMAS/MAIMON flags
+  2. 实现 batch sending (发送 N 个探针，收集所有响应)
+  3. 文档当前状态，移至 P2 或单独 Phase
+  - 创建 `rustnmap-common/src/rate.rs` 模块，移动 `RateLimiter` 到共享 crate
+  - 在 `ScanConfig` 添加 `min_rate` 和 `max_rate` 字段
+  - 在 `ParallelScanEngine` 集成 `RateLimiter`
+  - 在发送探针前检查速率限制 (`check_rate()`)
+  - 在发送探针后记录发送 (`record_sent()`)
+- 修改的文件:
+  - `crates/rustnmap-common/src/scan.rs` - 添加 min_rate/max_rate 字段
+  - `crates/rustnmap-common/src/rate.rs` - 新建 RateLimiter 模块
+  - `crates/rustnmap-common/src/lib.rs` - 导出 rate 模块
+  - `crates/rustnmap-scan/src/ultrascan.rs` - 集成 RateLimiter
+  - `crates/rustnmap-core/src/congestion.rs` - 重新导出 RateLimiter
+  - `crates/rustnmap-core/src/orchestrator.rs` - 传递 min_rate/max_rate 配置
 
 **性能差异分析**:
 - 某些目标本身扫描慢 (110.242.74.102: 64.52s vs nmap 1.38s = 47x)

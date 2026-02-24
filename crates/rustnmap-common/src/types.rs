@@ -229,7 +229,10 @@ impl PortRange {
     /// # Errors
     ///
     /// Returns an error if start > end or if either is 0.
-    #[expect(clippy::missing_const_for_fn, reason = "cannot be const: returns Result and constructs Error variants")]
+    #[expect(
+        clippy::missing_const_for_fn,
+        reason = "cannot be const: returns Result and constructs Error variants"
+    )]
     pub fn new(start: Port, end: Port) -> crate::Result<Self> {
         if start == 0 || end == 0 {
             return Err(Error::Target(TargetError::PortOutOfRange {

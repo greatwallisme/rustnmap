@@ -80,10 +80,11 @@ impl TcpConnectScanner {
     /// use rustnmap_scan::connect_scan::TcpConnectScanner;
     /// use rustnmap_target::Target;
     /// use rustnmap_common::ScanConfig;
+    /// use std::net::Ipv4Addr;
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let scanner = TcpConnectScanner::new(None, ScanConfig::default());
-    /// let target = Target::from_str("192.168.1.1")?;
+    /// let target = Target::from(Ipv4Addr::new(192, 168, 1, 1));
     /// let ports = vec![22, 80, 443];
     /// let results = scanner.scan_ports_parallel(&target, &ports).await;
     /// # Ok(())
@@ -234,8 +235,7 @@ mod tests {
 
     #[test]
     fn test_scanner_custom_parallelism() {
-        let scanner = TcpConnectScanner::new(None, ScanConfig::default())
-            .with_max_parallelism(50);
+        let scanner = TcpConnectScanner::new(None, ScanConfig::default()).with_max_parallelism(50);
         assert_eq!(scanner.max_parallelism, 50);
     }
 }

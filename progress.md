@@ -48,7 +48,7 @@
 
 ---
 
-### 2026-02-24: Phase 15 P0/P1 优化修复 (部分完成)
+### 2026-02-24: Phase 15 P0/P1 优化修复 - 继续进行中
 
 **任务**: 继续修复、优化系统
 
@@ -58,6 +58,40 @@
    - 修改 `run_port_scanning()` 使用 `futures_util::future::join_all`
    - 为每个目标创建异步任务并发执行
    - 共享 `Arc<ParallelScanEngine>` 跨目标任务
+   - 验证: 两个目标扫描比顺序扫描快 18.66s
+
+2. **Min/Max Rate rate limiting** (`rate.rs`, `ultrascan.rs`) ✅
+   - 创建 `rustnmap-common/src/rate.rs` 模块
+   - 移动 `RateLimiter` 从 `rustnmap-core` 到 `rustnmap-common` (避免循环依赖)
+   - 在 `ScanConfig` 添加 `min_rate` 和 `max_rate` 字段
+   - 在 `ParallelScanEngine` 集成 `RateLimiter`
+   - 在发送探针前检查速率限制
+   - 文件:
+     - `crates/rustnmap-common/src/rate.rs` (新建)
+     - `crates/rustnmap-common/src/scan.rs` (添加字段)
+     - `crates/rustnmap-common/src/lib.rs` (导出模块)
+     - `crates/rustnmap-scan/src/ultrascan.rs` (集成 RateLimiter)
+     - `crates/rustnmap-core/src/congestion.rs` (重新导出)
+     - `crates/rustnmap-core/src/orchestrator.rs` (传递配置)
+
+#### P1 调查和评估
+
+**Stealth Scans parallelization**:
+- 调查完成: 当前使用串行扫描 (send + wait 模式)
+- 性能影响: 30-40% 慢于 nmap
+- 建议: 需要架构改进，移至 P2 或单独 Phase
+
+**Decoy Scan integration**:
+- 调查完成: CLI `-D` 参数存在且工作正常
+- 问题: DecoyScheduler 未集成到扫描引擎
+- 技术限制: Raw socket spoofing 无法接收对伪造 IP 的响应
+- 建议: 需要 P2 或单独 Phase 完整实现
+
+#### 待完成
+
+- [P2] Stealth Scans parallelization (需要架构改进)
+- [P2] Decoy Scan integration (需要复杂集成工作)
+- [P2] 测试配置修正 (UDP state, JSON output, T0/Host Timeout)
    - 验证: 两个目标扫描比顺序扫描快 18.66s
    - 文件: `crates/rustnmap-core/src/orchestrator.rs`
 

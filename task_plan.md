@@ -1,11 +1,9 @@
 # Task Plan
 
 **Created**: 2026-02-21
-**Updated**: 2026-02-23 20:20
-**Status**: Phase 15 P2 优化和端口状态修复 - IN PROGRESS
-**Goal**: 修复端口状态分类问题、对齐 Timing Template 参数
-
-**详细分析**: 见 `IMPROVEMENT_PLAN.md`
+**Updated**: 2026-02-24 12:30
+**Status**: Phase 15 P0/P1 优化修复 - 进行中
+**Goal**: 修复性能问题、集成 RateLimiter
 
 ---
 
@@ -16,7 +14,46 @@ Phase 11: 修复测试失败问题 - COMPLETE (被 Phase 13 取代)
 Phase 12: SYN 扫描架构改进 - COMPLETE (被 Phase 13 取代)
 Phase 13: 修复 AF_PACKET 集成和 clippy 错误 - COMPLETE
 Phase 14: 性能优化和网络抖动处理 - COMPLETE
-Phase 15: P2 优化和端口状态修复 - IN PROGRESS
+Phase 15: P0/P1 优化修复 - IN PROGRESS
+
+---
+
+## Phase 15: P0/P1 优化修复 - IN PROGRESS
+
+**目标**: 修复性能问题，特别是 Min/Max Rate 限制和多目标扫描
+
+### P0 修复 - COMPLETE ✅
+
+1. **Multi-target parallel scanning** (`orchestrator.rs`)
+   - 使用 `futures_util::future::join_all` 并发处理目标
+   - 共享 `Arc<ParallelScanEngine>` 跨目标任务
+   - 验证: 两个目标扫描比顺序扫描快 18.66s
+
+2. **Min/Max Rate rate limiting** (`rate.rs`, `ultrascan.rs`)
+   - 创建 `rustnmap-common/src/rate.rs` 模块
+   - 移动 `RateLimiter` 从 `rustnmap-core` 到 `rustnmap-common`
+   - 在 `ScanConfig` 添加 `min_rate` 和 `max_rate` 字段
+   - 在 `ParallelScanEngine` 集成 `RateLimiter`
+   - 在发送探针前检查速率限制
+
+### P1 修复 - IN PROGRESS
+
+1. **Stealth Scans parallelization**
+   - 当前: FIN/NULL/XMAS/MAIMON 使用串行扫描
+   - 调查: 需要 batch sending 或扩展 ParallelScanEngine
+   - 状态: 调查中 - 需要架构改进，建议 P2 或单独 Phase
+
+2. **Decoy Scan integration**
+   - 当前: CLI `-D` 参数存在，但未集成到扫描引擎
+   - 需要: 集成 DecoyScheduler 到 ParallelScanEngine 和 stealth scans
+   - 状态: 调查完成 - 需要复杂集成工作 (raw socket spoofing 限制)
+
+### P2 修复 - PENDING
+
+1. **测试配置修正**
+   - UDP state: closed vs open|filtered
+   - JSON output: nmap 不支持
+   - T0/Host Timeout: nmap 失败但 rustnmap 成功
 
 ---
 

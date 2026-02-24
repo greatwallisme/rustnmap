@@ -161,10 +161,10 @@ impl TcpFinScanner {
                 timeout - elapsed
             };
 
-            match self.socket.recv_packet(
-                recv_buf.as_mut_slice(),
-                Some(remaining_timeout),
-            ) {
+            match self
+                .socket
+                .recv_packet(recv_buf.as_mut_slice(), Some(remaining_timeout))
+            {
                 Ok(len) if len > 0 => {
                     // Check for TCP response first
                     if let Some((flags, _seq, _ack, src_port, src_ip)) =
@@ -181,7 +181,9 @@ impl TcpFinScanner {
                         // Response for different host/port - continue waiting
                     } else if let Some(icmp_resp) = parse_icmp_response(&recv_buf[..len]) {
                         // Check if this ICMP response is for our probe
-                        if let Some(state) = Self::handle_icmp_response(icmp_resp, dst_addr, dst_port) {
+                        if let Some(state) =
+                            Self::handle_icmp_response(icmp_resp, dst_addr, dst_port)
+                        {
                             return Ok(state);
                         }
                         // ICMP response for different probe - continue waiting
@@ -384,10 +386,10 @@ impl TcpNullScanner {
                 timeout - elapsed
             };
 
-            match self.socket.recv_packet(
-                recv_buf.as_mut_slice(),
-                Some(remaining_timeout),
-            ) {
+            match self
+                .socket
+                .recv_packet(recv_buf.as_mut_slice(), Some(remaining_timeout))
+            {
                 Ok(len) if len > 0 => {
                     // Check for TCP response first
                     if let Some((flags, _seq, _ack, src_port, src_ip)) =
@@ -404,7 +406,9 @@ impl TcpNullScanner {
                         // Response for different host/port - continue waiting
                     } else if let Some(icmp_resp) = parse_icmp_response(&recv_buf[..len]) {
                         // Check if this ICMP response is for our probe
-                        if let Some(state) = Self::handle_icmp_response(icmp_resp, dst_addr, dst_port) {
+                        if let Some(state) =
+                            Self::handle_icmp_response(icmp_resp, dst_addr, dst_port)
+                        {
                             return Ok(state);
                         }
                         // ICMP response for different probe - continue waiting
@@ -610,10 +614,10 @@ impl TcpXmasScanner {
                 timeout - elapsed
             };
 
-            match self.socket.recv_packet(
-                recv_buf.as_mut_slice(),
-                Some(remaining_timeout),
-            ) {
+            match self
+                .socket
+                .recv_packet(recv_buf.as_mut_slice(), Some(remaining_timeout))
+            {
                 Ok(len) if len > 0 => {
                     // Check for TCP response first
                     if let Some((flags, _seq, _ack, src_port, src_ip)) =
@@ -630,7 +634,9 @@ impl TcpXmasScanner {
                         // Response for different host/port - continue waiting
                     } else if let Some(icmp_resp) = parse_icmp_response(&recv_buf[..len]) {
                         // Check if this ICMP response is for our probe
-                        if let Some(state) = Self::handle_icmp_response(icmp_resp, dst_addr, dst_port) {
+                        if let Some(state) =
+                            Self::handle_icmp_response(icmp_resp, dst_addr, dst_port)
+                        {
                             return Ok(state);
                         }
                         // ICMP response for different probe - continue waiting
@@ -1014,10 +1020,10 @@ impl TcpMaimonScanner {
                 timeout - elapsed
             };
 
-            match self.socket.recv_packet(
-                recv_buf.as_mut_slice(),
-                Some(remaining_timeout),
-            ) {
+            match self
+                .socket
+                .recv_packet(recv_buf.as_mut_slice(), Some(remaining_timeout))
+            {
                 Ok(len) if len > 0 => {
                     // Check for TCP response first
                     if let Some((flags, _seq, _ack, src_port, src_ip)) =
@@ -1034,7 +1040,9 @@ impl TcpMaimonScanner {
                         // Response for different host/port - continue waiting
                     } else if let Some(icmp_resp) = parse_icmp_response(&recv_buf[..len]) {
                         // Check if this ICMP response is for our probe
-                        if let Some(state) = Self::handle_icmp_response(icmp_resp, dst_addr, dst_port) {
+                        if let Some(state) =
+                            Self::handle_icmp_response(icmp_resp, dst_addr, dst_port)
+                        {
                             return Ok(state);
                         }
                         // ICMP response for different probe - continue waiting

@@ -86,7 +86,10 @@ impl OutputManager {
     }
 
     /// Set verbosity level.
-    #[expect(clippy::missing_const_for_fn, reason = "cannot be const: takes &mut self")]
+    #[expect(
+        clippy::missing_const_for_fn,
+        reason = "cannot be const: takes &mut self"
+    )]
     pub fn set_verbosity(&mut self, verbosity: VerbosityLevel) {
         self.verbosity = verbosity;
     }

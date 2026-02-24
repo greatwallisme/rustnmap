@@ -7,12 +7,14 @@
 #![warn(missing_docs)]
 
 pub mod error;
+pub mod rate;
 pub mod scan;
 pub mod services;
 pub mod types;
 
 // Re-exports for convenience
 pub use error::{Error, Result, ScanError};
+pub use rate::RateLimiter;
 pub use scan::{ScanConfig, TimingTemplate};
 pub use services::{DatabaseSource, ServiceDatabase, ServiceProtocol};
 pub use types::{MacAddr, Port, PortList, PortRange, PortSelector, PortState, Protocol, ScanStats};

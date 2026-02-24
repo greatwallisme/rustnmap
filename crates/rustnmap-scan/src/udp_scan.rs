@@ -276,19 +276,26 @@ impl UdpScanner {
             }
 
             // Try `ICMP` socket for backward compatibility
-            match self.socket_icmp_v4.recv_packet(
-                recv_buf.as_mut_slice(),
-                Some(Duration::from_millis(50)),
-            ) {
+            match self
+                .socket_icmp_v4
+                .recv_packet(recv_buf.as_mut_slice(), Some(Duration::from_millis(50)))
+            {
                 Ok(len) if len > 0 => {
                     if let Some(icmp_resp) = parse_icmp_response(&recv_buf[..len]) {
-                        if let Some(state) = Self::handle_icmp_response_v4(icmp_resp, dst_addr, dst_port) {
+                        if let Some(state) =
+                            Self::handle_icmp_response_v4(icmp_resp, dst_addr, dst_port)
+                        {
                             return Ok(state);
                         }
                     }
                 }
                 Ok(_) => {}
-                Err(e) if matches!(e.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) => {
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                    ) =>
+                {
                     // Continue to UDP socket check
                 }
                 Err(e) => {
@@ -301,10 +308,10 @@ impl UdpScanner {
             }
 
             // Try UDP socket for actual UDP responses (non-blocking check)
-            match self.socket_v4.recv_packet(
-                recv_buf.as_mut_slice(),
-                Some(Duration::from_millis(50)),
-            ) {
+            match self
+                .socket_v4
+                .recv_packet(recv_buf.as_mut_slice(), Some(Duration::from_millis(50)))
+            {
                 Ok(len) if len > 0 => {
                     let src_ip = if len >= 20 {
                         let bytes = [recv_buf[12], recv_buf[13], recv_buf[14], recv_buf[15]];
@@ -405,7 +412,10 @@ impl UdpScanner {
                 timeout - elapsed
             };
 
-            match socket.0.recv_packet(recv_buf.as_mut_slice(), Some(remaining_timeout)) {
+            match socket
+                .0
+                .recv_packet(recv_buf.as_mut_slice(), Some(remaining_timeout))
+            {
                 Ok(len) if len > 0 => {
                     // Check for UDP response first
                     if let Some((src_port, _payload)) = parse_ipv6_udp_response(&recv_buf[..len]) {
@@ -417,7 +427,8 @@ impl UdpScanner {
                     }
 
                     // Check for ICMPv6 response
-                    if let Some((code, orig_ip, orig_port)) = parse_icmpv6_unreachable(&recv_buf[..len])
+                    if let Some((code, orig_ip, orig_port)) =
+                        parse_icmpv6_unreachable(&recv_buf[..len])
                     {
                         // Check if this ICMPv6 response is for our probe
                         if let Some(state) = Self::handle_icmpv6_response(
@@ -577,11 +588,8 @@ impl UdpScanner {
         // For other addresses, try common interface names
         // Includes both wired and wireless interface naming conventions
         for if_name in [
-            "eth0", "eth1",
-            "ens33", "ens34", "ens37",
-            "enp0s3", "enp0s8", "enp1s0",
-            "wlan0", "wlp3s0", "wlp2s0", "wlp1s0",
-            "en0", "en1",
+            "eth0", "eth1", "ens33", "ens34", "ens37", "enp0s3", "enp0s8", "enp1s0", "wlan0",
+            "wlp3s0", "wlp2s0", "wlp1s0", "en0", "en1",
         ] {
             // Try to create the engine - if successful, this interface exists
             let ring_config = RingConfig::default();

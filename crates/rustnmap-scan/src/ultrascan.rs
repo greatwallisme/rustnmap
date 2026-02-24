@@ -38,15 +38,15 @@
 
 use std::collections::HashMap;
 use std::io::{self, ErrorKind};
+use std::mem;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::os::fd::{AsRawFd, FromRawFd};
-use std::sync::Arc as StdArc;
-use std::time::{Duration, Instant};
-use std::sync::Arc;
 use std::ptr;
-use std::mem;
+use std::sync::Arc as StdArc;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
-use rustnmap_common::{Port, PortState, ScanConfig};
+use rustnmap_common::{Port, PortState, RateLimiter, ScanConfig};
 use rustnmap_net::raw_socket::{parse_tcp_response, RawSocket, TcpPacketBuilder};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -271,8 +271,7 @@ impl SimpleAfPacket {
             libc::bind(
                 fd.as_raw_fd(),
                 (&raw const addr).cast::<libc::sockaddr>(),
-                u32::try_from(mem::size_of::<libc::sockaddr_ll>())
-                    .unwrap_or(u32::MAX),
+                u32::try_from(mem::size_of::<libc::sockaddr_ll>()).unwrap_or(u32::MAX),
             )
         };
         if ret < 0 {
@@ -286,9 +285,7 @@ impl SimpleAfPacket {
         }
         // SAFETY: fd is valid, flags is the current flag set from F_GETFL.
         // Adding O_NONBLOCK is a safe flag modification.
-        let ret = unsafe {
-            libc::fcntl(fd.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK)
-        };
+        let ret = unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) };
         if ret < 0 {
             return Err(io::Error::last_os_error());
         }
@@ -311,8 +308,7 @@ impl SimpleAfPacket {
                 libc::SOL_PACKET,
                 libc::PACKET_ADD_MEMBERSHIP,
                 (&raw const mreq).cast::<libc::c_void>(),
-                u32::try_from(mem::size_of::<libc::packet_mreq>())
-                    .unwrap_or(u32::MAX),
+                u32::try_from(mem::size_of::<libc::packet_mreq>()).unwrap_or(u32::MAX),
             )
         };
         if ret < 0 {
@@ -495,6 +491,7 @@ impl ReceivedPacket {
 /// 3. **Response Matching**: Correlates responses to outstanding probes
 /// 4. **Timeout Handling**: Retries or times out probes that don't respond
 /// 5. **Congestion Control**: TCP-like adaptive timeout and parallelism
+/// 6. **Rate Limiting**: Min/max rate enforcement for bandwidth control
 ///
 /// # Performance
 ///
@@ -513,6 +510,8 @@ pub struct ParallelScanEngine {
     config: ScanConfig,
     /// Congestion controller for adaptive timing.
     congestion: Arc<InternalCongestionController>,
+    /// Rate limiter for min/max rate enforcement.
+    rate_limiter: RateLimiter,
     /// Maximum parallelism (max outstanding probes).
     max_parallelism: usize,
     /// Timeout for the entire scan.
@@ -536,12 +535,15 @@ impl ParallelScanEngine {
     /// Returns an error if:
     /// - The process lacks `CAP_NET_RAW` capability (requires root)
     /// - The system runs out of file descriptors
-    pub fn new(local_addr: Ipv4Addr, config: ScanConfig) -> Result<Self, rustnmap_common::ScanError> {
+    pub fn new(
+        local_addr: Ipv4Addr,
+        config: ScanConfig,
+    ) -> Result<Self, rustnmap_common::ScanError> {
         let socket = StdArc::new(
             // Use IPPROTO_RAW to receive all IP packets, not just TCP.
-        // This prevents kernel TCP stack from interfering with packet reception.
-        // We manually filter for TCP responses in parse_packet().
-        RawSocket::with_protocol(255).map_err(|e| {
+            // This prevents kernel TCP stack from interfering with packet reception.
+            // We manually filter for TCP responses in parse_packet().
+            RawSocket::with_protocol(255).map_err(|e| {
                 rustnmap_common::ScanError::PermissionDenied {
                     operation: format!("create raw socket: {e}"),
                 }
@@ -557,12 +559,16 @@ impl ParallelScanEngine {
         // Create internal congestion controller for adaptive timing
         let congestion = Arc::new(InternalCongestionController::new(max_parallel));
 
+        // Create rate limiter for min/max rate enforcement
+        let rate_limiter = RateLimiter::new(config.min_rate, config.max_rate);
+
         Ok(Self {
             local_addr,
             socket,
             packet_socket,
             config,
             congestion,
+            rate_limiter,
             max_parallelism: max_parallel,
             scan_timeout: DEFAULT_SCAN_TIMEOUT,
         })
@@ -633,8 +639,8 @@ impl ParallelScanEngine {
 
         // Fallback: try common interface names in order of likelihood
         for if_name in [
-            "wlp3s0", "wlan0", "wlp2s0", "wlp1s0",  // Wireless
-            "eth0", "eth1", "ens33", "ens34", "enp0s3", "enp0s8",  // Wired
+            "wlp3s0", "wlan0", "wlp2s0", "wlp1s0", // Wireless
+            "eth0", "eth1", "ens33", "ens34", "enp0s3", "enp0s8", // Wired
         ] {
             // Check if interface exists by reading /sys/class/net/
             let path = format!("/sys/class/net/{if_name}/operstate");
@@ -737,10 +743,23 @@ impl ParallelScanEngine {
 
             // Send more probes if we haven't reached congestion window
             while outstanding.len() < current_cwnd && outstanding.len() < self.max_parallelism {
+                // Check rate limiter before sending
+                if let Some(wait_time) = self.rate_limiter.check_rate() {
+                    // Wait for rate limit
+                    tokio::time::sleep(wait_time).await;
+                    // Re-check parallelism after waiting
+                    if outstanding.len() >= current_cwnd
+                        || outstanding.len() >= self.max_parallelism
+                    {
+                        break;
+                    }
+                }
+
                 if let Some(port) = ports_iter.next() {
                     self.send_probe(target, port, &mut outstanding)?;
-                    // Record packet sent for congestion stats
+                    // Record packet sent for congestion stats and rate limiting
                     self.congestion.on_packet_sent();
+                    self.rate_limiter.record_sent();
                 } else {
                     break;
                 }
@@ -790,7 +809,12 @@ impl ParallelScanEngine {
             for probe in retry_probes.drain(..) {
                 let current_cwnd = self.congestion.cwnd();
                 if outstanding.len() < current_cwnd && outstanding.len() < self.max_parallelism {
+                    // Check rate limiter before resending
+                    if let Some(wait_time) = self.rate_limiter.check_rate() {
+                        tokio::time::sleep(wait_time).await;
+                    }
                     self.resend_probe(probe, &mut outstanding)?;
+                    self.rate_limiter.record_sent();
                 } else {
                     // Can't resend due to parallelism limit, mark as filtered
                     results.entry(probe.port).or_insert(PortState::Filtered);
@@ -891,8 +915,7 @@ impl ParallelScanEngine {
                         }
                     }
                     Ok(Err(e))
-                        if e.kind() == ErrorKind::WouldBlock
-                            || e.kind() == ErrorKind::TimedOut =>
+                        if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::TimedOut =>
                     {
                         // Normal timeout, loop will check is_closed() on next iteration
                     }
@@ -969,11 +992,12 @@ impl ParallelScanEngine {
         probe.sent_time = Instant::now();
 
         // Rebuild and resend the packet
-        let packet = TcpPacketBuilder::new(self.local_addr, probe.target, probe.src_port, probe.port)
-            .seq(probe.seq)
-            .syn()
-            .window(65_535)
-            .build();
+        let packet =
+            TcpPacketBuilder::new(self.local_addr, probe.target, probe.src_port, probe.port)
+                .seq(probe.seq)
+                .syn()
+                .window(65_535)
+                .build();
 
         let dst_sockaddr = SocketAddr::new(std::net::IpAddr::V4(probe.target), probe.port);
         self.socket

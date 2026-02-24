@@ -26,18 +26,24 @@ pub struct ScanConfig {
     pub scan_delay: Duration,
     /// DNS server address for local IP detection (default: 8.8.8.8:53).
     pub dns_server: String,
+    /// Minimum rate in packets per second (None = no limit).
+    pub min_rate: Option<u64>,
+    /// Maximum rate in packets per second (None = no limit).
+    pub max_rate: Option<u64>,
 }
 
 impl Default for ScanConfig {
     fn default() -> Self {
         Self {
-            min_rtt: Duration::from_millis(100), // Nmap MIN_RTT_TIMEOUT
-            max_rtt: Duration::from_secs(10),    // Nmap MAX_RTT_TIMEOUT
+            min_rtt: Duration::from_millis(100),      // Nmap MIN_RTT_TIMEOUT
+            max_rtt: Duration::from_secs(10),         // Nmap MAX_RTT_TIMEOUT
             initial_rtt: Duration::from_millis(1000), // Nmap INITIAL_RTT_TIMEOUT
-            max_retries: 10, // Nmap MAX_RETRANSMISSIONS (11 probes max)
+            max_retries: 10,                          // Nmap MAX_RETRANSMISSIONS (11 probes max)
             host_timeout: 900_000,
             scan_delay: Duration::ZERO,
             dns_server: crate::DEFAULT_DNS_SERVER.to_string(),
+            min_rate: None,
+            max_rate: None,
         }
     }
 }
@@ -74,7 +80,7 @@ impl TimingTemplate {
         match self {
             Self::Paranoid => ScanConfig {
                 min_rtt: Duration::from_millis(100),
-                max_rtt: Duration::from_secs(300), // 5 minutes
+                max_rtt: Duration::from_secs(300),     // 5 minutes
                 initial_rtt: Duration::from_secs(300), // 5 minutes
                 max_retries: 10,
                 host_timeout: 900_000,

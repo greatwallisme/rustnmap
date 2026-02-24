@@ -22,8 +22,8 @@ use rustnmap_scan::stealth_scans::{
     TcpXmasScanner,
 };
 use rustnmap_scan::syn_scan::TcpSynScanner;
-use rustnmap_scan::ultrascan::ParallelScanEngine;
 use rustnmap_scan::udp_scan::UdpScanner;
+use rustnmap_scan::ultrascan::ParallelScanEngine;
 use rustnmap_target::discovery::{HostDiscovery, HostState as DiscoveryHostState};
 use rustnmap_target::Target;
 use tokio::sync::RwLock;
@@ -433,6 +433,8 @@ impl ScanOrchestrator {
                             .unwrap_or(30000),
                         scan_delay: session.config.scan_delay,
                         dns_server: session.config.dns_server.clone(),
+                        min_rate: None,
+                        max_rate: None,
                     };
                     let discovery = HostDiscovery::new(discovery_config);
 
@@ -510,9 +512,9 @@ impl ScanOrchestrator {
 
             // Check for IPv6 targets or localhost targets - these require fallback
             let has_ipv6 = targets.iter().any(|t| matches!(t.ip, IpAddr::V6(_)));
-            let has_localhost = targets.iter().any(|t| {
-                matches!(t.ip, IpAddr::V4(addr) if addr.is_loopback())
-            });
+            let has_localhost = targets
+                .iter()
+                .any(|t| matches!(t.ip, IpAddr::V4(addr) if addr.is_loopback()));
 
             if has_ipv6 {
                 warn!("IPv6 not supported by parallel engine, falling back to sequential");
@@ -546,6 +548,8 @@ impl ScanOrchestrator {
                     .unwrap_or(30000),
                 scan_delay: self.session.config.scan_delay,
                 dns_server: self.session.config.dns_server.clone(),
+                min_rate: self.session.config.min_rate,
+                max_rate: self.session.config.max_rate,
             };
 
             let engine = if let Ok(engine) = ParallelScanEngine::new(local_addr, scanner_config) {
@@ -651,7 +655,10 @@ impl ScanOrchestrator {
             }
         } else {
             // Use sequential scanning for other scan types
-            info!("Using sequential scanning for scan type: {:?}", primary_scan_type);
+            info!(
+                "Using sequential scanning for scan type: {:?}",
+                primary_scan_type
+            );
             let ports = self.get_ports_for_scan();
             return self.run_port_scanning_sequential(&targets, &ports).await;
         }
@@ -862,6 +869,8 @@ impl ScanOrchestrator {
                 .unwrap_or(30000),
             scan_delay: self.session.config.scan_delay,
             dns_server: self.session.config.dns_server.clone(),
+            min_rate: self.session.config.min_rate,
+            max_rate: self.session.config.max_rate,
         };
 
         // Get local address for the scanner by detecting the source IP for the target

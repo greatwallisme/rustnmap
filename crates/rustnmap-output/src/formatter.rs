@@ -336,7 +336,9 @@ impl NormalFormatter {
     /// Create new normal formatter with default settings.
     #[must_use]
     pub const fn new() -> Self {
-        Self { verbosity: VerbosityLevel::Normal }
+        Self {
+            verbosity: VerbosityLevel::Normal,
+        }
     }
 
     /// Create normal formatter with specified verbosity.
@@ -500,7 +502,10 @@ impl OutputFormatter for NormalFormatter {
         };
 
         // Build service string with version info when available
-        #[expect(clippy::option_if_let_else, reason = "if let/else is more readable than map_or_else for this complex conditional logic")]
+        #[expect(
+            clippy::option_if_let_else,
+            reason = "if let/else is more readable than map_or_else for this complex conditional logic"
+        )]
         let service_string = if let Some(service) = &port.service {
             // Check if we have detailed version info (method == "probed" means we actually detected it)
             if service.method == "probed" {
