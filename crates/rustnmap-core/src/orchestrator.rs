@@ -668,11 +668,36 @@ impl ScanOrchestrator {
     }
 
     /// Runs port scanning sequentially (fallback for non-SYN scans or when raw socket fails).
+    ///
+    /// For stealth scans (FIN/NULL/XMAS/Maimon), uses batch mode for improved performance.
     async fn run_port_scanning_sequential(
         &self,
         targets: &[Target],
         ports: &[u16],
     ) -> Result<Vec<HostResult>> {
+        // Get the primary scan type
+        let primary_scan_type = self
+            .session
+            .config
+            .scan_types
+            .first()
+            .copied()
+            .unwrap_or(ScanType::TcpSyn);
+
+        // Check if this is a stealth scan that supports batch mode
+        let use_batch = matches!(
+            primary_scan_type,
+            ScanType::TcpFin | ScanType::TcpNull | ScanType::TcpXmas | ScanType::TcpMaimon
+        );
+
+        if use_batch {
+            info!(
+                scan_type = ?primary_scan_type,
+                "Using batch scanning mode for stealth scan"
+            );
+            return self.run_port_scanning_batch(targets, ports, primary_scan_type);
+        }
+
         info!("Starting sequential port scanning");
 
         let mut host_results = Vec::new();
@@ -711,6 +736,188 @@ impl ScanOrchestrator {
             host_results.push(host_result);
         }
 
+        Ok(host_results)
+    }
+
+    /// Runs port scanning in batch mode for stealth scans.
+    ///
+    /// This method sends all probes first, then collects responses,
+    /// providing significant performance improvement over serial scanning.
+    ///
+    /// Note: This method is synchronous because the underlying batch scan
+    /// operations in stealth scanners are synchronous (raw socket I/O).
+    #[expect(
+        clippy::too_many_lines,
+        reason = "Batch scanning requires handling all stealth scan types and result conversion in one function for clarity"
+    )]
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "Returns Result for API consistency with other scan methods; errors are logged and skipped to process all targets"
+    )]
+    fn run_port_scanning_batch(
+        &self,
+        targets: &[Target],
+        ports: &[u16],
+        scan_type: ScanType,
+    ) -> Result<Vec<HostResult>> {
+        info!("Starting batch port scanning for stealth scan");
+
+        let local_addr = get_local_address(&self.session.config.dns_server);
+        let timing_config = self.session.config.timing_template.scan_config();
+
+        let scanner_config = ScannerConfig {
+            min_rtt: timing_config.min_rtt,
+            max_rtt: timing_config.max_rtt,
+            initial_rtt: timing_config.initial_rtt,
+            max_retries: timing_config.max_retries,
+            host_timeout: self
+                .session
+                .config
+                .host_timeout
+                .as_millis()
+                .try_into()
+                .unwrap_or(30000),
+            scan_delay: self.session.config.scan_delay,
+            dns_server: self.session.config.dns_server.clone(),
+            min_rate: self.session.config.min_rate,
+            max_rate: self.session.config.max_rate,
+        };
+
+        let mut host_results = Vec::new();
+
+        for target in targets {
+            // Get IPv4 address
+            let target_ip = match target.ip {
+                IpAddr::V4(addr) => addr,
+                IpAddr::V6(_) => {
+                    warn!(ip = %target.ip, "IPv6 not supported for stealth scans, skipping");
+                    continue;
+                }
+            };
+
+            // Run batch scan based on scan type
+            let scan_results = match scan_type {
+                ScanType::TcpFin => match TcpFinScanner::new(local_addr, scanner_config.clone()) {
+                    Ok(scanner) => scanner.scan_ports_batch(target_ip, ports),
+                    Err(e) => {
+                        warn!(error = %e, "Failed to create FIN scanner");
+                        continue;
+                    }
+                },
+                ScanType::TcpNull => {
+                    match TcpNullScanner::new(local_addr, scanner_config.clone()) {
+                        Ok(scanner) => scanner.scan_ports_batch(target_ip, ports),
+                        Err(e) => {
+                            warn!(error = %e, "Failed to create NULL scanner");
+                            continue;
+                        }
+                    }
+                }
+                ScanType::TcpXmas => {
+                    match TcpXmasScanner::new(local_addr, scanner_config.clone()) {
+                        Ok(scanner) => scanner.scan_ports_batch(target_ip, ports),
+                        Err(e) => {
+                            warn!(error = %e, "Failed to create XMAS scanner");
+                            continue;
+                        }
+                    }
+                }
+                ScanType::TcpMaimon => {
+                    match TcpMaimonScanner::new(local_addr, scanner_config.clone()) {
+                        Ok(scanner) => scanner.scan_ports_batch(target_ip, ports),
+                        Err(e) => {
+                            warn!(error = %e, "Failed to create Maimon scanner");
+                            continue;
+                        }
+                    }
+                }
+                _ => {
+                    // Should not reach here, but handle gracefully
+                    warn!(scan_type = ?scan_type, "Unsupported scan type for batch mode");
+                    continue;
+                }
+            };
+
+            // Process scan results
+            let port_results = match scan_results {
+                Ok(results) => results,
+                Err(e) => {
+                    warn!(ip = %target.ip, error = %e, "Batch scan failed");
+                    continue;
+                }
+            };
+
+            // Convert to PortResult format
+            let mut converted_results = Vec::new();
+            for (port, state) in &port_results {
+                let output_state = match state {
+                    rustnmap_common::PortState::Open => PortState::Open,
+                    rustnmap_common::PortState::Closed => PortState::Closed,
+                    rustnmap_common::PortState::Filtered => PortState::Filtered,
+                    rustnmap_common::PortState::Unfiltered => PortState::Unfiltered,
+                    rustnmap_common::PortState::OpenOrFiltered => PortState::OpenOrFiltered,
+                    rustnmap_common::PortState::ClosedOrFiltered => PortState::ClosedOrFiltered,
+                    rustnmap_common::PortState::OpenOrClosed => PortState::OpenOrClosed,
+                };
+
+                let is_open = *state == rustnmap_common::PortState::Open;
+                if is_open {
+                    self.session.stats.record_open_port();
+                }
+                self.session.stats.record_packet_sent();
+
+                let service_info =
+                    service_info_from_db(*port, rustnmap_common::ServiceProtocol::Tcp);
+
+                converted_results.push(PortResult {
+                    number: *port,
+                    protocol: rustnmap_output::models::Protocol::Tcp,
+                    state: output_state,
+                    state_reason: "batch-scan".to_string(),
+                    state_ttl: None,
+                    service: service_info,
+                    scripts: Vec::new(),
+                });
+            }
+
+            // Add ports that weren't in results (shouldn't happen, but be safe)
+            for port in ports {
+                if !port_results.contains_key(port) {
+                    self.session.stats.record_packet_sent();
+                    converted_results.push(PortResult {
+                        number: *port,
+                        protocol: rustnmap_output::models::Protocol::Tcp,
+                        state: PortState::OpenOrFiltered,
+                        state_reason: "no-response".to_string(),
+                        state_ttl: None,
+                        service: service_info_from_db(*port, rustnmap_common::ServiceProtocol::Tcp),
+                        scripts: Vec::new(),
+                    });
+                }
+            }
+
+            let host_result = HostResult {
+                ip: target.ip,
+                mac: None,
+                hostname: target.hostname.clone(),
+                status: HostStatus::Up,
+                status_reason: "batch-scan".to_string(),
+                latency: std::time::Duration::from_millis(1),
+                ports: converted_results,
+                os_matches: Vec::new(),
+                scripts: Vec::new(),
+                traceroute: None,
+                times: rustnmap_output::models::HostTimes {
+                    srtt: None,
+                    rttvar: None,
+                    timeout: None,
+                },
+            };
+
+            host_results.push(host_result);
+        }
+
+        info!(hosts = host_results.len(), "Batch port scanning completed");
         Ok(host_results)
     }
 

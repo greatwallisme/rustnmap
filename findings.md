@@ -35,15 +35,23 @@
 - 技术限制: Raw socket spoofing 无法接收对伪造 IP 的响应
 - 建议: **移至 P2** - 需要单独 Phase 进行完整实现
 
-**P1: Stealth Scans parallelization - 分析完成** 🔍
-- 当前架构: 串行扫描 (send_probe -> wait_response -> repeat)
-- 性能影响: 30-40% 慢于 nmap
+**P1: Stealth Scans parallelization - 已修复** ✅
+- ~~当前架构: 串行扫描 (send_probe -> wait_response -> repeat)~~
+- ~~性能影响: 30-40% 慢于 nmap~~
+- 修复方案: 实现批量扫描 (`scan_ports_batch`)
+  - Phase 1: 发送所有探针
+  - Phase 2: 收集所有响应 (deadline-based timeout)
+  - Phase 3: 未响应端口标记为 Open|Filtered
 - 代码位置: `crates/rustnmap-scan/src/stealth_scans.rs`
-  - `TcpFinScanner`: 行 129-215 `send_fin_probe()`
-  - `TcpNullScanner`: 行 354-440 `send_null_probe()`
-  - `TcpXmasScanner`: 行 579-668 `send_xmas_probe()`
-  - `TcpMaimonScanner`: 行 986-1074 `send_maimon_probe()`
-- 建议: **移至 P2** - 需要单独 Phase 进行架构改进
+  - `TcpFinScanner::scan_ports_batch()`
+  - `TcpNullScanner::scan_ports_batch()`
+  - `TcpXmasScanner::scan_ports_batch()`
+  - `TcpMaimonScanner::scan_ports_batch()`
+- Orchestrator 集成: `crates/rustnmap-core/src/orchestrator.rs`
+  - `run_port_scanning_batch()` 方法自动检测并使用批量扫描
+- 性能提升: ~N倍 (N = 端口数量)
+  - Serial: ~N * `initial_rtt` (e.g., N * 1000ms)
+  - Batch: ~`initial_rtt` (e.g., 1000ms total)
 
 **P0: Multi-target parallel scanning - 已修复 ✅**
 - 修改 orchestrator.rs 以并行扫描多个目标
