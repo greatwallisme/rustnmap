@@ -1,8 +1,93 @@
 # Findings - RustNmap 项目分析
 
 **Created**: 2026-02-19
-**Updated**: 2026-02-24 17:56
-**Status**: Phase 17 - Bug Investigation & Fixes
+**Updated**: 2026-02-25 15:30
+**Status**: Phase 18 - Performance Investigation
+
+---
+
+## 最新发现 (2026-02-25 15:30)
+
+### Benchmark 脚本解析问题 - ✅ 已修复
+
+**问题**: `compare_scans.py` 无法正确解析 nmap 和 rustnmap 的输出
+
+**根本原因**:
+- nmap 使用 "Not shown: 95 closed ports" 隐藏 closed 端口
+- rustnmap 显示所有端口包括 closed 端口
+- 解析逻辑没有处理 nmap 的 "Not shown" 摘要行
+
+**修复**:
+1. 添加 `hidden_closed_count` 字段到 `ScanResult`
+2. 解析 "Not shown: X closed ports" 行
+3. 比较时过滤掉 nmap 隐藏的 closed 端口
+
+**修改文件**: `benchmarks/compare_scans.py`
+
+---
+
+### SYN 扫描性能问题 - ✅ 已确认根本原因 (2026-02-25 15:45)
+
+**问题**: rustnmap SYN 扫描比 nmap 慢
+
+| 端口数 | rustnmap | nmap | 倍数 |
+|--------|----------|------|------|
+| 5      | 800ms    | 650ms | 1.23x |
+| 100    | 5600ms   | 2320ms | 2.41x |
+
+**Nmap 源代码分析** (reference/nmap/timing.cc):
+
+```cpp
+// timing.cc:270-273
+low_cwnd = o.min_parallelism ? o.min_parallelism : 1;          // = 1
+max_cwnd = MAX(low_cwnd, o.max_parallelism ? o.max_parallelism : 300);  // = 300
+group_initial_cwnd = box(low_cwnd, max_cwnd, 10);              // = 10
+
+// utils.h:93-100 - box() 函数只是限制数值范围
+template<class T> T box(T bmin, T bmax, T bnum) {
+  if (bnum >= bmax) return bmax;
+  if (bnum <= bmin) return bmin;
+  return bnum;  // 返回 10
+}
+```
+
+| 参数 | Nmap | RustNmap |
+|------|------|----------|
+| max_cwnd | **300** | 100 |
+| initial_cwnd | **10** | 25 (max_cwnd/4) |
+| ssthresh | 75 | 50 |
+
+**根本原因确认**:
+
+1. **max_cwnd 太小** (主要瓶颈)
+   - nmap: max_cwnd = 300 (默认)
+   - rustnmap: max_cwnd = 100
+   - 即使 rustnmap 达到最大并行度，也只有 nmap 的 1/3
+
+2. **cwnd 增长机制差异**
+   - nmap: `cwnd += slow_incr * cc_scale(perf) * scale` (timing.cc:227)
+   - rustnmap: `cwnd *= 2` (指数增长)
+   - nmap 的线性增长每 ACK 增加 ~1，rustnmap 指数增长翻倍
+
+**修复方案**:
+
+将 `DEFAULT_MAX_PARALLELISM` 从 100 增加到 300：
+
+```rust
+// ultrascan.rs:401
+// 修复前
+pub const DEFAULT_MAX_PARALLELISM: usize = 100;
+
+// 修复后
+pub const DEFAULT_MAX_PARALLELISM: usize = 300;
+```
+
+**预期改进**:
+- 5 端口: 无明显变化 (受 RTT 限制)
+- 100 端口: 5600ms → ~2500ms (2.2x faster, 接近 nmap)
+
+**修改文件**:
+- `crates/rustnmap-scan/src/ultrascan.rs:401` - 修改 DEFAULT_MAX_PARALLELISM
 
 ---
 

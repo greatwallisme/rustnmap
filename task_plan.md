@@ -1,13 +1,89 @@
 # Task Plan
 
 **Created**: 2026-02-21
-**Updated**: 2026-02-25
-**Status**: Phase 17 - Bug Investigation & Nmap Database Integration - COMPLETE
-**Goal**: Fix MAC address output, FIN scan accuracy, integrate nmap-services/protocols/rpc databases
+**Updated**: 2026-02-25 16:30
+**Status**: Phase 18 - Benchmark Parsing Fix & Performance Investigation
+**Goal**: Fix benchmark parsing logic, investigate and fix SYN scan performance bottleneck
 
 ---
 
 ## 当前阶段
+
+Phase 18: Benchmark Parsing Fix & Performance Investigation - IN PROGRESS
+
+### 完成工作 (2026-02-25 16:30)
+
+1. **Benchmark 脚本解析修复** ✅
+   - 修复 `benchmarks/compare_scans.py` 中的端口解析逻辑
+   - 添加对 nmap "Not shown: X closed ports" 行的解析
+   - 添加 `hidden_closed_count` 字段跟踪 nmap 隐藏的 closed 端口
+   - 比较逻辑过滤掉 nmap 隐藏的 closed 端口，避免误报
+
+2. **编译警告修复** ✅
+   - 修复 `stealth_scans.rs:815` 中未使用的变量 `_resp_dst_port`
+   - 改为 `_resp_dst_port` 以避免 clippy 警告
+
+3. **性能问题深入调查** (2026-02-25 16:30)
+   - 读取 nmap 源码 (reference/nmap/timing.cc) 确认拥塞控制参数
+   - 发现问题: max_parallelism=300 导致性能严重下降 (21s vs 6s)
+   - 修复拥塞控制实现:
+     - initial_cwnd: 75 → 10 (匹配 nmap)
+     - ssthresh: 150 → 75 (匹配 nmap)
+     - Slow start: 指数增长 → 线性 +1 (匹配 nmap)
+   - 移除 AF_PACKET 接收循环的 10ms 睡眠延迟
+   - 实现批量接收处理 (最多 32 个数据包/批)
+   - 恢复 max_parallelism=100 (300 值太大会导致性能问题)
+
+4. **当前性能状态** ⚠️
+   - Fast Scan (100 ports): rustnmap 6.2s vs nmap 2.6s (2.4x 慢)
+   - Top Ports (100 ports): rustnmap 2.7s vs nmap 2.4s (接近!)
+   - 问题: `-F` flag 比 `--top-ports 100` 慢很多 (6.2s vs 2.7s)
+   - 待解决: 为什么相同端口数但性能不同
+
+### 待解决问题 (2026-02-25 16:30)
+
+1. **`-F` flag 性能异常** (HIGH PRIORITY)
+   - 现象: `-F` 需要 6.2s, `--top-ports 100` 只需 2.7s
+   - 两者都扫描 100 个端口,但性能差异巨大
+   - 需要检查:
+     - 是否 timing template 被隐式修改
+     - 是否端口顺序不同导致不同的网络行为
+     - 是否有其他隐含的差异
+
+2. **整体性能仍需优化**
+   - 当前: rustnmap 6.2s vs nmap 2.6s (2.4x 慢)
+   - 目标: 达到或超过 nmap 性能
+   - 可能方向:
+     - 增加 initial_cwnd (从 10 提高到 20-30)
+     - 改进线性增长速度
+     - 检查是否有其他隐藏的延迟
+
+3. **未测试的修改**
+   - 修改尚未通过完整测试验证
+   - 需要运行完整 benchmark 套件
+
+**修复方案**:
+
+| 方案 | 描述 | 风险 |
+|------|------|------|
+| A. 提高初始 cwnd 到 80-90% | 立即高并行度 | 可能导致丢包 |
+| B. 基于 RTT 动态调整 | 低 RTT → 高初始 cwnd | 复杂度增加 |
+| C. 端口数量阈值 | 小端口用保守值，大端口用激进值 | 需要测试阈值 |
+
+**推荐方案**: 方案 C + 方案 A 组合
+- 端口数 > 50: initial_cwnd = max(50, max_cwnd * 0.9)
+- 端口数 <= 50: 保持 current_cwnd = max_cwnd / 4
+
+### 下一步行动
+
+1. 修改 `InternalCongestionController::new()` 接受端口数量参数
+2. 实现基于端口数量的动态初始 cwnd
+3. 运行性能测试验证修复效果
+4. 如果仍慢，考虑其他优化 (接收循环、批量发送等)
+
+---
+
+## 历史阶段
 
 Phase 17: Bug Investigation & Nmap Database Integration - COMPLETE
 

@@ -29,6 +29,7 @@ class ScanResult:
     stderr: str
     output_path: Path | None = None
     raw_output: bytes = b""
+    hidden_closed_count: int = 0
 
     @property
     def stdout_line_count(self) -> int:
@@ -49,6 +50,7 @@ class ScanResult:
     def get_ports(self) -> dict[str, dict[str, str]]:
         """Parse port information from scan output."""
         ports = {}
+        hidden_closed_count = 0
 
         # Try parsing normal output format
         lines = self.stdout.split("\n")
@@ -56,6 +58,14 @@ class ScanResult:
 
         for line in lines:
             line = line.strip()
+
+            # Parse "Not shown: X closed ports" line (nmap format)
+            if "Not shown:" in line and "closed ports" in line:
+                import re
+                match = re.search(r'Not shown:\s*(\d+)\s+closed ports?', line)
+                if match:
+                    hidden_closed_count = int(match.group(1))
+                continue
 
             # Detect port section - handle both "PORT" and "STATE" on same line
             if "PORT" in line and "STATE" in line:
@@ -94,6 +104,8 @@ class ScanResult:
                         # Not a port line, exit port section
                         in_port_section = False
 
+        # Store hidden closed count for comparison
+        self.hidden_closed_count = hidden_closed_count
         return ports
 
     def get_xml_ports(self) -> dict[str, dict[str, str]]:
@@ -382,6 +394,21 @@ class ScanComparator:
             # Find differences
             rustnmap_only = set(rustnmap_ports.keys()) - set(nmap_ports.keys())
             nmap_only = set(nmap_ports.keys()) - set(rustnmap_ports.keys())
+
+            # Nmap hides closed ports by default - filter them out from rustnmap_only
+            # if nmap has hidden closed ports count
+            if rustnmap_only and nmap_result.hidden_closed_count > 0:
+                # Get actual closed ports from rustnmap that nmap would hide
+                hidden_closed_in_nmap = {
+                    p for p in rustnmap_only
+                    if rustnmap_ports[p]["state"] == "closed"
+                }
+                # These are expected to be hidden by nmap, not real differences
+                rustnmap_only -= hidden_closed_in_nmap
+                if hidden_closed_in_nmap:
+                    comparison["expected_differences_applied"].append(
+                        f"nmap_hides_closed_ports ({len(hidden_closed_in_nmap)} ports)"
+                    )
 
             if rustnmap_only:
                 comparison["warnings"].append(f"Ports only in rustnmap: {rustnmap_only}")

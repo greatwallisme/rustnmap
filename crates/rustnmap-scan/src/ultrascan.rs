@@ -143,25 +143,39 @@ impl InternalCongestionStats {
 
 /// Internal congestion controller for adaptive parallelism.
 ///
-/// Implements TCP Reno-style congestion control with slow start and
-/// congestion avoidance phases.
+/// Implements nmap's congestion control (NOT TCP Reno):
+/// - Slow start: LINEAR growth (+1 per ACK)
+/// - Congestion avoidance: very slow (+1 per cwnd ACKs)
 #[derive(Debug)]
 pub struct InternalCongestionController {
     stats: std::sync::Arc<InternalCongestionStats>,
     cwnd: std::sync::atomic::AtomicUsize,
     ssthresh: std::sync::atomic::AtomicUsize,
+    /// ACK counter for congestion avoidance (increment once per cwnd ACKs).
+    ca_ack_counter: std::sync::atomic::AtomicUsize,
     min_cwnd: usize,
     max_cwnd: usize,
 }
 
 impl InternalCongestionController {
     /// Creates a new congestion controller.
+    ///
+    /// Uses nmap's default initial values from `timing.cc:272-273`:
+    /// - `group_initial_cwnd = 10` (matches `box(low_cwnd, max_cwnd, 10)`)
+    /// - `initial_ssthresh = 75`
     fn new(max_cwnd: usize) -> Self {
-        let initial_cwnd = (max_cwnd / 4).max(1);
+        // Nmap timing.cc:272 - group_initial_cwnd = box(low_cwnd, max_cwnd, 10)
+        // low_cwnd=1, max_cwnd=300, box() returns 10 since 1 < 10 < 300
+        const GROUP_INITIAL_CWND: usize = 10;
+
+        // Nmap timing.cc:281 - initial_ssthresh = 75
+        const INITIAL_SSTHRESH: usize = 75;
+
         Self {
             stats: std::sync::Arc::new(InternalCongestionStats::new()),
-            cwnd: std::sync::atomic::AtomicUsize::new(initial_cwnd),
-            ssthresh: std::sync::atomic::AtomicUsize::new(max_cwnd / 2),
+            cwnd: std::sync::atomic::AtomicUsize::new(GROUP_INITIAL_CWND),
+            ssthresh: std::sync::atomic::AtomicUsize::new(INITIAL_SSTHRESH),
+            ca_ack_counter: std::sync::atomic::AtomicUsize::new(0),
             min_cwnd: 1,
             max_cwnd,
         }
@@ -179,6 +193,12 @@ impl InternalCongestionController {
     }
 
     /// Called when a packet is acknowledged.
+    ///
+    /// Uses nmap's LINEAR slow start growth (not exponential TCP Reno).
+    /// From `timing.cc:224-237`:
+    /// - Slow start: `cwnd += slow_incr * cc_scale * scale` (linear +1 per ACK)
+    /// - Congestion avoidance: `cwnd += ca_incr / cwnd * cc_scale * scale`
+    ///   which means +1 once per cwnd ACKs (integer division)
     fn on_packet_acked(&self, rtt: Option<Duration>) {
         use std::sync::atomic::Ordering;
 
@@ -191,13 +211,21 @@ impl InternalCongestionController {
         let ssthresh = self.ssthresh.load(Ordering::Relaxed);
 
         if current_cwnd < ssthresh {
-            // Slow start: exponential growth
-            let new_cwnd = (current_cwnd * 2).min(self.max_cwnd);
-            self.cwnd.store(new_cwnd, Ordering::Relaxed);
-        } else {
-            // Congestion avoidance: linear growth
+            // Nmap timing.cc:227 - cwnd += perf->slow_incr * cc_scale(perf) * scale
+            // slow_incr = 1, linear growth +1 per ACK
             let new_cwnd = (current_cwnd + 1).min(self.max_cwnd);
             self.cwnd.store(new_cwnd, Ordering::Relaxed);
+        } else {
+            // Nmap timing.cc:237 - cwnd += perf->ca_incr / cwnd * cc_scale(perf) * scale
+            // With ca_incr=1, integer division 1/cwnd = 0 for cwnd > 1
+            // So we increment once per cwnd ACKs
+            let ack_count = self.ca_ack_counter.fetch_add(1, Ordering::Relaxed) + 1;
+            if ack_count >= current_cwnd {
+                // Reset counter and increment cwnd
+                self.ca_ack_counter.store(0, Ordering::Relaxed);
+                let new_cwnd = (current_cwnd + 1).min(self.max_cwnd);
+                self.cwnd.store(new_cwnd, Ordering::Relaxed);
+            }
         }
     }
 
@@ -396,8 +424,8 @@ const ETH_HDR_SIZE: usize = 14;
 
 /// Default maximum number of probes to have outstanding at once.
 ///
-/// Nmap's default varies by timing template (T3=20, T4=40, T5=200+).
-/// The actual parallelism is now controlled by the congestion controller.
+/// This is a trade-off between performance and packet loss.
+/// Higher values can cause more congestion and packet drops.
 pub const DEFAULT_MAX_PARALLELISM: usize = 100;
 
 /// Default timeout for the entire scan operation.
@@ -851,9 +879,6 @@ impl ParallelScanEngine {
         let socket = StdArc::clone(&self.socket);
         let packet_socket = self.packet_socket.clone();
         tokio::spawn(async move {
-            // Polling interval when using non-blocking socket
-            const POLL_INTERVAL: Duration = Duration::from_millis(10);
-
             loop {
                 // Check if channel is closed before blocking on recv
                 if packet_tx.is_closed() {
@@ -862,28 +887,45 @@ impl ParallelScanEngine {
 
                 // Try AF_PACKET socket first (L2 capture - receives all TCP responses)
                 // Fall back to raw socket if packet socket is not available
-                let use_packet_socket = packet_socket.is_some();
-
                 let result = if let Some(ref pkt_sock) = packet_socket {
                     // Use AF_PACKET socket for L2 capture
                     let pkt_sock = Arc::clone(pkt_sock);
+                    let tx_clone = packet_tx.clone();
                     tokio::task::spawn_blocking(move || {
-                        match pkt_sock.recv_packet() {
-                            Ok(Some(data)) => {
-                                // Skip Ethernet header (14 bytes) to get to IP header
-                                if data.len() > ETH_HDR_SIZE {
-                                    let ip_data = data[ETH_HDR_SIZE..].to_vec();
-                                    Ok((ip_data.len(), ip_data))
-                                } else {
-                                    Ok((data.len(), data))
+                        // Process multiple packets in a batch to reduce context switches
+                        const MAX_BATCH: usize = 32;
+                        let mut batch_count = 0;
+
+                        while batch_count < MAX_BATCH {
+                            match pkt_sock.recv_packet() {
+                                Ok(Some(data)) => {
+                                    // Skip Ethernet header (14 bytes) to get to IP header
+                                    let ip_data = if data.len() > ETH_HDR_SIZE {
+                                        &data[ETH_HDR_SIZE..]
+                                    } else {
+                                        &data[..]
+                                    };
+                                    // Parse and send immediately as ReceivedPacket
+                                    if let Some(packet) = Self::parse_packet(ip_data) {
+                                        if tx_clone.send(packet).is_err() {
+                                            return Ok((batch_count, Vec::new()));
+                                        }
+                                    }
+                                    batch_count += 1;
                                 }
+                                Ok(None) => {
+                                    // No more packets available
+                                    break;
+                                }
+                                Err(e) if e.kind() == ErrorKind::WouldBlock => {
+                                    // No more packets available
+                                    break;
+                                }
+                                Err(e) => return Err(e),
                             }
-                            Ok(None) => {
-                                // No packet available (non-blocking), return empty
-                                Ok((0, Vec::new()))
-                            }
-                            Err(e) => Err(e),
                         }
+                        // Return batch_count with empty vec (packets already sent in loop)
+                        Ok::<_, io::Error>((batch_count, Vec::new()))
                     })
                     .await
                 } else {
@@ -891,33 +933,29 @@ impl ParallelScanEngine {
                     let socket_clone = StdArc::clone(&socket);
                     tokio::task::spawn_blocking(move || {
                         let mut recv_buf = vec![0u8; 65535];
-                        socket_clone
-                            .recv_packet(&mut recv_buf, Some(Duration::from_millis(50)))
-                            .map(|len| (len, recv_buf))
+                        match socket_clone.recv_packet(&mut recv_buf, Some(Duration::from_millis(50))) {
+                            Ok(len) => Ok((len, recv_buf)),
+                            Err(e) => Err(e),
+                        }
                     })
                     .await
                 };
 
                 match result {
-                    Ok(Ok((len, recv_buf))) if len > 0 => {
+                    Ok(Ok((len, recv_buf))) if len > 0 && !recv_buf.is_empty() => {
+                        // Raw socket path: parse packet from buffer
                         if let Some(packet) = Self::parse_packet(&recv_buf[..len]) {
-                            // Check if channel is closed before sending
                             if packet_tx.send(packet).is_err() {
-                                // Channel closed, stop receiving
                                 break;
                             }
                         }
                     }
-                    Ok(Ok(_)) => {
-                        // Empty packet (no data available), add small delay to avoid busy-wait
-                        if use_packet_socket {
-                            tokio::time::sleep(POLL_INTERVAL).await;
+                    Ok(Ok((batch_count, _))) => {
+                        // AF_PACKET batch processing result
+                        // Packets already sent in batch loop, just yield if empty
+                        if batch_count == 0 {
+                            tokio::task::yield_now().await;
                         }
-                    }
-                    Ok(Err(e))
-                        if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::TimedOut =>
-                    {
-                        // Normal timeout, loop will check is_closed() on next iteration
                     }
                     Ok(Err(_)) | Err(_) => {
                         // Fatal error or task was cancelled, stop receiving

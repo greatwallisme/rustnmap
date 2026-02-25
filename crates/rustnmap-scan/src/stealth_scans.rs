@@ -560,7 +560,7 @@ impl TcpFinScanner {
             };
 
             // Check for TCP response first
-            if let Some((flags, _seq, _ack, src_port, resp_dst_port, src_ip)) = parse_tcp_response(data.0) {
+            if let Some((flags, _seq, _ack, src_port, _resp_dst_port, src_ip)) = parse_tcp_response(data.0) {
                 // For stealth scans, we sent from our_source_port to dst_port
                 // The RST response comes from dst_port to our_source_port
                 // So we check if src_ip == target and src_port == dst_port (target sent RST)

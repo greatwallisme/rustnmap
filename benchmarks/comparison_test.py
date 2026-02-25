@@ -8,7 +8,6 @@ Loads configuration from .env file and test configuration TOML files.
 
 import argparse
 import asyncio
-import logging
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -17,21 +16,37 @@ from typing import Any
 
 import toml
 from dotenv import load_dotenv
+from loguru import logger as loguru_logger
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent))
 
 from compare_scans import ScanComparator, ScanResult
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    handlers=[
-        logging.StreamHandler(sys.stdout),
-    ],
+# Remove default handler and configure loguru
+loguru_logger.remove()
+loguru_logger.add(
+    sys.stdout,
+    format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <level>{message}</level>",
+    level="INFO",
 )
-logger = logging.getLogger(__name__)
+
+# Create log directory
+log_dir = Path(__file__).parent / "logs"
+log_dir.mkdir(exist_ok=True)
+
+# Add file handler with rotation
+loguru_logger.add(
+    log_dir / "comparison_{time:YYYY-MM-DD_HH-mm-ss}.log",
+    format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} | {message}",
+    level="DEBUG",
+    rotation="100 MB",
+    retention="7 days",
+    compression="zip",
+)
+
+# Create logger alias for compatibility
+logger = loguru_logger
 
 
 @dataclass
@@ -187,11 +202,11 @@ class ComparisonTestRunner:
         suite_description = suite_config["config"]["description"]
         category = suite_config["config"]["category"]
 
-        logger.info(f"{'='*60}")
-        logger.info(f"Running Test Suite: {suite_name}")
-        logger.info(f"Description: {suite_description}")
-        logger.info(f"Category: {category}")
-        logger.info(f"{'='*60}")
+        loguru_logger.info("="*60)
+        loguru_logger.info(f"Test Suite: {suite_name}")
+        loguru_logger.info(f"Description: {suite_description}")
+        loguru_logger.info(f"Category: {category}")
+        loguru_logger.info("="*60)
 
         result = TestSuiteResult(
             name=suite_name,
@@ -200,25 +215,32 @@ class ComparisonTestRunner:
         )
 
         for test_case in suite_config.get("test_case", []):
-            logger.info(f"[Test Case] {test_case['name']}: {test_case['description']}")
+            loguru_logger.info(f"[Test Case] {test_case['name']}: {test_case['description']}")
 
             try:
                 test_result = await self.run_test_case(test_case)
                 result.test_cases.append(test_result)
 
                 status = test_result.comparison_result.get("status", "UNKNOWN")
-                logger.info(f"Status: {status}")
+                loguru_logger.success(f"Status: {status}")
 
                 if status == "PASS":
                     metrics = test_result.comparison_result.get("metrics", {})
-                    logger.info(
+                    loguru_logger.info(
                         f"Performance: rustnmap={metrics.get('rustnmap_duration_ms', 0)}ms, "
                         f"nmap={metrics.get('nmap_duration_ms', 0)}ms, "
-                        f"speedup={metrics.get('speedup_factor', 0)}x"
+                        f"speedup={metrics.get('speedup_factor', 0):.2f}x"
                     )
+                elif status == "FAIL":
+                    loguru_logger.warning(f"Test FAILED - see errors above")
+                elif status == "SKIP":
+                    loguru_logger.info(f"Test SKIPPED")
+
+                # Immediately output this test case result
+                self._output_test_case_result(test_result)
 
             except Exception as e:
-                logger.error(f"Test case failed: {e}")
+                loguru_logger.error(f"Test case failed: {e}")
                 result.test_cases.append(TestCaseResult(
                     name=test_case["name"],
                     description=test_case["description"],
@@ -227,7 +249,54 @@ class ComparisonTestRunner:
                     comparison_result={"status": "ERROR", "error": str(e)},
                 ))
 
+        # Output suite summary
+        self._output_suite_summary(result)
+
         return result
+
+    def _output_test_case_result(self, test_result: TestCaseResult):
+        """Immediately output a single test case result."""
+        status = test_result.comparison_result.get("status", "UNKNOWN")
+        metrics = test_result.comparison_result.get("metrics", {})
+
+        loguru_logger.info("-" * 50)
+        loguru_logger.info(f"[{status}] {test_result.name}")
+        loguru_logger.info(f"  Description: {test_result.description}")
+
+        # Performance data
+        if metrics:
+            rustnmap_ms = metrics.get('rustnmap_duration_ms', 0)
+            nmap_ms = metrics.get('nmap_duration_ms', 0)
+            speedup = metrics.get('speedup_factor', 0)
+
+            if speedup >= 1.0:
+                loguru_logger.success(f"  Speed: {speedup:.2f}x faster (rustnmap={rustnmap_ms}ms, nmap={nmap_ms}ms)")
+            elif speedup > 0:
+                loguru_logger.warning(f"  Speed: {speedup:.2f}x slower (rustnmap={rustnmap_ms}ms, nmap={nmap_ms}ms)")
+
+        # Warnings
+        warnings = test_result.comparison_result.get("warnings", [])
+        if warnings:
+            loguru_logger.warning(f"  Warnings ({len(warnings)}):")
+            for warning in warnings:
+                loguru_logger.warning(f"    - {warning}")
+
+        # Errors
+        errors = test_result.comparison_result.get("errors", [])
+        if errors:
+            loguru_logger.error(f"  Errors ({len(errors)}):")
+            for error in errors:
+                loguru_logger.error(f"    - {error}")
+
+    def _output_suite_summary(self, result: TestSuiteResult):
+        """Output suite summary after all tests in suite complete."""
+        loguru_logger.info("="*50)
+        loguru_logger.info(f"Suite Summary: {result.name}")
+        loguru_logger.info(f"  Total: {result.total_tests}, Passed: {result.passed_tests}, Failed: {result.failed_tests}")
+        if result.passed_tests == result.total_tests:
+            loguru_logger.success("All tests PASSED")
+        elif result.failed_tests > 0:
+            loguru_logger.error(f"{result.failed_tests} test(s) FAILED")
 
     def _translate_nmap_to_rustnmap(self, command: str) -> str:
         """Translate nmap command flags to rustnmap flags."""
@@ -297,8 +366,8 @@ class ComparisonTestRunner:
             top_ports=self.config.test_top_ports,
         )
 
-        logger.debug(f"rustnmap command: {rustnmap_cmd}")
-        logger.debug(f"nmap command: {nmap_cmd}")
+        loguru_logger.debug(f"rustnmap command: {rustnmap_cmd}")
+        loguru_logger.debug(f"nmap command: {nmap_cmd}")
 
         # Execute scans
         rustnmap_result = await self.comparator.run_scan(rustnmap_cmd, "rustnmap")
@@ -338,7 +407,7 @@ class ComparisonTestRunner:
 
         for config_file in config_files:
             if not config_file.exists():
-                logger.warning(f"Test config file not found: {config_file}")
+                loguru_logger.warning(f"Test config file not found: {config_file}")
                 continue
 
             # Check if we should skip this suite
@@ -347,19 +416,19 @@ class ComparisonTestRunner:
 
             if category == "detection":
                 if "service" in suite_config["config"]["name"].lower() and not self.config.enable_service_detection:
-                    logger.info(f"Skipping {suite_config['config']['name']} (service detection disabled)")
+                    loguru_logger.info(f"Skipping {suite_config['config']['name']} (service detection disabled)")
                     continue
                 if "os" in suite_config["config"]["name"].lower() and not self.config.enable_os_detection:
-                    logger.info(f"Skipping {suite_config['config']['name']} (OS detection disabled)")
+                    loguru_logger.info(f"Skipping {suite_config['config']['name']} (OS detection disabled)")
                     continue
 
             if category == "advanced" and not self.config.enable_advanced_scans:
-                logger.info(f"Skipping {suite_config['config']['name']} (advanced scans disabled)")
+                loguru_logger.info(f"Skipping {suite_config['config']['name']} (advanced scans disabled)")
                 continue
 
             # New categories - always enabled for comprehensive testing
             if category in ("timing", "output", "multi_target"):
-                logger.info(f"Running {suite_config['config']['name']} ({category} test)")
+                loguru_logger.info(f"Running {suite_config['config']['name']} ({category} test)")
 
             suite_result = await self.run_test_suite(suite_config)
             results.append(suite_result)
@@ -436,7 +505,7 @@ class ComparisonTestRunner:
                         for error in errors:
                             f.write(f"  - {error}\n")
 
-        logger.info(f"Text report generated: {report_path}")
+        loguru_logger.info(f"Text report generated: {report_path}")
         return report_path
 
     def _generate_json_report(self, results: list[TestSuiteResult], timestamp: str) -> Path:
@@ -470,7 +539,7 @@ class ComparisonTestRunner:
         with open(report_path, "w") as f:
             json.dump(report_data, f, indent=2)
 
-        logger.info(f"JSON report generated: {report_path}")
+        loguru_logger.info(f"JSON report generated: {report_path}")
         return report_path
 
 
@@ -517,13 +586,26 @@ async def main():
         "-v",
         "--verbose",
         action="store_true",
-        help="Enable verbose output",
+        help="Enable verbose output (DEBUG level)",
     )
 
     args = parser.parse_args()
 
     if args.verbose:
-        logging.getLogger().setLevel(logging.DEBUG)
+        loguru_logger.remove()
+        loguru_logger.add(
+            sys.stdout,
+            format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <level>{message}</level>",
+            level="DEBUG",
+        )
+        loguru_logger.add(
+            log_dir / "comparison_{time:YYYY-MM-DD_HH-mm-ss}.log",
+            format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} | {message}",
+            level="DEBUG",
+            rotation="100 MB",
+            retention="7 days",
+            compression="zip",
+        )
 
     # Load configuration
     config = TestConfig.from_env(args.config)
@@ -542,7 +624,7 @@ async def main():
     # Verify binaries exist
     for binary in [config.rustnmap_release, config.nmap_binary]:
         if not Path(binary).exists():
-            logger.error(f"Binary not found: {binary}")
+            loguru_logger.error(f"Binary not found: {binary}")
             sys.exit(1)
 
     # Create test runner
@@ -562,7 +644,7 @@ async def main():
         }
         config_file = runner.test_configs_dir / suite_map.get(args.suite, args.suite + ".toml")
         if not config_file.exists():
-            logger.error(f"Test suite not found: {config_file}")
+            loguru_logger.error(f"Test suite not found: {config_file}")
             sys.exit(1)
 
         suite_config = runner.load_test_suite(config_file)
@@ -570,33 +652,40 @@ async def main():
     else:
         results = await runner.run_all_tests()
 
+    # All tests complete, generate final summary
+    loguru_logger.info("="*60)
+    loguru_logger.info("All Tests Complete")
+    loguru_logger.info("="*60)
+
     # Generate reports
+    loguru_logger.info("")
+    loguru_logger.info("Generating final reports...")
     report_paths = runner.generate_reports(results)
 
-    # Print summary
-    logger.info("=" * 60)
-    logger.info("Test Summary")
-    logger.info("=" * 60)
-
+    # Final summary
     total_tests = sum(r.total_tests for r in results)
     passed_tests = sum(r.passed_tests for r in results)
     failed_tests = sum(r.failed_tests for r in results)
+    success_rate = (passed_tests / total_tests * 100) if total_tests > 0 else 0
 
-    logger.info(f"Total Tests: {total_tests}")
-    logger.info(f"Passed: {passed_tests}")
-    logger.info(f"Failed: {failed_tests}")
+    loguru_logger.info("="*60)
+    loguru_logger.info(f"Final: {total_tests} tests | {passed_tests} passed | {failed_tests} failed | {success_rate:.1f}%")
+    loguru_logger.info("="*60)
 
     if failed_tests > 0:
-        logger.warning("Failed test suites:")
+        loguru_logger.warning("Failed test suites:")
         for result in results:
             if result.failed_tests > 0:
-                logger.warning(f"  - {result.name}: {result.failed_tests} failed")
+                loguru_logger.warning(f"  - {result.name}: {result.failed_tests} failed")
+        sys.exit(1)
+    else:
+        loguru_logger.success("All tests PASSED!")
 
-    logger.info("Reports generated:")
+    loguru_logger.info("Reports generated:")
     for path in report_paths:
-        logger.info(f"  - {path}")
+        loguru_logger.info(f"  - {path}")
 
-    sys.exit(0 if failed_tests == 0 else 1)
+    sys.exit(0)
 
 
 if __name__ == "__main__":
