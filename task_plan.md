@@ -1,15 +1,123 @@
 # Task Plan
 
 **Created**: 2026-02-21
-**Updated**: 2026-02-25 16:30
-**Status**: Phase 18 - Benchmark Parsing Fix & Performance Investigation
-**Goal**: Fix benchmark parsing logic, investigate and fix SYN scan performance bottleneck
+**Updated**: 2026-02-25 18:30
+**Status**: Phase 18 - cc_scale Implementation (Phase 18.1 & 18.2 Complete)
+**Goal**: Analyze and fix T3-T5 timing template performance issues
 
 ---
 
 ## 当前阶段
 
-Phase 18: Benchmark Parsing Fix & Performance Investigation - IN PROGRESS
+Phase 18: cc_scale Implementation - Phase 18.1 & 18.2 COMPLETE ✅ (2026-02-25 18:30)
+
+### 关键发现: 缺少 nmap 的核心性能优化机制
+
+通过仔细阅读 nmap 源码 (`timing.cc:209-237`), 发现 rustnmap **缺少关键的 `cc_scale` 机制**。
+
+**cc_scale 的作用**:
+- 当存在包丢失时,加速拥塞窗口增长以维持吞吐量
+- 最大可加速 50 倍 (`cc_scale_max = 50`)
+- 公式: `cc_scale = MIN(num_replies_expected / num_replies_received, 50)`
+
+**为什么 rustnmap 慢**:
+- 理想网络 (无包丢失): cc_scale = 1, 两者性能接近 ✅
+- 真实网络 (有包丢失): nmap 用 cc_scale=2-50 加速, rustnmap 用 cc_scale=1, rustnmap 慢 🔴
+- 不稳定网络 (严重包丢失): nmap 用 cc_scale=50 极速恢复, rustnmap 持续低吞吐, rustnmap 严重慢 🔴
+
+### 已完成的修改 (2026-02-25 17:35)
+
+1. **max_cwnd: 100 → 300** ✅
+   - 将 `DEFAULT_MAX_PARALLELISM` 从 100 增加到 300
+   - 匹配 nmap 的默认值 (timing.cc:271)
+   - 修改文件: `ultrascan.rs:446`
+
+2. **添加 timing_level 字段** ✅
+   - 在 `ScanConfig` 中添加 `timing_level: u8` 字段
+   - 在 `TimingTemplate` 中添加 `timing_level()` 方法
+   - 修改文件: `scan.rs`, `orchestrator.rs`, `discovery_integration_tests.rs`
+
+3. **实现 ca_incr = 2 for T4/T5** ✅
+   - 在 `InternalCongestionController` 中添加 `ca_incr` 字段
+   - `timing_level >= 4` 时使用 `ca_incr = 2`
+   - 修改文件: `ultrascan.rs`
+
+4. **修复所有 Clippy 警告** ✅
+   - 修复文档中缺失的反引号
+   - 修复 benchmark 中的元组解构
+   - 修复测试中的 ScanConfig 初始化
+
+### Phase 18.1-18.2: cc_scale 实现 (2026-02-25 18:30) ✅
+
+**关键修改**: `crates/rustnmap-scan/src/ultrascan.rs`
+
+1. **添加 `num_replies_expected` 和 `num_replies_received` 计数器** ✅
+   - 在 `InternalCongestionStats` 中添加 `AtomicU64` 计数器
+   - 用于计算包丢失率: `ratio = num_replies_expected / num_replies_received`
+
+2. **实现 `cc_scale()` 方法** ✅
+   - 返回 `MIN(ratio, 50)` 缩放因子
+   - 无包丢失: cc_scale = 1 (正常增长)
+   - 有包丢失: cc_scale > 1 (加速增长,最大 50 倍)
+
+3. **更新拥塞控制逻辑** ✅
+   - `on_packet_acked()`: 应用 cc_scale 到 cwnd 增长
+   - `check_timeouts()`: 超时时调用 `record_expected()`
+   - `scan_ports()`: 收到回复时调用 `record_expected()`
+
+4. **代码质量** ✅
+   - 所有类型转换使用 `#[expect]` 注释说明
+   - 通过 `cargo clippy --workspace --all-targets -- -D warnings`
+
+### 实现计划: Phase 18.1 - 18.3
+
+**Phase 18.1: 添加 cc_scale 跟踪** ✅ COMPLETE
+- [x] 在 `InternalCongestionStats` 中添加计数器:
+  - `num_replies_expected: AtomicU64`
+  - `num_replies_received: AtomicU64`
+- [x] 实现 `cc_scale()` 方法:
+  - 计算 `ratio = num_replies_expected / num_replies_received`
+  - 返回 `MIN(ratio, 50)` (匹配 nmap)
+- [x] 添加 `record_expected()` 方法
+
+**Phase 18.2: 更新拥塞控制逻辑** ✅ COMPLETE
+- [x] 修改 `on_packet_acked()` 应用 cc_scale:
+  - Slow start: `cwnd += 1 * cc_scale`
+  - Congestion avoidance: `cwnd += ca_incr / (cwnd / cc_scale)`
+- [x] 修改 `check_timeouts()` 超时时调用 `record_expected()`
+- [x] 修改 `scan_ports()` 收到回复时调用 `record_expected()`
+
+**Phase 18.3: 验证和调优** - IN PROGRESS
+- [ ] 运行 benchmark 对比 nmap
+- [ ] 如需要,调整 max_cwnd (可能回退到 100-150)
+- [ ] 确认性能 >= nmap (不接受比 nmap 慢)
+
+### 测试结果 (2026-02-25 17:35)
+
+**5 端口 SYN 扫描** (17:13):
+- rustnmap: 829ms, nmap: 716ms (0.86x - 16% 慢)
+- 状态: 可接受 ✅
+
+**100 端口扫描** - 结果不稳定:
+- 16:41 (max_cwnd=100): rustnmap 3.0s vs nmap 4.3s (1.4x faster) ✅
+- 17:14 (max_cwnd=300): rustnmap 18.4s vs nmap 2.4s (0.13x - 7.7x slower) 🔴
+- 17:20 (max_cwnd=300): rustnmap 6.3s vs nmap 4.6s (0.73x - 27% 慢) ⚠️
+
+### 代码质量状态
+
+- ✅ `cargo clippy --release --all-targets -- -D warnings` - 零警告
+- ✅ 所有文档使用正确的反引号格式
+- ✅ 所有 ScanConfig 创建都包含 timing_level 字段
+
+### 修改的文件
+
+| 文件 | 修改内容 |
+|------|----------|
+| `ultrascan.rs` | max_cwnd: 100→300, 添加 ca_incr, 修复文档 |
+| `scan.rs` | 添加 timing_level 字段和方法 |
+| `orchestrator.rs` | 更新 ScanConfig 创建添加 timing_level |
+| `discovery_integration_tests.rs` | 更新 ScanConfig 初始化 |
+| `packet_benchmarks.rs` | 修复元组解构 (添加 _dst_port) |
 
 ### 完成工作 (2026-02-25 16:30)
 

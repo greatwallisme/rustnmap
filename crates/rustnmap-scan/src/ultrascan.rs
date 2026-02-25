@@ -60,6 +60,9 @@ use tokio::time::timeout as tokio_timeout;
 ///
 /// Uses EWMA (Exponentially Weighted Moving Average) for RTT tracking,
 /// following RFC 2988: SRTT = (1-1/8)*SRTT + (1/8)*RTT
+///
+/// Implements nmap's `cc_scale` mechanism for adaptive congestion window growth
+/// when packet loss is detected. See `timing.cc:209-218` in nmap source.
 #[derive(Debug, Default)]
 struct InternalCongestionStats {
     /// Smoothed RTT in microseconds.
@@ -70,6 +73,16 @@ struct InternalCongestionStats {
     packets_sent: std::sync::atomic::AtomicU64,
     /// Total packets acknowledged.
     packets_acked: std::sync::atomic::AtomicU64,
+    /// Number of replies we would expect if every probe produced a reply.
+    ///
+    /// This is incremented when a probe gets a reply OR times out.
+    /// See nmap `timing.h:87-91` and `scan_engine.cc:1608-1612`.
+    num_replies_expected: std::sync::atomic::AtomicU64,
+    /// Number of replies we've actually received.
+    ///
+    /// This is incremented only when an actual reply is received.
+    /// See nmap `timing.h:92-93` and `timing.cc:222`.
+    num_replies_received: std::sync::atomic::AtomicU64,
 }
 
 impl InternalCongestionStats {
@@ -86,6 +99,8 @@ impl InternalCongestionStats {
             rttvar_micros: std::sync::atomic::AtomicU64::new(1_000_000),
             packets_sent: std::sync::atomic::AtomicU64::new(0),
             packets_acked: std::sync::atomic::AtomicU64::new(0),
+            num_replies_expected: std::sync::atomic::AtomicU64::new(0),
+            num_replies_received: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -138,6 +153,57 @@ impl InternalCongestionStats {
     fn record_acked(&self) {
         use std::sync::atomic::Ordering;
         self.packets_acked.fetch_add(1, Ordering::Relaxed);
+        // Increment num_replies_received when we actually get a reply
+        // See nmap timing.cc:222
+        self.num_replies_received.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Records a probe that got a reply OR timed out.
+    ///
+    /// This increments `num_replies_expected`, which is used to calculate
+    /// the `cc_scale` factor for adaptive congestion window growth.
+    /// See nmap `timing.h:87-91` and `scan_engine.cc:1608-1612`.
+    fn record_expected(&self) {
+        use std::sync::atomic::Ordering;
+        self.num_replies_expected.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Returns the congestion control scaling factor.
+    ///
+    /// This implements nmap's `cc_scale` mechanism from `timing.cc:209-218`.
+    /// When packet loss occurs, this factor can be > 1, allowing the congestion
+    /// window to grow faster to compensate for lost packets.
+    ///
+    /// # Formula
+    ///
+    /// ```text
+    /// ratio = num_replies_expected / num_replies_received
+    /// cc_scale = MIN(ratio, 50)
+    /// ```
+    ///
+    /// - No packet loss: ratio = 1, `cc_scale` = 1 (normal growth)
+    /// - Some packet loss: ratio > 1, `cc_scale` > 1 (accelerated growth)
+    /// - Maximum: `cc_scale` = 50 (50x acceleration)
+    ///
+    /// # Returns
+    ///
+    /// The scaling factor, from 1.0 (no loss) to 50.0 (maximum acceleration).
+    #[must_use]
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "Packet counts are bounded (u64) and f64 precision is sufficient for ratios up to 50x"
+    )]
+    fn cc_scale(&self) -> f64 {
+        use std::sync::atomic::Ordering;
+        let received = self.num_replies_received.load(Ordering::Relaxed);
+        if received == 0 {
+            // No replies yet, use normal scaling
+            return 1.0;
+        }
+        let expected = self.num_replies_expected.load(Ordering::Relaxed);
+        let ratio = expected as f64 / received as f64;
+        // nmap's cc_scale_max = 50 (timing.cc:280)
+        ratio.min(50.0)
     }
 }
 
@@ -213,6 +279,12 @@ impl InternalCongestionController {
     /// - Slow start: `cwnd += slow_incr * cc_scale * scale` (linear +1 per ACK)
     /// - Congestion avoidance: `cwnd += ca_incr / cwnd * cc_scale * scale`
     ///   which means +`ca_incr` once per cwnd ACKs (integer division)
+    #[expect(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "cwnd values are bounded (max 300) and ca_incr is small (1-2); f64 precision and casting are safe"
+    )]
     fn on_packet_acked(&self, rtt: Option<Duration>) {
         use std::sync::atomic::Ordering;
 
@@ -221,26 +293,53 @@ impl InternalCongestionController {
             self.stats.update_rtt(rtt);
         }
 
+        // Get the cc_scale factor for adaptive growth when packet loss occurs
+        let cc_scale = self.stats.cc_scale();
+
         let current_cwnd = self.cwnd.load(Ordering::Relaxed);
         let ssthresh = self.ssthresh.load(Ordering::Relaxed);
 
         if current_cwnd < ssthresh {
             // Nmap timing.cc:227 - cwnd += perf->slow_incr * cc_scale(perf) * scale
-            // slow_incr = 1, linear growth +1 per ACK
-            let new_cwnd = (current_cwnd + 1).min(self.max_cwnd);
+            // slow_incr = 1, scale = 1 (single scans use scale=1)
+            // Apply cc_scale to accelerate growth when packet loss is detected
+            let increment = (1.0_f64 * cc_scale).ceil() as usize;
+            let new_cwnd = (current_cwnd + increment).min(self.max_cwnd);
             self.cwnd.store(new_cwnd, Ordering::Relaxed);
         } else {
             // Nmap timing.cc:237 - cwnd += perf->ca_incr / cwnd * cc_scale(perf) * scale
-            // With ca_incr=1 or 2, integer division ca_incr/cwnd = 0 for cwnd > ca_incr
-            // So we increment once per cwnd ACKs
+            // Apply cc_scale to accelerate growth when packet loss is detected
             let ack_count = self.ca_ack_counter.fetch_add(1, Ordering::Relaxed) + 1;
-            if ack_count >= current_cwnd {
+            // Calculate how many ACKs we need before incrementing cwnd
+            // With cc_scale, we need fewer ACKs when there's packet loss
+            let acks_needed = if cc_scale > 1.0 {
+                // Scale down the ACK threshold when cc_scale > 1
+                // This makes cwnd grow faster when packet loss is detected
+                (current_cwnd as f64 / cc_scale).ceil() as usize
+            } else {
+                current_cwnd
+            };
+
+            if ack_count >= acks_needed {
                 // Reset counter and increment cwnd by ca_incr
                 self.ca_ack_counter.store(0, Ordering::Relaxed);
-                let new_cwnd = (current_cwnd + usize::from(self.ca_incr)).min(self.max_cwnd);
+                // Apply cc_scale to the increment as well
+                let increment = (f64::from(self.ca_incr) * cc_scale).ceil() as usize;
+                let new_cwnd = (current_cwnd + increment).min(self.max_cwnd);
                 self.cwnd.store(new_cwnd, Ordering::Relaxed);
             }
         }
+    }
+
+    /// Records a probe that got a reply OR timed out.
+    ///
+    /// This must be called when:
+    /// 1. A probe receives a reply (call before `on_packet_acked`)
+    /// 2. A probe times out (call when retrying or marking as filtered)
+    ///
+    /// See nmap `timing.h:87-91` and `scan_engine.cc:1608-1612`.
+    fn record_expected(&self) {
+        self.stats.record_expected();
     }
 
     /// Called when packet loss is detected.
@@ -831,6 +930,9 @@ impl ParallelScanEngine {
                         if valid_response {
                             // Calculate RTT for this probe
                             let rtt = probe.sent_time.elapsed();
+                            // Record that we expected a reply (got one!)
+                            // See nmap scan_engine.cc:1608-1612 (ultrascan_adjust_timing)
+                            self.congestion.record_expected();
                             // Record successful response with RTT for congestion control
                             self.congestion.on_packet_acked(Some(rtt));
                             results.insert(packet.src_port, packet.port_state());
@@ -1093,6 +1195,10 @@ impl ParallelScanEngine {
             .collect();
 
         for (key, probe) in timed_out {
+            // Record that we expected a reply (probe timed out without response)
+            // See nmap scan_engine.cc:1677 (ultrascan_adjust_timing with rcvdtime == NULL)
+            self.congestion.record_expected();
+
             if probe.retry_count < max_retries {
                 // Retry the probe
                 outstanding.remove(&key);
