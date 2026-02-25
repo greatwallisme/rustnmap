@@ -16,16 +16,17 @@
    - 修复: 添加 `create_decoy_scheduler()` 辅助函数，更新所有扫描器使用 `with_decoy()`
    - 验证: cargo check/clippy/test 全部通过
 
-3. **MAC 地址问题调查** 🔍
+3. **MAC 地址问题调查** 🔍 → ✅ **已完成**
    - 用户报告: rustnmap 不显示目标 MAC 地址
    - 发现: 基础设施完整 (MacAddr, parse_arp_reply, HostResult.mac)
-   - 根因: orchestrator.rs 中 HostResult 创建时 mac: None
-   - 需要: 添加 ARP 请求/响应处理
+   - 实现: 在所有扫描路径 (parallel, batch, sequential, two-phase) 集成 MAC 地址查找
+   - 集成 MAC 厂商数据库 (nmap-mac-prefixes) 自动查找厂商信息
 
 4. **FIN 扫描结果差异** 🔍
    - rustnmap: 80/tcp open|filtered
    - nmap: 80/tcp closed
-   - 需要调查: RST 响应处理逻辑
+   - 调查发现: 内核 TCP 栈消耗 RST 包，raw socket 无法接收
+   - 已尝试: IPPROTO_RAW (255) 替代 IPPROTO_TCP (6) - 无效
 
 **本次修改的文件**:
 ```
@@ -34,10 +35,64 @@ crates/rustnmap-scan/src/stealth_scans.rs | +150 (decoy 支持)
 crates/rustnmap-core/src/orchestrator.rs  | +30 (DecoyScheduler 创建 + fix)
 ```
 
+---
+
+### 2026-02-25: Nmap 数据库集成 - 当前会话
+
+**用户请求**: 集成 nmap-services, nmap-protocols, nmap-rpc, nmap-mac-prefixes 数据库
+
+**完成工作**:
+
+1. **创建 4 个新数据库解析器** ✅
+   - `services.rs`: 解析 nmap-services (端口->服务名)
+   - `protocols.rs`: 解析 nmap-protocols (协议号->协议名)
+   - `rpc.rs`: 解析 nmap-rpc (RPC程序号->服务名)
+   - 已有 `mac.rs`: nmap-mac-prefixes
+
+2. **更新 DatabaseUpdater** ✅
+   - 添加 4 个新数据库的下载 URL
+   - 添加 update_services(), update_protocols(), update_rpc() 方法
+   - 在 update_all() 中调用新方法
+
+3. **集成到 FingerprintDatabase** ✅
+   - 添加 mac_prefix_db 字段
+   - 添加 mac_db(), load_mac_db(), is_mac_db_loaded(), set_mac_db() 方法
+
+4. **集成到 Orchestrator** ✅
+   - 所有扫描路径添加 MAC 地址和厂商查找
+   - parallel, batch, sequential, two-phase 都已集成
+
+5. **集成到 CLI 启动** ✅
+   - 在 cli.rs 中添加 4 个新数据库的加载逻辑
+   - 从 $datadir/db/ 加载，默认 ~/.rustnmap/db/
+
+6. **复制数据库文件** ✅
+   - 复制 nmap-mac-prefixes, nmap-services, nmap-protocols, nmap-rpc 到 ~/.rustnmap/db/
+
+**验证结果**:
+- 服务名称现在显示 (ssh, http 等)
+- MAC 地址厂商查找基础设施已就位
+- 所有测试通过 (600+ tests, zero warnings)
+
+**本次修改的文件**:
+```
+crates/rustnmap-fingerprint/src/database/services.rs      | +450 (新建)
+crates/rustnmap-fingerprint/src/database/protocols.rs    | +330 (新建)
+crates/rustnmap-fingerprint/src/database/rpc.rs           | +435 (新建)
+crates/rustnmap-fingerprint/src/database/mod.rs         | +4 (导出)
+crates/rustnmap-fingerprint/src/database/updater.rs    | +236 (新URL + 方法)
+crates/rustnmap-fingerprint/src/lib.rs                   | +9 (文档+导出)
+crates/rustnmap-core/src/session.rs                     | +41 (mac_prefix_db字段)
+crates/rustnmap-core/src/orchestrator.rs               | +175 (MAC查找集成)
+crates/rustnmap-cli/src/cli.rs                          | +142 (数据库加载)
+```
+
 **待解决问题**:
-- [HIGH] ~~Decoy Scan 功能验证失败~~ ✅ 已修复
-- [MEDIUM] MAC 地址输出缺失
-- [LOW] FIN 扫描端口状态不准确
+- [HIGH] ~~MAC 地址输出缺失~~ ✅ 已完成
+- [MEDIUM] ~~nmap-services 数据库支持~~ ✅ 已完成
+- [LOW] ~~nmap-protocols 数据库支持~~ ✅ 已完成
+- [LOW] ~~nmap-rpc 数据库支持~~ ✅ 已完成
+- [LOW] FIN 扫描端口状态不准确 - 需要集成 AF_PACKET 层 2 捕获
 
 ---
 

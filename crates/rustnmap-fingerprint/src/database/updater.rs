@@ -16,7 +16,7 @@
 //!     .verify_checksums(true);
 //!
 //! let result = updater.update_all("/var/lib/rustnmap/", &options).await?;
-//! println!("Updated {} databases", result.updated_count);
+//! // Check result.updated_count for number of databases updated
 //! # Ok(())
 //! # }
 //! ```
@@ -33,6 +33,9 @@ use crate::FingerprintError;
 const NMAP_SERVICE_PROBES_URL: &str = "https://svn.nmap.org/nmap/nmap-service-probes";
 const NMAP_OS_DB_URL: &str = "https://svn.nmap.org/nmap/nmap-os-db";
 const NMAP_MAC_PREFIXES_URL: &str = "https://svn.nmap.org/nmap/nmap-mac-prefixes";
+const NMAP_SERVICES_URL: &str = "https://svn.nmap.org/nmap/nmap-services";
+const NMAP_PROTOCOLS_URL: &str = "https://svn.nmap.org/nmap/nmap-protocols";
+const NMAP_RPC_URL: &str = "https://svn.nmap.org/nmap/nmap-rpc";
 
 /// HTTP timeout for database downloads.
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(120);
@@ -67,6 +70,12 @@ pub struct CustomUrls {
     pub os_db: Option<String>,
     /// URL for MAC prefixes database.
     pub mac_prefixes: Option<String>,
+    /// URL for services database.
+    pub services: Option<String>,
+    /// URL for protocols database.
+    pub protocols: Option<String>,
+    /// URL for RPC database.
+    pub rpc: Option<String>,
 }
 
 /// Result of a database update operation.
@@ -157,6 +166,9 @@ impl UpdateOptions {
     ///     service_probes: Some("https://example.com/service-probes".to_string()),
     ///     os_db: None,
     ///     mac_prefixes: None,
+    ///     services: None,
+    ///     protocols: None,
+    ///     rpc: None,
     /// };
     /// let options = UpdateOptions::default().custom_urls(custom);
     /// ```
@@ -213,7 +225,7 @@ impl DatabaseUpdater {
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let updater = DatabaseUpdater::new();
     /// let result = updater.update_all("/var/lib/rustnmap/", &UpdateOptions::default()).await?;
-    /// println!("Updated {} databases", result.updated_count);
+    /// // Check result.updated_count for number of databases updated
     /// # Ok(())
     /// # }
     /// ```
@@ -309,6 +321,87 @@ impl DatabaseUpdater {
                 failed += 1;
                 details.push(DatabaseUpdateDetail {
                     name: "mac-prefixes".to_string(),
+                    success: false,
+                    previous_version: None,
+                    new_version: None,
+                    error: Some(e.to_string()),
+                    backup_created: false,
+                });
+            }
+        }
+
+        // Update services database
+        match self.update_services(target_dir, options).await {
+            Ok(detail) => {
+                if detail.success {
+                    if detail.previous_version == detail.new_version {
+                        unchanged += 1;
+                    } else {
+                        updated += 1;
+                    }
+                } else {
+                    failed += 1;
+                }
+                details.push(detail);
+            }
+            Err(e) => {
+                failed += 1;
+                details.push(DatabaseUpdateDetail {
+                    name: "services".to_string(),
+                    success: false,
+                    previous_version: None,
+                    new_version: None,
+                    error: Some(e.to_string()),
+                    backup_created: false,
+                });
+            }
+        }
+
+        // Update protocols database
+        match self.update_protocols(target_dir, options).await {
+            Ok(detail) => {
+                if detail.success {
+                    if detail.previous_version == detail.new_version {
+                        unchanged += 1;
+                    } else {
+                        updated += 1;
+                    }
+                } else {
+                    failed += 1;
+                }
+                details.push(detail);
+            }
+            Err(e) => {
+                failed += 1;
+                details.push(DatabaseUpdateDetail {
+                    name: "protocols".to_string(),
+                    success: false,
+                    previous_version: None,
+                    new_version: None,
+                    error: Some(e.to_string()),
+                    backup_created: false,
+                });
+            }
+        }
+
+        // Update RPC database
+        match self.update_rpc(target_dir, options).await {
+            Ok(detail) => {
+                if detail.success {
+                    if detail.previous_version == detail.new_version {
+                        unchanged += 1;
+                    } else {
+                        updated += 1;
+                    }
+                } else {
+                    failed += 1;
+                }
+                details.push(detail);
+            }
+            Err(e) => {
+                failed += 1;
+                details.push(DatabaseUpdateDetail {
+                    name: "rpc".to_string(),
                     success: false,
                     previous_version: None,
                     new_version: None,
@@ -454,6 +547,129 @@ impl DatabaseUpdater {
             .await
     }
 
+    /// Update the services database.
+    ///
+    /// Downloads the latest nmap-services file from the official Nmap
+    /// SVN repository.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the download fails or the file cannot be
+    /// written to the target directory.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use rustnmap_fingerprint::database::{DatabaseUpdater, UpdateOptions};
+    ///
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let updater = DatabaseUpdater::new();
+    /// let result = updater.update_services("/var/lib/rustnmap/", &UpdateOptions::default()).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn update_services(
+        &self,
+        target_dir: impl AsRef<Path>,
+        options: &UpdateOptions,
+    ) -> crate::Result<DatabaseUpdateDetail> {
+        let target_dir = target_dir.as_ref();
+        let target_path = target_dir.join("nmap-services");
+
+        let url = options
+            .custom_urls
+            .as_ref()
+            .and_then(|u| u.services.clone())
+            .unwrap_or_else(|| NMAP_SERVICES_URL.to_string());
+
+        info!("Updating services database from {}", url);
+
+        self.update_database_file(&url, &target_path, "services", options)
+            .await
+    }
+
+    /// Update the protocols database.
+    ///
+    /// Downloads the latest nmap-protocols file from the official Nmap
+    /// SVN repository.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the download fails or the file cannot be
+    /// written to the target directory.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use rustnmap_fingerprint::database::{DatabaseUpdater, UpdateOptions};
+    ///
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let updater = DatabaseUpdater::new();
+    /// let result = updater.update_protocols("/var/lib/rustnmap/", &UpdateOptions::default()).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn update_protocols(
+        &self,
+        target_dir: impl AsRef<Path>,
+        options: &UpdateOptions,
+    ) -> crate::Result<DatabaseUpdateDetail> {
+        let target_dir = target_dir.as_ref();
+        let target_path = target_dir.join("nmap-protocols");
+
+        let url = options
+            .custom_urls
+            .as_ref()
+            .and_then(|u| u.protocols.clone())
+            .unwrap_or_else(|| NMAP_PROTOCOLS_URL.to_string());
+
+        info!("Updating protocols database from {}", url);
+
+        self.update_database_file(&url, &target_path, "protocols", options)
+            .await
+    }
+
+    /// Update the RPC database.
+    ///
+    /// Downloads the latest nmap-rpc file from the official Nmap
+    /// SVN repository.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the download fails or the file cannot be
+    /// written to the target directory.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use rustnmap_fingerprint::database::{DatabaseUpdater, UpdateOptions};
+    ///
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let updater = DatabaseUpdater::new();
+    /// let result = updater.update_rpc("/var/lib/rustnmap/", &UpdateOptions::default()).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn update_rpc(
+        &self,
+        target_dir: impl AsRef<Path>,
+        options: &UpdateOptions,
+    ) -> crate::Result<DatabaseUpdateDetail> {
+        let target_dir = target_dir.as_ref();
+        let target_path = target_dir.join("nmap-rpc");
+
+        let url = options
+            .custom_urls
+            .as_ref()
+            .and_then(|u| u.rpc.clone())
+            .unwrap_or_else(|| NMAP_RPC_URL.to_string());
+
+        info!("Updating RPC database from {}", url);
+
+        self.update_database_file(&url, &target_path, "rpc", options)
+            .await
+    }
+
     /// Internal method to update a single database file.
     #[allow(
         clippy::too_many_lines,
@@ -539,23 +755,23 @@ impl DatabaseUpdater {
             });
         }
 
-        // Write to temporary file first
-        let temp_path = target_path.with_extension("tmp");
-        if let Err(e) = tokio::fs::write(&temp_path, &content).await {
+        // Write content to a staging file, then atomically replace target
+        let staging_path = target_path.with_extension("tmp");
+        if let Err(e) = tokio::fs::write(&staging_path, &content).await {
             return Ok(DatabaseUpdateDetail {
                 name: name.to_string(),
                 success: false,
                 previous_version: previous_version.clone(),
                 new_version: None,
-                error: Some(format!("Failed to write temp file: {e}")),
+                error: Some(format!("Failed to write staging file: {e}")),
                 backup_created,
             });
         }
 
-        // Atomically rename temp to target
-        if let Err(e) = tokio::fs::rename(&temp_path, target_path).await {
-            // Clean up temp file
-            let _ = tokio::fs::remove_file(&temp_path).await;
+        // Atomically replace target file with staging file
+        if let Err(e) = tokio::fs::rename(&staging_path, target_path).await {
+            // Clean up staging file
+            let _ = tokio::fs::remove_file(&staging_path).await;
             return Ok(DatabaseUpdateDetail {
                 name: name.to_string(),
                 success: false,

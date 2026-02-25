@@ -11,8 +11,10 @@ use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 
 use futures_util::future::join_all;
+use rustnmap_common::MacAddr;
 use rustnmap_common::ScanConfig as ScannerConfig;
 use rustnmap_evasion::DecoyScheduler;
+use rustnmap_net::raw_socket::{parse_arp_reply, ArpPacketBuilder, RawSocket};
 use rustnmap_output::models::PortState;
 use rustnmap_output::models::{HostResult, HostStatus, PortResult, ScanResult, ScanStatistics};
 use rustnmap_scan::connect_scan::TcpConnectScanner;
@@ -27,6 +29,7 @@ use rustnmap_scan::udp_scan::UdpScanner;
 use rustnmap_scan::ultrascan::ParallelScanEngine;
 use rustnmap_target::discovery::{HostDiscovery, HostState as DiscoveryHostState};
 use rustnmap_target::Target;
+
 use tokio::sync::RwLock;
 use tracing::{debug, info, instrument, warn};
 
@@ -77,6 +80,51 @@ fn create_decoy_scheduler(
                 .expect("Failed to create DecoyScheduler")
         })
     })
+}
+
+/// Attempts to get the MAC address for an IPv4 target via ARP request.
+///
+/// # Arguments
+///
+/// * `target_ip` - The target IPv4 address
+/// * `local_addr` - The local IPv4 address to use for the ARP request
+/// * `timeout` - Timeout for the ARP request
+///
+/// # Returns
+///
+/// `Some(MacAddr)` if ARP reply is received, `None` otherwise.
+fn get_mac_address_via_arp(
+    target_ip: std::net::Ipv4Addr,
+    local_addr: std::net::Ipv4Addr,
+    timeout: std::time::Duration,
+) -> Option<MacAddr> {
+    // Use broadcast MAC for ARP requests
+    let src_mac = MacAddr::broadcast();
+
+    let socket = RawSocket::with_protocol(1).ok()?;
+
+    let packet = ArpPacketBuilder::new(src_mac, local_addr, target_ip).build();
+
+    let dst_sockaddr = SocketAddr::new(IpAddr::V4(target_ip), 0);
+
+    socket.send_packet(&packet, &dst_sockaddr).ok()?;
+
+    let mut recv_buf = vec![0u8; 65535];
+
+    match socket.recv_packet(recv_buf.as_mut_slice(), Some(timeout)) {
+        Ok(len) if len > 0 => {
+            if let Some((mac_addr, sender_ip)) = parse_arp_reply(&recv_buf[..len]) {
+                let octets = target_ip.octets();
+                if sender_ip
+                    == rustnmap_common::Ipv4Addr::new(octets[0], octets[1], octets[2], octets[3])
+                {
+                    return Some(mac_addr);
+                }
+            }
+            None
+        }
+        _ => None,
+    }
 }
 
 /// Scan phase enumeration.
@@ -587,6 +635,9 @@ impl ScanOrchestrator {
             let ports = self.get_ports_for_scan();
             let session = Arc::clone(&self.session);
 
+            // Get MAC addresses for IPv4 targets (only for local network targets)
+            let mac_timeout = std::time::Duration::from_millis(500);
+
             // Spawn async tasks for each target to scan in parallel
             let scan_futures: Vec<_> = targets
                 .iter()
@@ -595,6 +646,10 @@ impl ScanOrchestrator {
                     let ports = ports.clone();
                     let session = Arc::clone(&session);
                     let target = target.clone();
+                    let target_ip_for_mac = match target.ip {
+                        IpAddr::V4(addr) => Some(addr),
+                        IpAddr::V6(_) => None,
+                    };
 
                     async move {
                         let target_ip = match target.ip {
@@ -648,9 +703,31 @@ impl ScanOrchestrator {
                             session.stats.record_packet_sent();
                         }
 
+                        // Get MAC address via ARP (only for IPv4 targets)
+                        let mac = if let Some(target_ipv4) = target_ip_for_mac {
+                            get_mac_address_via_arp(target_ipv4, local_addr, mac_timeout).map(
+                                |mac_addr| {
+                                    let mac_str = mac_addr.to_string();
+                                    // Look up vendor from MAC prefix database
+                                    let vendor = self
+                                        .session
+                                        .fingerprint_db
+                                        .mac_db()
+                                        .and_then(|db| db.lookup(&mac_str))
+                                        .map(std::string::ToString::to_string);
+                                    rustnmap_output::models::MacAddress {
+                                        address: mac_str,
+                                        vendor,
+                                    }
+                                },
+                            )
+                        } else {
+                            None
+                        };
+
                         Some(HostResult {
                             ip: target.ip,
-                            mac: None,
+                            mac,
                             hostname: target.hostname.clone(),
                             status: HostStatus::Up,
                             status_reason: "syn-ack".to_string(),
@@ -723,6 +800,8 @@ impl ScanOrchestrator {
 
         info!("Starting sequential port scanning");
 
+        // Get local address for MAC lookup
+        let local_addr = get_local_address(&self.session.config.dns_server);
         let mut host_results = Vec::new();
 
         for target in targets {
@@ -740,7 +819,30 @@ impl ScanOrchestrator {
 
             let host_result = HostResult {
                 ip: target.ip,
-                mac: None,
+                mac: match target.ip {
+                    IpAddr::V4(target_ipv4) => {
+                        get_mac_address_via_arp(
+                            target_ipv4,
+                            local_addr,
+                            std::time::Duration::from_millis(500),
+                        )
+                        .map(|mac_addr| {
+                            let mac_str = mac_addr.to_string();
+                            // Look up vendor from MAC prefix database
+                            let vendor = self
+                                .session
+                                .fingerprint_db
+                                .mac_db()
+                                .and_then(|db| db.lookup(&mac_str))
+                                .map(std::string::ToString::to_string);
+                            rustnmap_output::models::MacAddress {
+                                address: mac_str,
+                                vendor,
+                            }
+                        })
+                    }
+                    IpAddr::V6(_) => None,
+                },
                 hostname: target.hostname.clone(),
                 status: HostStatus::Up,
                 status_reason: "syn-ack".to_string(),
@@ -945,9 +1047,35 @@ impl ScanOrchestrator {
                 }
             }
 
+            // Get MAC address via ARP (only for IPv4 targets)
+            let mac = match target.ip {
+                IpAddr::V4(target_ipv4) => {
+                    get_mac_address_via_arp(
+                        target_ipv4,
+                        local_addr,
+                        std::time::Duration::from_millis(500),
+                    )
+                    .map(|mac_addr| {
+                        let mac_str = mac_addr.to_string();
+                        // Look up vendor from MAC prefix database
+                        let vendor = self
+                            .session
+                            .fingerprint_db
+                            .mac_db()
+                            .and_then(|db| db.lookup(&mac_str))
+                            .map(std::string::ToString::to_string);
+                        rustnmap_output::models::MacAddress {
+                            address: mac_str,
+                            vendor,
+                        }
+                    })
+                }
+                IpAddr::V6(_) => None,
+            };
+
             let host_result = HostResult {
                 ip: target.ip,
-                mac: None,
+                mac,
                 hostname: target.hostname.clone(),
                 status: HostStatus::Up,
                 status_reason: "batch-scan".to_string(),
@@ -974,12 +1102,19 @@ impl ScanOrchestrator {
     ///
     /// Phase 1: Quick scan of common ports to identify live hosts with open ports
     /// Phase 2: Full port scan only on hosts that responded in Phase 1
+    #[expect(
+        clippy::too_many_lines,
+        reason = "Two-phase scanning requires multiple sequential operations"
+    )]
     async fn run_two_phase_port_scanning(&self) -> Result<Vec<HostResult>> {
         info!("Starting two-phase port scanning");
 
         let targets: Vec<Target> = self.session.target_set.targets().to_vec();
         let mut host_results = Vec::new();
         let mut phase1_hosts = Vec::new();
+
+        // Get local address for MAC lookup
+        let local_addr = get_local_address(&self.session.config.dns_server);
 
         // ========== Phase 1: Fast Discovery ==========
         info!("Phase 1: Fast discovery with common ports");
@@ -1039,7 +1174,30 @@ impl ScanOrchestrator {
 
             let host_result = HostResult {
                 ip: target.ip,
-                mac: None,
+                mac: match target.ip {
+                    IpAddr::V4(target_ipv4) => {
+                        get_mac_address_via_arp(
+                            target_ipv4,
+                            local_addr,
+                            std::time::Duration::from_millis(500),
+                        )
+                        .map(|mac_addr| {
+                            let mac_str = mac_addr.to_string();
+                            // Look up vendor from MAC prefix database
+                            let vendor = self
+                                .session
+                                .fingerprint_db
+                                .mac_db()
+                                .and_then(|db| db.lookup(&mac_str))
+                                .map(std::string::ToString::to_string);
+                            rustnmap_output::models::MacAddress {
+                                address: mac_str,
+                                vendor,
+                            }
+                        })
+                    }
+                    IpAddr::V6(_) => None,
+                },
                 hostname: target.hostname.clone(),
                 status: HostStatus::Up,
                 status_reason: "syn-ack".to_string(),
@@ -1062,9 +1220,33 @@ impl ScanOrchestrator {
         // These hosts are alive but have no open common ports
         for target in &targets {
             if !host_results.iter().any(|h| h.ip == target.ip) {
+                let mac = match target.ip {
+                    IpAddr::V4(target_ipv4) => {
+                        get_mac_address_via_arp(
+                            target_ipv4,
+                            local_addr,
+                            std::time::Duration::from_millis(500),
+                        )
+                        .map(|mac_addr| {
+                            let mac_str = mac_addr.to_string();
+                            // Look up vendor from MAC prefix database
+                            let vendor = self
+                                .session
+                                .fingerprint_db
+                                .mac_db()
+                                .and_then(|db| db.lookup(&mac_str))
+                                .map(std::string::ToString::to_string);
+                            rustnmap_output::models::MacAddress {
+                                address: mac_str,
+                                vendor,
+                            }
+                        })
+                    }
+                    IpAddr::V6(_) => None,
+                };
                 let host_result = HostResult {
                     ip: target.ip,
-                    mac: None,
+                    mac,
                     hostname: target.hostname.clone(),
                     status: HostStatus::Up,
                     status_reason: "host-alive".to_string(),

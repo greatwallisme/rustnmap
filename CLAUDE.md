@@ -12,7 +12,7 @@
 ## Most Important
 - Pay Attention to Code Quality Hook Error Messages. **Do not** attempt to bypass or disable the Hook
 - **Zero warning**, **Zero error**. **NEVER** allow any warning or error by relaxing clippy standards in configuration 
-- ./target/release/rustnmap, ./target/debug/rustnmap, /usr/bin/nmap have already add in `/etc/sudoer`, these can be executed directly 
+- `./target/release/rustnmap`, `/usr/bin/nmap` have already add in `/etc/sudoer`, these can be executed directly 
 
 ## Project Overview
 

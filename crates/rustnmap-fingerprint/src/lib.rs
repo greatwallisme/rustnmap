@@ -69,6 +69,10 @@
 //! This crate supports Nmap's standard database formats:
 //! - `nmap-service-probes` - Service version detection patterns
 //! - `nmap-os-db` - OS fingerprint reference database
+//! - `nmap-mac-prefixes` - MAC vendor mappings
+//! - `nmap-services` - Port-to-service name mappings
+//! - `nmap-protocols` - Protocol number-to-name mappings
+//! - `nmap-rpc` - RPC program number-to-name mappings
 //!
 //! # Performance
 //!
@@ -94,7 +98,10 @@ pub type Result<T> = std::result::Result<T, error::FingerprintError>;
 
 // Re-exports for convenience
 #[doc(inline)]
-pub use database::{DatabaseUpdater, MacPrefixDatabase, UpdateOptions};
+pub use database::{
+    DatabaseUpdater, MacPrefixDatabase, ProtocolDatabase, RpcDatabase, ServiceDatabase,
+    UpdateOptions,
+};
 pub use error::FingerprintError;
 pub use os::{
     EcnFingerprint, FingerprintDatabase, IcmpTestResult, IpIdPattern, IpIdSeqClass, IsnClass,

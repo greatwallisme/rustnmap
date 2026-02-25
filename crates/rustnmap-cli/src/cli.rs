@@ -470,6 +470,95 @@ async fn handle_profile_scan(args: &Args, profile_path: &std::path::Path) -> Res
         }
     }
 
+    // Load MAC prefix database for vendor lookups
+    let mac_db_path = db_dir.join("nmap-mac-prefixes");
+    if mac_db_path.exists() {
+        info!(
+            "Loading MAC prefix database from: {}",
+            mac_db_path.display()
+        );
+        match rustnmap_fingerprint::MacPrefixDatabase::load_from_file(&mac_db_path).await {
+            Ok(db) => {
+                info!(
+                    "MAC prefix database loaded successfully ({} entries)",
+                    db.len()
+                );
+                fp_db.set_mac_db(db);
+            }
+            Err(e) => {
+                warn!("Failed to load MAC prefix database: {e}");
+            }
+        }
+    } else {
+        debug!(
+            "MAC prefix database not found at: {}",
+            mac_db_path.display()
+        );
+    }
+
+    // Load service database for port-to-service name mappings
+    let services_db_path = db_dir.join("nmap-services");
+    if services_db_path.exists() {
+        info!(
+            "Loading services database from: {}",
+            services_db_path.display()
+        );
+        match rustnmap_fingerprint::ServiceDatabase::load_from_file(&services_db_path).await {
+            Ok(_db) => {
+                info!("Services database loaded successfully");
+                // Note: Service database is available but not yet used in output
+            }
+            Err(e) => {
+                warn!("Failed to load services database: {e}");
+            }
+        }
+    } else {
+        debug!(
+            "Services database not found at: {}",
+            services_db_path.display()
+        );
+    }
+
+    // Load protocols database for protocol number-to-name mappings
+    let protocols_db_path = db_dir.join("nmap-protocols");
+    if protocols_db_path.exists() {
+        info!(
+            "Loading protocols database from: {}",
+            protocols_db_path.display()
+        );
+        match rustnmap_fingerprint::ProtocolDatabase::load_from_file(&protocols_db_path).await {
+            Ok(_db) => {
+                info!("Protocols database loaded successfully");
+                // Note: Protocols database is available but not yet used in output
+            }
+            Err(e) => {
+                warn!("Failed to load protocols database: {e}");
+            }
+        }
+    } else {
+        debug!(
+            "Protocols database not found at: {}",
+            protocols_db_path.display()
+        );
+    }
+
+    // Load RPC database for RPC program number mappings
+    let rpc_db_path = db_dir.join("nmap-rpc");
+    if rpc_db_path.exists() {
+        info!("Loading RPC database from: {}", rpc_db_path.display());
+        match rustnmap_fingerprint::RpcDatabase::load_from_file(&rpc_db_path).await {
+            Ok(_db) => {
+                info!("RPC database loaded successfully");
+                // Note: RPC database is available but not yet used in output
+            }
+            Err(e) => {
+                warn!("Failed to load RPC database: {e}");
+            }
+        }
+    } else {
+        debug!("RPC database not found at: {}", rpc_db_path.display());
+    }
+
     let fingerprint_db = Arc::new(fp_db);
 
     // Create scan session and run
@@ -772,6 +861,95 @@ async fn run_normal_scan(args: &Args) -> Result<()> {
             );
             warn!("OS detection will be skipped");
         }
+    }
+
+    // Load MAC prefix database for vendor lookups
+    let mac_db_path = db_dir.join("nmap-mac-prefixes");
+    if mac_db_path.exists() {
+        info!(
+            "Loading MAC prefix database from: {}",
+            mac_db_path.display()
+        );
+        match rustnmap_fingerprint::MacPrefixDatabase::load_from_file(&mac_db_path).await {
+            Ok(db) => {
+                info!(
+                    "MAC prefix database loaded successfully ({} entries)",
+                    db.len()
+                );
+                fp_db.set_mac_db(db);
+            }
+            Err(e) => {
+                warn!("Failed to load MAC prefix database: {e}");
+            }
+        }
+    } else {
+        debug!(
+            "MAC prefix database not found at: {}",
+            mac_db_path.display()
+        );
+    }
+
+    // Load service database for port-to-service name mappings
+    let services_db_path = db_dir.join("nmap-services");
+    if services_db_path.exists() {
+        info!(
+            "Loading services database from: {}",
+            services_db_path.display()
+        );
+        match rustnmap_fingerprint::ServiceDatabase::load_from_file(&services_db_path).await {
+            Ok(_db) => {
+                info!("Services database loaded successfully");
+                // Note: Service database is available but not yet used in output
+            }
+            Err(e) => {
+                warn!("Failed to load services database: {e}");
+            }
+        }
+    } else {
+        debug!(
+            "Services database not found at: {}",
+            services_db_path.display()
+        );
+    }
+
+    // Load protocols database for protocol number-to-name mappings
+    let protocols_db_path = db_dir.join("nmap-protocols");
+    if protocols_db_path.exists() {
+        info!(
+            "Loading protocols database from: {}",
+            protocols_db_path.display()
+        );
+        match rustnmap_fingerprint::ProtocolDatabase::load_from_file(&protocols_db_path).await {
+            Ok(_db) => {
+                info!("Protocols database loaded successfully");
+                // Note: Protocols database is available but not yet used in output
+            }
+            Err(e) => {
+                warn!("Failed to load protocols database: {e}");
+            }
+        }
+    } else {
+        debug!(
+            "Protocols database not found at: {}",
+            protocols_db_path.display()
+        );
+    }
+
+    // Load RPC database for RPC program number mappings
+    let rpc_db_path = db_dir.join("nmap-rpc");
+    if rpc_db_path.exists() {
+        info!("Loading RPC database from: {}", rpc_db_path.display());
+        match rustnmap_fingerprint::RpcDatabase::load_from_file(&rpc_db_path).await {
+            Ok(_db) => {
+                info!("RPC database loaded successfully");
+                // Note: RPC database is available but not yet used in output
+            }
+            Err(e) => {
+                warn!("Failed to load RPC database: {e}");
+            }
+        }
+    } else {
+        debug!("RPC database not found at: {}", rpc_db_path.display());
     }
 
     let fingerprint_db = Arc::new(fp_db);

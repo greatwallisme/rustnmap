@@ -4,6 +4,9 @@
 //! querying fingerprint databases including:
 //!
 //! - **MAC Prefix Database**: Vendor lookup from MAC addresses
+//! - **Service Database**: Port-to-service name lookups
+//! - **Protocol Database**: Protocol number-to-name lookups
+//! - **RPC Database**: RPC program number-to-name lookups
 //! - **Database Updater**: Download and update databases from Nmap
 //!
 //! # Example
@@ -27,7 +30,13 @@
 //! ```
 
 mod mac;
+mod protocols;
+mod rpc;
+mod services;
 mod updater;
 
 pub use mac::{MacPrefixDatabase, MacVendorInfo};
+pub use protocols::{ProtocolDatabase, ProtocolEntry};
+pub use rpc::{RpcDatabase, RpcEntry};
+pub use services::{ServiceDatabase, ServiceEntry, ServiceProtocol};
 pub use updater::{CustomUrls, DatabaseUpdateDetail, DatabaseUpdater, UpdateOptions, UpdateResult};

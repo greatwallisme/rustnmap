@@ -24,6 +24,9 @@ fn test_update_options_builder_complete() {
         service_probes: Some("https://example.com/probes".to_string()),
         os_db: Some("https://example.com/os-db".to_string()),
         mac_prefixes: Some("https://example.com/mac".to_string()),
+        services: Some("https://example.com/services".to_string()),
+        protocols: Some("https://example.com/protocols".to_string()),
+        rpc: Some("https://example.com/rpc".to_string()),
     };
 
     let _opts = UpdateOptions::new()
@@ -73,6 +76,9 @@ fn test_custom_urls_all_fields() {
         service_probes: Some("https://custom.example.com/service-probes".to_string()),
         os_db: Some("https://custom.example.com/nmap-os-db".to_string()),
         mac_prefixes: Some("https://custom.example.com/nmap-mac-prefixes".to_string()),
+        services: None,
+        protocols: None,
+        rpc: None,
     };
 
     assert!(urls.service_probes.is_some());
@@ -92,6 +98,9 @@ fn test_custom_urls_partial() {
         service_probes: Some("https://custom.example.com/service-probes".to_string()),
         os_db: None,
         mac_prefixes: None,
+        services: None,
+        protocols: None,
+        rpc: None,
     };
 
     assert!(urls.service_probes.is_some());
@@ -106,6 +115,9 @@ fn test_custom_urls_all_none() {
         service_probes: None,
         os_db: None,
         mac_prefixes: None,
+        services: None,
+        protocols: None,
+        rpc: None,
     };
 
     assert!(urls.service_probes.is_none());
@@ -120,6 +132,9 @@ fn test_custom_urls_clone() {
         service_probes: Some("https://example.com".to_string()),
         os_db: None,
         mac_prefixes: None,
+        services: None,
+        protocols: None,
+        rpc: None,
     };
 
     let cloned = urls.clone();
@@ -133,6 +148,9 @@ fn test_update_options_with_custom_urls() {
         service_probes: Some("https://mirror1.example.com/probes".to_string()),
         os_db: Some("https://mirror1.example.com/os".to_string()),
         mac_prefixes: Some("https://mirror1.example.com/mac".to_string()),
+        services: None,
+        protocols: None,
+        rpc: None,
     };
 
     let _opts = UpdateOptions::default().custom_urls(custom_urls);
@@ -450,6 +468,9 @@ fn test_custom_urls_debug() {
         service_probes: Some("https://example.com".to_string()),
         os_db: None,
         mac_prefixes: None,
+        services: None,
+        protocols: None,
+        rpc: None,
     };
 
     let debug_str = format!("{urls:?}");
@@ -515,6 +536,9 @@ fn test_update_options_empty_custom_urls() {
         service_probes: None,
         os_db: None,
         mac_prefixes: None,
+        services: None,
+        protocols: None,
+        rpc: None,
     };
 
     let _opts = UpdateOptions::default().custom_urls(urls);
@@ -540,6 +564,9 @@ fn test_update_options_all_combinations() {
         service_probes: Some("https://example.com".to_string()),
         os_db: None,
         mac_prefixes: None,
+        services: None,
+        protocols: None,
+        rpc: None,
     };
     let _opts = UpdateOptions::default().custom_urls(urls);
 
@@ -548,6 +575,9 @@ fn test_update_options_all_combinations() {
         service_probes: Some("https://example.com/p".to_string()),
         os_db: Some("https://example.com/o".to_string()),
         mac_prefixes: Some("https://example.com/m".to_string()),
+        services: None,
+        protocols: None,
+        rpc: None,
     };
     let _opts = UpdateOptions::new()
         .backup(true)
@@ -752,6 +782,9 @@ async fn test_real_download_invalid_url() {
         ),
         os_db: None,
         mac_prefixes: None,
+        services: None,
+        protocols: None,
+        rpc: None,
     };
 
     let options = UpdateOptions::default()

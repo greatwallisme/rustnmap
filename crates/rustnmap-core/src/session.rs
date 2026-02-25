@@ -481,11 +481,17 @@ impl fmt::Debug for ScanSession {
 
 /// Fingerprint database handle.
 #[derive(Debug)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "All fields are database references, `_db` suffix is semantically meaningful"
+)]
 pub struct FingerprintDatabase {
     /// Service probe database.
     service_db: Option<rustnmap_fingerprint::ProbeDatabase>,
     /// OS fingerprint database.
     os_db: Option<rustnmap_fingerprint::FingerprintDatabase>,
+    /// MAC prefix database for vendor lookups.
+    mac_prefix_db: Option<rustnmap_fingerprint::MacPrefixDatabase>,
 }
 
 impl Default for FingerprintDatabase {
@@ -501,6 +507,7 @@ impl FingerprintDatabase {
         Self {
             service_db: None,
             os_db: None,
+            mac_prefix_db: None,
         }
     }
 
@@ -510,6 +517,7 @@ impl FingerprintDatabase {
         Self {
             service_db: Some(rustnmap_fingerprint::ProbeDatabase::empty()),
             os_db: Some(rustnmap_fingerprint::FingerprintDatabase::empty()),
+            mac_prefix_db: Some(rustnmap_fingerprint::MacPrefixDatabase::empty()),
         }
     }
 
@@ -580,6 +588,43 @@ impl FingerprintDatabase {
             }
             Err(e) => Err(crate::error::CoreError::fingerprint(format!(
                 "Failed to load OS DB: {e}"
+            ))),
+        }
+    }
+
+    /// Returns true if the MAC prefix database is loaded.
+    #[must_use]
+    pub fn is_mac_db_loaded(&self) -> bool {
+        self.mac_prefix_db.is_some()
+    }
+
+    /// Returns a reference to the MAC prefix database.
+    #[must_use]
+    pub const fn mac_db(&self) -> Option<&rustnmap_fingerprint::MacPrefixDatabase> {
+        self.mac_prefix_db.as_ref()
+    }
+
+    /// Sets the MAC prefix database.
+    pub fn set_mac_db(&mut self, db: rustnmap_fingerprint::MacPrefixDatabase) {
+        self.mac_prefix_db = Some(db);
+    }
+
+    /// Loads MAC prefix database from file.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database file cannot be loaded.
+    pub async fn load_mac_db(
+        &mut self,
+        path: impl AsRef<std::path::Path>,
+    ) -> crate::error::Result<()> {
+        match rustnmap_fingerprint::MacPrefixDatabase::load_from_file(path).await {
+            Ok(db) => {
+                self.mac_prefix_db = Some(db);
+                Ok(())
+            }
+            Err(e) => Err(crate::error::CoreError::fingerprint(format!(
+                "Failed to load MAC prefix DB: {e}"
             ))),
         }
     }
