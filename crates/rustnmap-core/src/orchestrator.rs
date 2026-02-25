@@ -506,6 +506,7 @@ impl ScanOrchestrator {
                         dns_server: session.config.dns_server.clone(),
                         min_rate: None,
                         max_rate: None,
+                        timing_level: 3, // Use T3 Normal for host discovery
                     };
                     let discovery = HostDiscovery::new(discovery_config);
 
@@ -621,6 +622,7 @@ impl ScanOrchestrator {
                 dns_server: self.session.config.dns_server.clone(),
                 min_rate: self.session.config.min_rate,
                 max_rate: self.session.config.max_rate,
+                timing_level: timing_config.timing_level,
             };
 
             let engine = if let Ok(engine) = ParallelScanEngine::new(local_addr, scanner_config) {
@@ -906,6 +908,7 @@ impl ScanOrchestrator {
             dns_server: self.session.config.dns_server.clone(),
             min_rate: self.session.config.min_rate,
             max_rate: self.session.config.max_rate,
+            timing_level: timing_config.timing_level,
         };
 
         // Create decoy scheduler if evasion config has decoys
@@ -1309,6 +1312,7 @@ impl ScanOrchestrator {
             dns_server: self.session.config.dns_server.clone(),
             min_rate: self.session.config.min_rate,
             max_rate: self.session.config.max_rate,
+            timing_level: timing_config.timing_level,
         };
 
         // Get local address for the scanner by detecting the source IP for the target

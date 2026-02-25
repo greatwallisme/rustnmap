@@ -364,7 +364,7 @@ fn bench_packet_batch_processing(c: &mut Criterion) {
             let mut filtered_count = 0;
 
             for packet in &packets {
-                if let Some((flags, _seq, _ack, _src_port, _ipv4_addr)) = parse_tcp_response(packet)
+                if let Some((flags, _seq, _ack, _src_port, _dst_port, _ipv4_addr)) = parse_tcp_response(packet)
                 {
                     let syn_received = (flags & 0x02) != 0;
                     let ack_received = (flags & 0x10) != 0;

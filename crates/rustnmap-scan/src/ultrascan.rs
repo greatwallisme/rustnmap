@@ -155,6 +155,11 @@ pub struct InternalCongestionController {
     ca_ack_counter: std::sync::atomic::AtomicUsize,
     min_cwnd: usize,
     max_cwnd: usize,
+    /// Congestion avoidance increment (`ca_incr`).
+    /// From nmap `timing.cc:276-279`:
+    /// - `timing_level` < 4 (T0-T3): `ca_incr` = 1
+    /// - `timing_level` >= 4 (T4-T5): `ca_incr` = 2
+    ca_incr: u8,
 }
 
 impl InternalCongestionController {
@@ -163,13 +168,21 @@ impl InternalCongestionController {
     /// Uses nmap's default initial values from `timing.cc:272-273`:
     /// - `group_initial_cwnd = 10` (matches `box(low_cwnd, max_cwnd, 10)`)
     /// - `initial_ssthresh = 75`
-    fn new(max_cwnd: usize) -> Self {
+    ///
+    /// From nmap `timing.cc:276-279`:
+    /// - `timing_level` < 4: `ca_incr` = 1
+    /// - `timing_level` >= 4: `ca_incr` = 2
+    fn new(max_cwnd: usize, timing_level: u8) -> Self {
         // Nmap timing.cc:272 - group_initial_cwnd = box(low_cwnd, max_cwnd, 10)
         // low_cwnd=1, max_cwnd=300, box() returns 10 since 1 < 10 < 300
         const GROUP_INITIAL_CWND: usize = 10;
 
         // Nmap timing.cc:281 - initial_ssthresh = 75
         const INITIAL_SSTHRESH: usize = 75;
+
+        // Nmap timing.cc:276-279
+        // "The congestion window grows faster with more aggressive timing."
+        let ca_incr = if timing_level < 4 { 1 } else { 2 };
 
         Self {
             stats: std::sync::Arc::new(InternalCongestionStats::new()),
@@ -178,6 +191,7 @@ impl InternalCongestionController {
             ca_ack_counter: std::sync::atomic::AtomicUsize::new(0),
             min_cwnd: 1,
             max_cwnd,
+            ca_incr,
         }
     }
 
@@ -198,7 +212,7 @@ impl InternalCongestionController {
     /// From `timing.cc:224-237`:
     /// - Slow start: `cwnd += slow_incr * cc_scale * scale` (linear +1 per ACK)
     /// - Congestion avoidance: `cwnd += ca_incr / cwnd * cc_scale * scale`
-    ///   which means +1 once per cwnd ACKs (integer division)
+    ///   which means +`ca_incr` once per cwnd ACKs (integer division)
     fn on_packet_acked(&self, rtt: Option<Duration>) {
         use std::sync::atomic::Ordering;
 
@@ -217,13 +231,13 @@ impl InternalCongestionController {
             self.cwnd.store(new_cwnd, Ordering::Relaxed);
         } else {
             // Nmap timing.cc:237 - cwnd += perf->ca_incr / cwnd * cc_scale(perf) * scale
-            // With ca_incr=1, integer division 1/cwnd = 0 for cwnd > 1
+            // With ca_incr=1 or 2, integer division ca_incr/cwnd = 0 for cwnd > ca_incr
             // So we increment once per cwnd ACKs
             let ack_count = self.ca_ack_counter.fetch_add(1, Ordering::Relaxed) + 1;
             if ack_count >= current_cwnd {
-                // Reset counter and increment cwnd
+                // Reset counter and increment cwnd by ca_incr
                 self.ca_ack_counter.store(0, Ordering::Relaxed);
-                let new_cwnd = (current_cwnd + 1).min(self.max_cwnd);
+                let new_cwnd = (current_cwnd + usize::from(self.ca_incr)).min(self.max_cwnd);
                 self.cwnd.store(new_cwnd, Ordering::Relaxed);
             }
         }
@@ -424,9 +438,12 @@ const ETH_HDR_SIZE: usize = 14;
 
 /// Default maximum number of probes to have outstanding at once.
 ///
+/// Matches nmap's default `max_parallelism` (`timing.cc:271`):
+/// `max_cwnd = MAX(low_cwnd, o.max_parallelism ? o.max_parallelism : 300)`
+///
 /// This is a trade-off between performance and packet loss.
 /// Higher values can cause more congestion and packet drops.
-pub const DEFAULT_MAX_PARALLELISM: usize = 100;
+pub const DEFAULT_MAX_PARALLELISM: usize = 300;
 
 /// Default timeout for the entire scan operation.
 pub const DEFAULT_SCAN_TIMEOUT: Duration = Duration::from_secs(300);
@@ -585,7 +602,8 @@ impl ParallelScanEngine {
         let max_parallel = DEFAULT_MAX_PARALLELISM;
 
         // Create internal congestion controller for adaptive timing
-        let congestion = Arc::new(InternalCongestionController::new(max_parallel));
+        // Uses timing_level from config to set ca_incr (T4/T5 use ca_incr=2)
+        let congestion = Arc::new(InternalCongestionController::new(max_parallel, config.timing_level));
 
         // Create rate limiter for min/max rate enforcement
         let rate_limiter = RateLimiter::new(config.min_rate, config.max_rate);
@@ -687,8 +705,8 @@ impl ParallelScanEngine {
     #[must_use]
     pub fn with_max_parallelism(mut self, value: usize) -> Self {
         self.max_parallelism = value;
-        // Recreate congestion controller with new max
-        self.congestion = Arc::new(InternalCongestionController::new(value));
+        // Recreate congestion controller with new max and existing timing_level
+        self.congestion = Arc::new(InternalCongestionController::new(value, self.config.timing_level));
         self
     }
 

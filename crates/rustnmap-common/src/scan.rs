@@ -30,6 +30,9 @@ pub struct ScanConfig {
     pub min_rate: Option<u64>,
     /// Maximum rate in packets per second (None = no limit).
     pub max_rate: Option<u64>,
+    /// Timing level (0-5) for T0-T5 templates.
+    /// Used by congestion control to determine growth rate.
+    pub timing_level: u8,
 }
 
 impl Default for ScanConfig {
@@ -44,6 +47,7 @@ impl Default for ScanConfig {
             dns_server: crate::DEFAULT_DNS_SERVER.to_string(),
             min_rate: None,
             max_rate: None,
+            timing_level: 3,                          // T3 Normal is default
         }
     }
 }
@@ -66,6 +70,23 @@ pub enum TimingTemplate {
 }
 
 impl TimingTemplate {
+    /// Returns the timing level (0-5) corresponding to T0-T5.
+    ///
+    /// This matches nmap's `timing_level` used in `timing.cc:276-279`:
+    /// - T0-T3: `timing_level` < 4 → `ca_incr` = 1
+    /// - T4-T5: `timing_level` >= 4 → `ca_incr` = 2
+    #[must_use]
+    pub const fn timing_level(&self) -> u8 {
+        match self {
+            Self::Paranoid => 0,
+            Self::Sneaky => 1,
+            Self::Polite => 2,
+            Self::Normal => 3,
+            Self::Aggressive => 4,
+            Self::Insane => 5,
+        }
+    }
+
     /// Returns the timing parameters for this template.
     ///
     /// These values are based on nmap's `timing.cc` implementation:
@@ -85,6 +106,7 @@ impl TimingTemplate {
                 max_retries: 10,
                 host_timeout: 900_000,
                 scan_delay: Duration::from_millis(300_000), // 5 minutes
+                timing_level: 0,
                 ..Default::default()
             },
             Self::Sneaky => ScanConfig {
@@ -94,6 +116,7 @@ impl TimingTemplate {
                 max_retries: 10,
                 host_timeout: 900_000,
                 scan_delay: Duration::from_millis(15_000), // 15 seconds
+                timing_level: 1,
                 ..Default::default()
             },
             Self::Polite => ScanConfig {
@@ -103,6 +126,7 @@ impl TimingTemplate {
                 max_retries: 10,
                 host_timeout: 900_000,
                 scan_delay: Duration::from_millis(400),
+                timing_level: 2,
                 ..Default::default()
             },
             Self::Normal => ScanConfig::default(),
@@ -113,6 +137,7 @@ impl TimingTemplate {
                 max_retries: 6,
                 host_timeout: 900_000,
                 scan_delay: Duration::ZERO,
+                timing_level: 4,
                 ..Default::default()
             },
             Self::Insane => ScanConfig {
@@ -122,6 +147,7 @@ impl TimingTemplate {
                 max_retries: 2,
                 host_timeout: 300_000, // 15 minutes (nmap: host_timeout = 900000)
                 scan_delay: Duration::ZERO,
+                timing_level: 5,
                 ..Default::default()
             },
         }
