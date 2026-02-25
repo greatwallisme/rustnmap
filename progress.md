@@ -37,6 +37,89 @@ crates/rustnmap-core/src/orchestrator.rs  | +30 (DecoyScheduler 创建 + fix)
 
 ---
 
+### 2026-02-25: AF_PACKET Integration for Stealth Scanners - **✅ FIXED & TESTED**
+
+**用户请求**: 集成 AF_PACKET 到 stealth scanners 以修复 FIN 扫描端口状态不准确问题
+
+**完成工作**:
+
+1. **SimpleAfPacket 结构体添加** ✅
+   - 从 ultrascan.rs 复制 SimpleAfPacket 实现到 stealth_scans.rs
+   - 添加 ETH_P_ALL (0x0003) 和 ETH_HDR_SIZE (14) 常量
+   - 实现 L2 层数据包捕获 (AF_PACKET socket)
+
+2. **辅助函数添加** ✅
+   - `create_packet_socket()` - 创建 AF_PACKET socket
+   - `get_interface_for_ip()` - 检测网络接口
+   - 支持localhost跳过, 否则使用 /proc/net/route 查找默认路由接口
+
+3. **所有 6 个 Stealth Scanner 更新** ✅
+   - TcpFinScanner, TcpNullScanner, TcpXmasScanner
+   - TcpMaimonScanner, TcpAckScanner, TcpWindowScanner
+   - 添加 `packet_socket: Option<Arc<SimpleAfPacket>>` 字段
+
+4. **构造函数更新** ✅
+   - 所有扫描器构造函数现在创建 AF_PACKET socket (当可用时)
+   - 使用 `create_packet_socket()` 辅助函数
+
+5. **接收循环更新** ✅
+   - 单端口扫描 (send_*_probe) 和批量扫描 (scan_ports_batch)
+   - 优先使用 AF_PACKET (L2 捕获), 回退到 raw socket (L3)
+   - 修复生命周期问题 (packet_data 延长数据生命周期)
+
+6. **Bug 修复: 超时机制** ✅
+   - 添加 `recv_packet_with_timeout()` 方法
+   - 使用 `poll()` 等待数据，超时设为 min(remaining_timeout, 200ms)
+   - 解决非阻塞模式立即回退的问题
+
+7. **Bug 修复: 响应匹配** ✅
+   - 更新 `parse_tcp_response()` 返回 destination port
+   - 修正 RST 响应匹配逻辑 (使用 destination port 匹配)
+
+**修改的文件**:
+```
+crates/rustnmap-scan/src/stealth_scans.rs  | +700 (AF_PACKET + 超时 + 匹配修复)
+crates/rustnmap-net/src/lib.rs            | ±20  (parse_tcp_response 更新)
+crates/rustnmap-scan/src/syn_scan.rs       | ±5   (适配新签名)
+crates/rustnmap-scan/src/ultrascan.rs      | ±5   (适配新签名)
+crates/rustnmap-traceroute/src/tcp.rs      | ±5   (适配新签名)
+crates/rustnmap-target/src/discovery.rs    | ±5   (适配新签名)
+```
+
+**技术细节**:
+- AF_PACKET 在数据链路层捕获数据,绕过内核 TCP 栈
+- 允许接收内核 TCP 栈会消耗的 RST 响应
+- 使用 `poll()` 实现超时等待，避免立即回退到 raw socket
+- RST 响应匹配使用 destination port (响应目标的端口)
+
+**验证状态**:
+- ✅ `cargo build --release` PASSED
+- ✅ `cargo clippy -- -D warnings` PASSED (零警告)
+- ✅ `cargo test -p rustnmap-scan --lib` PASSED (93 tests)
+- ✅ 功能测试 PASSED
+  ```
+  rustnmap: 80/tcp closed
+  nmap:     80/tcp closed
+  ```
+
+**测试结果**:
+```
+目标: 192.168.12.1 (网关)
+端口: 22, 80, 443, 8080
+
+| Port | Nmap    | RustNmap | Status  |
+|------|---------|----------|---------|
+| 22   | open|filtered | open|filtered | MATCH |
+| 80   | closed  | closed   | ✅ FIX  |
+| 443  | open|filtered | open|filtered | MATCH |
+| 8080 | closed  | closed   | ✅ FIX  |
+```
+
+**待解决问题**:
+- ~~[LOW] FIN 扫描端口状态不准确~~ → **✅ 已修复**
+
+---
+
 ### 2026-02-25: Nmap 数据库集成 - 当前会话
 
 **用户请求**: 集成 nmap-services, nmap-protocols, nmap-rpc, nmap-mac-prefixes 数据库

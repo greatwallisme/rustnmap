@@ -174,7 +174,7 @@ impl TcpSynTraceroute {
         _expected_target: Ipv4Addr,
         expected_port: u16,
     ) -> Option<ProbeResponse> {
-        if let Some((flags, _seq, ack, src_port, _src_ip)) = parse_tcp_response(packet) {
+        if let Some((flags, _seq, ack, src_port, _dst_port, _src_ip)) = parse_tcp_response(packet) {
             // Verify this is a response to our probe
             if src_port != expected_port {
                 return None;
@@ -387,7 +387,7 @@ impl TcpAckTraceroute {
         expected_target: Ipv4Addr,
         expected_port: u16,
     ) -> Option<ProbeResponse> {
-        if let Some((flags, _seq, _ack, src_port, src_ip)) = parse_tcp_response(packet) {
+        if let Some((flags, _seq, _ack, src_port, _dst_port, src_ip)) = parse_tcp_response(packet) {
             // Verify this is a response to our probe
             if src_port != expected_port {
                 return None;

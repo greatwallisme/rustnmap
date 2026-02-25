@@ -747,7 +747,7 @@ pub mod raw_socket {
     /// Parses a TCP response packet.
     ///
     /// Returns the TCP flags, sequence number, acknowledgment number, source port,
-    /// and source IP address if the packet is a valid TCP response.
+    /// destination port, and source IP address if the packet is a valid TCP response.
     ///
     /// # Arguments
     ///
@@ -755,9 +755,9 @@ pub mod raw_socket {
     ///
     /// # Returns
     ///
-    /// `Some((flags, seq, ack, src_port, src_ip))` if valid TCP packet, `None` otherwise.
+    /// `Some((flags, seq, ack, src_port, dst_port, src_ip))` if valid TCP packet, `None` otherwise.
     #[must_use]
-    pub fn parse_tcp_response(packet: &[u8]) -> Option<(u8, u32, u32, Port, Ipv4Addr)> {
+    pub fn parse_tcp_response(packet: &[u8]) -> Option<(u8, u32, u32, Port, Port, Ipv4Addr)> {
         // Minimum IP header + TCP header
         if packet.len() < 40 {
             return None;
@@ -788,6 +788,8 @@ pub mod raw_socket {
 
         // Source port
         let src_port = u16::from_be_bytes([packet[tcp_start], packet[tcp_start + 1]]);
+        // Destination port
+        let dst_port = u16::from_be_bytes([packet[tcp_start + 2], packet[tcp_start + 3]]);
         // Sequence number
         let seq = u32::from_be_bytes([
             packet[tcp_start + 4],
@@ -805,7 +807,7 @@ pub mod raw_socket {
         // Flags
         let flags = packet[tcp_start + 13];
 
-        Some((flags, seq, ack, src_port, src_ip))
+        Some((flags, seq, ack, src_port, dst_port, src_ip))
     }
 
     /// Parses a full TCP response packet with all fields and options.

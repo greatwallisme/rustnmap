@@ -183,7 +183,7 @@ impl TcpSynScanner {
             {
                 Ok(len) if len > 0 => {
                     // Parse the response
-                    if let Some((flags, _seq, ack, resp_src_port, src_ip)) =
+                    if let Some((flags, _seq, ack, resp_src_port, _dst_port, src_ip)) =
                         parse_tcp_response(&recv_buf[..len])
                     {
                         // Verify this is a response from the target IP

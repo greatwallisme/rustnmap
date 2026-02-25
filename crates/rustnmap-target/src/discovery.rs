@@ -155,7 +155,7 @@ impl TcpSynPing {
             .recv_packet(recv_buf.as_mut_slice(), Some(self.timeout))
         {
             Ok(len) if len > 0 => {
-                if let Some((flags, _seq, ack, src_port, _src_ip)) =
+                if let Some((flags, _seq, ack, src_port, _dst_port, _src_ip)) =
                     parse_tcp_response(&recv_buf[..len])
                 {
                     if src_port != dst_port {
@@ -331,7 +331,7 @@ impl TcpAckPing {
             .recv_packet(recv_buf.as_mut_slice(), Some(self.timeout))
         {
             Ok(len) if len > 0 => {
-                if let Some((flags, _seq, _ack, src_port, _src_ip)) =
+                if let Some((flags, _seq, _ack, src_port, _dst_port, _src_ip)) =
                     parse_tcp_response(&recv_buf[..len])
                 {
                     if src_port != dst_port {

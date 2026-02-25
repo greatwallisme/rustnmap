@@ -932,7 +932,7 @@ impl ParallelScanEngine {
     ///
     /// Returns `None` if the packet cannot be parsed as a TCP packet.
     fn parse_packet(data: &[u8]) -> Option<ReceivedPacket> {
-        if let Some((flags, seq, ack, src_port, src_ip)) = parse_tcp_response(data) {
+        if let Some((flags, seq, ack, src_port, _dst_port, src_ip)) = parse_tcp_response(data) {
             Some(ReceivedPacket::new(src_ip, src_port, flags, seq, ack))
         } else {
             None
