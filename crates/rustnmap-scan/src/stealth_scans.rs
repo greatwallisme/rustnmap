@@ -2101,10 +2101,6 @@ impl TcpAckScanner {
     /// - RST received -> Unfiltered
     /// - ICMP unreachable -> Filtered
     /// - No response -> Filtered
-    #[expect(
-        clippy::too_many_lines,
-        reason = "Batch scanning requires handling send, receive, and result collection in one method for clarity"
-    )]
     pub fn scan_ports_batch(
         &self,
         dst_addr: Ipv4Addr,

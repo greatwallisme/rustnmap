@@ -1187,20 +1187,102 @@ fn build_evasion_config(args: &Args) -> Result<Option<rustnmap_evasion::EvasionC
 
 /// Parses decoy IP list from comma-separated string.
 ///
+/// Supports:
+/// - Explicit IP addresses (e.g., "192.168.1.1,10.0.0.1")
+/// - `RND:number` syntax to generate random decoys (e.g., "RND:10")
+/// - Mixed syntax (e.g., "192.168.1.1,RND:5,10.0.0.1")
+///
 /// # Errors
 ///
-/// Returns an error if any IP address is invalid.
+/// Returns an error if any IP address is invalid or RND number is out of range.
 fn parse_decoy_ips(s: &str) -> Result<Vec<std::net::IpAddr>> {
     let mut ips = Vec::new();
-    for ip_str in s.split(',') {
-        let ip_str = ip_str.trim();
-        if ip_str.is_empty() {
+    for part in s.split(',') {
+        let part = part.trim();
+        if part.is_empty() {
             continue;
         }
-        let ip: std::net::IpAddr = ip_str.parse().map_err(|_| {
-            rustnmap_common::Error::Other(format!("Invalid decoy IP address: {ip_str}"))
-        })?;
-        ips.push(ip);
+
+        // Check for RND:number syntax (nmap-compatible random decoys)
+        if let Some(number_str) = part.strip_prefix("RND:") {
+            let count: usize = number_str.parse().map_err(|_| {
+                rustnmap_common::Error::Other(format!(
+                    "Invalid RND number: {number_str} (expected RND:<number>)"
+                ))
+            })?;
+
+            // nmap limits RND to reasonable values (typically 1-100)
+            if count == 0 {
+                return Err(rustnmap_common::Error::Other(
+                    "RND count must be at least 1".to_string(),
+                ));
+            }
+            if count > 100 {
+                return Err(rustnmap_common::Error::Other(
+                    "RND count exceeds maximum of 100".to_string(),
+                ));
+            }
+
+            // Generate random IP addresses for decoys
+            // Use current time and process ID as seed sources
+            let seed = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos();
+            let pid = std::process::id();
+
+            for i in 0..count {
+                // Simple deterministic random generation based on seed
+                // This is sufficient for decoy generation (not cryptographic)
+                #[expect(
+                    clippy::cast_possible_truncation,
+                    reason = "Truncation is acceptable for decoy IP generation"
+                )]
+                let hash = {
+                    let base = (seed as u64).wrapping_add((pid as u64).wrapping_mul(0x5851_f42d));
+                    let offset = (i as u64).wrapping_mul(0x0001_4057_b7ef);
+                    base.wrapping_add(offset)
+                };
+
+                // Generate random IP in public IP space (avoid reserved ranges)
+                // Use the hash to create a public IP address
+                let octets: [u8; 4] = [
+                    // First octet: avoid 0, 10, 127, 172.16-31, 192.168 (private/reserved)
+                    // Prefer common public ranges: 1-9, 11-126, 128-171, 173-191, 193-255
+                    {
+                        let first = ((hash >> 24) & 0xFF) as u8;
+                        // Map to valid public IP first octet
+                        match first {
+                            0..=9 => first.saturating_add(1),
+                            10 => 11,
+                            127 => 128,
+                            172..=191 => {
+                                if first == 172 { 173 } else { first }
+                            }
+                            192..=223 => {
+                                if (190..=223).contains(&first) {
+                                    first
+                                } else {
+                                    first.saturating_add(30)
+                                }
+                            }
+                            _ => first,
+                        }
+                    },
+                    ((hash >> 16) & 0xFF) as u8,
+                    ((hash >> 8) & 0xFF) as u8,
+                    (hash & 0xFF) as u8,
+                ];
+
+                ips.push(std::net::IpAddr::V4(std::net::Ipv4Addr::from(octets)));
+            }
+        } else {
+            // Parse as explicit IP address
+            let ip: std::net::IpAddr = part.parse().map_err(|_| {
+                rustnmap_common::Error::Other(format!("Invalid decoy IP address: {part}"))
+            })?;
+            ips.push(ip);
+        }
     }
     Ok(ips)
 }

@@ -673,14 +673,27 @@ impl Args {
                 .map_err(|_| format!("Invalid spoof IP address: {ip}"))?;
         }
 
-        // Validate decoy IP addresses
+        // Validate decoy IP addresses (supports RND:number syntax)
         if let Some(ref decoys) = self.decoys {
-            for ip_str in decoys.split(',') {
-                let ip_str = ip_str.trim();
-                if !ip_str.is_empty() {
-                    ip_str
-                        .parse::<std::net::IpAddr>()
-                        .map_err(|_| format!("Invalid decoy IP address: {ip_str}"))?;
+            for part in decoys.split(',') {
+                let part = part.trim();
+                if part.is_empty() {
+                    continue;
+                }
+                // Check for RND:number syntax
+                if let Some(number_str) = part.strip_prefix("RND:") {
+                    let count: usize = number_str
+                        .parse()
+                        .map_err(|_| format!("Invalid RND number: {number_str}"))?;
+                    if count == 0 || count > 100 {
+                        return Err(format!(
+                            "RND count must be between 1 and 100, got {count}"
+                        ));
+                    }
+                } else {
+                    // Validate as explicit IP address
+                    part.parse::<std::net::IpAddr>()
+                        .map_err(|_| format!("Invalid decoy IP address: {part}"))?;
                 }
             }
         }
