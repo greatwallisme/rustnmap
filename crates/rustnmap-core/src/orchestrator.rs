@@ -786,6 +786,12 @@ impl ScanOrchestrator {
             .copied()
             .unwrap_or(ScanType::TcpSyn);
 
+        // Special case for TCP Connect scan: use batch scanning for better performance
+        if primary_scan_type == ScanType::TcpConnect {
+            info!("Using batch scanning mode for TCP connect scan");
+            return self.run_port_scanning_connect_batch(targets, ports).await;
+        }
+
         // Check if this is a stealth scan that supports batch mode
         let use_batch = matches!(
             primary_scan_type,
@@ -1098,6 +1104,141 @@ impl ScanOrchestrator {
         }
 
         info!(hosts = host_results.len(), "Batch port scanning completed");
+        Ok(host_results)
+    }
+
+    /// Runs TCP Connect port scanning in batch mode for improved performance.
+    ///
+    /// Uses `TcpConnectScanner::scan_ports_parallel()` to scan all ports
+    /// concurrently instead of sequentially, providing significant performance
+    /// improvement matching nmap's behavior.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "Batch scanning requires handling all hosts and ports in one function for performance"
+    )]
+    async fn run_port_scanning_connect_batch(
+        &self,
+        targets: &[Target],
+        ports: &[u16],
+    ) -> Result<Vec<HostResult>> {
+        info!("Starting batch port scanning for TCP connect scan");
+
+        let local_addr = get_local_address(&self.session.config.dns_server);
+        let timing_config = self.session.config.timing_template.scan_config();
+
+        let scanner_config = ScannerConfig {
+            min_rtt: timing_config.min_rtt,
+            max_rtt: timing_config.max_rtt,
+            initial_rtt: timing_config.initial_rtt,
+            max_retries: timing_config.max_retries,
+            host_timeout: self
+                .session
+                .config
+                .host_timeout
+                .as_millis()
+                .try_into()
+                .unwrap_or(30000),
+            scan_delay: self.session.config.scan_delay,
+            dns_server: self.session.config.dns_server.clone(),
+            min_rate: self.session.config.min_rate,
+            max_rate: self.session.config.max_rate,
+            timing_level: timing_config.timing_level,
+        };
+
+        let mut host_results = Vec::new();
+
+        for target in targets {
+            // Create connect scanner with optimized parallel scanning
+            let connect_scanner = TcpConnectScanner::new(Some(local_addr), scanner_config.clone());
+
+            // Scan all ports in parallel using async I/O
+            let port_states = connect_scanner.scan_ports_parallel(target, ports).await;
+
+            // Convert to PortResult format
+            let mut port_results = Vec::new();
+            for port in ports {
+                let common_state = port_states.get(port).copied().unwrap_or(rustnmap_common::PortState::Filtered);
+                let state = match common_state {
+                    rustnmap_common::PortState::Open => PortState::Open,
+                    rustnmap_common::PortState::Closed => PortState::Closed,
+                    rustnmap_common::PortState::Filtered => PortState::Filtered,
+                    rustnmap_common::PortState::Unfiltered => PortState::Unfiltered,
+                    rustnmap_common::PortState::OpenOrFiltered => PortState::OpenOrFiltered,
+                    rustnmap_common::PortState::ClosedOrFiltered => PortState::ClosedOrFiltered,
+                    rustnmap_common::PortState::OpenOrClosed => PortState::OpenOrClosed,
+                };
+                let is_open = matches!(common_state, rustnmap_common::PortState::Open);
+
+                if is_open {
+                    self.session.stats.record_open_port();
+                }
+                self.session.stats.record_packet_sent();
+
+                let service_info =
+                    service_info_from_db(*port, rustnmap_common::ServiceProtocol::Tcp);
+
+                port_results.push(PortResult {
+                    number: *port,
+                    protocol: rustnmap_output::models::Protocol::Tcp,
+                    state,
+                    state_reason: "connect-scan".to_string(),
+                    state_ttl: None,
+                    service: service_info,
+                    scripts: Vec::new(),
+                });
+            }
+
+            // Get MAC address for IPv4 targets
+            let mac = match target.ip {
+                IpAddr::V4(target_ipv4) => {
+                    get_mac_address_via_arp(
+                        target_ipv4,
+                        local_addr,
+                        std::time::Duration::from_millis(500),
+                    )
+                    .map(|mac_addr| {
+                        let mac_str = mac_addr.to_string();
+                        // Look up vendor from MAC prefix database
+                        let vendor = self
+                            .session
+                            .fingerprint_db
+                            .mac_db()
+                            .and_then(|db| db.lookup(&mac_str))
+                            .map(std::string::ToString::to_string);
+                        rustnmap_output::models::MacAddress {
+                            address: mac_str,
+                            vendor,
+                        }
+                    })
+                }
+                IpAddr::V6(_) => None,
+            };
+
+            let host_result = HostResult {
+                ip: target.ip,
+                mac,
+                hostname: target.hostname.clone(),
+                status: HostStatus::Up,
+                status_reason: "connect-scan".to_string(),
+                latency: std::time::Duration::from_millis(1),
+                ports: port_results,
+                os_matches: Vec::new(),
+                scripts: Vec::new(),
+                traceroute: None,
+                times: rustnmap_output::models::HostTimes {
+                    srtt: None,
+                    rttvar: None,
+                    timeout: None,
+                },
+            };
+
+            host_results.push(host_result);
+        }
+
+        info!(
+            hosts = host_results.len(),
+            "TCP connect batch port scanning completed"
+        );
         Ok(host_results)
     }
 

@@ -544,6 +544,22 @@ const ETH_HDR_SIZE: usize = 14;
 /// Higher values can cause more congestion and packet drops.
 pub const DEFAULT_MAX_PARALLELISM: usize = 300;
 
+/// Maximum number of probes to send per batch before waiting for responses.
+///
+/// This matches nmap's batch limit from `scan_engine.cc:326-327`:
+/// ```cpp
+/// // Limit sends between waits to avoid overflowing pcap buffer
+/// recentsends = USI->gstats->probes_sent - USI->gstats->probes_sent_at_last_wait;
+/// if (recentsends >= 50)
+///     return false;
+/// ```
+///
+/// This is critical for performance because:
+/// 1. Prevents pcap buffer overflow
+/// 2. Ensures regular response processing
+/// 3. Improves congestion control responsiveness
+const BATCH_SIZE: usize = 50;
+
 /// Default timeout for the entire scan operation.
 pub const DEFAULT_SCAN_TIMEOUT: Duration = Duration::from_secs(300);
 
@@ -872,6 +888,10 @@ impl ParallelScanEngine {
         let mut ports_iter = ports.iter().copied().peekable();
         let mut retry_probes: Vec<OutstandingProbe> = Vec::new();
 
+        // Track probes sent in current batch (nmap batch limit: 50)
+        // See scan_engine.cc:326-327
+        let mut probes_sent_this_batch: usize = 0;
+
         // Main scan loop
         while ports_iter.peek().is_some() || !outstanding.is_empty() {
             // Check for scan timeout
@@ -887,7 +907,11 @@ impl ParallelScanEngine {
             let current_cwnd = self.congestion.cwnd();
 
             // Send more probes if we haven't reached congestion window
-            while outstanding.len() < current_cwnd && outstanding.len() < self.max_parallelism {
+            // AND we haven't reached the batch limit (nmap: 50 probes per batch)
+            while outstanding.len() < current_cwnd
+                && outstanding.len() < self.max_parallelism
+                && probes_sent_this_batch < BATCH_SIZE
+            {
                 // Check rate limiter before sending
                 if let Some(wait_time) = self.rate_limiter.check_rate() {
                     // Wait for rate limit
@@ -895,6 +919,7 @@ impl ParallelScanEngine {
                     // Re-check parallelism after waiting
                     if outstanding.len() >= current_cwnd
                         || outstanding.len() >= self.max_parallelism
+                        || probes_sent_this_batch >= BATCH_SIZE
                     {
                         break;
                     }
@@ -905,52 +930,72 @@ impl ParallelScanEngine {
                     // Record packet sent for congestion stats and rate limiting
                     self.congestion.on_packet_sent();
                     self.rate_limiter.record_sent();
+                    probes_sent_this_batch += 1;
                 } else {
                     break;
                 }
             }
 
-            // Wait for packets (with a small timeout to check for retries/timeouts)
-            match tokio_timeout(Duration::from_millis(100), packet_rx.recv()).await {
-                Ok(Some(packet)) => {
-                    // Match the packet to an outstanding probe
-                    let probe_key = (packet.src_ip, packet.src_port);
-                    if let Some(probe) = outstanding.remove(&probe_key) {
-                        // For SYN-ACK responses, verify the ACK matches our sequence number.
-                        // For RST responses, seq is typically 0 -- only validate ACK.
-                        let expected_ack = probe.seq.wrapping_add(1);
-                        let rst_received = (packet.flags & 0x04) != 0;
-                        let valid_response = if rst_received {
-                            // RST packets: accept if ACK matches (seq may be 0)
-                            packet.ack == expected_ack
-                        } else {
-                            // SYN-ACK and other responses: validate both ACK and non-zero seq
-                            packet.ack == expected_ack && packet.seq() != 0
-                        };
-                        if valid_response {
-                            // Calculate RTT for this probe
-                            let rtt = probe.sent_time.elapsed();
-                            // Record that we expected a reply (got one!)
-                            // See nmap scan_engine.cc:1608-1612 (ultrascan_adjust_timing)
-                            self.congestion.record_expected();
-                            // Record successful response with RTT for congestion control
-                            self.congestion.on_packet_acked(Some(rtt));
-                            results.insert(packet.src_port, packet.port_state());
-                        } else {
-                            // Unexpected ACK or invalid seq - put the probe back
-                            outstanding.insert(probe_key, probe);
+            // Wait for packets and drain all available responses (nmap waitForResponses pattern)
+            // Use a shorter timeout initially, then extend if we're getting responses
+            let mut wait_duration = Duration::from_millis(50);
+            let mut received_any = false;
+
+            loop {
+                match tokio_timeout(wait_duration, packet_rx.recv()).await {
+                    Ok(Some(packet)) => {
+                        received_any = true;
+                        // Match the packet to an outstanding probe
+                        let probe_key = (packet.src_ip, packet.src_port);
+                        if let Some(probe) = outstanding.remove(&probe_key) {
+                            // For SYN-ACK responses, verify the ACK matches our sequence number.
+                            // For RST responses, seq is typically 0 -- only validate ACK.
+                            let expected_ack = probe.seq.wrapping_add(1);
+                            let rst_received = (packet.flags & 0x04) != 0;
+                            let valid_response = if rst_received {
+                                // RST packets: accept if ACK matches (seq may be 0)
+                                packet.ack == expected_ack
+                            } else {
+                                // SYN-ACK and other responses: validate both ACK and non-zero seq
+                                packet.ack == expected_ack && packet.seq() != 0
+                            };
+                            if valid_response {
+                                // Calculate RTT for this probe
+                                let rtt = probe.sent_time.elapsed();
+                                // Record that we expected a reply (got one!)
+                                // See nmap scan_engine.cc:1608-1612 (ultrascan_adjust_timing)
+                                self.congestion.record_expected();
+                                // Record successful response with RTT for congestion control
+                                self.congestion.on_packet_acked(Some(rtt));
+                                results.insert(packet.src_port, packet.port_state());
+                            } else {
+                                // Unexpected ACK or invalid seq - put the probe back
+                                outstanding.insert(probe_key, probe);
+                            }
                         }
+                        // If we can't find a matching probe, this packet is unrelated traffic - ignore
+
+                        // Use shorter timeout for draining remaining packets
+                        wait_duration = Duration::from_millis(10);
                     }
-                    // If we can't find a matching probe, this packet is unrelated traffic - ignore
+                    Ok(None) => {
+                        // Channel closed, receiver task ended
+                        break;
+                    }
+                    Err(_) => {
+                        // Timeout - no more packets available
+                        break;
+                    }
                 }
-                Ok(None) => {
-                    // Channel closed, receiver task ended
-                    break;
-                }
-                Err(_) => {
-                    // Timeout - check for probe timeouts
-                    self.check_timeouts(&mut outstanding, &mut retry_probes, &mut results);
-                }
+            }
+
+            // Check for probe timeouts and handle retries
+            self.check_timeouts(&mut outstanding, &mut retry_probes, &mut results);
+
+            // Reset batch counter after processing responses (matches nmap's waitForResponses behavior)
+            // Only reset if we've sent a full batch or received any responses
+            if probes_sent_this_batch >= BATCH_SIZE || received_any {
+                probes_sent_this_batch = 0;
             }
 
             // Re-send retry probes

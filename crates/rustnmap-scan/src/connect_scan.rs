@@ -18,10 +18,22 @@ use std::time::Duration;
 /// Default maximum parallel connections.
 const DEFAULT_MAX_PARALLELISM: usize = 100;
 
+/// Default connect timeout in milliseconds.
+///
+/// Matches nmap's `DEFAULT_CONNECT_TIMEOUT` from `service_scan.h:86`.
+/// nmap uses adaptive timeouts, but starts with this value.
+const DEFAULT_CONNECT_TIMEOUT_MS: u64 = 5_000;
+
 /// TCP Connect scanner.
 ///
 /// Uses the system TCP stack to attempt full connections to target ports.
 /// Does not require root privileges but is noisier than SYN scan.
+///
+/// # Performance
+///
+/// This implementation uses async I/O with tokio for efficient concurrent
+/// connections, matching nmap's approach of using non-blocking sockets with
+/// `select()` for multiplexing.
 #[derive(Debug)]
 pub struct TcpConnectScanner {
     /// Connection timeout for individual port probes.
@@ -44,7 +56,7 @@ impl TcpConnectScanner {
     #[must_use]
     pub fn new(_local_addr: Option<rustnmap_common::Ipv4Addr>, _config: ScanConfig) -> Self {
         Self {
-            connect_timeout: Duration::from_secs(5),
+            connect_timeout: Duration::from_millis(DEFAULT_CONNECT_TIMEOUT_MS),
             max_parallelism: DEFAULT_MAX_PARALLELISM,
         }
     }
@@ -64,6 +76,9 @@ impl TcpConnectScanner {
     ///
     /// This is significantly faster than scanning ports sequentially,
     /// especially when many ports are closed or filtered.
+    ///
+    /// Uses async I/O for efficient concurrency, avoiding the overhead of
+    /// `spawn_blocking` and blocking system calls.
     ///
     /// # Arguments
     ///
@@ -107,25 +122,77 @@ impl TcpConnectScanner {
 
             for &port in chunk {
                 let target_clone = Arc::clone(&target);
-                let handle = tokio::task::spawn_blocking(move || {
-                    let state = Self::scan_single_port(&target_clone, port, timeout);
+
+                // Spawn each connection as a separate task for true parallelism
+                handles.push(tokio::spawn(async move {
+                    let state = Self::scan_single_port_async(&target_clone, port, timeout).await;
                     (port, state)
-                });
-                handles.push(handle);
+                }));
             }
 
-            // Wait for all connections in this batch
+            // Wait for all tasks to complete concurrently
             for handle in handles {
                 if let Ok((port, state)) = handle.await {
                     results.insert(port, state);
                 }
+                // Task failed: no need to record, port not in results = filtered
             }
         }
 
         results
     }
 
+    /// Scans a single port asynchronously.
+    ///
+    /// Uses tokio's async TCP stream with timeout for efficient non-blocking
+    /// connection attempts.
+    ///
+    /// # Arguments
+    ///
+    /// * `target` - Target host to scan
+    /// * `port` - Port number to probe
+    /// * `timeout` - Connection timeout duration
+    ///
+    /// # Returns
+    ///
+    /// Port state based on connection result.
+    async fn scan_single_port_async(target: &Target, port: Port, timeout: Duration) -> PortState {
+        // Get target socket address
+        let socket_addr = match target.ip {
+            rustnmap_common::IpAddr::V4(addr) => SocketAddr::new(std::net::IpAddr::V4(addr), port),
+            rustnmap_common::IpAddr::V6(_) => return PortState::Filtered,
+        };
+
+        // Attempt async connection with timeout
+        let connect_future = tokio::net::TcpStream::connect(&socket_addr);
+        let timeout_future = tokio::time::timeout(timeout, connect_future);
+
+        match timeout_future.await {
+            Ok(Ok(_stream)) => PortState::Open,
+            Ok(Err(e))
+                if e.kind() == std::io::ErrorKind::ConnectionRefused
+                    || e.kind() == std::io::ErrorKind::ConnectionReset =>
+            {
+                PortState::Closed
+            }
+            // Connection error or timeout: filtered
+            Ok(Err(_)) | Err(_) => PortState::Filtered,
+        }
+    }
+
     /// Scans a single port synchronously.
+    ///
+    /// This is a fallback for non-async contexts. Uses blocking I/O.
+    ///
+    /// # Arguments
+    ///
+    /// * `target` - Target host to scan
+    /// * `port` - Port number to probe
+    /// * `timeout` - Connection timeout duration
+    ///
+    /// # Returns
+    ///
+    /// Port state based on connection result.
     fn scan_single_port(target: &Target, port: Port, timeout: Duration) -> PortState {
         // Get target socket address
         let socket_addr = match target.ip {
@@ -152,6 +219,7 @@ impl TcpConnectScanner {
     /// Scans a single port on a target using TCP connect.
     ///
     /// Attempts to establish a TCP connection to determine port state.
+    /// Uses async I/O when in a tokio runtime for better performance.
     ///
     /// # Arguments
     ///
@@ -168,27 +236,17 @@ impl TcpConnectScanner {
             return PortState::Filtered;
         }
 
-        // Try to use spawn_blocking if in a multi-threaded tokio runtime context
+        // Try to use async I/O if in a tokio runtime context
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread {
-                // Clone data needed for the blocking operation
-                let target_clone = target.clone();
-                let timeout = self.connect_timeout;
-                match tokio::task::block_in_place(|| {
-                    handle.block_on(async {
-                        tokio::task::spawn_blocking(move || {
-                            Self::scan_single_port(&target_clone, port, timeout)
-                        })
-                        .await
-                    })
-                }) {
-                    Ok(state) => return state,
-                    Err(_) => return PortState::Filtered,
-                }
-            }
+            let target_clone = target.clone();
+            let timeout = self.connect_timeout;
+
+            return tokio::task::block_in_place(|| {
+                handle.block_on(Self::scan_single_port_async(&target_clone, port, timeout))
+            });
         }
 
-        // No multi-threaded runtime, do blocking operation directly
+        // No tokio runtime, do blocking operation directly
         Self::scan_single_port(target, port, self.connect_timeout)
     }
 }
