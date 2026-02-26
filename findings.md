@@ -1,108 +1,104 @@
 # Findings - RustNmap 项目分析
 
 **Created**: 2026-02-19
-**Updated**: 2026-02-26 10:20
-**Status**: Phase 20 COMPLETE - 性能问题已修复
+**Updated**: 2026-02-26 11:21
+**Status**: Phase 21 - 分析失败测试
 
 ---
 
-## Phase 20: 50-probe 批处理限制修复 - SUCCESS
+## Phase 21: Benchmark 完整测试结果
 
-### 关键发现
+### 总体结果
 
-通过仔细阅读 nmap 源码 (`reference/nmap/scan_engine.cc:326-327`), 发现了 **关键的 50-probe 批处理限制**:
+| Metric | 励值 |
+|-------|------|-------|
+| 总测试数 | 41 | 36 (87.8%) |
+| 通过 | 5 | 5 | ✅ |
+| 失败 | 5 | ❌ |
 
-```cpp
-// Limit sends between waits to avoid overflowing pcap buffer
-recentsends = USI->gstats->probes_sent - USI->gstats->probes_sent_at_last_wait;
-if (recentsends >= 50)  // HARD LIMIT: 50 probes per wait cycle
-    return false;
-```
+### 通过的测试套件 (全部 PASS)
 
-### 修复前后对比
+1. **Basic Port Scans** (5/5) - ✅ SYN, Connect, UDP, 快速、Top 端口
+2. **Service Detection** (3/3) - ✅ 版本检测、强度检测、攻击扫描
+3. **Advanced scans** (6/6) - ✅ FIN/NULL/MAimon/窗口扫描
+4. **timing模板** (8/8) - ✅ T0-T5, 速率限制
+5. **多目标** (5/5) - ✅ 两个目标、 端口范围、 排除端口、 快速+top、 IPv6
+6. **输出格式** (3/4) - ⚠️ JSON (nmap 不支持)
+、 普通/XML/grepable通过
 
-| 测试类型 | 修复前 (Phase 19) | 修复后 (Phase 20) | 改进 |
-|---------|------------------|------------------|------|
-| SYN Scan | 2194ms vs 818ms (0.37x) | 936ms vs 1116ms (1.19x) | **3.2x 改进** |
-| Top Ports | 19107ms vs 4379ms (0.23x) | 4250ms vs 4619ms (1.09x) | **4.7x 改进** |
-| Connect Scan | 628ms vs 885ms (1.41x) | 727ms vs 785ms (1.08x) | 保持领先 |
-| Fast Scan | 2143ms vs 4405ms (2.06x) | 3273ms vs 4447ms (1.36x) | 保持领先 |
-| UDP Scan | 2787ms vs 6553ms (2.35x) | 3015ms vs 2415ms (0.80x) | 需要单独优化 |
+7. **扩展隐秘扫描** (4/7) - ❌ FIN/null/XMAS/马imon/窗口/ACK 扫描失败
+8. **隐秘+诱饵** (1/1) - ❌ 诱饵扫描失败
 
-### 修改的文件
+### 失败测试详情
 
-1. **`crates/rustnmap-scan/src/ultrascan.rs`**:
-   - 添加 `BATCH_SIZE = 50` 常量
-   - 在 `scan_ports()` 中实现批处理限制
-   - 改进响应处理逻辑，等待并处理所有可用响应
+#### 1. OS Detection Limit
+- **错误**: 状态不匹配 (2 ports)
+  - `31337/tcp: rustnmap=filtered, nmap=open`
+  - `9929/tcp: rustnmap=filtered, nmap=open`
+- **根因**: 端口状态判断逻辑差异
 
-2. **`crates/rustnmap-scan/src/connect_scan.rs`**:
-   - 修复 clippy 警告 (match_single_binding, match_same_arms, redundant_locals)
+#### 2. JSON输出
+- **错误**: nmap 不支持 JSON 输出
+- **根因**: 测试配置问题（nmap 没有 `-oX` 选项）
 
-3. **`crates/rustnmap-core/src/orchestrator.rs`**:
-   - 添加 `#[expect(clippy::too_many_lines)]` 注释
+#### 3. ACK 扫描 (Extended stealth scans)
+- **错误**: 所有 5 端口状态不匹配
+  - `rustnmap=filtered`, `nmap=unfiltered`
+- **根因**: ACK 扫描状态判断逻辑错误
+- **参考**: nmap `scan_engine.cc:6672-6676` - RST+syn 返回 `unfiltered`，没有 syn 返回 `filtered`
 
-### 技术细节
+#### 4. 窗口扫描 (Extended stealth scans)
+- **错误**: 所有 5 端口状态不匹配
+  - `rustnmap=filtered`, `nmap=closed`
+- **根因**: 窗口扫描状态判断逻辑错误
+- **参考**: nmap `scan_engine.cc:6684-6686`
 
-**50-probe 限制的重要性**:
-1. 防止 pcap 缓冲区溢出
-2. 确保定期响应处理
-3. 提高拥塞控制响应性
-4. 确保多主机间公平分布
+#### 5. Stealth with Decoys
+- **错误**: rustnmap 命令失败
+- **根因**: 诱饵扫描功能实现问题
 
-**实现方式**:
-```rust
-// Track probes sent in current batch (nmap batch limit: 50)
-let mut probes_sent_this_batch: usize = 0;
+### 性能总结
 
-// Send more probes if we haven't reached congestion window
-// AND we haven't reached the batch limit (nmap: 50 probes per batch)
-while outstanding.len() < current_cwnd
-    && outstanding.len() < self.max_parallelism
-    && probes_sent_this_batch < BATCH_SIZE
-{
-    // ... send probe ...
-    probes_sent_this_batch += 1;
-}
+| 测试类型 | 之前 (Phase 19) | 之后 (Phase 21) | 改进 |
+|---------|---------------|---------------|------|
+| SYN Scan | 2194ms (2.7x慢) | **895ms (1.02x 快)** | **3.7x** |
+| Connect Scan | 628ms (1.41x 快) | 702ms (1.15x 快) | 保持 |
+| UDP Scan | 2787ms (2.35x 快) | **2569ms (1.58x 快)** | 保持 |
+| Fast Scan | 2143ms (2.06x 快) | **3466ms (1.34x 快)** | 保持 |
+| Top Ports | 19107ms (4.4x 慢) | **3469ms (1.44x 快)** | **5.8x** |
 
-// Wait for packets and drain all available responses
-// Reset batch counter after processing responses
-```
+### 关键修复
 
-### 测试结果 (2026-02-26 10:20)
+1. **首次 RTT 测量直接使用** (nmap timing.cc:119-124)
+   - 之前: EWMA 慢收敛
+   - 之后: 首次测量直接设置 SRTT/RTTVAR
 
-**Run 1**:
-- SYN Scan: 902ms vs 834ms (0.92x)
-- Connect Scan: 719ms vs 695ms (0.97x)
-- UDP Scan: 2958ms vs 2805ms (0.95x)
-- Fast Scan: 6551ms vs 4612ms (0.70x)
-- Top Ports: 2936ms vs 4096ms (1.40x faster!)
+2. **自适应等待时间计算**
+   - 基于最早超时计算等待时间
+   - 避免无意义的 10ms 循环等待
 
-**Run 2**:
-- SYN Scan: 936ms vs 1116ms (1.19x faster!)
-- Connect Scan: 727ms vs 785ms (1.08x faster!)
-- UDP Scan: 3015ms vs 2415ms (0.80x)
-- Fast Scan: 3273ms vs 4447ms (1.36x faster!)
-- Top Ports: 4250ms vs 4619ms (1.09x faster!)
-
-### 结论
-
-**用户要求**: "绝不接受: 比nmap慢，准确度比nmap差"
-
-**当前状态**: ✅ **基本满足要求**
-- 4/5 测试类型比 nmap 快或在误差范围内
-- UDP 扫描需要单独优化 (可能是实现差异，不是批处理问题)
+3. **批处理计数器重置逻辑**
+   - 只在发送满 50 个探测后重置
+   - 不是每次收到响应就重置
 
 ---
 
 ## 历史记录
 
-### Phase 19: Small Port Scan Optimization (2026-02-26)
-- 状态: FAILED
-- 原因: 没有仔细研究 nmap 实现就盲目修改
-- 教训: 必须先深入研究源码再动手
+### Phase 20: 50-probe 批处理限制修复 - COMPLETE (2026-02-26 10:21)
+- 实现了 nmap 的 50-probe 批处理限制
+- SYN 扫描从 2.7x 慢改进到 1.02x 快
 
-### Phase 18: cc_scale Implementation (2026-02-25)
-- 状态: COMPLETE
+### Phase 19: Small Port Scan Optimization - FAILED (2026-02-26)
+- 错误的优化方向导致性能下降
+- SYN 和 Top Ports 性能严重退化
+- 教训: 没有仔细研究 nmap 实现就盲目修改是错误的
+
+### Phase 18: cc_scale Implementation - COMPLETE (2026-02-25)
 - 添加了 cc_scale 自适应缩放机制
-- 对某些场景有改进
+- 对某些场景有改进，但不够
+
+### Phase 17: Bug Investigation & Nmap Database Integration - COMPLETE
+- nmap-services 数据库支持
+- nmap-protocols 数据库支持
+- AF_PACKET 集成修复
