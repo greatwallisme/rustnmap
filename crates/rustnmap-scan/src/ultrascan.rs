@@ -69,6 +69,11 @@ struct InternalCongestionStats {
     srtt_micros: std::sync::atomic::AtomicU64,
     /// RTT variance in microseconds.
     rttvar_micros: std::sync::atomic::AtomicU64,
+    /// Whether this is the first RTT measurement.
+    ///
+    /// Nmap uses -1 for SRTT/RTTVAR to indicate "not initialized", but we use a separate flag
+    /// to avoid needing AtomicI64.
+    first_measurement: std::sync::atomic::AtomicBool,
     /// Total packets sent.
     packets_sent: std::sync::atomic::AtomicU64,
     /// Total packets acknowledged.
@@ -97,6 +102,8 @@ impl InternalCongestionStats {
             srtt_micros: std::sync::atomic::AtomicU64::new(1_000_000),
             // Nmap: rttvar = box(5000, 2000000, srtt) = clamp(srtt, 5ms, 2000ms)
             rttvar_micros: std::sync::atomic::AtomicU64::new(1_000_000),
+            // Track if this is the first RTT measurement (nmap uses -1 sentinel)
+            first_measurement: std::sync::atomic::AtomicBool::new(true),
             packets_sent: std::sync::atomic::AtomicU64::new(0),
             packets_acked: std::sync::atomic::AtomicU64::new(0),
             num_replies_expected: std::sync::atomic::AtomicU64::new(0),
@@ -105,6 +112,9 @@ impl InternalCongestionStats {
     }
 
     /// Updates RTT estimate using EWMA.
+    ///
+    /// For the first measurement, uses the measurement directly (nmap behavior).
+    /// See nmap `timing.cc:adjust_timeouts2` (lines 99-167).
     #[expect(
         clippy::cast_possible_truncation,
         reason = "RTT values are bounded to reasonable network latencies (< 30s)"
@@ -113,6 +123,27 @@ impl InternalCongestionStats {
         use std::sync::atomic::Ordering;
 
         let rtt_micros = rtt.as_micros() as u64;
+
+        // Check if this is the first measurement (nmap uses -1 sentinel)
+        if self
+            .first_measurement
+            .compare_exchange(
+                true,
+                false,
+                Ordering::SeqCst,
+                Ordering::Relaxed,
+            )
+            .is_ok()
+        {
+            // First measurement: use RTT directly (nmap timing.cc:119-124)
+            self.srtt_micros.store(rtt_micros, Ordering::Relaxed);
+            // RTTVAR = clamp(RTT, 5ms, 2000ms) - nmap: box(5000, 2000000, delta)
+            let clamped_rttvar = rtt_micros.clamp(5_000, 2_000_000);
+            self.rttvar_micros.store(clamped_rttvar, Ordering::Relaxed);
+            return;
+        }
+
+        // Subsequent measurements: RFC 2988 EWMA
         let old_srtt = self.srtt_micros.load(Ordering::Relaxed);
         let old_rttvar = self.rttvar_micros.load(Ordering::Relaxed);
 
@@ -937,14 +968,41 @@ impl ParallelScanEngine {
             }
 
             // Wait for packets and drain all available responses (nmap waitForResponses pattern)
-            // Use a shorter timeout initially, then extend if we're getting responses
-            let mut wait_duration = Duration::from_millis(50);
-            let mut received_any = false;
+            // Calculate optimal wait time:
+            // - If we have more ports to send, use short wait (send more probes soon)
+            // - If all probes sent, wait until the earliest probe timeout
+            let has_more_ports = ports_iter.peek().is_some();
+            let probe_timeout = self.congestion.recommended_timeout();
+
+            // Find the earliest timeout among outstanding probes
+            let earliest_timeout = outstanding
+                .values()
+                .map(|p| {
+                    let elapsed = p.sent_time.elapsed();
+                    if elapsed >= probe_timeout {
+                        Duration::ZERO // Already timed out
+                    } else {
+                        probe_timeout - elapsed
+                    }
+                })
+                .min()
+                .unwrap_or(Duration::from_millis(100));
+
+            let initial_wait = if has_more_ports {
+                // Still have ports to scan - use short wait to send more probes
+                Duration::from_millis(10)
+            } else if !outstanding.is_empty() {
+                // All probes sent, wait for earliest timeout (but not longer than 100ms per iteration)
+                earliest_timeout.min(Duration::from_millis(100))
+            } else {
+                // No outstanding probes - short wait
+                Duration::from_millis(10)
+            };
+            let mut wait_duration = initial_wait;
 
             loop {
                 match tokio_timeout(wait_duration, packet_rx.recv()).await {
                     Ok(Some(packet)) => {
-                        received_any = true;
                         // Match the packet to an outstanding probe
                         let probe_key = (packet.src_ip, packet.src_port);
                         if let Some(probe) = outstanding.remove(&probe_key) {
@@ -992,9 +1050,9 @@ impl ParallelScanEngine {
             // Check for probe timeouts and handle retries
             self.check_timeouts(&mut outstanding, &mut retry_probes, &mut results);
 
-            // Reset batch counter after processing responses (matches nmap's waitForResponses behavior)
-            // Only reset if we've sent a full batch or received any responses
-            if probes_sent_this_batch >= BATCH_SIZE || received_any {
+            // Reset batch counter only after sending a full batch and draining responses
+            // This matches nmap's behavior: reset after waitForResponses() when batch is complete
+            if probes_sent_this_batch >= BATCH_SIZE {
                 probes_sent_this_batch = 0;
             }
 
