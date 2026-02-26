@@ -1,12 +1,147 @@
 # Findings - RustNmap 项目分析
 
 **Created**: 2026-02-19
-**Updated**: 2026-02-26 11:25
-**Status**: Phase 22 - 深度分析测试日志
+**Updated**: 2026-02-26 13:30
+**Status**: Phase 24 - 发现 ACK/Window 扫描修复可能未生效，正在调查
 
 ---
 
-## Phase 23: ACK/Window 扫描 Bug 修复
+## Phase 24: ACK/Window 扫描修复验证 - 发现问题
+
+### 测试结果 (2026-02-26 13:20)
+
+**手动测试**:
+```
+# ACK Scan - 192.168.12.1
+./target/release/rustnmap --scan-ack -p 22,80 192.168.12.1
+22/tcp  open    ssh    # WRONG! 应该是 unfiltered
+80/tcp  closed  http   # WRONG! 应该是 unfiltered
+
+# Window Scan - 192.168.12.1
+./target/release/rustnmap --scan-window -p 22,80 192.168.12.1
+22/tcp  open    ssh    # WRONG! 应该是 closed (window=0) 或 open (window>0)
+80/tcp  closed  http   # 可能正确
+```
+
+### 问题分析
+
+**现象**: ACK 扫描返回 `open` 和 `closed` 而不是 `unfiltered`
+
+**根因分析**:
+1. `open` 状态在 ACK 扫描中**不可能出现** - ACK 扫描只返回 `unfiltered` 或 `filtered`
+2. 扫描在 0.02 秒内完成 - 远低于 1 秒超时
+3. 这表明扫描器正在回退到 `scan_port_connect()` 而不是使用 `TcpAckScanner`
+
+**代码流程**:
+```rust
+// orchestrator.rs:1546-1550
+ScanType::TcpAck => match TcpAckScanner::new(local_addr, scanner_config) {
+    Ok(scanner) => scanner.scan_port(...),
+    Err(_) => return self.scan_port_connect(target, port).await,  // 回退到这里
+},
+```
+
+**可能的原因**:
+1. `TcpAckScanner::new()` 静默失败
+2. 原始套接字创建失败
+3. AF_PACKET 套接字创建失败
+
+### 根因确认
+
+**测试结果**:
+
+| 权限 | 命令 | 结果 | 分析 |
+|------|------|------|------|
+| 无 sudo | `./target/release/rustnmap --scan-ack` | `open`/`closed` | 回退到 TCP Connect |
+| 有 sudo | `sudo ./target/release/rustnmap --scan-ack` | `unfiltered` | 原始套接字正常 |
+
+**结论**: Phase 23 的修复是**正确的**。之前的测试失败是因为没有使用 sudo 权限运行。
+
+### 遗留问题：ACK/Window 扫描缺少批量模式 (Phase 25)
+
+**问题表现**:
+- 远程目标部分端口返回 `filtered` 而不是 `unfiltered`
+- 性能比 nmap 慢 3-7 倍
+
+**根因**: `TcpAckScanner` 和 `TcpWindowScanner` **没有** `scan_ports_batch` 方法！
+
+```rust
+// orchestrator.rs:796-799
+let use_batch = matches!(
+    primary_scan_type,
+    ScanType::TcpFin | ScanType::TcpNull | ScanType::TcpXmas | ScanType::TcpMaimon
+);
+// TcpAck 和 TcpWindow 不在列表中！
+```
+
+**对比**:
+| 扫描器 | 批量方法 | 顺序方法 |
+|--------|----------|----------|
+| TcpFinScanner | ✓ | ✓ |
+| TcpNullScanner | ✓ | ✓ |
+| TcpXmasScanner | ✓ | ✓ |
+| TcpMaimonScanner | ✓ | ✓ |
+| **TcpAckScanner** | **✗** | ✓ |
+| **TcpWindowScanner** | **✗** | ✓ |
+
+**解决方案**:
+1. 为 `TcpAckScanner` 添加 `scan_ports_batch` 方法
+2. 为 `TcpWindowScanner` 添加 `scan_ports_batch` 方法
+3. 将 `ScanType::TcpAck` 和 `ScanType::TcpWindow` 添加到批量扫描列表
+
+---
+
+## Phase 23: ACK/Window 扫描 Bug 修复 - 代码已提交，待完整验证
+
+### Bug 根因分析
+
+**发现**: ACK 和 Window 扫描器使用非阻塞 `recv_packet()` 而不是带超时的接收循环
+
+**对比代码**:
+
+| 扫描器 | 接收方式 | 结果 |
+|--------|----------|------|
+| FIN/NULL/XMAS/Maimon | `recv_packet_with_timeout()` + 循环 | ✅ 正确接收 RST |
+| ACK/Window | `recv_packet()` 无超时 | ❌ 无法接收 RST |
+
+**代码位置**:
+- ACK Scanner: `stealth_scans.rs:1953-1963` (修复前)
+- Window Scanner: `stealth_scans.rs:2645-2655` (修复前)
+- FIN Scanner (正确实现): `stealth_scans.rs:524-534`
+
+### 修复内容
+
+1. 为 `TcpAckScanner::send_ack_probe()` 添加接收循环
+2. 为 `TcpWindowScanner::send_window_probe()` 添加接收循环
+3. 使用 `recv_packet_with_timeout()` 等待 RST 响应
+4. 添加 `handle_icmp_response_with_match()` 函数
+
+### 已验证（仅手动测试）
+
+| 测试项 | 目标 | rustnmap | nmap | 状态 |
+|--------|------|----------|------|------|
+| ACK Scan | 192.168.12.1:22,80,443 | unfiltered | unfiltered | ✅ 匹配 |
+| Window Scan | 192.168.12.1:22,80,443 | closed | closed | ✅ 匹配 |
+
+### ⚠️ 未验证项
+
+| 项目 | 原因 |
+|------|------|
+| Benchmark 套件 | 未运行 `comparison_test.py` |
+| 远程目标 | 只测试了本地网关 |
+| 不同端口组合 | 只测试了 3 个端口 |
+| 不同网络环境 | 只测试了一种网络 |
+
+### Commit 信息
+
+```
+commit 45d3ec8
+fix: ACK and Window scan state detection with receive loop
+```
+
+---
+
+## Phase 22: 测试日志深度分析
 
 ### Bug 根因分析
 

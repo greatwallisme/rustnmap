@@ -1,3 +1,63 @@
+### 2026-02-26: Phase 23 - ACK/Window 扫描修复 - 代码已提交，待验证 ⚠️
+
+**用户请求**: 继续修复之前 benchmark 测试中出现的问题
+
+**完成工作**:
+
+1. **Bug 根因分析** ✅
+   - 发现 ACK/Window 扫描器使用非阻塞 `recv_packet()` 而不是带超时的接收循环
+   - 对比 FIN 扫描器的正确实现
+   - 代码位置: `stealth_scans.rs:1953-1963` (ACK), `stealth_scans.rs:2645-2655` (Window)
+
+2. **代码修复** ✅
+   - 为 `TcpAckScanner::send_ack_probe()` 添加接收循环
+   - 为 `TcpWindowScanner::send_window_probe()` 添加接收循环
+   - 添加 `handle_icmp_response_with_match()` 函数
+   - 更新测试用例
+
+3. **手动验证** ⚠️ (仅本地网关)
+   ```
+   # ACK Scan - 192.168.12.1
+   rustnmap: 22/unfiltered, 80/unfiltered, 443/unfiltered
+   nmap:     22/unfiltered, 80/unfiltered, 443/unfiltered
+   结果: 匹配 ✅
+
+   # Window Scan - 192.168.12.1
+   rustnmap: 22/closed, 80/closed, 443/closed
+   nmap:     22/closed, 80/closed, 443/closed
+   结果: 匹配 ✅
+   ```
+
+4. **代码提交** ✅
+   ```
+   commit 45d3ec8
+   fix: ACK and Window scan state detection with receive loop
+   28 files changed, 3245 insertions(+), 129 deletions(-)
+   ```
+
+**未完成工作**:
+
+| 项目 | 状态 | 原因 |
+|------|------|------|
+| Benchmark 套件验证 | ❌ 未运行 | sudo 权限问题 |
+| 远程目标测试 | ❌ 未测试 | 只测试了本地网关 |
+| Top Ports 性能优化 | ❌ 未修复 | 0.45x 性能差距 |
+| Decoy Scan 实现 | ❌ 未实现 | 功能缺失 |
+
+**待运行验证命令**:
+```bash
+# 需要 sudo 权限运行
+sudo python3 benchmarks/comparison_test.py --config benchmarks/test_configs/stealth_extended.toml
+```
+
+**本次修改的文件**:
+```
+crates/rustnmap-scan/src/stealth_scans.rs | +200 -50 (ACK/Window 修复)
+crates/rustnmap-scan/src/ultrascan.rs     | +2 -1 (doc fix)
+```
+
+---
+
 ### 2026-02-25: Phase 18 - Benchmark Parsing Fix & Performance Investigation - COMPLETE ✅
 
 **用户请求**: 修改 benchmark 脚本修复解析问题，彻底解决性能问题

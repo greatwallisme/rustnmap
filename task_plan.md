@@ -1,12 +1,12 @@
 # Task Plan
 
 **Created**: 2026-02-21
-**Updated**: 2026-02-26 11:25
-**Status**: Phase 22 - 分析测试脚本和代码问题
+**Updated**: 2026-02-26 14:36
+**Status**: Phase 25 - 批量扫描修复完成，ACK/Window 性能超越 nmap
 
 ---
 
-## Phase 23: 修复 ACK/Window 扫描状态判断 - COMPLETE
+## Phase 23: 修复 ACK/Window 扫描状态判断 - CODE COMPLETE, BENCHMARK 待验证
 
 ### Bug 根因
 
@@ -28,29 +28,146 @@ ACK 和 Window 扫描器使用非阻塞 `recv_packet()` 而不是带超时的接
   - `TcpWindowScanner::send_window_probe()` - 添加接收循环
   - 添加 `handle_icmp_response_with_match()` 函数
 
-### 验证结果
+### 已完成的验证（仅手动测试）
 
 ```
-# ACK scan - rustnmap
+# 手动测试 - 192.168.12.1
+sudo ./target/release/rustnmap --scan-ack 192.168.12.1 -p 22,80,443
+22/tcp  unfiltered ssh  ✅
+80/tcp  unfiltered http ✅
+443/tcp unfiltered https ✅
+
+sudo nmap -sA -p 22,80,443 192.168.12.1
 22/tcp  unfiltered ssh
 80/tcp  unfiltered http
 443/tcp unfiltered https
+# 结果匹配！
 
-# ACK scan - nmap (matches!)
-22/tcp  unfiltered ssh
-80/tcp  unfiltered http
-443/tcp unfiltered https
+# Window scan
+sudo ./target/release/rustnmap --scan-window 192.168.12.1 -p 22,80,443
+22/tcp  closed  ssh  ✅
+80/tcp  closed  http ✅
+443/tcp closed  https ✅
 
-# Window scan - rustnmap
+sudo nmap -sW -p 22,80,443 192.168.12.1
 22/tcp  closed  ssh
 80/tcp  closed  http
 443/tcp closed  https
-
-# Window scan - nmap (matches!)
-22/tcp  closed  ssh
-80/tcp  closed  http
-443/tcp closed  https
+# 结果匹配！
 ```
+
+### ⚠️ 未完成事项
+
+1. **Benchmark 测试需要 sudo** - 必须使用 `sudo python3 benchmarks/comparison_test.py` 运行
+2. **Top Ports 性能问题未修复** - 0.45x 性能差距仍然存在
+
+---
+
+## Phase 24: ACK/Window 修复验证 - COMPLETE
+
+### 根因分析
+
+ACK/Window 扫描需要 root 权限。之前的测试失败是因为没有使用 sudo。
+
+| 权限 | 命令 | 结果 | 原因 |
+|------|------|------|------|
+| 无 sudo | `./target/release/rustnmap --scan-ack` | `open`/`closed` | 回退到 TCP Connect |
+| 有 sudo | `sudo ./target/release/rustnmap --scan-ack` | `unfiltered` | 原始套接字正常 |
+
+### 验证命令
+
+```bash
+# ACK Scan - 需要 sudo
+sudo ./target/release/rustnmap --scan-ack -p 22,80 192.168.12.1
+# 22/tcp  unfiltered ssh  ✅
+# 80/tcp  unfiltered http ✅
+
+# Window Scan - 需要 sudo
+sudo ./target/release/rustnmap --scan-window -p 22,80 192.168.12.1
+# 22/tcp  closed  ssh  ✅
+# 80/tcp  closed  http ✅
+```
+
+### 结论
+
+Phase 23 的修复是**正确的**。之前的测试失败是因为没有使用 sudo 权限运行。
+
+---
+
+## Phase 25: ACK/Window 批量扫描实现 - COMPLETE
+
+### 问题
+
+ACK 和 Window 扫描没有使用批量模式，导致：
+1. 性能比 nmap 慢 3-7 倍
+2. 远程目标部分端口返回错误状态
+
+### 根本原因
+
+1. `TcpAckScanner` 和 `TcpWindowScanner` 没有 `scan_ports_batch` 方法
+2. Orchestrator 批量扫描列表不包含 `ScanType::TcpAck` 和 `ScanType::TcpWindow`
+3. 响应匹配逻辑错误 - 使用响应目的端口而不是源端口
+
+### 修复内容
+
+1. **添加 `parse_tcp_response_with_window` 函数** (rustnmap-net/src/lib.rs)
+   - 返回 TCP 窗口字段用于 Window 扫描
+
+2. **添加 `TcpAckScanner::scan_ports_batch`** (stealth_scans.rs)
+   - 批量发送所有 ACK 探测
+   - 正确匹配 RST 响应 (使用响应源端口 = 目标端口)
+   - RST → Unfiltered, 无响应 → Filtered
+
+3. **添加 `TcpWindowScanner::scan_ports_batch`** (stealth_scans.rs)
+   - 批量发送所有 ACK 探测
+   - 解析 TCP 窗口字段
+   - Window > 0 → Open, Window == 0 → Closed
+
+4. **更新 Orchestrator** (orchestrator.rs)
+   - 将 `ScanType::TcpAck` 和 `ScanType::TcpWindow` 添加到批量扫描列表
+   - 添加对应的扫描器创建逻辑
+
+### 测试结果
+
+| 扫描类型 | rustnmap | nmap | 性能比 |
+|---------|----------|------|--------|
+| FIN Scan | 1636ms | 4162ms | **2.54x faster** |
+| NULL Scan | 1593ms | 4575ms | **2.87x faster** |
+| XMAS Scan | 1745ms | 4707ms | **2.70x faster** |
+| MAIMON Scan | 1641ms | 4698ms | **2.86x faster** |
+| **ACK Scan** | **697ms** | **733ms** | **1.05x faster** ✓ |
+| Window Scan | 1546ms | 3358ms | **2.17x faster** |
+
+### 遗留问题
+
+1. **Decoy Scan** - 未实现 (`rustnmap exit=1`)
+2. **Window Scan 状态不一致** - 偶尔显示 `filtered` 而不是 `closed`
+
+---
+
+## Phase 26: Top Ports 性能优化 - PENDING
+
+### 问题
+
+rustnmap Top Ports 比 nmap 慢 2.2x (0.45x)
+
+### 需要调查
+
+1. 检查 nmap 的 `--top-ports` 实现细节
+2. 比较 rustnmap 和 nmap 扫描的端口数量
+3. 检查批处理和并发设置
+
+---
+
+## Phase 26: Decoy Scan 实现 - PENDING
+
+### 问题
+
+`Stealth with Decoys` 测试失败，rustnmap exit=1
+
+### 原因
+
+Decoy 扫描功能未完全实现
 
 ---
 

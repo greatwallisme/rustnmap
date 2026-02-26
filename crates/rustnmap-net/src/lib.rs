@@ -810,6 +810,76 @@ pub mod raw_socket {
         Some((flags, seq, ack, src_port, dst_port, src_ip))
     }
 
+    /// Parses a TCP response packet and extracts the window field.
+    ///
+    /// This is used by Window scan to determine port state based on
+    /// the TCP window value in RST responses.
+    ///
+    /// # Arguments
+    ///
+    /// * `packet` - The raw packet bytes
+    ///
+    /// # Returns
+    ///
+    /// `Some((flags, seq, ack, src_port, dst_port, src_ip, window))` if valid TCP packet, `None` otherwise.
+    #[must_use]
+    pub fn parse_tcp_response_with_window(
+        packet: &[u8],
+    ) -> Option<(u8, u32, u32, Port, Port, Ipv4Addr, u16)> {
+        // Minimum IP header + TCP header
+        if packet.len() < 40 {
+            return None;
+        }
+
+        // Check IP version (must be 4)
+        let version = (packet[0] >> 4) & 0x0F;
+        if version != 4 {
+            return None;
+        }
+
+        // Get IP header length
+        let ip_header_len = (packet[0] & 0x0F) as usize * 4;
+
+        // Check protocol (must be TCP = 6)
+        if packet[9] != 6 {
+            return None;
+        }
+
+        // Parse source IP address (bytes 12-15 of IP header)
+        let src_ip = Ipv4Addr::new(packet[12], packet[13], packet[14], packet[15]);
+
+        // Parse TCP header
+        let tcp_start = ip_header_len;
+        if packet.len() < tcp_start + 20 {
+            return None;
+        }
+
+        // Source port
+        let src_port = u16::from_be_bytes([packet[tcp_start], packet[tcp_start + 1]]);
+        // Destination port
+        let dst_port = u16::from_be_bytes([packet[tcp_start + 2], packet[tcp_start + 3]]);
+        // Sequence number
+        let seq = u32::from_be_bytes([
+            packet[tcp_start + 4],
+            packet[tcp_start + 5],
+            packet[tcp_start + 6],
+            packet[tcp_start + 7],
+        ]);
+        // Acknowledgment number
+        let ack = u32::from_be_bytes([
+            packet[tcp_start + 8],
+            packet[tcp_start + 9],
+            packet[tcp_start + 10],
+            packet[tcp_start + 11],
+        ]);
+        // Flags
+        let flags = packet[tcp_start + 13];
+        // Window (bytes 14-15 of TCP header)
+        let window = u16::from_be_bytes([packet[tcp_start + 14], packet[tcp_start + 15]]);
+
+        Some((flags, seq, ack, src_port, dst_port, src_ip, window))
+    }
+
     /// Parses a full TCP response packet with all fields and options.
     ///
     /// # Arguments

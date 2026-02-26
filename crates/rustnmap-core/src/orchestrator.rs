@@ -795,7 +795,12 @@ impl ScanOrchestrator {
         // Check if this is a stealth scan that supports batch mode
         let use_batch = matches!(
             primary_scan_type,
-            ScanType::TcpFin | ScanType::TcpNull | ScanType::TcpXmas | ScanType::TcpMaimon
+            ScanType::TcpFin
+                | ScanType::TcpNull
+                | ScanType::TcpXmas
+                | ScanType::TcpMaimon
+                | ScanType::TcpAck
+                | ScanType::TcpWindow
         );
 
         if use_batch {
@@ -987,6 +992,24 @@ impl ScanOrchestrator {
                         Ok(scanner) => scanner.scan_ports_batch(target_ip, ports),
                         Err(e) => {
                             warn!(error = %e, "Failed to create Maimon scanner");
+                            continue;
+                        }
+                    }
+                }
+                ScanType::TcpAck => {
+                    match TcpAckScanner::new(local_addr, scanner_config.clone()) {
+                        Ok(scanner) => scanner.scan_ports_batch(target_ip, ports),
+                        Err(e) => {
+                            warn!(error = %e, "Failed to create ACK scanner");
+                            continue;
+                        }
+                    }
+                }
+                ScanType::TcpWindow => {
+                    match TcpWindowScanner::new(local_addr, scanner_config.clone()) {
+                        Ok(scanner) => scanner.scan_ports_batch(target_ip, ports),
+                        Err(e) => {
+                            warn!(error = %e, "Failed to create Window scanner");
                             continue;
                         }
                     }

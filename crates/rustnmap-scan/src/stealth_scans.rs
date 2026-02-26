@@ -45,7 +45,7 @@ use rustnmap_common::ScanConfig;
 use rustnmap_common::{Ipv4Addr, Port, PortState, Protocol};
 use rustnmap_evasion::DecoyScheduler;
 use rustnmap_net::raw_socket::{
-    parse_icmp_response, parse_tcp_response, IcmpResponse,
+    parse_icmp_response, parse_tcp_response, parse_tcp_response_with_window, IcmpResponse,
     IcmpUnreachableCode, RawSocket, TcpPacketBuilder,
 };
 use rustnmap_target::Target;
@@ -2077,6 +2077,169 @@ impl TcpAckScanner {
         let pid = std::process::id();
         now_lower.wrapping_add(pid)
     }
+
+    /// Scans multiple ports in batch mode for improved performance.
+    ///
+    /// Sends all ACK probes first, then collects responses. This is much faster
+    /// than sequential scanning for remote targets with high latency.
+    ///
+    /// # Arguments
+    ///
+    /// * `dst_addr` - Target IP address
+    /// * `ports` - List of ports to scan
+    ///
+    /// # Returns
+    ///
+    /// A `ScanResult` containing a map of port numbers to port states.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if packet transmission or reception fails.
+    ///
+    /// # Port State Mapping
+    ///
+    /// - RST received -> Unfiltered
+    /// - ICMP unreachable -> Filtered
+    /// - No response -> Filtered
+    #[expect(
+        clippy::too_many_lines,
+        reason = "Batch scanning requires handling send, receive, and result collection in one method for clarity"
+    )]
+    pub fn scan_ports_batch(
+        &self,
+        dst_addr: Ipv4Addr,
+        ports: &[Port],
+    ) -> ScanResult<HashMap<Port, PortState>> {
+        if ports.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        // Limit batch size to prevent memory issues
+        let ports_to_scan: Vec<Port> = ports.iter().copied().take(MAX_BATCH_SIZE).collect();
+
+        // Phase 1: Send all probes
+        // Track scanned ports for O(1) lookup
+        let mut scanned_ports: std::collections::HashSet<Port> = ports_to_scan.iter().copied().collect();
+        // Port tracking: dst_port -> set of src_ports for O(1) ICMP matching
+        let mut port_srcs: HashMap<Port, std::collections::HashSet<u16>> = HashMap::new();
+
+        let src_port = Self::generate_source_port();
+
+        for dst_port in &ports_to_scan {
+            let seq = Self::generate_sequence_number();
+
+            // Build TCP packet with ACK flag only
+            let packet = TcpPacketBuilder::new(self.local_addr, dst_addr, src_port, *dst_port)
+                .seq(seq)
+                .ack_flag()
+                .window(65535)
+                .build();
+
+            let port_sockaddr = SocketAddr::new(std::net::IpAddr::V4(dst_addr), *dst_port);
+            self.socket
+                .send_packet(&packet, &port_sockaddr)
+                .map_err(|e| {
+                    rustnmap_common::ScanError::Network(rustnmap_common::Error::Network(
+                        rustnmap_common::error::NetworkError::SendError { source: e },
+                    ))
+                })?;
+
+            port_srcs.entry(*dst_port).or_default().insert(src_port);
+        }
+
+        // Phase 2: Collect responses until timeout
+        let mut results: HashMap<Port, PortState> = HashMap::new();
+        let deadline = Instant::now() + self.config.initial_rtt;
+        let mut recv_buf = vec![0u8; 65535];
+
+        while Instant::now() < deadline && !scanned_ports.is_empty() {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+
+            // Try AF_PACKET first if available (L2 capture - receives all TCP responses)
+            #[expect(unused_assignments, reason = "packet_data extends lifetime of received data")]
+            let mut packet_data = None;
+            let packet_timeout = remaining.min(Duration::from_millis(200));
+            let received = if let Some(ref pkt_sock) = self.packet_socket {
+                match pkt_sock.recv_packet_with_timeout(packet_timeout) {
+                    Ok(Some(data)) if data.len() > ETH_HDR_SIZE => {
+                        packet_data = Some(data);
+                        packet_data.as_ref().map(|d| (&d[ETH_HDR_SIZE..], d.len() - ETH_HDR_SIZE))
+                    }
+                    _ => None,
+                }
+            } else {
+                None
+            };
+
+            // Fall back to raw socket if AF_PACKET didn't receive data
+            let data = if let Some((slice, len)) = received {
+                (slice, len)
+            } else {
+                match self
+                    .socket
+                    .recv_packet(recv_buf.as_mut_slice(), Some(remaining))
+                {
+                    Ok(len) if len > 0 => (&recv_buf[..len], len),
+                    Ok(_) => continue,
+                    Err(e)
+                        if e.kind() == io::ErrorKind::WouldBlock
+                            || e.kind() == io::ErrorKind::TimedOut =>
+                    {
+                        continue;
+                    }
+                    Err(e) => {
+                        return Err(rustnmap_common::ScanError::Network(
+                            rustnmap_common::Error::Network(
+                                rustnmap_common::error::NetworkError::ReceiveError { source: e },
+                            ),
+                        ))
+                    }
+                }
+            };
+
+            // Check for TCP response
+            if let Some((flags, _seq, _ack, resp_src_port, _resp_dst_port, src_ip)) = parse_tcp_response(data.0) {
+                if src_ip == dst_addr {
+                    // For ACK scan, RST responses come FROM the target port
+                    // So resp_src_port is the port we scanned
+                    if scanned_ports.remove(&resp_src_port) {
+                        // For ACK scan, RST means unfiltered
+                        let state = if (flags & tcp_flags::RST) != 0 {
+                            PortState::Unfiltered
+                        } else {
+                            PortState::Filtered
+                        };
+                        results.insert(resp_src_port, state);
+                        // Also remove from port_srcs
+                        port_srcs.remove(&resp_src_port);
+                    }
+                }
+            } else if let Some(IcmpResponse::DestinationUnreachable {
+                code,
+                original_dst_ip,
+                original_dst_port,
+            }) = parse_icmp_response(data.0)
+            {
+                // O(1) check if we have probes for this port
+                if original_dst_ip == dst_addr && scanned_ports.remove(&original_dst_port) {
+                    // For ACK scan, ICMP unreachable means filtered
+                    let _ = code; // All ICMP unreachable types mean filtered for ACK scan
+                    results.insert(original_dst_port, PortState::Filtered);
+                    port_srcs.remove(&original_dst_port);
+                }
+            }
+        }
+
+        // Phase 3: Mark remaining ports as Filtered (no response)
+        for port in scanned_ports {
+            results.entry(port).or_insert(PortState::Filtered);
+        }
+
+        Ok(results)
+    }
 }
 
 impl PortScanner for TcpAckScanner {
@@ -2826,6 +2989,173 @@ impl TcpWindowScanner {
         let now_lower = now as u32;
         let pid = std::process::id();
         now_lower.wrapping_add(pid)
+    }
+
+    /// Scans multiple ports in batch mode for improved performance.
+    ///
+    /// Sends all ACK probes first, then collects responses and analyzes TCP window
+    /// field to determine port state. This is much faster than sequential scanning.
+    ///
+    /// # Arguments
+    ///
+    /// * `dst_addr` - Target IP address
+    /// * `ports` - List of ports to scan
+    ///
+    /// # Returns
+    ///
+    /// A `ScanResult` containing a map of port numbers to port states.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if packet transmission or reception fails.
+    ///
+    /// # Port State Mapping
+    ///
+    /// - RST + Window > 0 -> Open
+    /// - RST + Window == 0 -> Closed
+    /// - ICMP unreachable -> Filtered
+    /// - No response -> Filtered
+    #[expect(
+        clippy::too_many_lines,
+        reason = "Batch scanning requires handling send, receive, and result collection in one method for clarity"
+    )]
+    pub fn scan_ports_batch(
+        &self,
+        dst_addr: Ipv4Addr,
+        ports: &[Port],
+    ) -> ScanResult<HashMap<Port, PortState>> {
+        if ports.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        // Limit batch size to prevent memory issues
+        let ports_to_scan: Vec<Port> = ports.iter().copied().take(MAX_BATCH_SIZE).collect();
+
+        // Phase 1: Send all probes
+        // Track scanned ports for O(1) lookup
+        let mut scanned_ports: std::collections::HashSet<Port> = ports_to_scan.iter().copied().collect();
+        // Port tracking: dst_port -> set of src_ports for O(1) ICMP matching
+        let mut port_srcs: HashMap<Port, std::collections::HashSet<u16>> = HashMap::new();
+
+        let src_port = Self::generate_source_port();
+
+        for dst_port in &ports_to_scan {
+            let seq = Self::generate_sequence_number();
+
+            // Build TCP packet with ACK flag only
+            let packet = TcpPacketBuilder::new(self.local_addr, dst_addr, src_port, *dst_port)
+                .seq(seq)
+                .ack_flag()
+                .window(65535)
+                .build();
+
+            let port_sockaddr = SocketAddr::new(std::net::IpAddr::V4(dst_addr), *dst_port);
+            self.socket
+                .send_packet(&packet, &port_sockaddr)
+                .map_err(|e| {
+                    rustnmap_common::ScanError::Network(rustnmap_common::Error::Network(
+                        rustnmap_common::error::NetworkError::SendError { source: e },
+                    ))
+                })?;
+
+            port_srcs.entry(*dst_port).or_default().insert(src_port);
+        }
+
+        // Phase 2: Collect responses until timeout
+        let mut results: HashMap<Port, PortState> = HashMap::new();
+        let deadline = Instant::now() + self.config.initial_rtt;
+        let mut recv_buf = vec![0u8; 65535];
+
+        while Instant::now() < deadline && !scanned_ports.is_empty() {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+
+            // Try AF_PACKET first if available
+            #[expect(unused_assignments, reason = "packet_data extends lifetime of received data")]
+            let mut packet_data = None;
+            let packet_timeout = remaining.min(Duration::from_millis(200));
+            let received = if let Some(ref pkt_sock) = self.packet_socket {
+                match pkt_sock.recv_packet_with_timeout(packet_timeout) {
+                    Ok(Some(data)) if data.len() > ETH_HDR_SIZE => {
+                        packet_data = Some(data);
+                        packet_data.as_ref().map(|d| (&d[ETH_HDR_SIZE..], d.len() - ETH_HDR_SIZE))
+                    }
+                    _ => None,
+                }
+            } else {
+                None
+            };
+
+            // Fall back to raw socket if AF_PACKET didn't receive data
+            let data = if let Some((slice, len)) = received {
+                (slice, len)
+            } else {
+                match self
+                    .socket
+                    .recv_packet(recv_buf.as_mut_slice(), Some(remaining))
+                {
+                    Ok(len) if len > 0 => (&recv_buf[..len], len),
+                    Ok(_) => continue,
+                    Err(e)
+                        if e.kind() == io::ErrorKind::WouldBlock
+                            || e.kind() == io::ErrorKind::TimedOut =>
+                    {
+                        continue;
+                    }
+                    Err(e) => {
+                        return Err(rustnmap_common::ScanError::Network(
+                            rustnmap_common::Error::Network(
+                                rustnmap_common::error::NetworkError::ReceiveError { source: e },
+                            ),
+                        ))
+                    }
+                }
+            };
+
+            // Check for TCP response with window field
+            if let Some((flags, _seq, _ack, resp_src_port, _resp_dst_port, src_ip, window)) = parse_tcp_response_with_window(data.0) {
+                if src_ip == dst_addr {
+                    // For Window scan, RST responses come FROM the target port
+                    // So resp_src_port is the port we scanned
+                    if scanned_ports.remove(&resp_src_port) {
+                        // For Window scan, analyze TCP window field in RST response
+                        let state = if (flags & tcp_flags::RST) != 0 {
+                            // Window scan: non-zero window = Open, zero window = Closed
+                            if window > 0 {
+                                PortState::Open
+                            } else {
+                                PortState::Closed
+                            }
+                        } else {
+                            PortState::Filtered
+                        };
+                        results.insert(resp_src_port, state);
+                        port_srcs.remove(&resp_src_port);
+                    }
+                }
+            } else if let Some(IcmpResponse::DestinationUnreachable {
+                code,
+                original_dst_ip,
+                original_dst_port,
+            }) = parse_icmp_response(data.0)
+            {
+                if original_dst_ip == dst_addr && scanned_ports.remove(&original_dst_port) {
+                    // For Window scan, ICMP unreachable means filtered
+                    let _ = code;
+                    results.insert(original_dst_port, PortState::Filtered);
+                    port_srcs.remove(&original_dst_port);
+                }
+            }
+        }
+
+        // Phase 3: Mark remaining ports as Filtered (no response)
+        for port in scanned_ports {
+            results.entry(port).or_insert(PortState::Filtered);
+        }
+
+        Ok(results)
     }
 }
 
