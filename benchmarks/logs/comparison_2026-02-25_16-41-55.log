@@ -1,0 +1,101 @@
+2026-02-25 16:41:55 | INFO     | __main__:run_test_suite:205 | ============================================================
+2026-02-25 16:41:55 | INFO     | __main__:run_test_suite:206 | Test Suite: Timing Templates
+2026-02-25 16:41:55 | INFO     | __main__:run_test_suite:207 | Description: Compare timing template behaviors
+2026-02-25 16:41:55 | INFO     | __main__:run_test_suite:208 | Category: timing
+2026-02-25 16:41:55 | INFO     | __main__:run_test_suite:209 | ============================================================
+2026-02-25 16:41:55 | INFO     | __main__:run_test_suite:218 | [Test Case] T0 Paranoid: Very slow serial scan for IDS evasion
+2026-02-25 16:41:55 | DEBUG    | __main__:run_test_case:369 | rustnmap command: sudo /home/greatwallimse/private/rust-nmap/target/release/rustnmap --scan-syn --timing 0 -p 22,80,113,443,8080 45.33.32.156
+2026-02-25 16:41:55 | DEBUG    | __main__:run_test_case:370 | nmap command: sudo /usr/bin/nmap -sS -T0 -p 22,80,113,443,8080 45.33.32.156
+2026-02-25 16:46:56 | SUCCESS  | __main__:run_test_suite:225 | Status: PASS
+2026-02-25 16:46:56 | INFO     | __main__:run_test_suite:229 | Performance: rustnmap=813ms, nmap=300000ms, speedup=369.00x
+2026-02-25 16:46:56 | INFO     | __main__:_output_test_case_result:262 | --------------------------------------------------
+2026-02-25 16:46:56 | INFO     | __main__:_output_test_case_result:263 | [PASS] T0 Paranoid
+2026-02-25 16:46:56 | INFO     | __main__:_output_test_case_result:264 |   Description: Very slow serial scan for IDS evasion
+2026-02-25 16:46:56 | SUCCESS  | __main__:_output_test_case_result:273 |   Speed: 369.00x faster (rustnmap=813ms, nmap=300000ms)
+2026-02-25 16:46:56 | WARNING  | __main__:_output_test_case_result:280 |   Warnings (2):
+2026-02-25 16:46:56 | WARNING  | __main__:_output_test_case_result:282 |     - Expected difference: nmap failed (exit=-1) but rustnmap succeeded (exit=0)
+2026-02-25 16:46:56 | WARNING  | __main__:_output_test_case_result:282 |     - Ports only in rustnmap: {'113/tcp', '80/tcp', '443/tcp', '22/tcp', '8080/tcp'}
+2026-02-25 16:46:56 | INFO     | __main__:run_test_suite:218 | [Test Case] T1 Sneaky: Slow serial scan for IDS evasion
+2026-02-25 16:46:56 | DEBUG    | __main__:run_test_case:369 | rustnmap command: sudo /home/greatwallimse/private/rust-nmap/target/release/rustnmap --scan-syn --timing 1 -p 22,80,113,443,8080 45.33.32.156
+2026-02-25 16:46:56 | DEBUG    | __main__:run_test_case:370 | nmap command: sudo /usr/bin/nmap -sS -T1 -p 22,80,113,443,8080 45.33.32.156
+2026-02-25 16:48:27 | SUCCESS  | __main__:run_test_suite:225 | Status: PASS
+2026-02-25 16:48:27 | INFO     | __main__:run_test_suite:229 | Performance: rustnmap=835ms, nmap=90811ms, speedup=108.76x
+2026-02-25 16:48:27 | INFO     | __main__:_output_test_case_result:262 | --------------------------------------------------
+2026-02-25 16:48:27 | INFO     | __main__:_output_test_case_result:263 | [PASS] T1 Sneaky
+2026-02-25 16:48:27 | INFO     | __main__:_output_test_case_result:264 |   Description: Slow serial scan for IDS evasion
+2026-02-25 16:48:27 | SUCCESS  | __main__:_output_test_case_result:273 |   Speed: 108.76x faster (rustnmap=835ms, nmap=90811ms)
+2026-02-25 16:48:27 | INFO     | __main__:run_test_suite:218 | [Test Case] T2 Polite: Polite scan to reduce bandwidth usage
+2026-02-25 16:48:27 | DEBUG    | __main__:run_test_case:369 | rustnmap command: sudo /home/greatwallimse/private/rust-nmap/target/release/rustnmap --scan-syn --timing 2 -p 22,80,113,443,8080 45.33.32.156
+2026-02-25 16:48:27 | DEBUG    | __main__:run_test_case:370 | nmap command: sudo /usr/bin/nmap -sS -T2 -p 22,80,113,443,8080 45.33.32.156
+2026-02-25 16:48:31 | SUCCESS  | __main__:run_test_suite:225 | Status: PASS
+2026-02-25 16:48:31 | INFO     | __main__:run_test_suite:229 | Performance: rustnmap=950ms, nmap=3146ms, speedup=3.31x
+2026-02-25 16:48:31 | INFO     | __main__:_output_test_case_result:262 | --------------------------------------------------
+2026-02-25 16:48:31 | INFO     | __main__:_output_test_case_result:263 | [PASS] T2 Polite
+2026-02-25 16:48:31 | INFO     | __main__:_output_test_case_result:264 |   Description: Polite scan to reduce bandwidth usage
+2026-02-25 16:48:31 | SUCCESS  | __main__:_output_test_case_result:273 |   Speed: 3.31x faster (rustnmap=950ms, nmap=3146ms)
+2026-02-25 16:48:31 | INFO     | __main__:run_test_suite:218 | [Test Case] T3 Normal: Default timing template
+2026-02-25 16:48:31 | DEBUG    | __main__:run_test_case:369 | rustnmap command: sudo /home/greatwallimse/private/rust-nmap/target/release/rustnmap --scan-syn --timing 3 -p 22,80,113,443,8080 45.33.32.156
+2026-02-25 16:48:31 | DEBUG    | __main__:run_test_case:370 | nmap command: sudo /usr/bin/nmap -sS -T3 -p 22,80,113,443,8080 45.33.32.156
+2026-02-25 16:48:33 | SUCCESS  | __main__:run_test_suite:225 | Status: PASS
+2026-02-25 16:48:33 | INFO     | __main__:run_test_suite:229 | Performance: rustnmap=928ms, nmap=718ms, speedup=0.77x
+2026-02-25 16:48:33 | INFO     | __main__:_output_test_case_result:262 | --------------------------------------------------
+2026-02-25 16:48:33 | INFO     | __main__:_output_test_case_result:263 | [PASS] T3 Normal
+2026-02-25 16:48:33 | INFO     | __main__:_output_test_case_result:264 |   Description: Default timing template
+2026-02-25 16:48:33 | WARNING  | __main__:_output_test_case_result:275 |   Speed: 0.77x slower (rustnmap=928ms, nmap=718ms)
+2026-02-25 16:48:33 | INFO     | __main__:run_test_suite:218 | [Test Case] T4 Aggressive: Aggressive scan for faster results
+2026-02-25 16:48:33 | DEBUG    | __main__:run_test_case:369 | rustnmap command: sudo /home/greatwallimse/private/rust-nmap/target/release/rustnmap --scan-syn --timing 4 -p 22,80,113,443,8080 45.33.32.156
+2026-02-25 16:48:33 | DEBUG    | __main__:run_test_case:370 | nmap command: sudo /usr/bin/nmap -sS -T4 -p 22,80,113,443,8080 45.33.32.156
+2026-02-25 16:48:35 | SUCCESS  | __main__:run_test_suite:225 | Status: PASS
+2026-02-25 16:48:35 | INFO     | __main__:run_test_suite:229 | Performance: rustnmap=880ms, nmap=856ms, speedup=0.97x
+2026-02-25 16:48:35 | INFO     | __main__:_output_test_case_result:262 | --------------------------------------------------
+2026-02-25 16:48:35 | INFO     | __main__:_output_test_case_result:263 | [PASS] T4 Aggressive
+2026-02-25 16:48:35 | INFO     | __main__:_output_test_case_result:264 |   Description: Aggressive scan for faster results
+2026-02-25 16:48:35 | WARNING  | __main__:_output_test_case_result:275 |   Speed: 0.97x slower (rustnmap=880ms, nmap=856ms)
+2026-02-25 16:48:35 | INFO     | __main__:run_test_suite:218 | [Test Case] T5 Insane: Very fast scan sacrificing accuracy
+2026-02-25 16:48:35 | DEBUG    | __main__:run_test_case:369 | rustnmap command: sudo /home/greatwallimse/private/rust-nmap/target/release/rustnmap --scan-syn --timing 5 -p 22,80,113,443,8080 45.33.32.156
+2026-02-25 16:48:35 | DEBUG    | __main__:run_test_case:370 | nmap command: sudo /usr/bin/nmap -sS -T5 -p 22,80,113,443,8080 45.33.32.156
+2026-02-25 16:48:36 | SUCCESS  | __main__:run_test_suite:225 | Status: PASS
+2026-02-25 16:48:36 | INFO     | __main__:run_test_suite:229 | Performance: rustnmap=805ms, nmap=722ms, speedup=0.90x
+2026-02-25 16:48:36 | INFO     | __main__:_output_test_case_result:262 | --------------------------------------------------
+2026-02-25 16:48:36 | INFO     | __main__:_output_test_case_result:263 | [PASS] T5 Insane
+2026-02-25 16:48:36 | INFO     | __main__:_output_test_case_result:264 |   Description: Very fast scan sacrificing accuracy
+2026-02-25 16:48:36 | WARNING  | __main__:_output_test_case_result:275 |   Speed: 0.90x slower (rustnmap=805ms, nmap=722ms)
+2026-02-25 16:48:36 | INFO     | __main__:run_test_suite:218 | [Test Case] Min/Max Rate Limiting: Rate limiting for bandwidth control
+2026-02-25 16:48:36 | DEBUG    | __main__:run_test_case:369 | rustnmap command: sudo /home/greatwallimse/private/rust-nmap/target/release/rustnmap --scan-syn --min-rate 50 --max-rate 200 -p 22,80,113,443,8080 45.33.32.156
+2026-02-25 16:48:36 | DEBUG    | __main__:run_test_case:370 | nmap command: sudo /usr/bin/nmap -sS --min-rate 50 --max-rate 200 -p 22,80,113,443,8080 45.33.32.156
+2026-02-25 16:48:38 | SUCCESS  | __main__:run_test_suite:225 | Status: PASS
+2026-02-25 16:48:38 | INFO     | __main__:run_test_suite:229 | Performance: rustnmap=945ms, nmap=791ms, speedup=0.84x
+2026-02-25 16:48:38 | INFO     | __main__:_output_test_case_result:262 | --------------------------------------------------
+2026-02-25 16:48:38 | INFO     | __main__:_output_test_case_result:263 | [PASS] Min/Max Rate Limiting
+2026-02-25 16:48:38 | INFO     | __main__:_output_test_case_result:264 |   Description: Rate limiting for bandwidth control
+2026-02-25 16:48:38 | WARNING  | __main__:_output_test_case_result:275 |   Speed: 0.84x slower (rustnmap=945ms, nmap=791ms)
+2026-02-25 16:48:38 | INFO     | __main__:run_test_suite:218 | [Test Case] Host Timeout: Set host timeout to 30 seconds
+2026-02-25 16:48:38 | DEBUG    | __main__:run_test_case:369 | rustnmap command: sudo /home/greatwallimse/private/rust-nmap/target/release/rustnmap --scan-syn --host-timeout 30000 -p 22,80,113,443,8080 45.33.32.156
+2026-02-25 16:48:38 | DEBUG    | __main__:run_test_case:370 | nmap command: sudo /usr/bin/nmap -sS --host-timeout 30000 -p 22,80,113,443,8080 45.33.32.156
+2026-02-25 16:48:39 | SUCCESS  | __main__:run_test_suite:225 | Status: PASS
+2026-02-25 16:48:39 | INFO     | __main__:run_test_suite:229 | Performance: rustnmap=925ms, nmap=18ms, speedup=0.02x
+2026-02-25 16:48:39 | INFO     | __main__:_output_test_case_result:262 | --------------------------------------------------
+2026-02-25 16:48:39 | INFO     | __main__:_output_test_case_result:263 | [PASS] Host Timeout
+2026-02-25 16:48:39 | INFO     | __main__:_output_test_case_result:264 |   Description: Set host timeout to 30 seconds
+2026-02-25 16:48:39 | WARNING  | __main__:_output_test_case_result:275 |   Speed: 0.02x slower (rustnmap=925ms, nmap=18ms)
+2026-02-25 16:48:39 | WARNING  | __main__:_output_test_case_result:280 |   Warnings (2):
+2026-02-25 16:48:39 | WARNING  | __main__:_output_test_case_result:282 |     - Expected difference: nmap failed (exit=1) but rustnmap succeeded (exit=0)
+2026-02-25 16:48:39 | WARNING  | __main__:_output_test_case_result:282 |     - Ports only in rustnmap: {'113/tcp', '80/tcp', '443/tcp', '22/tcp', '8080/tcp'}
+2026-02-25 16:48:39 | INFO     | __main__:_output_suite_summary:293 | ==================================================
+2026-02-25 16:48:39 | INFO     | __main__:_output_suite_summary:294 | Suite Summary: Timing Templates
+2026-02-25 16:48:39 | INFO     | __main__:_output_suite_summary:295 |   Total: 8, Passed: 8, Failed: 0
+2026-02-25 16:48:39 | SUCCESS  | __main__:_output_suite_summary:297 | All tests PASSED
+2026-02-25 16:48:39 | INFO     | __main__:main:656 | ============================================================
+2026-02-25 16:48:39 | INFO     | __main__:main:657 | All Tests Complete
+2026-02-25 16:48:39 | INFO     | __main__:main:658 | ============================================================
+2026-02-25 16:48:39 | INFO     | __main__:main:661 | 
+2026-02-25 16:48:39 | INFO     | __main__:main:662 | Generating final reports...
+2026-02-25 16:48:39 | INFO     | __main__:_generate_text_report:508 | Text report generated: /home/greatwallimse/private/rust-nmap/benchmarks/reports/comparison_report_20260225_164839.txt
+2026-02-25 16:48:39 | INFO     | __main__:_generate_json_report:542 | JSON report generated: /home/greatwallimse/private/rust-nmap/benchmarks/reports/comparison_report_20260225_164839.json
+2026-02-25 16:48:39 | INFO     | __main__:main:671 | ============================================================
+2026-02-25 16:48:39 | INFO     | __main__:main:672 | Final: 8 tests | 8 passed | 0 failed | 100.0%
+2026-02-25 16:48:39 | INFO     | __main__:main:673 | ============================================================
+2026-02-25 16:48:39 | SUCCESS  | __main__:main:682 | All tests PASSED!
+2026-02-25 16:48:39 | INFO     | __main__:main:684 | Reports generated:
+2026-02-25 16:48:39 | INFO     | __main__:main:686 |   - /home/greatwallimse/private/rust-nmap/benchmarks/reports/comparison_report_20260225_164839.txt
+2026-02-25 16:48:39 | INFO     | __main__:main:686 |   - /home/greatwallimse/private/rust-nmap/benchmarks/reports/comparison_report_20260225_164839.json

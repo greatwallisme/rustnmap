@@ -1,14 +1,130 @@
 # Findings - RustNmap 项目分析
 
 **Created**: 2026-02-19
-**Updated**: 2026-02-26 11:21
-**Status**: Phase 21 - 分析失败测试
+**Updated**: 2026-02-26 11:25
+**Status**: Phase 22 - 深度分析测试日志
 
 ---
 
-## Phase 21: Benchmark 完整测试结果
+## Phase 23: ACK/Window 扫描 Bug 修复
 
-### 总体结果
+### Bug 根因分析
+
+**发现**: ACK 和 Window 扫描器使用非阻塞 `recv_packet()` 而不是带超时的接收循环
+
+**对比代码**:
+
+| 扫描器 | 接收方式 | 结果 |
+|--------|----------|------|
+| FIN/NULL/XMAS/Maimon | `recv_packet_with_timeout()` + 循环 | ✅ 正确接收 RST |
+| ACK/Window | `recv_packet()` 无超时 | ❌ 无法接收 RST |
+
+**代码位置**:
+- ACK Scanner: `stealth_scans.rs:1953-1963`
+- Window Scanner: `stealth_scans.rs:2645-2655`
+- FIN Scanner (正确实现): `stealth_scans.rs:524-534`
+
+**问题**:
+1. `recv_packet()` 是非阻塞的，立即返回 None 如果没有数据
+2. 然后回退到 raw socket，但 raw socket 无法接收 RST（内核 TCP 栈消耗）
+3. 结果：总是返回 `Filtered` 而不是检查 RST 响应
+
+**修复方案**:
+- 为 ACK 和 Window 扫描器添加与 FIN 扫描器相同的接收循环
+- 使用 `recv_packet_with_timeout()` 等待 RST 响应
+
+### nmap 行为参考
+
+**ACK Scan** (refguide.xml:689):
+- RST 收到 → Unfiltered
+- 无响应/ICMP → Filtered
+
+**Window Scan** (refguide.xml:1479):
+- RST + Window > 0 → Open
+- RST + Window == 0 → Closed
+- 无响应/ICMP → Filtered
+
+---
+
+## Phase 22: 测试日志深度分析
+
+### 1. "Ports only in rustnmap" 警告分析
+
+**现象**: 测试报告显示 rustnmap 报告了很多 nmap 没有报告的端口
+
+**根因分析**:
+- rustnmap 默认输出所有扫描的端口（包括 closed）
+- nmap 默认隐藏 closed 端口，显示 "Not shown: X closed ports"
+
+**实际输出对比**:
+```
+# rustnmap --fast-scan 45.33.32.156
+PORT     STATE SERVICE
+199/tcp  closed  smux      # closed 端口
+5051/tcp  closed  ida-agent # closed 端口
+37/tcp  closed  time       # closed 端口
+...
+
+# nmap -F 45.33.32.156
+Not shown: 95 closed ports  # 隐藏 closed 端口
+PORT    STATE    SERVICE
+22/tcp  open     ssh
+80/tcp  open     http
+```
+
+**测试脚本处理**:
+- compare_scans.py:398-411 尝试过滤 closed 端口
+- 但 filtered 端口仍然显示为差异
+- 这不是测试脚本 bug，而是 rustnmap 行为与 nmap 不一致
+
+**解决方案**:
+1. 修改 rustnmap 默认行为，隐藏 closed 端口
+2. 添加 `--show-all` 选项让用户显式请求显示所有端口
+
+### 2. 性能警告分析
+
+| 测试 | rustnmap | nmap | 比率 | 分析 |
+|-----|----------|------|------|------|
+| SYN Scan | 955ms | 881ms | 0.92x | 接近，可接受 |
+| Connect Scan | 699ms | 610ms | 0.87x | 接近，可接受 |
+| UDP Scan | 3167ms | 2679ms | 0.85x | 需要优化 |
+| Fast Scan | 4925ms | 3881ms | 0.79x | 需要优化 |
+| **Top Ports** | **5850ms** | **2642ms** | **0.45x** | **严重** |
+| **Two Targets** | **2167ms** | **771ms** | **0.36x** | **严重** |
+
+**Top Ports 慢的原因**:
+- rustnmap 可能扫描了比 nmap 更多的端口
+- nmap 对 top ports 有特殊优化
+
+### 3. 功能缺失分析
+
+| 功能 | nmap 支持 | rustnmap 支持 | 状态 |
+|-----|----------|--------------|------|
+| Decoy (-D) | ✅ | ❌ | 未实现 |
+| JSON Output | ❌ | ✅ | nmap 不支持（测试问题） |
+
+---
+
+## Phase 23: ACK/Window 扫描修复 - COMPLETE
+
+| Metric | 之前 (Phase 21) | 之后 (Phase 23) |
+|-------|---------------|-------------|
+| ACK Scan | 总是 filtered | unfiltered (正确!) |
+| Window Scan | 总是 filtered | closed (正确!) |
+
+### 修改摘要
+
+1. 为 ACK 和 Window 扫描器添加了带超时的接收循环
+2. 使用 `recv_packet_with_timeout()` 焉待 RST 响应
+3. 正确匹配响应的源 IP 和目标地址
+
+4. 正确解析 TCP window 字段
+
+5. 更新测试用例以使用新的函数名
+
+### 代码质量
+- 所有 clippy 警告已修复
+- 所有测试通过 (93 tests)### 总体结果
 
 | Metric | 励值 |
 |-------|------|-------|

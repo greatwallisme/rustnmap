@@ -45,7 +45,7 @@ use rustnmap_common::ScanConfig;
 use rustnmap_common::{Ipv4Addr, Port, PortState, Protocol};
 use rustnmap_evasion::DecoyScheduler;
 use rustnmap_net::raw_socket::{
-    parse_icmp_response, parse_tcp_response, parse_tcp_response_full, IcmpResponse,
+    parse_icmp_response, parse_tcp_response, IcmpResponse,
     IcmpUnreachableCode, RawSocket, TcpPacketBuilder,
 };
 use rustnmap_target::Target;
@@ -1946,73 +1946,113 @@ impl TcpAckScanner {
         let mut recv_buf = vec![0u8; 65535];
         let timeout = self.config.initial_rtt;
 
-        // Try AF_PACKET first if available (L2 capture - receives all TCP responses)
-        // Fall back to raw socket if packet socket is not available
-        #[expect(unused_assignments, reason = "packet_data extends lifetime of received data")]
-        let mut packet_data = None;
-        let received = if let Some(ref pkt_sock) = self.packet_socket {
-            match pkt_sock.recv_packet() {
-                Ok(Some(data)) if data.len() > ETH_HDR_SIZE => {
-                    packet_data = Some(data);
-                    packet_data.as_ref().map(|d| (&d[ETH_HDR_SIZE..], d.len() - ETH_HDR_SIZE))
-                }
-                _ => None,
-            }
-        } else {
-            None
-        };
+        // Use a receive loop to filter out non-matching responses
+        let start = std::time::Instant::now();
 
-        // Fall back to raw socket if AF_PACKET didn't receive data
-        let data = if let Some((slice, len)) = received {
-            (slice, len)
-        } else {
-            match self
-                .socket
-                .recv_packet(recv_buf.as_mut_slice(), Some(timeout))
-            {
-                Ok(len) if len > 0 => (&recv_buf[..len], len),
-                Ok(_) => return Ok(PortState::Filtered),
-                Err(e)
-                    if e.kind() == io::ErrorKind::WouldBlock
-                        || e.kind() == io::ErrorKind::TimedOut =>
+        loop {
+            // Calculate remaining timeout
+            let elapsed = start.elapsed();
+            let remaining_timeout = if elapsed >= timeout {
+                return Ok(PortState::Filtered); // Timeout exceeded - no response means filtered
+            } else {
+                timeout - elapsed
+            };
+
+            // Try AF_PACKET first if available (L2 capture - receives all TCP responses)
+            // Use a short timeout (200ms or remaining timeout) to wait for RST responses
+            // Fall back to raw socket if packet socket is not available or times out
+            #[expect(unused_assignments, reason = "packet_data extends lifetime of received data")]
+            let mut packet_data = None;
+            let packet_timeout = remaining_timeout.min(Duration::from_millis(200));
+            let received = if let Some(ref pkt_sock) = self.packet_socket {
+                match pkt_sock.recv_packet_with_timeout(packet_timeout) {
+                    Ok(Some(data)) if data.len() > ETH_HDR_SIZE => {
+                        packet_data = Some(data);
+                        packet_data.as_ref().map(|d| (&d[ETH_HDR_SIZE..], d.len() - ETH_HDR_SIZE))
+                    }
+                    _ => None,
+                }
+            } else {
+                None
+            };
+
+            // Fall back to raw socket if AF_PACKET didn't receive data
+            let data = if let Some((slice, len)) = received {
+                (slice, len)
+            } else {
+                match self
+                    .socket
+                    .recv_packet(recv_buf.as_mut_slice(), Some(remaining_timeout))
                 {
+                    Ok(len) if len > 0 => (&recv_buf[..len], len),
+                    Ok(_) => return Ok(PortState::Filtered),
+                    Err(e)
+                        if e.kind() == io::ErrorKind::WouldBlock
+                            || e.kind() == io::ErrorKind::TimedOut =>
+                    {
+                        return Ok(PortState::Filtered);
+                    }
+                    Err(e) => {
+                        return Err(rustnmap_common::ScanError::Network(
+                            rustnmap_common::Error::Network(
+                                rustnmap_common::error::NetworkError::ReceiveError { source: e },
+                            ),
+                        ))
+                    }
+                }
+            };
+
+            // Check for TCP response first
+            if let Some((flags, _seq, _ack, resp_src_port, _resp_dst_port, src_ip)) = parse_tcp_response(data.0) {
+                // For ACK scan, we sent from src_port to dst_port
+                // The RST response comes from dst_port to src_port
+                // So we check if src_ip == target and resp_src_port == dst_port (target sent RST)
+                if src_ip == dst_addr && resp_src_port == dst_port {
+                    // For ACK scan, RST means the port is unfiltered (reachable)
+                    if (flags & tcp_flags::RST) != 0 {
+                        return Ok(PortState::Unfiltered);
+                    }
+                    // Non-RST response (shouldn't happen for ACK scan)
                     return Ok(PortState::Filtered);
                 }
-                Err(e) => {
-                    return Err(rustnmap_common::ScanError::Network(
-                        rustnmap_common::Error::Network(
-                            rustnmap_common::error::NetworkError::ReceiveError { source: e },
-                        ),
-                    ))
+                // Response for different host/port - continue waiting
+            } else if let Some(icmp_resp) = parse_icmp_response(data.0) {
+                // Check if this ICMP response is for our probe
+                if let Some(state) = Self::handle_icmp_response_with_match(icmp_resp, dst_addr, dst_port) {
+                    return Ok(state);
                 }
+                // ICMP response for different probe - continue waiting
             }
-        };
-
-        // Check for TCP response first
-        if let Some((flags, _seq, _ack, src_port, _dst_port, _src_ip)) = parse_tcp_response(data.0) {
-            if src_port != dst_port {
-                return Ok(PortState::Filtered);
-            }
-
-            // For ACK scan, RST means the port is unfiltered (reachable)
-            if (flags & tcp_flags::RST) != 0 {
-                return Ok(PortState::Unfiltered);
-            }
-
-            return Ok(PortState::Filtered);
+            // Loop continues to next iteration
         }
-
-        // Check for ICMP response
-        if let Some(icmp_resp) = parse_icmp_response(data.0) {
-            return Ok(Self::handle_icmp_response(icmp_resp));
-        }
-
-        Ok(PortState::Filtered)
     }
 
     /// Handles ICMP response for ACK scan.
-    fn handle_icmp_response(_icmp_resp: IcmpResponse) -> PortState {
-        PortState::Filtered
+    ///
+    /// Returns `None` if the ICMP response is not for our probe (caller should continue waiting).
+    /// Returns `Some(state)` if the ICMP response is for our probe.
+    fn handle_icmp_response_with_match(
+        icmp_resp: IcmpResponse,
+        expected_dst_ip: Ipv4Addr,
+        expected_dst_port: Port,
+    ) -> Option<PortState> {
+        match icmp_resp {
+            IcmpResponse::DestinationUnreachable {
+                code,
+                original_dst_ip,
+                original_dst_port,
+            } => {
+                // Verify this ICMP response is for our probe
+                if original_dst_ip != expected_dst_ip || original_dst_port != expected_dst_port {
+                    return None; // Not for our probe - continue waiting
+                }
+
+                // For ACK scan, ICMP unreachable means filtered
+                let _ = code;
+                Some(PortState::Filtered)
+            }
+            IcmpResponse::Other { .. } | IcmpResponse::TimeExceeded { .. } => None,
+        }
     }
 
     /// Generates a random source port.
@@ -2638,78 +2678,131 @@ impl TcpWindowScanner {
         let mut recv_buf = vec![0u8; 65535];
         let timeout = self.config.initial_rtt;
 
-        // Try AF_PACKET first if available (L2 capture - receives all TCP responses)
-        // Fall back to raw socket if packet socket is not available
-        #[expect(unused_assignments, reason = "packet_data extends lifetime of received data")]
-        let mut packet_data = None;
-        let received = if let Some(ref pkt_sock) = self.packet_socket {
-            match pkt_sock.recv_packet() {
-                Ok(Some(data)) if data.len() > ETH_HDR_SIZE => {
-                    packet_data = Some(data);
-                    packet_data.as_ref().map(|d| (&d[ETH_HDR_SIZE..], d.len() - ETH_HDR_SIZE))
-                }
-                _ => None,
-            }
-        } else {
-            None
-        };
+        // Use a receive loop to filter out non-matching responses
+        let start = std::time::Instant::now();
 
-        // Fall back to raw socket if AF_PACKET didn't receive data
-        let data = if let Some((slice, len)) = received {
-            (slice, len)
-        } else {
-            match self
-                .socket
-                .recv_packet(recv_buf.as_mut_slice(), Some(timeout))
-            {
-                Ok(len) if len > 0 => (&recv_buf[..len], len),
-                Ok(_) => return Ok(PortState::Filtered),
-                Err(e)
-                    if e.kind() == io::ErrorKind::WouldBlock
-                        || e.kind() == io::ErrorKind::TimedOut =>
+        loop {
+            // Calculate remaining timeout
+            let elapsed = start.elapsed();
+            let remaining_timeout = if elapsed >= timeout {
+                return Ok(PortState::Filtered); // Timeout exceeded - no response means filtered
+            } else {
+                timeout - elapsed
+            };
+
+            // Try AF_PACKET first if available (L2 capture - receives all TCP responses)
+            // Use a short timeout (200ms or remaining timeout) to wait for RST responses
+            // Fall back to raw socket if packet socket is not available or times out
+            #[expect(unused_assignments, reason = "packet_data extends lifetime of received data")]
+            let mut packet_data = None;
+            let packet_timeout = remaining_timeout.min(Duration::from_millis(200));
+            let received = if let Some(ref pkt_sock) = self.packet_socket {
+                match pkt_sock.recv_packet_with_timeout(packet_timeout) {
+                    Ok(Some(data)) if data.len() > ETH_HDR_SIZE => {
+                        packet_data = Some(data);
+                        packet_data.as_ref().map(|d| (&d[ETH_HDR_SIZE..], d.len() - ETH_HDR_SIZE))
+                    }
+                    _ => None,
+                }
+            } else {
+                None
+            };
+
+            // Fall back to raw socket if AF_PACKET didn't receive data
+            let data = if let Some((slice, len)) = received {
+                (slice, len)
+            } else {
+                match self
+                    .socket
+                    .recv_packet(recv_buf.as_mut_slice(), Some(remaining_timeout))
                 {
+                    Ok(len) if len > 0 => (&recv_buf[..len], len),
+                    Ok(_) => return Ok(PortState::Filtered),
+                    Err(e)
+                        if e.kind() == io::ErrorKind::WouldBlock
+                            || e.kind() == io::ErrorKind::TimedOut =>
+                    {
+                        return Ok(PortState::Filtered);
+                    }
+                    Err(e) => {
+                        return Err(rustnmap_common::ScanError::Network(
+                            rustnmap_common::Error::Network(
+                                rustnmap_common::error::NetworkError::ReceiveError { source: e },
+                            ),
+                        ))
+                    }
+                }
+            };
+
+            // Use parse_tcp_response first to get the source IP for matching
+            if let Some((flags, _seq, _ack, resp_src_port, _resp_dst_port, src_ip)) = parse_tcp_response(data.0) {
+                // For Window scan, we sent from src_port to dst_port
+                // The RST response comes from dst_port to src_port
+                // So we check if src_ip == target and resp_src_port == dst_port (target sent RST)
+                if src_ip == dst_addr && resp_src_port == dst_port {
+                    // Check for RST flag
+                    if (flags & tcp_flags::RST) != 0 {
+                        // Window scan: analyze window size in RST response
+                        // Need to parse the window field from the TCP header
+                        // TCP window is at offset 14-15 from TCP header start
+                        let ip_header_len = ((data.0[0] & 0x0F) as usize) * 4;
+                        let tcp_start = ip_header_len;
+                        if data.0.len() >= tcp_start + 16 {
+                            let window = u16::from_be_bytes([
+                                data.0[tcp_start + 14],
+                                data.0[tcp_start + 15],
+                            ]);
+                            // Some systems (HP-UX, AIX) return non-zero window for closed ports
+                            // On most systems: window > 0 -> Open, window == 0 -> Closed
+                            if window > 0 {
+                                return Ok(PortState::Open);
+                            }
+                            return Ok(PortState::Closed);
+                        }
+                        // Can't parse window, default to Closed
+                        return Ok(PortState::Closed);
+                    }
+                    // Non-RST response (shouldn't happen for Window scan)
                     return Ok(PortState::Filtered);
                 }
-                Err(e) => {
-                    return Err(rustnmap_common::ScanError::Network(
-                        rustnmap_common::Error::Network(
-                            rustnmap_common::error::NetworkError::ReceiveError { source: e },
-                        ),
-                    ))
+                // Response for different host/port - continue waiting
+            } else if let Some(icmp_resp) = parse_icmp_response(data.0) {
+                // Check if this ICMP response is for our probe
+                if let Some(state) = Self::handle_icmp_response_with_match(icmp_resp, dst_addr, dst_port) {
+                    return Ok(state);
                 }
+                // ICMP response for different probe - continue waiting
             }
-        };
-
-        // Use full TCP response parser to get window field
-        if let Some(tcp_resp) = parse_tcp_response_full(data.0) {
-            if tcp_resp.src_port != dst_port {
-                return Ok(PortState::Filtered);
-            }
-
-            // Check for RST flag
-            if (tcp_resp.flags & tcp_flags::RST) != 0 {
-                // Window scan: analyze window size in RST response
-                // Some systems (HP-UX, AIX) return non-zero window for closed ports
-                if tcp_resp.window > 0 {
-                    return Ok(PortState::Closed);
-                }
-                return Ok(PortState::Open);
-            }
-
-            return Ok(PortState::Filtered);
+            // Loop continues to next iteration
         }
-
-        // Check for ICMP response
-        if let Some(icmp_resp) = parse_icmp_response(data.0) {
-            return Ok(Self::handle_icmp_response(icmp_resp));
-        }
-
-        Ok(PortState::Filtered)
     }
 
     /// Handles ICMP response for Window scan.
-    fn handle_icmp_response(_icmp_resp: IcmpResponse) -> PortState {
-        PortState::Filtered
+    ///
+    /// Returns `None` if the ICMP response is not for our probe (caller should continue waiting).
+    /// Returns `Some(state)` if the ICMP response is for our probe.
+    fn handle_icmp_response_with_match(
+        icmp_resp: IcmpResponse,
+        expected_dst_ip: Ipv4Addr,
+        expected_dst_port: Port,
+    ) -> Option<PortState> {
+        match icmp_resp {
+            IcmpResponse::DestinationUnreachable {
+                code,
+                original_dst_ip,
+                original_dst_port,
+            } => {
+                // Verify this ICMP response is for our probe
+                if original_dst_ip != expected_dst_ip || original_dst_port != expected_dst_port {
+                    return None; // Not for our probe - continue waiting
+                }
+
+                // For Window scan, ICMP unreachable means filtered
+                let _ = code;
+                Some(PortState::Filtered)
+            }
+            IcmpResponse::Other { .. } | IcmpResponse::TimeExceeded { .. } => None,
+        }
     }
 
     /// Generates a random source port.
@@ -2936,9 +3029,15 @@ mod tests {
             original_dst_ip: Ipv4Addr::new(192, 168, 1, 1),
             original_dst_port: 80,
         };
+        let expected_dst_ip = Ipv4Addr::new(192, 168, 1, 1);
+        let expected_dst_port = 80;
 
-        let result = TcpAckScanner::handle_icmp_response(icmp_resp);
-        assert_eq!(result, PortState::Filtered);
+        let result = TcpAckScanner::handle_icmp_response_with_match(
+            icmp_resp,
+            expected_dst_ip,
+            expected_dst_port,
+        );
+        assert_eq!(result, Some(PortState::Filtered));
     }
 
     #[test]
@@ -2976,8 +3075,14 @@ mod tests {
             original_dst_ip: Ipv4Addr::new(192, 168, 1, 1),
             original_dst_port: 80,
         };
+        let expected_dst_ip = Ipv4Addr::new(192, 168, 1, 1);
+        let expected_dst_port = 80;
 
-        let result = TcpWindowScanner::handle_icmp_response(icmp_resp);
-        assert_eq!(result, PortState::Filtered);
+        let result = TcpWindowScanner::handle_icmp_response_with_match(
+            icmp_resp,
+            expected_dst_ip,
+            expected_dst_port,
+        );
+        assert_eq!(result, Some(PortState::Filtered));
     }
 }

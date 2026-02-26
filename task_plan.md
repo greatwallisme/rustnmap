@@ -1,8 +1,124 @@
 # Task Plan
 
 **Created**: 2026-02-21
-**Updated**: 2026-02-26 11:21
-**Status**: Phase 21 - 分析失败测试
+**Updated**: 2026-02-26 11:25
+**Status**: Phase 22 - 分析测试脚本和代码问题
+
+---
+
+## Phase 23: 修复 ACK/Window 扫描状态判断 - COMPLETE
+
+### Bug 根因
+
+ACK 和 Window 扫描器使用非阻塞 `recv_packet()` 而不是带超时的接收循环：
+- `recv_packet()` 立即返回 None 如果没有数据
+- 回退到 raw socket 无法接收 RST（内核 TCP 栈消耗）
+- 结果：总是返回 `Filtered` 而不是正确判断
+
+### 修复方案
+
+为 ACK 和 Window 扫描器添加与 FIN 扫描器相同的接收循环：
+1. 使用 `recv_packet_with_timeout()` 等待 RST 响应
+2. 在循环中处理响应直到超时
+
+### 修改文件
+
+- `crates/rustnmap-scan/src/stealth_scans.rs`
+  - `TcpAckScanner::send_ack_probe()` - 添加接收循环
+  - `TcpWindowScanner::send_window_probe()` - 添加接收循环
+  - 添加 `handle_icmp_response_with_match()` 函数
+
+### 验证结果
+
+```
+# ACK scan - rustnmap
+22/tcp  unfiltered ssh
+80/tcp  unfiltered http
+443/tcp unfiltered https
+
+# ACK scan - nmap (matches!)
+22/tcp  unfiltered ssh
+80/tcp  unfiltered http
+443/tcp unfiltered https
+
+# Window scan - rustnmap
+22/tcp  closed  ssh
+80/tcp  closed  http
+443/tcp closed  https
+
+# Window scan - nmap (matches!)
+22/tcp  closed  ssh
+80/tcp  closed  http
+443/tcp closed  https
+```
+
+---
+
+## Phase 22: 深度分析测试日志警告和失败 - COMPLETE
+
+### 问题分类
+
+经过详细分析，测试日志中的警告和失败可分为以下几类：
+
+#### 1. "Ports only in rustnmap" 警告 - **代码问题**
+
+**根因**: rustnmap 输出所有端口（包括 closed），nmap 默认隐藏 closed 端口
+
+**证据**:
+```
+# rustnmap 输出 - 显示所有端口
+199/tcp  closed  smux
+5051/tcp  closed  ida-agent
+...
+
+# nmap 输出 - 隐藏 closed 端口
+Not shown: 95 closed ports
+PORT    STATE    SERVICE
+22/tcp  open     ssh
+80/tcp  open     http
+```
+
+**测试脚本逻辑** (compare_scans.py:398-411):
+- 尝试过滤 closed 端口
+- 但 filtered 端口仍然显示差异
+
+**解决方案**:
+1. 修改 rustnmap 默认行为，隐藏 closed 端口（像 nmap 一样）
+2. 或者添加 `--show-all` 选项让用户选择
+
+#### 2. "Speed: 0.XXx slower" 警告 - **需要优化**
+
+| 测试 | rustnmap | nmap | 比率 | 严重性 |
+|-----|----------|------|------|--------|
+| SYN Scan | 955ms | 881ms | 0.92x | 轻微 |
+| Connect Scan | 699ms | 610ms | 0.87x | 轻微 |
+| Top Ports | 5850ms | 2642ms | **0.45x** | 严重 |
+| Two Targets | 2167ms | 771ms | **0.36x** | 严重 |
+
+**Top Ports 慢的原因**:
+- rustnmap 扫描更多端口（100个），nmap 可能优化了端口选择
+- 需要分析 nmap 的 top ports 实现
+
+#### 3. 状态判断失败 - **代码 Bug** (Phase 23 修复中)
+
+| 扫描类型 | 问题 | nmap 参考代码 |
+|---------|------|--------------|
+| ACK Scan | filtered → 应为 unfiltered | scan_engine.cc:6672-6676 |
+| Window Scan | filtered → 应为 closed | scan_engine.cc:6684-6686 |
+
+#### 4. 功能未实现 - **功能缺失**
+
+| 功能 | 状态 |
+|-----|------|
+| Stealth with Decoys (-D) | rustnmap exit=1 |
+| JSON Output | nmap 不支持（测试配置问题） |
+
+### 下一步行动
+
+1. **P0**: 修复 ACK/Window 扫描状态判断逻辑 (Phase 23)
+2. **P1**: 修复 rustnmap 默认隐藏 closed 端口
+3. **P2**: 优化 Top Ports 性能
+4. **P3**: 实现 Decoy 扫描功能
 
 ---
 

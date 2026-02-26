@@ -1,0 +1,72 @@
+2026-02-26 09:08:45 | INFO     | __main__:run_test_suite:205 | ============================================================
+2026-02-26 09:08:45 | INFO     | __main__:run_test_suite:206 | Test Suite: Basic Port Scans
+2026-02-26 09:08:45 | INFO     | __main__:run_test_suite:207 | Description: Compare basic port scanning capabilities
+2026-02-26 09:08:45 | INFO     | __main__:run_test_suite:208 | Category: basic
+2026-02-26 09:08:45 | INFO     | __main__:run_test_suite:209 | ============================================================
+2026-02-26 09:08:45 | INFO     | __main__:run_test_suite:218 | [Test Case] SYN Scan: TCP SYN scan (default with root)
+2026-02-26 09:08:45 | DEBUG    | __main__:run_test_case:369 | rustnmap command: sudo /home/greatwallimse/private/rust-nmap/target/release/rustnmap --scan-syn -p 22,80,113,443,8080 45.33.32.156
+2026-02-26 09:08:45 | DEBUG    | __main__:run_test_case:370 | nmap command: sudo /usr/bin/nmap -sS -p 22,80,113,443,8080 45.33.32.156
+2026-02-26 09:08:46 | SUCCESS  | __main__:run_test_suite:225 | Status: PASS
+2026-02-26 09:08:46 | INFO     | __main__:run_test_suite:229 | Performance: rustnmap=934ms, nmap=798ms, speedup=0.85x
+2026-02-26 09:08:46 | INFO     | __main__:_output_test_case_result:262 | --------------------------------------------------
+2026-02-26 09:08:46 | INFO     | __main__:_output_test_case_result:263 | [PASS] SYN Scan
+2026-02-26 09:08:46 | INFO     | __main__:_output_test_case_result:264 |   Description: TCP SYN scan (default with root)
+2026-02-26 09:08:46 | WARNING  | __main__:_output_test_case_result:275 |   Speed: 0.85x slower (rustnmap=934ms, nmap=798ms)
+2026-02-26 09:08:46 | INFO     | __main__:run_test_suite:218 | [Test Case] Connect Scan: TCP Connect scan (default without root)
+2026-02-26 09:08:46 | DEBUG    | __main__:run_test_case:369 | rustnmap command: sudo /home/greatwallimse/private/rust-nmap/target/release/rustnmap --scan-connect -p 22,80,113,443,8080 45.33.32.156
+2026-02-26 09:08:46 | DEBUG    | __main__:run_test_case:370 | nmap command: sudo /usr/bin/nmap -sT -p 22,80,113,443,8080 45.33.32.156
+2026-02-26 09:08:49 | SUCCESS  | __main__:run_test_suite:225 | Status: PASS
+2026-02-26 09:08:49 | INFO     | __main__:run_test_suite:229 | Performance: rustnmap=2163ms, nmap=923ms, speedup=0.43x
+2026-02-26 09:08:49 | INFO     | __main__:_output_test_case_result:262 | --------------------------------------------------
+2026-02-26 09:08:49 | INFO     | __main__:_output_test_case_result:263 | [PASS] Connect Scan
+2026-02-26 09:08:49 | INFO     | __main__:_output_test_case_result:264 |   Description: TCP Connect scan (default without root)
+2026-02-26 09:08:49 | WARNING  | __main__:_output_test_case_result:275 |   Speed: 0.43x slower (rustnmap=2163ms, nmap=923ms)
+2026-02-26 09:08:49 | INFO     | __main__:run_test_suite:218 | [Test Case] UDP Scan: UDP port scan
+2026-02-26 09:08:49 | DEBUG    | __main__:run_test_case:369 | rustnmap command: sudo /home/greatwallimse/private/rust-nmap/target/release/rustnmap --scan-udp -p 22,80,113,443,8080 45.33.32.156
+2026-02-26 09:08:49 | DEBUG    | __main__:run_test_case:370 | nmap command: sudo /usr/bin/nmap -sU -p 22,80,113,443,8080 45.33.32.156
+2026-02-26 09:08:56 | SUCCESS  | __main__:run_test_suite:225 | Status: PASS
+2026-02-26 09:08:56 | INFO     | __main__:run_test_suite:229 | Performance: rustnmap=3264ms, nmap=3315ms, speedup=1.02x
+2026-02-26 09:08:56 | INFO     | __main__:_output_test_case_result:262 | --------------------------------------------------
+2026-02-26 09:08:56 | INFO     | __main__:_output_test_case_result:263 | [PASS] UDP Scan
+2026-02-26 09:08:56 | INFO     | __main__:_output_test_case_result:264 |   Description: UDP port scan
+2026-02-26 09:08:56 | SUCCESS  | __main__:_output_test_case_result:273 |   Speed: 1.02x faster (rustnmap=3264ms, nmap=3315ms)
+2026-02-26 09:08:56 | INFO     | __main__:run_test_suite:218 | [Test Case] Fast Scan: Scan fewer ports (top 100)
+2026-02-26 09:08:56 | DEBUG    | __main__:run_test_case:369 | rustnmap command: sudo /home/greatwallimse/private/rust-nmap/target/release/rustnmap --fast-scan 45.33.32.156
+2026-02-26 09:08:56 | DEBUG    | __main__:run_test_case:370 | nmap command: sudo /usr/bin/nmap -F 45.33.32.156
+2026-02-26 09:09:05 | SUCCESS  | __main__:run_test_suite:225 | Status: PASS
+2026-02-26 09:09:05 | INFO     | __main__:run_test_suite:229 | Performance: rustnmap=3559ms, nmap=4926ms, speedup=1.38x
+2026-02-26 09:09:05 | INFO     | __main__:_output_test_case_result:262 | --------------------------------------------------
+2026-02-26 09:09:05 | INFO     | __main__:_output_test_case_result:263 | [PASS] Fast Scan
+2026-02-26 09:09:05 | INFO     | __main__:_output_test_case_result:264 |   Description: Scan fewer ports (top 100)
+2026-02-26 09:09:05 | SUCCESS  | __main__:_output_test_case_result:273 |   Speed: 1.38x faster (rustnmap=3559ms, nmap=4926ms)
+2026-02-26 09:09:05 | WARNING  | __main__:_output_test_case_result:280 |   Warnings (1):
+2026-02-26 09:09:05 | WARNING  | __main__:_output_test_case_result:282 |     - Ports only in rustnmap: {'106/tcp', '2121/tcp'}
+2026-02-26 09:09:05 | INFO     | __main__:run_test_suite:218 | [Test Case] Top Ports: Scan top N most common ports
+2026-02-26 09:09:05 | DEBUG    | __main__:run_test_case:369 | rustnmap command: sudo /home/greatwallimse/private/rust-nmap/target/release/rustnmap --top-ports 100 45.33.32.156
+2026-02-26 09:09:05 | DEBUG    | __main__:run_test_case:370 | nmap command: sudo /usr/bin/nmap --top-ports 100 45.33.32.156
+2026-02-26 09:09:12 | SUCCESS  | __main__:run_test_suite:225 | Status: PASS
+2026-02-26 09:09:12 | INFO     | __main__:run_test_suite:229 | Performance: rustnmap=3292ms, nmap=3995ms, speedup=1.21x
+2026-02-26 09:09:12 | INFO     | __main__:_output_test_case_result:262 | --------------------------------------------------
+2026-02-26 09:09:12 | INFO     | __main__:_output_test_case_result:263 | [PASS] Top Ports
+2026-02-26 09:09:12 | INFO     | __main__:_output_test_case_result:264 |   Description: Scan top N most common ports
+2026-02-26 09:09:12 | SUCCESS  | __main__:_output_test_case_result:273 |   Speed: 1.21x faster (rustnmap=3292ms, nmap=3995ms)
+2026-02-26 09:09:12 | WARNING  | __main__:_output_test_case_result:280 |   Warnings (1):
+2026-02-26 09:09:12 | WARNING  | __main__:_output_test_case_result:282 |     - Ports only in rustnmap: {'6001/tcp', '1027/tcp'}
+2026-02-26 09:09:12 | INFO     | __main__:_output_suite_summary:293 | ==================================================
+2026-02-26 09:09:12 | INFO     | __main__:_output_suite_summary:294 | Suite Summary: Basic Port Scans
+2026-02-26 09:09:12 | INFO     | __main__:_output_suite_summary:295 |   Total: 5, Passed: 5, Failed: 0
+2026-02-26 09:09:12 | SUCCESS  | __main__:_output_suite_summary:297 | All tests PASSED
+2026-02-26 09:09:12 | INFO     | __main__:main:656 | ============================================================
+2026-02-26 09:09:12 | INFO     | __main__:main:657 | All Tests Complete
+2026-02-26 09:09:12 | INFO     | __main__:main:658 | ============================================================
+2026-02-26 09:09:12 | INFO     | __main__:main:661 | 
+2026-02-26 09:09:12 | INFO     | __main__:main:662 | Generating final reports...
+2026-02-26 09:09:12 | INFO     | __main__:_generate_text_report:508 | Text report generated: /home/greatwallimse/private/rust-nmap/benchmarks/reports/comparison_report_20260226_090912.txt
+2026-02-26 09:09:12 | INFO     | __main__:_generate_json_report:542 | JSON report generated: /home/greatwallimse/private/rust-nmap/benchmarks/reports/comparison_report_20260226_090912.json
+2026-02-26 09:09:12 | INFO     | __main__:main:671 | ============================================================
+2026-02-26 09:09:12 | INFO     | __main__:main:672 | Final: 5 tests | 5 passed | 0 failed | 100.0%
+2026-02-26 09:09:12 | INFO     | __main__:main:673 | ============================================================
+2026-02-26 09:09:12 | SUCCESS  | __main__:main:682 | All tests PASSED!
+2026-02-26 09:09:12 | INFO     | __main__:main:684 | Reports generated:
+2026-02-26 09:09:12 | INFO     | __main__:main:686 |   - /home/greatwallimse/private/rust-nmap/benchmarks/reports/comparison_report_20260226_090912.txt
+2026-02-26 09:09:12 | INFO     | __main__:main:686 |   - /home/greatwallimse/private/rust-nmap/benchmarks/reports/comparison_report_20260226_090912.json

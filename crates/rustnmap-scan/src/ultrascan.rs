@@ -72,7 +72,7 @@ struct InternalCongestionStats {
     /// Whether this is the first RTT measurement.
     ///
     /// Nmap uses -1 for SRTT/RTTVAR to indicate "not initialized", but we use a separate flag
-    /// to avoid needing AtomicI64.
+    /// to avoid needing `AtomicI64`.
     first_measurement: std::sync::atomic::AtomicBool,
     /// Total packets sent.
     packets_sent: std::sync::atomic::AtomicU64,
@@ -897,6 +897,10 @@ impl ParallelScanEngine {
     /// - Packet transmission fails
     /// - The scan timeout expires
     /// - Response processing fails
+    #[expect(
+        clippy::too_many_lines,
+        reason = "Port scanning requires handling send, receive, timeout, and result collection in one method"
+    )]
     pub async fn scan_ports(
         &self,
         target: Ipv4Addr,
