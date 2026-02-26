@@ -1,8 +1,8 @@
 # Task Plan
 
 **Created**: 2026-02-21
-**Updated**: 2026-02-26 15:30
-**Status**: Phase 26 COMPLETE - Benchmark 95.1% pass rate achieved
+**Updated**: 2026-02-26 18:10
+**Status**: Phase 27 COMPLETE - Bugs identified, plan ready for implementation
 
 ---
 
@@ -79,6 +79,91 @@ Warning: Unknown output format type "J"
 ```
 ee26d50 feat: Add RND decoy support for nmap-compatible random decoys
 ```
+
+---
+
+## Phase 27: Bug Identification & Solution Design - COMPLETE
+
+### Test Script Fixes Applied
+
+1. **JSON Output Test**: Added `rustnmap_only` flag handling in `comparison_test.py`
+2. **Output Format Validation**: Fixed to read from output files instead of stdout in `compare_scans.py`
+
+### Real rustnmap Bugs Identified
+
+#### Bug 1: UDP Scan State Detection
+- **Test**: Basic Port Scans > UDP Scan
+- **Error**: `113/udp: rustnmap=open|filtered, nmap=closed`
+- **Root Cause**: UDP scan lacks retry logic
+- **File**: `crates/rustnmap-scan/src/udp_scan.rs:235-354`
+
+#### Bug 2: Window Scan State Detection
+- **Test**: Extended Stealth Scans > Window Scan
+- **Error**: `22/tcp: rustnmap=filtered, nmap=closed` and `80/tcp: rustnmap=filtered, nmap=closed`
+- **Root Cause**: Window scan lacks retry logic
+- **File**: `crates/rustnmap-scan/src/stealth_scans.rs:2816-2937`
+
+### Solution Design
+
+**Approach**: Add retry logic with exponential backoff, following SYN scan pattern
+
+**Reference Implementation**: `crates/rustnmap-scan/src/syn_scan.rs:150-177`
+
+**Key Points**:
+- Use `config.max_retries` (T0-T3: 10, T4: 6, T5: 2)
+- Exponential backoff: `total_timeout = initial_rtt * 2^retry_count`
+- Track `received_any_from_target` flag
+- On final timeout: return `Closed` if any response received, else `Filtered`/`OpenOrFiltered`
+
+**Do NOT modify**: Batch scanning (`scan_ports_batch()`) - intentionally lacks retry logic
+
+---
+
+## Phase 28: Implement UDP and Window Scan Retry Logic - PENDING
+
+### Tasks
+
+#### Task 1: Implement UDP Scan Retry Logic
+**File**: `crates/rustnmap-scan/src/udp_scan.rs`
+**Lines**: 235-354 (`send_udp_probe_v4`), 370-480 (`send_udp_probe_v6`)
+
+**Changes**:
+1. Add retry loop with `config.max_retries`
+2. Add `received_any_from_target` flag
+3. Implement exponential backoff
+4. Return `Closed` if any ICMP received, `OpenOrFiltered` if completely silent
+
+#### Task 2: Implement Window Scan Retry Logic
+**File**: `crates/rustnmap-scan/src/stealth_scans.rs`
+**Lines**: 2816-2937 (`send_window_probe`)
+
+**Changes**:
+1. Add retry loop with `config.max_retries`
+2. Add `received_any_from_target` flag
+3. Implement exponential backoff
+4. Return `Closed` if any RST received, `Filtered` if completely silent
+
+#### Task 3: Add Unit Tests
+**Files**: `crates/rustnmap-scan/tests/udp_scan_test.rs`, `crates/rustnmap-scan/tests/window_scan_test.rs`
+
+#### Task 4: Run Benchmark Tests
+**Command**: `cd benchmarks && uv run python comparison_test.py`
+
+**Expected Results**: 41/41 tests pass (100%)
+
+#### Task 5: Verification
+```bash
+cargo build --release
+cargo test -p rustnmap-scan
+cargo clippy -- -D warnings
+```
+
+### Success Criteria
+- [ ] UDP scan returns `closed` for port 113/udp
+- [ ] Window scan returns `closed` for ports 22/tcp and 80/tcp
+- [ ] 41/41 benchmark tests pass
+- [ ] Zero warnings, zero errors
+- [ ] No performance degradation for T4/T5
 
 ---
 

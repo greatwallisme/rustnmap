@@ -347,14 +347,23 @@ class ComparisonTestRunner:
         # Prepare command templates
         template = test_case["command_template"]
 
-        # Run with nmap (use template as-is)
-        nmap_cmd = template.format(
-            scanner="sudo " + self.config.nmap_binary,
-            target=self.config.target_ip,
-            ports=self.config.test_ports,
-            port_range=self.config.test_port_range,
-            top_ports=self.config.test_top_ports,
-        )
+        # Check if this is a rustnmap-only test (nmap doesn't support this feature)
+        is_rustnmap_only = test_case.get("rustnmap_only", False)
+
+        # Run with nmap (use template as-is) - skip if rustnmap_only
+        if is_rustnmap_only:
+            loguru_logger.debug("Skipping nmap comparison (rustnmap_only test)")
+            nmap_result = ScanResult(exit_code=0, duration_ms=0, stdout="", stderr="")
+        else:
+            nmap_cmd = template.format(
+                scanner="sudo " + self.config.nmap_binary,
+                target=self.config.target_ip,
+                ports=self.config.test_ports,
+                port_range=self.config.test_port_range,
+                top_ports=self.config.test_top_ports,
+            )
+            loguru_logger.debug(f"nmap command: {nmap_cmd}")
+            nmap_result = await self.comparator.run_scan(nmap_cmd, "nmap")
 
         # Run with rustnmap (translate flags)
         rustnmap_template = self._translate_nmap_to_rustnmap(template)
@@ -367,18 +376,21 @@ class ComparisonTestRunner:
         )
 
         loguru_logger.debug(f"rustnmap command: {rustnmap_cmd}")
-        loguru_logger.debug(f"nmap command: {nmap_cmd}")
 
         # Execute scans
         rustnmap_result = await self.comparator.run_scan(rustnmap_cmd, "rustnmap")
-        nmap_result = await self.comparator.run_scan(nmap_cmd, "nmap")
+
+        # For rustnmap_only tests, add expected_differences to allow nmap "failure"
+        expected_differences = test_case.get("expected_differences")
+        if is_rustnmap_only and expected_differences is None:
+            expected_differences = {"allow_nmap_failure": True}
 
         # Compare results
         comparison = self.comparator.compare_results(
             rustnmap_result,
             nmap_result,
             test_case.get("expected_fields", []),
-            test_case.get("expected_differences"),
+            expected_differences,
         )
 
         return TestCaseResult(

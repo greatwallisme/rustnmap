@@ -1,8 +1,70 @@
 # Findings - RustNmap 项目分析
 
 **Created**: 2026-02-19
-**Updated**: 2026-02-26 15:25
-**Status**: Phase 26 COMPLETE - 39/41 tests pass, 2 failures are test config issues
+**Updated**: 2026-02-26 18:10
+**Status**: Phase 27 COMPLETE - 39/41 tests pass (95.1%), 2 rustnmap bugs identified
+
+---
+
+## Phase 27: Benchmark Re-analysis & Bug Identification (2026-02-26)
+
+### Overall Results
+
+**39/41 tests passed (95.1%)**
+
+| Suite | Tests | Pass | Fail | Status |
+|-------|-------|------|------|--------|
+| Basic Port Scans | 5 | 4 | 1 | 80% |
+| Service Detection | 3 | 3 | 0 | 100% |
+| OS Detection | 3 | 3 | 0 | 100% |
+| Advanced Scans | 6 | 6 | 0 | 100% |
+| Timing Templates | 8 | 8 | 0 | 100% |
+| Multi-Target Scans | 5 | 5 | 0 | 100% |
+| Output Formats | 4 | 4 | 0 | 100% |
+| Extended Stealth Scans | 7 | 6 | 1 | 85.7% |
+
+### Test Script Fixes Applied
+
+1. **JSON Output Test**: Added `rustnmap_only` flag handling in `comparison_test.py`
+2. **Output Format Validation**: Fixed to read from output files instead of stdout in `compare_scans.py`
+
+### Real rustnmap Bugs Identified
+
+#### Bug 1: UDP Scan State Detection
+
+**Test**: Basic Port Scans > UDP Scan
+**Error**: `113/udp: rustnmap=open|filtered, nmap=closed`
+**Location**: `/home/greatwallimse/private/rust-nmap/crates/rustnmap-scan/src/udp_scan.rs:235-354`
+**Root Cause**: UDP scan lacks retry logic. Single probe times out after `initial_rtt` (1000ms), while nmap retries multiple times with exponential backoff.
+**Current Behavior**: Returns `OpenOrFiltered` on timeout
+**Expected Behavior**: Should return `Closed` when ICMP Port Unreachable is received
+
+#### Bug 2: Window Scan State Detection
+
+**Test**: Extended Stealth Scans > Window Scan
+**Error**: `22/tcp: rustnmap=filtered, nmap=closed` and `80/tcp: rustnmap=filtered, nmap=closed`
+**Location**: `/home/greatwallimse/private/rust-nmap/crates/rustnmap-scan/src/stealth_scans.rs:2816-2937`
+**Root Cause**: Window scan lacks retry logic. Single probe times out after `initial_rtt`, while nmap retries multiple times.
+**Current Behavior**: Returns `Filtered` on timeout
+**Expected Behavior**: Should return `Closed` when RST with window=0 is received
+
+### Research Findings
+
+**Nmap's Timeout Handling**:
+- Uses RTT-based timeout: RTO = SRTT + 4 × RTTVAR (Jacobson/Karels algorithm)
+- Default max retries: 10 (T0-T3), 6 (T4), 2 (T5)
+- Retries use exponential backoff
+- UDP and Window scans use SAME retry mechanism as TCP scans
+
+**RustNmap's Current State**:
+- Default `initial_rtt`: 1000ms (matches Nmap)
+- Only SYN scan has retry logic (3 retries, exponential backoff)
+- UDP and Window scans have NO retry logic
+- `TimeoutTracker` module exists but isn't used by UDP/Window scans
+
+**Reference Implementation**:
+- SYN scan retry logic at `syn_scan.rs:150-177`
+- Pattern: retry loop, exponential backoff, `received_any_from_target` flag
 
 ---
 

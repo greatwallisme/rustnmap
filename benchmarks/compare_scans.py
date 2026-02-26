@@ -249,12 +249,28 @@ class ScanComparator:
 
         start_time = datetime.now()
         output_file = None
+        full_command = command
 
-        if use_xml_output:
+        # Extract output file path from command if present
+        # Supports -oX, --output-xml, -oG, --output-grepable, --output-json
+        import shlex
+        parts = shlex.split(command)
+        for i, part in enumerate(parts):
+            if part in ("-oX", "--output-xml", "-oG", "--output-grepable", "--output-json"):
+                if i + 1 < len(parts):
+                    output_file = Path(parts[i + 1])
+                    break
+            elif part.startswith("-oX=") or part.startswith("--output-xml="):
+                output_file = Path(part.split("=", 1)[1])
+                break
+            elif part.startswith("--output-json="):
+                output_file = Path(part.split("=", 1)[1])
+                break
+
+        # For backward compatibility, if use_xml_output is True and no output file specified
+        if use_xml_output and output_file is None:
             output_file = self.temp_dir / f"{scanner_name}_{datetime.now().timestamp()}.xml"
             full_command = f"{command} -oX {output_file}"
-        else:
-            full_command = command
 
         try:
             process = await asyncio.create_subprocess_shell(
@@ -299,6 +315,7 @@ class ScanComparator:
                 duration_ms=self.config.scan_timeout * 1000,
                 stdout="",
                 stderr="Scan timed out",
+                output_path=output_file,
             )
         except Exception as e:
             logger.error(f"{scanner_name} failed: {e}")
@@ -307,6 +324,7 @@ class ScanComparator:
                 duration_ms=int((datetime.now() - start_time).total_seconds() * 1000),
                 stdout="",
                 stderr=str(e),
+                output_path=output_file,
             )
 
     def compare_results(
@@ -461,9 +479,19 @@ class ScanComparator:
             "rustnmap_faster": rustnmap_result.duration_ms < nmap_result.duration_ms,
         }
 
-        # Field validation
+        # Field validation - check stdout and output files
+        output_to_check = rustnmap_result.stdout
+
+        # If output file exists, read its contents for validation
+        if rustnmap_result.output_path and rustnmap_result.output_path.exists():
+            try:
+                with open(rustnmap_result.output_path, 'r', encoding='utf-8', errors='replace') as f:
+                    output_to_check = f.read()
+            except Exception as e:
+                logger.warning(f"Failed to read output file: {e}")
+
         for field in expected_fields:
-            if field not in rustnmap_result.stdout:
+            if field not in output_to_check:
                 comparison["warnings"].append(f"Expected field '{field}' not found in rustnmap output")
 
         return comparison
