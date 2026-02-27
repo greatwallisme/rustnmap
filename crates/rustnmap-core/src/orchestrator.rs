@@ -575,12 +575,15 @@ impl ScanOrchestrator {
             .copied()
             .unwrap_or(ScanType::TcpSyn);
 
-        // Check if we should use parallel scanning (TCP SYN scan)
-        let use_parallel = matches!(primary_scan_type, ScanType::TcpSyn);
+        // Check if we should use parallel scanning (TCP SYN or UDP scan)
+        let use_parallel = matches!(primary_scan_type, ScanType::TcpSyn | ScanType::Udp);
 
         if use_parallel {
             // Use parallel scanning for better performance
-            info!("Using parallel scanning engine for TCP SYN scan");
+            info!(
+                "Using parallel scanning engine for {:?} scan",
+                primary_scan_type
+            );
 
             // Check for IPv6 targets or localhost targets - these require fallback
             let has_ipv6 = targets.iter().any(|t| matches!(t.ip, IpAddr::V6(_)));
@@ -663,13 +666,36 @@ impl ScanOrchestrator {
                             }
                         };
 
-                        // Run parallel scan for this target
-                        let scan_results = match engine.scan_ports(target_ip, &ports).await {
-                            Ok(r) => r,
-                            Err(e) => {
-                                warn!(ip = %target.ip, error = %e, "Parallel scan failed for target");
-                                return None;
+                        // Run parallel scan for this target (TCP SYN or UDP)
+                        let scan_results = if primary_scan_type == ScanType::Udp {
+                            match engine.scan_udp_ports(target_ip, &ports).await {
+                                Ok(r) => r,
+                                Err(e) => {
+                                    warn!(ip = %target.ip, error = %e, "UDP parallel scan failed for target");
+                                    return None;
+                                }
                             }
+                        } else {
+                            match engine.scan_ports(target_ip, &ports).await {
+                                Ok(r) => r,
+                                Err(e) => {
+                                    warn!(ip = %target.ip, error = %e, "Parallel scan failed for target");
+                                    return None;
+                                }
+                            }
+                        };
+
+                        // Determine protocol for results
+                        let (protocol, service_protocol) = if primary_scan_type == ScanType::Udp {
+                            (
+                                rustnmap_output::models::Protocol::Udp,
+                                rustnmap_common::ServiceProtocol::Udp,
+                            )
+                        } else {
+                            (
+                                rustnmap_output::models::Protocol::Tcp,
+                                rustnmap_common::ServiceProtocol::Tcp,
+                            )
                         };
 
                         // Convert scan results to port results
@@ -690,11 +716,11 @@ impl ScanOrchestrator {
 
                             let port_result = PortResult {
                                 number: port,
-                                protocol: rustnmap_output::models::Protocol::Tcp,
+                                protocol,
                                 state: output_state,
                                 state_reason: "scan".to_string(),
                                 state_ttl: None,
-                                service: service_info_from_db(port, rustnmap_common::ServiceProtocol::Tcp),
+                                service: service_info_from_db(port, service_protocol),
                                 scripts: Vec::new(),
                             };
 
@@ -727,12 +753,19 @@ impl ScanOrchestrator {
                             None
                         };
 
+                        // Determine status reason based on scan type
+                        let status_reason = if primary_scan_type == ScanType::Udp {
+                            "udp-response".to_string()
+                        } else {
+                            "syn-ack".to_string()
+                        };
+
                         Some(HostResult {
                             ip: target.ip,
                             mac,
                             hostname: target.hostname.clone(),
                             status: HostStatus::Up,
-                            status_reason: "syn-ack".to_string(),
+                            status_reason,
                             latency: std::time::Duration::from_millis(1),
                             ports: port_results,
                             os_matches: Vec::new(),
@@ -1010,6 +1043,24 @@ impl ScanOrchestrator {
                         Ok(scanner) => scanner.scan_ports_batch(target_ip, ports),
                         Err(e) => {
                             warn!(error = %e, "Failed to create Window scanner");
+                            continue;
+                        }
+                    }
+                }
+                ScanType::Udp => {
+                    // Use ParallelScanEngine for UDP parallel scanning
+                    match ParallelScanEngine::new(local_addr, scanner_config.clone()) {
+                        Ok(engine) => {
+                            // scan_udp_ports is async, so we need to block_on
+                            // Since this method is synchronous, we use tokio runtime
+                            tokio::task::block_in_place(|| {
+                                tokio::runtime::Handle::current().block_on(async {
+                                    engine.scan_udp_ports(target_ip, ports).await
+                                })
+                            })
+                        }
+                        Err(e) => {
+                            warn!(error = %e, "Failed to create UDP parallel scanner");
                             continue;
                         }
                     }

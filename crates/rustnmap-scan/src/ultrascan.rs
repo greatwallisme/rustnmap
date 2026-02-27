@@ -48,7 +48,7 @@ use std::time::{Duration, Instant};
 
 use rustnmap_common::{Port, PortState, RateLimiter, ScanConfig};
 use rustnmap_net::raw_socket::{parse_tcp_response, RawSocket, TcpPacketBuilder};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tokio::time::timeout as tokio_timeout;
 
@@ -455,11 +455,26 @@ impl SimpleAfPacket {
         if flags < 0 {
             return Err(io::Error::last_os_error());
         }
-        // SAFETY: fd is valid, flags is the current flag set from F_GETFL.
-        // Adding O_NONBLOCK is a safe flag modification.
-        let ret = unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) };
+        // Keep socket in BLOCKING mode for reliable ICMP reception
+        // Non-blocking mode causes timing gaps that result in packet loss
+        // We'll use SO_RCVTIMEO for timeout instead
+        let timeout = libc::timeval {
+            tv_sec: 0,
+            tv_usec: 100_000, // 100ms timeout
+        };
+        // SAFETY: fd is a valid socket, timeout is a valid libc::timeval struct,
+        // and setsockopt is safe to call with these parameters.
+        let ret = unsafe {
+            libc::setsockopt(
+                fd.as_raw_fd(),
+                libc::SOL_SOCKET,
+                libc::SO_RCVTIMEO,
+                (&raw const timeout).cast::<libc::c_void>(),
+                u32::try_from(mem::size_of::<libc::timeval>()).unwrap_or(u32::MAX),
+            )
+        };
         if ret < 0 {
-            return Err(io::Error::last_os_error());
+            // Non-fatal: timeout is helpful but not required
         }
 
         // SAFETY: zeroed memory is valid for packet_mreq (POD struct).
@@ -485,6 +500,24 @@ impl SimpleAfPacket {
         };
         if ret < 0 {
             // Non-fatal: promiscuous mode is helpful but not required
+        }
+
+        // Increase socket receive buffer size to prevent packet loss
+        // Nmap uses pcap which has large buffers; AF_PACKET needs explicit configuration
+        let socket_rcvbuf_size: i32 = 2_097_152; // 2MB
+        // SAFETY: fd is a valid socket, socket_rcvbuf_size is a valid i32,
+        // and setsockopt is safe to call with these parameters.
+        let ret = unsafe {
+            libc::setsockopt(
+                fd.as_raw_fd(),
+                libc::SOL_SOCKET,
+                libc::SO_RCVBUF,
+                (&raw const socket_rcvbuf_size).cast::<libc::c_void>(),
+                u32::try_from(mem::size_of::<i32>()).unwrap_or(u32::MAX),
+            )
+        };
+        if ret < 0 {
+            // Non-fatal: larger buffer is helpful but not required
         }
 
         Ok(Self { if_index, fd })
@@ -524,11 +557,11 @@ impl SimpleAfPacket {
     /// Receives a packet from the `AF_PACKET` socket.
     ///
     /// Returns `Ok(Some(data))` if a packet was received,
-    /// `Ok(None)` if no packet is available (non-blocking), or `Err` on error.
+    /// `Ok(None)` on timeout (blocking socket with `SO_RCVTIMEO`), or `Err` on error.
     ///
     /// # Errors
     ///
-    /// Returns an error if `recvfrom` fails with an error other than `WouldBlock`.
+    /// Returns an error if `recvfrom` fails with an error other than timeout.
     fn recv_packet(&self) -> io::Result<Option<Vec<u8>>> {
         let mut buffer = vec![0u8; 65_535];
         // SAFETY: fd is a valid AF_PACKET socket. buffer is a properly allocated
@@ -546,7 +579,8 @@ impl SimpleAfPacket {
         };
         if ret < 0 {
             let err = io::Error::last_os_error();
-            if err.kind() == io::ErrorKind::WouldBlock {
+            // EAGAIN/EWOULDBLOCK indicates timeout on blocking socket with SO_RCVTIMEO
+            if err.kind() == io::ErrorKind::WouldBlock || err.raw_os_error() == Some(libc::EAGAIN) {
                 return Ok(None);
             }
             return Err(err);
@@ -558,6 +592,17 @@ impl SimpleAfPacket {
         let len = ret as usize;
         buffer.truncate(len);
         Ok(Some(buffer))
+    }
+
+    /// Flushes any pending packets from the socket receive buffer.
+    ///
+    /// This should be called before starting a new scan to ensure we don't
+    /// process stale packets from previous scans.
+    fn flush_buffer(&self) {
+        // Drain all pending packets
+        while self.recv_packet().is_ok_and(|p| p.is_some()) {
+            // Continue discarding packets
+        }
     }
 }
 
@@ -596,6 +641,55 @@ pub const DEFAULT_SCAN_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// Source port range for outbound probes.
 pub const SOURCE_PORT_START: u16 = 60000;
+
+/// Ethernet header size for `AF_PACKET`.
+const ETH_HEADER_SIZE: usize = 14;
+
+/// ICMP Type 3 - Destination Unreachable.
+const ICMP_TYPE_DEST_UNREACH: u8 = 3;
+/// ICMP Code 3 - Port Unreachable.
+const ICMP_CODE_PORT_UNREACH: u8 = 3;
+
+/// Information about a UDP probe that has been sent but not yet responded to.
+#[derive(Debug, Clone)]
+struct UdpOutstandingProbe {
+    /// Target IP address.
+    target: Ipv4Addr,
+    /// Target port number.
+    port: Port,
+    /// Our source port.
+    src_port: Port,
+    /// When this probe was sent.
+    sent_time: Instant,
+    /// Number of retry attempts.
+    retry_count: u32,
+}
+
+/// Parsed ICMP response information.
+#[derive(Debug, Clone)]
+struct IcmpResponse {
+    /// Original destination IP (the target we probed).
+    orig_dst_ip: Ipv4Addr,
+    /// Original destination port (the port we probed).
+    orig_dst_port: Port,
+    /// ICMP type (3 = Destination Unreachable).
+    icmp_type: u8,
+    /// ICMP code (3 = Port Unreachable).
+    icmp_code: u8,
+}
+
+impl IcmpResponse {
+    /// Determines the port state from ICMP type and code.
+    #[must_use]
+    const fn port_state(&self) -> PortState {
+        if self.icmp_type == ICMP_TYPE_DEST_UNREACH && self.icmp_code == ICMP_CODE_PORT_UNREACH {
+            PortState::Closed
+        } else {
+            // Other ICMP types (filtered, admin prohibited, etc.)
+            PortState::Filtered
+        }
+    }
+}
 
 /// Information about a probe that has been sent but not yet responded to.
 #[derive(Debug, Clone)]
@@ -791,9 +885,8 @@ impl ParallelScanEngine {
 
         match SimpleAfPacket::new(&if_name) {
             Ok(socket) => Some(Arc::new(socket)),
-            Err(e) => {
-                // Log the error but continue with raw socket fallback
-                let _ = e;
+            Err(_e) => {
+                // Continue with raw socket fallback
                 None
             }
         }
@@ -1343,6 +1436,521 @@ impl ParallelScanEngine {
         let now_lower = now as u32;
         let pid = std::process::id();
         now_lower.wrapping_add(pid)
+    }
+
+    // ========================================================================
+    // UDP Parallel Scanning
+    // ========================================================================
+
+    /// Scans multiple UDP ports on a target in parallel.
+    ///
+    /// This implements nmap's `ultra_scan` architecture for UDP scanning:
+    /// - Sends multiple UDP probes concurrently (up to cwnd limit)
+    /// - Waits for ICMP Port Unreachable responses in unified receive loop
+    /// - Handles retransmissions for timed-out probes
+    /// - Uses adaptive timing based on RTT measurements
+    ///
+    /// # Arguments
+    ///
+    /// * `target` - Target host to scan
+    /// * `ports` - UDP port numbers to scan
+    ///
+    /// # Returns
+    ///
+    /// A map of port numbers to their states, or an error if scanning fails.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - Packet transmission fails
+    /// - The scan timeout expires
+    #[expect(
+        clippy::too_many_lines,
+        reason = "UDP parallel scanning requires send, receive, timeout, and result collection"
+    )]
+    pub async fn scan_udp_ports(
+        &self,
+        target: Ipv4Addr,
+        ports: &[Port],
+    ) -> Result<HashMap<Port, PortState>, rustnmap_common::ScanError> {
+        let start_time = Instant::now();
+
+        // Small delay to let the system stabilize before starting the scan
+        // This helps ensure the socket and network stack are ready
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        // Flush any stale packets from previous scans
+        if let Some(ref pkt_sock) = self.packet_socket {
+            pkt_sock.flush_buffer();
+        }
+
+        // Channel for received ICMP responses
+        let (icmp_tx, mut icmp_rx) = mpsc::unbounded_channel();
+
+        // Ready signal to ensure receiver is polling before we send probes
+        let (ready_tx, ready_rx) = oneshot::channel();
+
+        // Start ICMP receiver task
+        let receiver_handle = self.start_icmp_receiver_task(icmp_tx.clone(), ready_tx);
+
+        // Wait for receiver to be ready (with timeout to prevent deadlock)
+        if tokio::time::timeout(Duration::from_millis(100), ready_rx)
+            .await
+            .is_err()
+        {
+            // Timeout waiting for receiver - log warning but continue
+            // The receiver might still work, just took too long to signal ready
+        }
+
+        // Outstanding UDP probes: (target, port) -> probe info
+        let mut outstanding: HashMap<(Ipv4Addr, Port), UdpOutstandingProbe> = HashMap::new();
+        let mut results: HashMap<Port, PortState> = HashMap::new();
+        let mut ports_iter = ports.iter().copied().peekable();
+        let mut retry_probes: Vec<UdpOutstandingProbe> = Vec::new();
+
+        // Track probes sent in current batch
+        let mut probes_sent_this_batch: usize = 0;
+
+        // Main scan loop - follows nmap ultra_scan pattern
+        while ports_iter.peek().is_some() || !outstanding.is_empty() {
+            // Check for scan timeout
+            if start_time.elapsed() > self.scan_timeout {
+                // Mark remaining probes as open|filtered
+                for probe in outstanding.values() {
+                    results.entry(probe.port).or_insert(PortState::OpenOrFiltered);
+                }
+                break;
+            }
+
+            // Get adaptive parallelism
+            let current_cwnd = self.congestion.cwnd();
+
+            // Send more probes if within limits
+            while outstanding.len() < current_cwnd
+                && outstanding.len() < self.max_parallelism
+                && probes_sent_this_batch < BATCH_SIZE
+            {
+                // Check rate limiter
+                if let Some(wait_time) = self.rate_limiter.check_rate() {
+                    tokio::time::sleep(wait_time).await;
+                    if outstanding.len() >= current_cwnd
+                        || outstanding.len() >= self.max_parallelism
+                        || probes_sent_this_batch >= BATCH_SIZE
+                    {
+                        break;
+                    }
+                }
+
+                if let Some(port) = ports_iter.next() {
+                    self.send_udp_probe(target, port, &mut outstanding)?;
+                    self.congestion.on_packet_sent();
+                    self.rate_limiter.record_sent();
+                    probes_sent_this_batch += 1;
+
+                    // UDP scans need inter-probe delay to avoid ICMP rate limiting
+                    // Nmap uses 50ms delay for UDP scans (see timing.cc)
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                } else {
+                    break;
+                }
+            }
+
+            // Wait for ICMP responses (unified wait - nmap pattern)
+            let has_more_ports = ports_iter.peek().is_some();
+            let probe_timeout = self.congestion.recommended_timeout();
+
+            let earliest_timeout = outstanding
+                .values()
+                .map(|p| {
+                    let elapsed = p.sent_time.elapsed();
+                    if elapsed >= probe_timeout {
+                        Duration::ZERO
+                    } else {
+                        probe_timeout - elapsed
+                    }
+                })
+                .min()
+                .unwrap_or(Duration::from_millis(100));
+
+            let initial_wait = if has_more_ports {
+                // Give ICMP responses time to arrive before sending more probes
+                // Nmap waits for responses in a unified loop
+                Duration::from_millis(150)
+            } else if !outstanding.is_empty() {
+                earliest_timeout.min(Duration::from_millis(200))
+            } else {
+                Duration::from_millis(10)
+            };
+            let mut wait_duration = initial_wait;
+
+            // Drain all available ICMP responses
+            loop {
+                match tokio_timeout(wait_duration, icmp_rx.recv()).await {
+                    Ok(Some(icmp_resp)) => {
+                        // Match ICMP response to outstanding probe
+                        let probe_key = (icmp_resp.orig_dst_ip, icmp_resp.orig_dst_port);
+                        if let Some(probe) = outstanding.remove(&probe_key) {
+                            // Calculate RTT
+                            let rtt = probe.sent_time.elapsed();
+                            self.congestion.record_expected();
+                            self.congestion.on_packet_acked(Some(rtt));
+                            results.insert(probe.port, icmp_resp.port_state());
+                        }
+                        // Continue draining with short timeout
+                        wait_duration = Duration::from_millis(10);
+                    }
+                    Ok(None) => {
+                        // Channel closed
+                        break;
+                    }
+                    Err(_) => {
+                        // Timeout - no more responses
+                        break;
+                    }
+                }
+            }
+
+            // Check for probe timeouts and handle retries
+            self.check_udp_timeouts(&mut outstanding, &mut retry_probes, &mut results);
+
+            // Reset batch counter
+            if probes_sent_this_batch >= BATCH_SIZE {
+                probes_sent_this_batch = 0;
+            }
+
+            // Re-send retry probes
+            for probe in retry_probes.drain(..) {
+                let current_cwnd = self.congestion.cwnd();
+                if outstanding.len() < current_cwnd && outstanding.len() < self.max_parallelism {
+                    if let Some(wait_time) = self.rate_limiter.check_rate() {
+                        tokio::time::sleep(wait_time).await;
+                    }
+                    self.resend_udp_probe(probe, &mut outstanding)?;
+                    self.rate_limiter.record_sent();
+                } else {
+                    // Can't resend - mark as open|filtered
+                    results.entry(probe.port).or_insert(PortState::OpenOrFiltered);
+                }
+            }
+        }
+
+        // Final wait for any remaining ICMP responses
+        // This is critical for UDP scans where ICMP responses can be delayed
+        let final_wait = Duration::from_millis(200);
+        let final_start = Instant::now();
+        while final_start.elapsed() < final_wait {
+            match tokio_timeout(Duration::from_millis(50), icmp_rx.recv()).await {
+                Ok(Some(icmp_resp)) => {
+                    // Match ICMP response to outstanding probe
+                    let probe_key = (icmp_resp.orig_dst_ip, icmp_resp.orig_dst_port);
+                    if let Some(probe) = outstanding.remove(&probe_key) {
+                        results.insert(probe.port, icmp_resp.port_state());
+                    }
+                }
+                _ => break,
+            }
+        }
+
+        // Mark any remaining outstanding probes as open|filtered
+        for probe in outstanding.values() {
+            results.entry(probe.port).or_insert(PortState::OpenOrFiltered);
+        }
+
+        // Signal receiver to stop
+        drop(icmp_tx);
+        let _ = tokio::time::timeout(Duration::from_millis(200), receiver_handle).await;
+
+        Ok(results)
+    }
+
+    /// Sends a single UDP probe to the target.
+    fn send_udp_probe(
+        &self,
+        target: Ipv4Addr,
+        port: Port,
+        outstanding: &mut HashMap<(Ipv4Addr, Port), UdpOutstandingProbe>,
+    ) -> Result<(), rustnmap_common::ScanError> {
+        use rustnmap_net::raw_socket::UdpPacketBuilder;
+
+        let src_port = Self::generate_source_port();
+
+        // Build UDP packet
+        let packet = UdpPacketBuilder::new(self.local_addr, target, src_port, port).build();
+
+        // Send the packet
+        let dst_sockaddr = SocketAddr::new(std::net::IpAddr::V4(target), port);
+        self.socket
+            .send_packet(&packet, &dst_sockaddr)
+            .map_err(|e| {
+                rustnmap_common::ScanError::Network(rustnmap_common::Error::Network(
+                    rustnmap_common::error::NetworkError::SendError { source: e },
+                ))
+            })?;
+
+        // Track the outstanding probe
+        outstanding.insert(
+            (target, port),
+            UdpOutstandingProbe {
+                target,
+                port,
+                src_port,
+                sent_time: Instant::now(),
+                retry_count: 0,
+            },
+        );
+
+        Ok(())
+    }
+
+    /// Re-sends a UDP probe (for retries).
+    fn resend_udp_probe(
+        &self,
+        mut probe: UdpOutstandingProbe,
+        outstanding: &mut HashMap<(Ipv4Addr, Port), UdpOutstandingProbe>,
+    ) -> Result<(), rustnmap_common::ScanError> {
+        use rustnmap_net::raw_socket::UdpPacketBuilder;
+
+        probe.retry_count += 1;
+        probe.sent_time = Instant::now();
+
+        // Rebuild and resend
+        let packet =
+            UdpPacketBuilder::new(self.local_addr, probe.target, probe.src_port, probe.port)
+                .build();
+
+        let dst_sockaddr = SocketAddr::new(std::net::IpAddr::V4(probe.target), probe.port);
+        self.socket
+            .send_packet(&packet, &dst_sockaddr)
+            .map_err(|e| {
+                rustnmap_common::ScanError::Network(rustnmap_common::Error::Network(
+                    rustnmap_common::error::NetworkError::SendError { source: e },
+                ))
+            })?;
+
+        outstanding.insert((probe.target, probe.port), probe);
+        Ok(())
+    }
+
+    /// Checks for timed-out UDP probes and handles retries.
+    fn check_udp_timeouts(
+        &self,
+        outstanding: &mut HashMap<(Ipv4Addr, Port), UdpOutstandingProbe>,
+        retry_probes: &mut Vec<UdpOutstandingProbe>,
+        results: &mut HashMap<Port, PortState>,
+    ) {
+        let now = Instant::now();
+        let max_retries = u32::from(self.config.max_retries);
+        // UDP scans need longer timeout for ICMP responses
+        // Nmap uses 1 second initial timeout; we use minimum 500ms for reliability
+        let probe_timeout = self.congestion.recommended_timeout().max(Duration::from_millis(500));
+
+        let timed_out: Vec<_> = outstanding
+            .iter()
+            .filter(|(_, p)| now.duration_since(p.sent_time) >= probe_timeout)
+            .map(|(k, p)| (*k, p.clone()))
+            .collect();
+
+        for (key, probe) in timed_out {
+            self.congestion.record_expected();
+
+            if probe.retry_count < max_retries {
+                outstanding.remove(&key);
+                retry_probes.push(probe);
+                self.congestion.on_packet_lost();
+            } else {
+                // Max retries - mark as open|filtered (no response)
+                outstanding.remove(&key);
+                results.entry(probe.port).or_insert(PortState::OpenOrFiltered);
+                self.congestion.on_packet_lost();
+            }
+        }
+    }
+
+    /// Starts the ICMP receiver task for UDP scanning.
+    fn start_icmp_receiver_task(
+        &self,
+        icmp_tx: mpsc::UnboundedSender<IcmpResponse>,
+        ready_tx: oneshot::Sender<()>,
+    ) -> JoinHandle<()> {
+        // Use AF_PACKET socket for ICMP reception (same approach as pcap/nmap)
+        // AF_PACKET receives all Ethernet frames including ICMP responses
+        let packet_socket = self.packet_socket.clone();
+        let local_addr = self.local_addr;
+
+        tokio::spawn(async move {
+            // Only use AF_PACKET for ICMP reception
+            if let Some(pkt_sock) = packet_socket {
+                // Use a single continuous blocking task to avoid gaps in packet reception
+                let result = tokio::task::spawn_blocking(move || {
+                    let mut total_icmp_received = 0u32;
+                    let mut total_packets_checked = 0u32;
+                    let mut ready_tx = Some(ready_tx);
+
+                    loop {
+                        // Check if channel is closed before receiving
+                        if icmp_tx.is_closed() {
+                            break;
+                        }
+
+                        // Signal ready AFTER we're actually in the receive loop
+                        // This ensures we're polling before the sender starts
+                        if let Some(tx) = ready_tx.take() {
+                            let _ = tx.send(());
+                        }
+
+                        match pkt_sock.recv_packet() {
+                            Ok(Some(data)) => {
+                                // Skip Ethernet header (14 bytes)
+                                let ip_data = if data.len() > ETH_HEADER_SIZE {
+                                    &data[ETH_HEADER_SIZE..]
+                                } else {
+                                    &data[..]
+                                };
+                                total_packets_checked += 1;
+
+                                // Quick protocol check before full parsing
+                                // IP protocol field is at byte 9
+                                if ip_data.len() > 9 && ip_data[9] == 1 {
+                                    // This is an ICMP packet, try to parse
+                                    if let Some(icmp) =
+                                        Self::parse_icmp_response(ip_data, local_addr)
+                                    {
+                                        total_icmp_received += 1;
+                                        if icmp_tx.send(icmp).is_err() {
+                                            break; // Channel closed
+                                        }
+                                    }
+                                }
+                            }
+                            Ok(None) => {
+                                // Timeout on blocking socket (SO_RCVTIMEO)
+                                // Check if channel is still open and continue waiting
+                                if icmp_tx.is_closed() {
+                                    break;
+                                }
+                            }
+                            Err(e) => {
+                                // Error receiving - check if it's a timeout
+                                if e.kind() == io::ErrorKind::WouldBlock || e.raw_os_error() == Some(libc::EAGAIN) {
+                                    // Timeout - check if channel is still open
+                                    if icmp_tx.is_closed() {
+                                        break;
+                                    }
+                                } else {
+                                    // Other error - brief pause before retry
+                                    std::thread::sleep(Duration::from_millis(10));
+                                    if icmp_tx.is_closed() {
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    (total_icmp_received, total_packets_checked)
+                })
+                .await;
+
+                if let Ok((icmp_count, packet_count)) = result {
+                    let _ = icmp_count;
+                    let _ = packet_count;
+                }
+            }
+        })
+    }
+
+    /// Parses an ICMP response from raw packet data.
+    ///
+    /// Returns `Some(IcmpResponse)` if this is an ICMP Port Unreachable
+    /// message that matches one of our probes.
+    fn parse_icmp_response(data: &[u8], local_addr: Ipv4Addr) -> Option<IcmpResponse> {
+        // Minimum: IP header (20) + ICMP header (8) + inner IP header (20) + inner UDP header (8)
+        if data.len() < 56 {
+            return None;
+        }
+
+        // Check IP header
+        let version_ihl = data[0];
+        let version = version_ihl >> 4;
+        if version != 4 {
+            return None;
+        }
+
+        // Check protocol field (byte 9) - must be ICMP (1)
+        let protocol = data[9];
+        if protocol != 1 {
+            return None;
+        }
+
+        // Calculate IP header length
+        let ihl = u32::from(version_ihl & 0x0F) * 4;
+        if data.len() < usize::try_from(ihl + 8).ok()? {
+            return None;
+        }
+
+        // Parse ICMP header (after IP header)
+        let icmp_start = usize::try_from(ihl).ok()?;
+        let icmp_type = data[icmp_start];
+        let icmp_code = data[icmp_start + 1];
+
+        // Only process Destination Unreachable (type 3)
+        if icmp_type != ICMP_TYPE_DEST_UNREACH {
+            return None;
+        }
+
+        // Inner IP header starts after ICMP header (8 bytes)
+        let inner_ip_start = icmp_start + 8;
+        if data.len() < inner_ip_start + 28 {
+            return None;
+        }
+
+        // Parse inner IP header
+        // Inner packet is our original probe:
+        // - Source IP (bytes 12-15) = our local_addr
+        // - Destination IP (bytes 16-19) = target IP we probed
+        let inner_src_ip = Ipv4Addr::new(
+            data[inner_ip_start + 12],
+            data[inner_ip_start + 13],
+            data[inner_ip_start + 14],
+            data[inner_ip_start + 15],
+        );
+
+        // Verify this ICMP is for our probe (source should be our local IP)
+        // Note: We skip this check if local_addr is unspecified (0.0.0.0)
+        if local_addr != Ipv4Addr::UNSPECIFIED && inner_src_ip != local_addr {
+            return None;
+        }
+
+        // Get inner IP header length
+        let inner_ihl = u32::from(data[inner_ip_start] & 0x0F) * 4;
+        let inner_udp_start = inner_ip_start + usize::try_from(inner_ihl).ok()?;
+
+        if data.len() < inner_udp_start + 8 {
+            return None;
+        }
+
+        // Check inner protocol is UDP (17)
+        let inner_protocol = data[inner_ip_start + 9];
+        if inner_protocol != 17 {
+            return None;
+        }
+
+        // Parse inner UDP header - get destination port (the port we probed)
+        let orig_dst_port = u16::from_be_bytes([data[inner_udp_start + 2], data[inner_udp_start + 3]]);
+
+        // Get original destination IP (the target we probed) - bytes 16-19 of inner IP header
+        let orig_dst_ip = Ipv4Addr::new(
+            data[inner_ip_start + 16],
+            data[inner_ip_start + 17],
+            data[inner_ip_start + 18],
+            data[inner_ip_start + 19],
+        );
+
+        Some(IcmpResponse {
+            orig_dst_ip,
+            orig_dst_port,
+            icmp_type,
+            icmp_code,
+        })
     }
 }
 

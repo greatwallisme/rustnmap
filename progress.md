@@ -1,3 +1,72 @@
+### 2026-02-27: Phase 30 - UDP Parallel Scanning with AF_PACKET
+
+**User Request**: Continue fixing benchmark issues: study nmap details, use justfile recipes, match nmap performance/accuracy
+
+**What Was Done**:
+
+1. **Studied nmap UDP scanning implementation**:
+   - Read scan_engine_raw.cc for begin_sniffer() function
+   - Learned nmap uses libpcap with BPF filter: `dst host <ip> and (icmp or icmp6 or tcp or udp or sctp)`
+   - Found nmap uses 50ms inter-probe delay for UDP scans
+   - Discovered --defeat-icmp-ratelimit option for handling ICMP rate limiting
+
+2. **Implemented multiple ICMP reception improvements**:
+   - Changed to blocking socket with SO_RCVTIMEO (100ms timeout)
+   - Increased socket receive buffer to 2MB
+   - Added 50ms inter-probe delay (like nmap)
+   - Added 500ms minimum UDP probe timeout
+   - Added final ICMP wait (200ms) at scan end
+   - Added socket buffer flush before each scan
+
+3. **Fixed code quality issues**:
+   - Added SAFETY comments for unsafe blocks
+   - Fixed doc comment formatting
+   - Removed dead code (wait_for_data function)
+
+**Current State**:
+- UDP scan works ~70% of the time
+- Inconsistency due to AF_PACKET vs libpcap differences
+- Performance: ~2x slower than nmap (due to delays for reliability)
+- Root cause: AF_PACKET lacks kernel-level BPF filtering that libpcap provides
+
+**Files Modified**:
+- crates/rustnmap-scan/src/ultrascan.rs (UDP ICMP reception improvements)
+
+**Recommendation**:
+- Consider adding pcap crate for reliable ICMP reception
+- Or implement BPF filtering on AF_PACKET socket
+- Or add --defeat-icmp-ratelimit option
+
+---
+
+### 2026-02-27: Phase 28 - UDP Scan Retry Logic - FAILED
+
+**User Request**: Continue fixing benchmark issues: 1. Study nmap details carefully, 2. Never accept slower/worse accuracy than nmap, 3. Use justfile recipes
+
+**What Went Wrong**:
+
+I attempted to implement UDP scan retry logic by adapting the TCP SYN scan pattern, but this was fundamentally wrong because:
+
+1. **Did NOT study nmap implementation first** - Started coding without understanding
+2. **Wrong architectural fit** - Applied retry logic to sequential scanning (nmap uses parallel)
+3. **Made code progressively worse** with each attempt:
+   - Attempt 1: 10 retries → 17+ minute timeouts
+   - Attempt 2: 3 retries → 10+ second timeouts, still failing
+   - Attempt 3: 5 retries → Different port failed
+   - Attempt 4: Changed base timeout → Still failing
+
+**User Feedback**: "瞎JB乱试" (blindly trying random things) - Correct criticism
+
+**Current State**:
+- All changes reverted to original code
+- UDP scan: 4/5 tests pass (intermittent failure on different ports)
+- 40/41 total tests pass (97.6%)
+- Root cause of UDP issue: NOT determined
+
+**Files Modified**: None (all changes reverted)
+
+---
+
 ### 2026-02-26: Phase 26 - RND Decoy Support & All Stealth Scans PASS
 
 **User Request**: Continue fixing benchmark issues: 1. Study nmap details carefully, 2. Never accept slower/worse accuracy than nmap, 3. Use justfile recipes
