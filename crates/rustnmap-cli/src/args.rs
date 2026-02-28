@@ -686,9 +686,7 @@ impl Args {
                         .parse()
                         .map_err(|_| format!("Invalid RND number: {number_str}"))?;
                     if count == 0 || count > 100 {
-                        return Err(format!(
-                            "RND count must be between 1 and 100, got {count}"
-                        ));
+                        return Err(format!("RND count must be between 1 and 100, got {count}"));
                     }
                 } else {
                     // Validate as explicit IP address

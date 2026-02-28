@@ -1257,7 +1257,11 @@ fn parse_decoy_ips(s: &str) -> Result<Vec<std::net::IpAddr>> {
                             10 => 11,
                             127 => 128,
                             172..=191 => {
-                                if first == 172 { 173 } else { first }
+                                if first == 172 {
+                                    173
+                                } else {
+                                    first
+                                }
                             }
                             192..=223 => {
                                 if (190..=223).contains(&first) {

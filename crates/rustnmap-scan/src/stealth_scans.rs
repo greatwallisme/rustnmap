@@ -258,11 +258,7 @@ impl SimpleAfPacket {
         let timeout_ms = if timeout.is_zero() {
             0
         } else {
-            timeout
-                .as_millis()
-                .try_into()
-                .unwrap_or(i32::MAX)
-                .max(1)
+            timeout.as_millis().try_into().unwrap_or(i32::MAX).max(1)
         };
 
         // SAFETY: pollfd is properly initialized with fd and events.
@@ -280,6 +276,17 @@ impl SimpleAfPacket {
 
         // Data is available, receive it
         self.recv_packet()
+    }
+
+    /// Flushes any pending packets from the socket receive buffer.
+    ///
+    /// This should be called before starting a new scan to ensure we don't
+    /// process stale packets from previous scans or network activity.
+    fn flush_buffer(&self) {
+        // Drain all pending packets
+        while self.recv_packet().is_ok_and(|p| p.is_some()) {
+            // Continue discarding packets
+        }
     }
 }
 
@@ -518,14 +525,19 @@ impl TcpFinScanner {
             // Try AF_PACKET first if available (L2 capture - receives all TCP responses)
             // Use a short timeout (200ms or remaining timeout) to wait for RST responses
             // Fall back to raw socket if packet socket is not available or times out
-            #[expect(unused_assignments, reason = "packet_data extends lifetime of received data")]
+            #[expect(
+                unused_assignments,
+                reason = "packet_data extends lifetime of received data"
+            )]
             let mut packet_data = None;
             let packet_timeout = remaining_timeout.min(Duration::from_millis(200));
             let received = if let Some(ref pkt_sock) = self.packet_socket {
                 match pkt_sock.recv_packet_with_timeout(packet_timeout) {
                     Ok(Some(data)) if data.len() > ETH_HDR_SIZE => {
                         packet_data = Some(data);
-                        packet_data.as_ref().map(|d| (&d[ETH_HDR_SIZE..], d.len() - ETH_HDR_SIZE))
+                        packet_data
+                            .as_ref()
+                            .map(|d| (&d[ETH_HDR_SIZE..], d.len() - ETH_HDR_SIZE))
                     }
                     _ => None,
                 }
@@ -560,7 +572,9 @@ impl TcpFinScanner {
             };
 
             // Check for TCP response first
-            if let Some((flags, _seq, _ack, src_port, _resp_dst_port, src_ip)) = parse_tcp_response(data.0) {
+            if let Some((flags, _seq, _ack, src_port, _resp_dst_port, src_ip)) =
+                parse_tcp_response(data.0)
+            {
                 // For stealth scans, we sent from our_source_port to dst_port
                 // The RST response comes from dst_port to our_source_port
                 // So we check if src_ip == target and src_port == dst_port (target sent RST)
@@ -750,6 +764,12 @@ impl TcpFinScanner {
             }
         }
 
+        // Flush any stale packets from the AF_PACKET socket before receiving responses
+        // This prevents processing stale packets from previous scans or network activity
+        if let Some(ref pkt_sock) = self.packet_socket {
+            pkt_sock.flush_buffer();
+        }
+
         // Phase 2: Collect responses until timeout
         let mut results: HashMap<Port, PortState> = HashMap::new();
         let deadline = Instant::now() + self.config.initial_rtt;
@@ -766,7 +786,10 @@ impl TcpFinScanner {
             // Try AF_PACKET first if available (L2 capture - receives all TCP responses)
             // Use a short timeout (200ms or remaining timeout) to wait for RST responses
             // Fall back to raw socket if packet socket is not available or times out
-            #[expect(unused_assignments, reason = "packet_data extends lifetime of received data")]
+            #[expect(
+                unused_assignments,
+                reason = "packet_data extends lifetime of received data"
+            )]
             let mut packet_data = None;
             let packet_timeout = remaining.min(Duration::from_millis(200));
             let received = if let Some(ref pkt_sock) = self.packet_socket {
@@ -774,7 +797,9 @@ impl TcpFinScanner {
                     Ok(Some(data)) if data.len() > ETH_HDR_SIZE => {
                         _af_packet_count += 1;
                         packet_data = Some(data);
-                        packet_data.as_ref().map(|d| (&d[ETH_HDR_SIZE..], d.len() - ETH_HDR_SIZE))
+                        packet_data
+                            .as_ref()
+                            .map(|d| (&d[ETH_HDR_SIZE..], d.len() - ETH_HDR_SIZE))
                     }
                     _ => None,
                 }
@@ -812,7 +837,9 @@ impl TcpFinScanner {
             };
 
             // Check for TCP response
-            if let Some((flags, _seq, _ack, src_port, dst_port, src_ip)) = parse_tcp_response(data.0) {
+            if let Some((flags, _seq, _ack, src_port, dst_port, src_ip)) =
+                parse_tcp_response(data.0)
+            {
                 if src_ip == dst_addr {
                     // For stealth scans, RST responses come FROM the target port TO our source port
                     // So we match based on dst_port (our source port) instead of src_port
@@ -1029,14 +1056,19 @@ impl TcpNullScanner {
             // Try AF_PACKET first if available (L2 capture - receives all TCP responses)
             // Use a short timeout (200ms or remaining timeout) to wait for RST responses
             // Fall back to raw socket if packet socket is not available or times out
-            #[expect(unused_assignments, reason = "packet_data extends lifetime of received data")]
+            #[expect(
+                unused_assignments,
+                reason = "packet_data extends lifetime of received data"
+            )]
             let mut packet_data = None;
             let packet_timeout = remaining_timeout.min(Duration::from_millis(200));
             let received = if let Some(ref pkt_sock) = self.packet_socket {
                 match pkt_sock.recv_packet_with_timeout(packet_timeout) {
                     Ok(Some(data)) if data.len() > ETH_HDR_SIZE => {
                         packet_data = Some(data);
-                        packet_data.as_ref().map(|d| (&d[ETH_HDR_SIZE..], d.len() - ETH_HDR_SIZE))
+                        packet_data
+                            .as_ref()
+                            .map(|d| (&d[ETH_HDR_SIZE..], d.len() - ETH_HDR_SIZE))
                     }
                     _ => None,
                 }
@@ -1071,7 +1103,9 @@ impl TcpNullScanner {
             };
 
             // Check for TCP response first
-            if let Some((flags, _seq, _ack, src_port, _dst_port, src_ip)) = parse_tcp_response(data.0) {
+            if let Some((flags, _seq, _ack, src_port, _dst_port, src_ip)) =
+                parse_tcp_response(data.0)
+            {
                 // Only process responses from our target for our destination port
                 if src_ip == dst_addr && src_port == dst_port {
                     if (flags & tcp_flags::RST) != 0 {
@@ -1233,6 +1267,12 @@ impl TcpNullScanner {
             }
         }
 
+        // Flush any stale packets from the AF_PACKET socket before receiving responses
+        // This prevents processing stale packets from previous scans or network activity
+        if let Some(ref pkt_sock) = self.packet_socket {
+            pkt_sock.flush_buffer();
+        }
+
         // Phase 2: Collect responses
         let mut results: HashMap<Port, PortState> = HashMap::new();
         let deadline = Instant::now() + self.config.initial_rtt;
@@ -1249,7 +1289,10 @@ impl TcpNullScanner {
             // Try AF_PACKET first if available (L2 capture - receives all TCP responses)
             // Use a short timeout (200ms or remaining timeout) to wait for RST responses
             // Fall back to raw socket if packet socket is not available or times out
-            #[expect(unused_assignments, reason = "packet_data extends lifetime of received data")]
+            #[expect(
+                unused_assignments,
+                reason = "packet_data extends lifetime of received data"
+            )]
             let mut packet_data = None;
             let packet_timeout = remaining.min(Duration::from_millis(200));
             let received = if let Some(ref pkt_sock) = self.packet_socket {
@@ -1257,7 +1300,9 @@ impl TcpNullScanner {
                     Ok(Some(data)) if data.len() > ETH_HDR_SIZE => {
                         _af_packet_count += 1;
                         packet_data = Some(data);
-                        packet_data.as_ref().map(|d| (&d[ETH_HDR_SIZE..], d.len() - ETH_HDR_SIZE))
+                        packet_data
+                            .as_ref()
+                            .map(|d| (&d[ETH_HDR_SIZE..], d.len() - ETH_HDR_SIZE))
                     }
                     _ => None,
                 }
@@ -1294,7 +1339,9 @@ impl TcpNullScanner {
                 }
             };
 
-            if let Some((flags, _seq, _ack, src_port, _dst_port, src_ip)) = parse_tcp_response(data.0) {
+            if let Some((flags, _seq, _ack, src_port, _dst_port, src_ip)) =
+                parse_tcp_response(data.0)
+            {
                 if src_ip == dst_addr {
                     // O(1) lookup
                     if let Some(dst_port) = src_to_dst.remove(&src_port) {
@@ -1509,14 +1556,19 @@ impl TcpXmasScanner {
             // Try AF_PACKET first if available (L2 capture - receives all TCP responses)
             // Use a short timeout (200ms or remaining timeout) to wait for RST responses
             // Fall back to raw socket if packet socket is not available or times out
-            #[expect(unused_assignments, reason = "packet_data extends lifetime of received data")]
+            #[expect(
+                unused_assignments,
+                reason = "packet_data extends lifetime of received data"
+            )]
             let mut packet_data = None;
             let packet_timeout = remaining_timeout.min(Duration::from_millis(200));
             let received = if let Some(ref pkt_sock) = self.packet_socket {
                 match pkt_sock.recv_packet_with_timeout(packet_timeout) {
                     Ok(Some(data)) if data.len() > ETH_HDR_SIZE => {
                         packet_data = Some(data);
-                        packet_data.as_ref().map(|d| (&d[ETH_HDR_SIZE..], d.len() - ETH_HDR_SIZE))
+                        packet_data
+                            .as_ref()
+                            .map(|d| (&d[ETH_HDR_SIZE..], d.len() - ETH_HDR_SIZE))
                     }
                     _ => None,
                 }
@@ -1551,7 +1603,9 @@ impl TcpXmasScanner {
             };
 
             // Check for TCP response first
-            if let Some((flags, _seq, _ack, src_port, _dst_port, src_ip)) = parse_tcp_response(data.0) {
+            if let Some((flags, _seq, _ack, src_port, _dst_port, src_ip)) =
+                parse_tcp_response(data.0)
+            {
                 // Only process responses from our target for our destination port
                 if src_ip == dst_addr && src_port == dst_port {
                     if (flags & tcp_flags::RST) != 0 {
@@ -1716,6 +1770,12 @@ impl TcpXmasScanner {
             }
         }
 
+        // Flush any stale packets from the AF_PACKET socket before receiving responses
+        // This prevents processing stale packets from previous scans or network activity
+        if let Some(ref pkt_sock) = self.packet_socket {
+            pkt_sock.flush_buffer();
+        }
+
         // Phase 2: Collect responses
         let mut results: HashMap<Port, PortState> = HashMap::new();
         let deadline = Instant::now() + self.config.initial_rtt;
@@ -1732,7 +1792,10 @@ impl TcpXmasScanner {
             // Try AF_PACKET first if available (L2 capture - receives all TCP responses)
             // Use a short timeout (200ms or remaining timeout) to wait for RST responses
             // Fall back to raw socket if packet socket is not available or times out
-            #[expect(unused_assignments, reason = "packet_data extends lifetime of received data")]
+            #[expect(
+                unused_assignments,
+                reason = "packet_data extends lifetime of received data"
+            )]
             let mut packet_data = None;
             let packet_timeout = remaining.min(Duration::from_millis(200));
             let received = if let Some(ref pkt_sock) = self.packet_socket {
@@ -1740,7 +1803,9 @@ impl TcpXmasScanner {
                     Ok(Some(data)) if data.len() > ETH_HDR_SIZE => {
                         _af_packet_count += 1;
                         packet_data = Some(data);
-                        packet_data.as_ref().map(|d| (&d[ETH_HDR_SIZE..], d.len() - ETH_HDR_SIZE))
+                        packet_data
+                            .as_ref()
+                            .map(|d| (&d[ETH_HDR_SIZE..], d.len() - ETH_HDR_SIZE))
                     }
                     _ => None,
                 }
@@ -1777,7 +1842,9 @@ impl TcpXmasScanner {
                 }
             };
 
-            if let Some((flags, _seq, _ack, src_port, _dst_port, src_ip)) = parse_tcp_response(data.0) {
+            if let Some((flags, _seq, _ack, src_port, _dst_port, src_ip)) =
+                parse_tcp_response(data.0)
+            {
                 if src_ip == dst_addr {
                     if let Some(dst_port) = src_to_dst.remove(&src_port) {
                         let state = if (flags & tcp_flags::RST) != 0 {
@@ -1961,14 +2028,19 @@ impl TcpAckScanner {
             // Try AF_PACKET first if available (L2 capture - receives all TCP responses)
             // Use a short timeout (200ms or remaining timeout) to wait for RST responses
             // Fall back to raw socket if packet socket is not available or times out
-            #[expect(unused_assignments, reason = "packet_data extends lifetime of received data")]
+            #[expect(
+                unused_assignments,
+                reason = "packet_data extends lifetime of received data"
+            )]
             let mut packet_data = None;
             let packet_timeout = remaining_timeout.min(Duration::from_millis(200));
             let received = if let Some(ref pkt_sock) = self.packet_socket {
                 match pkt_sock.recv_packet_with_timeout(packet_timeout) {
                     Ok(Some(data)) if data.len() > ETH_HDR_SIZE => {
                         packet_data = Some(data);
-                        packet_data.as_ref().map(|d| (&d[ETH_HDR_SIZE..], d.len() - ETH_HDR_SIZE))
+                        packet_data
+                            .as_ref()
+                            .map(|d| (&d[ETH_HDR_SIZE..], d.len() - ETH_HDR_SIZE))
                     }
                     _ => None,
                 }
@@ -2003,7 +2075,9 @@ impl TcpAckScanner {
             };
 
             // Check for TCP response first
-            if let Some((flags, _seq, _ack, resp_src_port, _resp_dst_port, src_ip)) = parse_tcp_response(data.0) {
+            if let Some((flags, _seq, _ack, resp_src_port, _resp_dst_port, src_ip)) =
+                parse_tcp_response(data.0)
+            {
                 // For ACK scan, we sent from src_port to dst_port
                 // The RST response comes from dst_port to src_port
                 // So we check if src_ip == target and resp_src_port == dst_port (target sent RST)
@@ -2018,7 +2092,9 @@ impl TcpAckScanner {
                 // Response for different host/port - continue waiting
             } else if let Some(icmp_resp) = parse_icmp_response(data.0) {
                 // Check if this ICMP response is for our probe
-                if let Some(state) = Self::handle_icmp_response_with_match(icmp_resp, dst_addr, dst_port) {
+                if let Some(state) =
+                    Self::handle_icmp_response_with_match(icmp_resp, dst_addr, dst_port)
+                {
                     return Ok(state);
                 }
                 // ICMP response for different probe - continue waiting
@@ -2101,6 +2177,10 @@ impl TcpAckScanner {
     /// - RST received -> Unfiltered
     /// - ICMP unreachable -> Filtered
     /// - No response -> Filtered
+    #[expect(
+        clippy::too_many_lines,
+        reason = "Batch scanning requires handling send, receive, and result collection in one method for clarity"
+    )]
     pub fn scan_ports_batch(
         &self,
         dst_addr: Ipv4Addr,
@@ -2113,9 +2193,17 @@ impl TcpAckScanner {
         // Limit batch size to prevent memory issues
         let ports_to_scan: Vec<Port> = ports.iter().copied().take(MAX_BATCH_SIZE).collect();
 
+        // Flush any stale packets from the AF_PACKET socket BEFORE sending probes
+        // This prevents processing stale packets from previous scans or network activity
+        // Must flush BEFORE sending, not after, to avoid flushing our own responses
+        if let Some(ref pkt_sock) = self.packet_socket {
+            pkt_sock.flush_buffer();
+        }
+
         // Phase 1: Send all probes
         // Track scanned ports for O(1) lookup
-        let mut scanned_ports: std::collections::HashSet<Port> = ports_to_scan.iter().copied().collect();
+        let mut scanned_ports: std::collections::HashSet<Port> =
+            ports_to_scan.iter().copied().collect();
         // Port tracking: dst_port -> set of src_ports for O(1) ICMP matching
         let mut port_srcs: HashMap<Port, std::collections::HashSet<u16>> = HashMap::new();
 
@@ -2155,14 +2243,19 @@ impl TcpAckScanner {
             }
 
             // Try AF_PACKET first if available (L2 capture - receives all TCP responses)
-            #[expect(unused_assignments, reason = "packet_data extends lifetime of received data")]
+            #[expect(
+                unused_assignments,
+                reason = "packet_data extends lifetime of received data"
+            )]
             let mut packet_data = None;
             let packet_timeout = remaining.min(Duration::from_millis(200));
             let received = if let Some(ref pkt_sock) = self.packet_socket {
                 match pkt_sock.recv_packet_with_timeout(packet_timeout) {
                     Ok(Some(data)) if data.len() > ETH_HDR_SIZE => {
                         packet_data = Some(data);
-                        packet_data.as_ref().map(|d| (&d[ETH_HDR_SIZE..], d.len() - ETH_HDR_SIZE))
+                        packet_data
+                            .as_ref()
+                            .map(|d| (&d[ETH_HDR_SIZE..], d.len() - ETH_HDR_SIZE))
                     }
                     _ => None,
                 }
@@ -2197,7 +2290,9 @@ impl TcpAckScanner {
             };
 
             // Check for TCP response
-            if let Some((flags, _seq, _ack, resp_src_port, _resp_dst_port, src_ip)) = parse_tcp_response(data.0) {
+            if let Some((flags, _seq, _ack, resp_src_port, _resp_dst_port, src_ip)) =
+                parse_tcp_response(data.0)
+            {
                 if src_ip == dst_addr {
                     // For ACK scan, RST responses come FROM the target port
                     // So resp_src_port is the port we scanned
@@ -2399,14 +2494,19 @@ impl TcpMaimonScanner {
             // Try AF_PACKET first if available (L2 capture - receives all TCP responses)
             // Use a short timeout (200ms or remaining timeout) to wait for RST responses
             // Fall back to raw socket if packet socket is not available or times out
-            #[expect(unused_assignments, reason = "packet_data extends lifetime of received data")]
+            #[expect(
+                unused_assignments,
+                reason = "packet_data extends lifetime of received data"
+            )]
             let mut packet_data = None;
             let packet_timeout = remaining_timeout.min(Duration::from_millis(200));
             let received = if let Some(ref pkt_sock) = self.packet_socket {
                 match pkt_sock.recv_packet_with_timeout(packet_timeout) {
                     Ok(Some(data)) if data.len() > ETH_HDR_SIZE => {
                         packet_data = Some(data);
-                        packet_data.as_ref().map(|d| (&d[ETH_HDR_SIZE..], d.len() - ETH_HDR_SIZE))
+                        packet_data
+                            .as_ref()
+                            .map(|d| (&d[ETH_HDR_SIZE..], d.len() - ETH_HDR_SIZE))
                     }
                     _ => None,
                 }
@@ -2441,7 +2541,9 @@ impl TcpMaimonScanner {
             };
 
             // Check for TCP response first
-            if let Some((flags, _seq, _ack, src_port, _dst_port, src_ip)) = parse_tcp_response(data.0) {
+            if let Some((flags, _seq, _ack, src_port, _dst_port, src_ip)) =
+                parse_tcp_response(data.0)
+            {
                 // Only process responses from our target for our destination port
                 if src_ip == dst_addr && src_port == dst_port {
                     if (flags & tcp_flags::RST) != 0 {
@@ -2604,6 +2706,12 @@ impl TcpMaimonScanner {
             }
         }
 
+        // Flush any stale packets from the AF_PACKET socket before receiving responses
+        // This prevents processing stale packets from previous scans or network activity
+        if let Some(ref pkt_sock) = self.packet_socket {
+            pkt_sock.flush_buffer();
+        }
+
         // Phase 2: Collect responses
         let mut results: HashMap<Port, PortState> = HashMap::new();
         let deadline = Instant::now() + self.config.initial_rtt;
@@ -2620,7 +2728,10 @@ impl TcpMaimonScanner {
             // Try AF_PACKET first if available (L2 capture - receives all TCP responses)
             // Use a short timeout (200ms or remaining timeout) to wait for RST responses
             // Fall back to raw socket if packet socket is not available or times out
-            #[expect(unused_assignments, reason = "packet_data extends lifetime of received data")]
+            #[expect(
+                unused_assignments,
+                reason = "packet_data extends lifetime of received data"
+            )]
             let mut packet_data = None;
             let packet_timeout = remaining.min(Duration::from_millis(200));
             let received = if let Some(ref pkt_sock) = self.packet_socket {
@@ -2628,7 +2739,9 @@ impl TcpMaimonScanner {
                     Ok(Some(data)) if data.len() > ETH_HDR_SIZE => {
                         _af_packet_count += 1;
                         packet_data = Some(data);
-                        packet_data.as_ref().map(|d| (&d[ETH_HDR_SIZE..], d.len() - ETH_HDR_SIZE))
+                        packet_data
+                            .as_ref()
+                            .map(|d| (&d[ETH_HDR_SIZE..], d.len() - ETH_HDR_SIZE))
                     }
                     _ => None,
                 }
@@ -2665,7 +2778,9 @@ impl TcpMaimonScanner {
                 }
             };
 
-            if let Some((flags, _seq, _ack, src_port, _dst_port, src_ip)) = parse_tcp_response(data.0) {
+            if let Some((flags, _seq, _ack, src_port, _dst_port, src_ip)) =
+                parse_tcp_response(data.0)
+            {
                 if src_ip == dst_addr {
                     if let Some(dst_port) = src_to_dst.remove(&src_port) {
                         let state = if (flags & tcp_flags::RST) != 0 {
@@ -2852,14 +2967,19 @@ impl TcpWindowScanner {
             // Try AF_PACKET first if available (L2 capture - receives all TCP responses)
             // Use a short timeout (200ms or remaining timeout) to wait for RST responses
             // Fall back to raw socket if packet socket is not available or times out
-            #[expect(unused_assignments, reason = "packet_data extends lifetime of received data")]
+            #[expect(
+                unused_assignments,
+                reason = "packet_data extends lifetime of received data"
+            )]
             let mut packet_data = None;
             let packet_timeout = remaining_timeout.min(Duration::from_millis(200));
             let received = if let Some(ref pkt_sock) = self.packet_socket {
                 match pkt_sock.recv_packet_with_timeout(packet_timeout) {
                     Ok(Some(data)) if data.len() > ETH_HDR_SIZE => {
                         packet_data = Some(data);
-                        packet_data.as_ref().map(|d| (&d[ETH_HDR_SIZE..], d.len() - ETH_HDR_SIZE))
+                        packet_data
+                            .as_ref()
+                            .map(|d| (&d[ETH_HDR_SIZE..], d.len() - ETH_HDR_SIZE))
                     }
                     _ => None,
                 }
@@ -2894,7 +3014,9 @@ impl TcpWindowScanner {
             };
 
             // Use parse_tcp_response first to get the source IP for matching
-            if let Some((flags, _seq, _ack, resp_src_port, _resp_dst_port, src_ip)) = parse_tcp_response(data.0) {
+            if let Some((flags, _seq, _ack, resp_src_port, _resp_dst_port, src_ip)) =
+                parse_tcp_response(data.0)
+            {
                 // For Window scan, we sent from src_port to dst_port
                 // The RST response comes from dst_port to src_port
                 // So we check if src_ip == target and resp_src_port == dst_port (target sent RST)
@@ -2911,12 +3033,13 @@ impl TcpWindowScanner {
                                 data.0[tcp_start + 14],
                                 data.0[tcp_start + 15],
                             ]);
-                            // Some systems (HP-UX, AIX) return non-zero window for closed ports
-                            // On most systems: window > 0 -> Open, window == 0 -> Closed
-                            if window > 0 {
-                                return Ok(PortState::Open);
+                            // Window scan: analyze window size in RST response
+                            // Linux (and most systems): Window == 0 -> Closed
+                            // Some systems (HP-UX, old BSD): Window > 0 -> Open
+                            if window == 0 {
+                                return Ok(PortState::Closed);
                             }
-                            return Ok(PortState::Closed);
+                            return Ok(PortState::Open);
                         }
                         // Can't parse window, default to Closed
                         return Ok(PortState::Closed);
@@ -2927,7 +3050,9 @@ impl TcpWindowScanner {
                 // Response for different host/port - continue waiting
             } else if let Some(icmp_resp) = parse_icmp_response(data.0) {
                 // Check if this ICMP response is for our probe
-                if let Some(state) = Self::handle_icmp_response_with_match(icmp_resp, dst_addr, dst_port) {
+                if let Some(state) =
+                    Self::handle_icmp_response_with_match(icmp_resp, dst_addr, dst_port)
+                {
                     return Ok(state);
                 }
                 // ICMP response for different probe - continue waiting
@@ -3027,9 +3152,17 @@ impl TcpWindowScanner {
         // Limit batch size to prevent memory issues
         let ports_to_scan: Vec<Port> = ports.iter().copied().take(MAX_BATCH_SIZE).collect();
 
+        // Flush any stale packets from the AF_PACKET socket BEFORE sending probes
+        // This prevents processing stale packets from previous scans or network activity
+        // Must flush BEFORE sending, not after, to avoid flushing our own responses
+        if let Some(ref pkt_sock) = self.packet_socket {
+            pkt_sock.flush_buffer();
+        }
+
         // Phase 1: Send all probes
         // Track scanned ports for O(1) lookup
-        let mut scanned_ports: std::collections::HashSet<Port> = ports_to_scan.iter().copied().collect();
+        let mut scanned_ports: std::collections::HashSet<Port> =
+            ports_to_scan.iter().copied().collect();
         // Port tracking: dst_port -> set of src_ports for O(1) ICMP matching
         let mut port_srcs: HashMap<Port, std::collections::HashSet<u16>> = HashMap::new();
 
@@ -3069,14 +3202,19 @@ impl TcpWindowScanner {
             }
 
             // Try AF_PACKET first if available
-            #[expect(unused_assignments, reason = "packet_data extends lifetime of received data")]
+            #[expect(
+                unused_assignments,
+                reason = "packet_data extends lifetime of received data"
+            )]
             let mut packet_data = None;
             let packet_timeout = remaining.min(Duration::from_millis(200));
             let received = if let Some(ref pkt_sock) = self.packet_socket {
                 match pkt_sock.recv_packet_with_timeout(packet_timeout) {
                     Ok(Some(data)) if data.len() > ETH_HDR_SIZE => {
                         packet_data = Some(data);
-                        packet_data.as_ref().map(|d| (&d[ETH_HDR_SIZE..], d.len() - ETH_HDR_SIZE))
+                        packet_data
+                            .as_ref()
+                            .map(|d| (&d[ETH_HDR_SIZE..], d.len() - ETH_HDR_SIZE))
                     }
                     _ => None,
                 }
@@ -3111,23 +3249,26 @@ impl TcpWindowScanner {
             };
 
             // Check for TCP response with window field
-            if let Some((flags, _seq, _ack, resp_src_port, _resp_dst_port, src_ip, window)) = parse_tcp_response_with_window(data.0) {
+            if let Some((flags, _seq, _ack, resp_src_port, _resp_dst_port, src_ip, window)) =
+                parse_tcp_response_with_window(data.0)
+            {
                 if src_ip == dst_addr {
                     // For Window scan, RST responses come FROM the target port
                     // So resp_src_port is the port we scanned
-                    if scanned_ports.remove(&resp_src_port) {
+                    if scanned_ports.contains(&resp_src_port) {
                         // For Window scan, analyze TCP window field in RST response
                         let state = if (flags & tcp_flags::RST) != 0 {
-                            // Window scan: non-zero window = Open, zero window = Closed
-                            if window > 0 {
-                                PortState::Open
-                            } else {
+                            // Window scan: Window == 0 = Closed (Linux), Window > 0 = Open (some systems)
+                            if window == 0 {
                                 PortState::Closed
+                            } else {
+                                PortState::Open
                             }
                         } else {
                             PortState::Filtered
                         };
                         results.insert(resp_src_port, state);
+                        scanned_ports.remove(&resp_src_port);
                         port_srcs.remove(&resp_src_port);
                     }
                 }

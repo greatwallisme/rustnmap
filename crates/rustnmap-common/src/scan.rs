@@ -47,7 +47,7 @@ impl Default for ScanConfig {
             dns_server: crate::DEFAULT_DNS_SERVER.to_string(),
             min_rate: None,
             max_rate: None,
-            timing_level: 3,                          // T3 Normal is default
+            timing_level: 3, // T3 Normal is default
         }
     }
 }

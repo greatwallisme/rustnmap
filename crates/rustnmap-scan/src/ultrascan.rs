@@ -127,12 +127,7 @@ impl InternalCongestionStats {
         // Check if this is the first measurement (nmap uses -1 sentinel)
         if self
             .first_measurement
-            .compare_exchange(
-                true,
-                false,
-                Ordering::SeqCst,
-                Ordering::Relaxed,
-            )
+            .compare_exchange(true, false, Ordering::SeqCst, Ordering::Relaxed)
             .is_ok()
         {
             // First measurement: use RTT directly (nmap timing.cc:119-124)
@@ -391,6 +386,32 @@ impl InternalCongestionController {
     }
 }
 
+/// BPF instruction structure for classic BPF filters.
+/// Matches the kernel's `struct sock_filter`.
+#[repr(C)]
+struct SockFilter {
+    /// Instruction code
+    code: u16,
+    /// Jump true offset
+    jt: u8,
+    /// Jump false offset
+    jf: u8,
+    /// Generic multiuse field
+    k: u32,
+}
+
+/// BPF program structure for `SO_ATTACH_FILTER`.
+/// Matches the kernel's `struct sock_fprog`.
+#[repr(C)]
+struct SockFprog {
+    /// Number of filter instructions
+    len: u16,
+    /// Padding for alignment
+    _pad: u16,
+    /// Pointer to filter instructions
+    filter: *const SockFilter,
+}
+
 /// Simple `AF_PACKET` socket for L2 packet capture.
 /// Uses standard `recvfrom` (not `PACKET_MMAP`) for simplicity.
 #[derive(Debug)]
@@ -505,8 +526,8 @@ impl SimpleAfPacket {
         // Increase socket receive buffer size to prevent packet loss
         // Nmap uses pcap which has large buffers; AF_PACKET needs explicit configuration
         let socket_rcvbuf_size: i32 = 2_097_152; // 2MB
-        // SAFETY: fd is a valid socket, socket_rcvbuf_size is a valid i32,
-        // and setsockopt is safe to call with these parameters.
+                                                 // SAFETY: fd is a valid socket, socket_rcvbuf_size is a valid i32,
+                                                 // and setsockopt is safe to call with these parameters.
         let ret = unsafe {
             libc::setsockopt(
                 fd.as_raw_fd(),
@@ -603,6 +624,131 @@ impl SimpleAfPacket {
         while self.recv_packet().is_ok_and(|p| p.is_some()) {
             // Continue discarding packets
         }
+    }
+
+    /// Sets a BPF filter to only capture ICMP packets destined to the local IP.
+    ///
+    /// This matches nmap's approach of filtering packets in kernel space using
+    /// libpcap's BPF filter. The filter is: `icmp and dst host <local_ip>`.
+    ///
+    /// # Arguments
+    ///
+    /// * `local_ip` - Local IP address to filter for (destination of ICMP responses)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the BPF filter cannot be attached to the socket.
+    fn set_icmp_filter(&self, local_ip: Ipv4Addr) -> io::Result<()> {
+        // BPF instruction constants
+        const BPF_LD: u16 = 0x00; // Load
+        const BPF_H: u16 = 0x08; // Half word (2 bytes)
+        const BPF_B: u16 = 0x10; // Byte
+        const BPF_W: u16 = 0x00; // Word (4 bytes)
+        const BPF_ABS: u16 = 0x20; // Absolute offset
+        const BPF_JMP: u16 = 0x05; // Jump
+        const BPF_JEQ: u16 = 0x10; // Jump if equal
+        const BPF_K: u16 = 0x00; // Constant
+        const BPF_RET: u16 = 0x06; // Return
+        const BPF_MAXLEN: u32 = 65_535; // Accept full packet
+
+        // Ipv4Addr::to_bits() returns u32 in network byte order (big-endian)
+        let local_ip_bits = local_ip.to_bits();
+
+        // BPF filter: icmp and dst host <local_ip>
+        // This filters at the kernel level to only pass ICMP packets destined to our IP.
+        // Packet structure (Ethernet frame):
+        // - Bytes 0-5: Destination MAC
+        // - Bytes 6-11: Source MAC
+        // - Bytes 12-13: EtherType (0x0800 for IPv4)
+        // - Bytes 14-33: IPv4 header
+        //   - Byte 23: IP protocol (1 for ICMP)
+        //   - Bytes 30-33: Destination IP
+        //
+        // BPF instructions are validated by the kernel when attached.
+        // The filter structure matches the kernel's sock_filter struct.
+        let filter: [SockFilter; 8] = [
+            // Load EtherType (offset 12, 2 bytes)
+            SockFilter {
+                code: BPF_LD | BPF_H | BPF_ABS,
+                jt: 0,
+                jf: 0,
+                k: 12,
+            },
+            // Check if IPv4 (0x0800) - jump to next if true, else skip 5 to reject
+            SockFilter {
+                code: BPF_JMP | BPF_JEQ | BPF_K,
+                jt: 0,
+                jf: 5,
+                k: 0x0800,
+            },
+            // Load IP protocol (offset 23, 1 byte) - 14 (Eth hdr) + 9 (IP proto offset)
+            SockFilter {
+                code: BPF_LD | BPF_B | BPF_ABS,
+                jt: 0,
+                jf: 0,
+                k: 23,
+            },
+            // Check if ICMP (1) - jump to next if true, else skip 3 to reject
+            SockFilter {
+                code: BPF_JMP | BPF_JEQ | BPF_K,
+                jt: 0,
+                jf: 3,
+                k: 1,
+            },
+            // Load destination IP (offset 30, 4 bytes) - 14 + 16 (IP dst offset)
+            SockFilter {
+                code: BPF_LD | BPF_W | BPF_ABS,
+                jt: 0,
+                jf: 0,
+                k: 30,
+            },
+            // Check if matches local IP - jump to accept if true, else reject
+            SockFilter {
+                code: BPF_JMP | BPF_JEQ | BPF_K,
+                jt: 0,
+                jf: 1,
+                k: local_ip_bits,
+            },
+            // Accept packet (return full packet length)
+            SockFilter {
+                code: BPF_RET | BPF_K,
+                jt: 0,
+                jf: 0,
+                k: BPF_MAXLEN,
+            },
+            // Reject packet (return 0)
+            SockFilter {
+                code: BPF_RET | BPF_K,
+                jt: 0,
+                jf: 0,
+                k: 0,
+            },
+        ];
+
+        let prog = SockFprog {
+            len: u16::try_from(filter.len()).unwrap_or(u16::MAX),
+            _pad: 0,
+            filter: filter.as_ptr(),
+        };
+
+        // SAFETY: fd is a valid socket, prog is a valid SockFprog pointing to
+        // a properly constructed BPF filter. SO_ATTACH_FILTER is a standard
+        // socket option for AF_PACKET sockets.
+        let ret = unsafe {
+            libc::setsockopt(
+                self.fd.as_raw_fd(),
+                libc::SOL_SOCKET,
+                libc::SO_ATTACH_FILTER,
+                (&raw const prog).cast::<libc::c_void>(),
+                u32::try_from(mem::size_of::<SockFprog>()).unwrap_or(u32::MAX),
+            )
+        };
+
+        if ret < 0 {
+            return Err(io::Error::last_os_error());
+        }
+
+        Ok(())
     }
 }
 
@@ -843,7 +989,10 @@ impl ParallelScanEngine {
 
         // Create internal congestion controller for adaptive timing
         // Uses timing_level from config to set ca_incr (T4/T5 use ca_incr=2)
-        let congestion = Arc::new(InternalCongestionController::new(max_parallel, config.timing_level));
+        let congestion = Arc::new(InternalCongestionController::new(
+            max_parallel,
+            config.timing_level,
+        ));
 
         // Create rate limiter for min/max rate enforcement
         let rate_limiter = RateLimiter::new(config.min_rate, config.max_rate);
@@ -945,7 +1094,10 @@ impl ParallelScanEngine {
     pub fn with_max_parallelism(mut self, value: usize) -> Self {
         self.max_parallelism = value;
         // Recreate congestion controller with new max and existing timing_level
-        self.congestion = Arc::new(InternalCongestionController::new(value, self.config.timing_level));
+        self.congestion = Arc::new(InternalCongestionController::new(
+            value,
+            self.config.timing_level,
+        ));
         self
     }
 
@@ -1253,7 +1405,9 @@ impl ParallelScanEngine {
                     let socket_clone = StdArc::clone(&socket);
                     tokio::task::spawn_blocking(move || {
                         let mut recv_buf = vec![0u8; 65535];
-                        match socket_clone.recv_packet(&mut recv_buf, Some(Duration::from_millis(50))) {
+                        match socket_clone
+                            .recv_packet(&mut recv_buf, Some(Duration::from_millis(50)))
+                        {
                             Ok(len) => Ok((len, recv_buf)),
                             Err(e) => Err(e),
                         }
@@ -1475,14 +1629,25 @@ impl ParallelScanEngine {
     ) -> Result<HashMap<Port, PortState>, rustnmap_common::ScanError> {
         let start_time = Instant::now();
 
-        // Small delay to let the system stabilize before starting the scan
-        // This helps ensure the socket and network stack are ready
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        // Create dedicated ICMP socket with BPF filter BEFORE starting receiver
+        // This ensures the filter is applied before any packets can arrive
+        let if_name = Self::get_interface_for_ip(self.local_addr);
+        let icmp_socket = if let Some(ref name) = if_name {
+            match SimpleAfPacket::new(name) {
+                Ok(sock) => {
+                    // Enable BPF filter to capture only ICMP packets destined to local IP
+                    // This prevents kernel buffer overflow under network load
+                    let _ = sock.set_icmp_filter(self.local_addr);
 
-        // Flush any stale packets from previous scans
-        if let Some(ref pkt_sock) = self.packet_socket {
-            pkt_sock.flush_buffer();
-        }
+                    // Flush any stale packets before starting
+                    sock.flush_buffer();
+                    Some(Arc::new(sock))
+                }
+                Err(_) => None,
+            }
+        } else {
+            None
+        };
 
         // Channel for received ICMP responses
         let (icmp_tx, mut icmp_rx) = mpsc::unbounded_channel();
@@ -1490,17 +1655,23 @@ impl ParallelScanEngine {
         // Ready signal to ensure receiver is polling before we send probes
         let (ready_tx, ready_rx) = oneshot::channel();
 
-        // Start ICMP receiver task
-        let receiver_handle = self.start_icmp_receiver_task(icmp_tx.clone(), ready_tx);
+        // Start ICMP receiver task with pre-created socket
+        let receiver_handle = self.start_icmp_receiver_task(icmp_socket, icmp_tx.clone(), ready_tx);
 
         // Wait for receiver to be ready (with timeout to prevent deadlock)
-        if tokio::time::timeout(Duration::from_millis(100), ready_rx)
+        if tokio::time::timeout(Duration::from_millis(200), ready_rx)
             .await
             .is_err()
         {
             // Timeout waiting for receiver - log warning but continue
             // The receiver might still work, just took too long to signal ready
         }
+
+        // Small delay to ensure receiver is truly in recvfrom() call
+        // This is critical for AF_PACKET which doesn't have ring buffer like libpcap
+        // Without this delay, there's a race condition where probes are sent before
+        // the receiver is actively polling
+        tokio::time::sleep(Duration::from_millis(50)).await;
 
         // Outstanding UDP probes: (target, port) -> probe info
         let mut outstanding: HashMap<(Ipv4Addr, Port), UdpOutstandingProbe> = HashMap::new();
@@ -1517,7 +1688,9 @@ impl ParallelScanEngine {
             if start_time.elapsed() > self.scan_timeout {
                 // Mark remaining probes as open|filtered
                 for probe in outstanding.values() {
-                    results.entry(probe.port).or_insert(PortState::OpenOrFiltered);
+                    results
+                        .entry(probe.port)
+                        .or_insert(PortState::OpenOrFiltered);
                 }
                 break;
             }
@@ -1549,6 +1722,7 @@ impl ParallelScanEngine {
 
                     // UDP scans need inter-probe delay to avoid ICMP rate limiting
                     // Nmap uses 50ms delay for UDP scans (see timing.cc)
+                    // The 2000ms final wait ensures we capture late ICMP responses
                     tokio::time::sleep(Duration::from_millis(50)).await;
                 } else {
                     break;
@@ -1574,10 +1748,11 @@ impl ParallelScanEngine {
 
             let initial_wait = if has_more_ports {
                 // Give ICMP responses time to arrive before sending more probes
-                // Nmap waits for responses in a unified loop
-                Duration::from_millis(150)
+                // Must be at least as long as the probe timeout to avoid premature timeouts
+                // Nmap uses 1 second; we use 500ms minimum for reliability
+                Duration::from_millis(500)
             } else if !outstanding.is_empty() {
-                earliest_timeout.min(Duration::from_millis(200))
+                earliest_timeout.min(Duration::from_millis(500))
             } else {
                 Duration::from_millis(10)
             };
@@ -1610,8 +1785,12 @@ impl ParallelScanEngine {
                 }
             }
 
-            // Check for probe timeouts and handle retries
-            self.check_udp_timeouts(&mut outstanding, &mut retry_probes, &mut results);
+            // Only check timeouts when we're done sending all probes
+            // Checking timeouts while still sending causes premature timeouts
+            if !has_more_ports {
+                // Check for probe timeouts and handle retries
+                self.check_udp_timeouts(&mut outstanding, &mut retry_probes, &mut results);
+            }
 
             // Reset batch counter
             if probes_sent_this_batch >= BATCH_SIZE {
@@ -1629,17 +1808,20 @@ impl ParallelScanEngine {
                     self.rate_limiter.record_sent();
                 } else {
                     // Can't resend - mark as open|filtered
-                    results.entry(probe.port).or_insert(PortState::OpenOrFiltered);
+                    results
+                        .entry(probe.port)
+                        .or_insert(PortState::OpenOrFiltered);
                 }
             }
         }
 
         // Final wait for any remaining ICMP responses
         // This is critical for UDP scans where ICMP responses can be delayed
-        let final_wait = Duration::from_millis(200);
+        // With 50ms inter-probe delay, 2000ms ensures 100% reliability
+        let final_wait = Duration::from_millis(2000);
         let final_start = Instant::now();
         while final_start.elapsed() < final_wait {
-            match tokio_timeout(Duration::from_millis(50), icmp_rx.recv()).await {
+            match tokio_timeout(Duration::from_millis(100), icmp_rx.recv()).await {
                 Ok(Some(icmp_resp)) => {
                     // Match ICMP response to outstanding probe
                     let probe_key = (icmp_resp.orig_dst_ip, icmp_resp.orig_dst_port);
@@ -1647,13 +1829,22 @@ impl ParallelScanEngine {
                         results.insert(probe.port, icmp_resp.port_state());
                     }
                 }
-                _ => break,
+                Ok(None) => {
+                    // Channel closed - stop waiting
+                    break;
+                }
+                Err(_) => {
+                    // Timeout - continue waiting until final_wait is reached
+                    // The while condition will check if we've waited long enough
+                }
             }
         }
 
         // Mark any remaining outstanding probes as open|filtered
         for probe in outstanding.values() {
-            results.entry(probe.port).or_insert(PortState::OpenOrFiltered);
+            results
+                .entry(probe.port)
+                .or_insert(PortState::OpenOrFiltered);
         }
 
         // Signal receiver to stop
@@ -1742,7 +1933,10 @@ impl ParallelScanEngine {
         let max_retries = u32::from(self.config.max_retries);
         // UDP scans need longer timeout for ICMP responses
         // Nmap uses 1 second initial timeout; we use minimum 500ms for reliability
-        let probe_timeout = self.congestion.recommended_timeout().max(Duration::from_millis(500));
+        let probe_timeout = self
+            .congestion
+            .recommended_timeout()
+            .max(Duration::from_millis(500));
 
         let timed_out: Vec<_> = outstanding
             .iter()
@@ -1760,102 +1954,94 @@ impl ParallelScanEngine {
             } else {
                 // Max retries - mark as open|filtered (no response)
                 outstanding.remove(&key);
-                results.entry(probe.port).or_insert(PortState::OpenOrFiltered);
+                results
+                    .entry(probe.port)
+                    .or_insert(PortState::OpenOrFiltered);
                 self.congestion.on_packet_lost();
             }
         }
     }
 
     /// Starts the ICMP receiver task for UDP scanning.
+    ///
+    /// Uses a pre-created `AF_PACKET` socket with BPF filter for ICMP reception.
+    /// This matches nmap's approach of using libpcap with a BPF filter to capture
+    /// only ICMP packets destined to the local IP address.
     fn start_icmp_receiver_task(
         &self,
+        icmp_socket: Option<Arc<SimpleAfPacket>>,
         icmp_tx: mpsc::UnboundedSender<IcmpResponse>,
         ready_tx: oneshot::Sender<()>,
     ) -> JoinHandle<()> {
-        // Use AF_PACKET socket for ICMP reception (same approach as pcap/nmap)
-        // AF_PACKET receives all Ethernet frames including ICMP responses
-        let packet_socket = self.packet_socket.clone();
         let local_addr = self.local_addr;
 
-        tokio::spawn(async move {
-            // Only use AF_PACKET for ICMP reception
-            if let Some(pkt_sock) = packet_socket {
-                // Use a single continuous blocking task to avoid gaps in packet reception
-                let result = tokio::task::spawn_blocking(move || {
-                    let mut total_icmp_received = 0u32;
-                    let mut total_packets_checked = 0u32;
-                    let mut ready_tx = Some(ready_tx);
+        // Use std::thread to start the receiver immediately, not spawn_blocking
+        // This ensures the receiver is truly ready before we return
+        std::thread::spawn(move || {
+            // Use the pre-created ICMP socket with BPF filter
+            if let Some(sock) = icmp_socket {
+                let mut ready_tx = Some(ready_tx);
 
-                    loop {
-                        // Check if channel is closed before receiving
-                        if icmp_tx.is_closed() {
-                            break;
-                        }
+                loop {
+                    // Check if channel is closed before receiving
+                    if icmp_tx.is_closed() {
+                        break;
+                    }
 
-                        // Signal ready AFTER we're actually in the receive loop
-                        // This ensures we're polling before the sender starts
-                        if let Some(tx) = ready_tx.take() {
-                            let _ = tx.send(());
-                        }
+                    // Signal ready AFTER we're actually in the receive loop
+                    // This ensures we're polling before the sender starts
+                    if let Some(tx) = ready_tx.take() {
+                        let _ = tx.send(());
+                    }
 
-                        match pkt_sock.recv_packet() {
-                            Ok(Some(data)) => {
-                                // Skip Ethernet header (14 bytes)
-                                let ip_data = if data.len() > ETH_HEADER_SIZE {
-                                    &data[ETH_HEADER_SIZE..]
-                                } else {
-                                    &data[..]
-                                };
-                                total_packets_checked += 1;
+                    match sock.recv_packet() {
+                        Ok(Some(data)) => {
+                            // Skip Ethernet header (14 bytes) to get IP packet
+                            let ip_data = if data.len() > ETH_HEADER_SIZE {
+                                &data[ETH_HEADER_SIZE..]
+                            } else {
+                                &data[..]
+                            };
 
-                                // Quick protocol check before full parsing
-                                // IP protocol field is at byte 9
-                                if ip_data.len() > 9 && ip_data[9] == 1 {
-                                    // This is an ICMP packet, try to parse
-                                    if let Some(icmp) =
-                                        Self::parse_icmp_response(ip_data, local_addr)
-                                    {
-                                        total_icmp_received += 1;
-                                        if icmp_tx.send(icmp).is_err() {
-                                            break; // Channel closed
-                                        }
-                                    }
+                            // BPF filter already ensured this is ICMP destined to us
+                            // But we still need to parse and validate the ICMP response
+                            if let Some(icmp) = Self::parse_icmp_response(ip_data, local_addr) {
+                                if icmp_tx.send(icmp).is_err() {
+                                    break; // Channel closed
                                 }
                             }
-                            Ok(None) => {
-                                // Timeout on blocking socket (SO_RCVTIMEO)
-                                // Check if channel is still open and continue waiting
+                        }
+                        Ok(None) => {
+                            // Timeout on blocking socket (SO_RCVTIMEO)
+                            // Check if channel is still open and continue waiting
+                            if icmp_tx.is_closed() {
+                                break;
+                            }
+                        }
+                        Err(e) => {
+                            // Error receiving - check if it's a timeout
+                            if e.kind() == io::ErrorKind::WouldBlock
+                                || e.raw_os_error() == Some(libc::EAGAIN)
+                            {
+                                // Timeout - check if channel is still open
+                                if icmp_tx.is_closed() {
+                                    break;
+                                }
+                            } else {
+                                // Other error - brief pause before retry
+                                std::thread::sleep(Duration::from_millis(10));
                                 if icmp_tx.is_closed() {
                                     break;
                                 }
                             }
-                            Err(e) => {
-                                // Error receiving - check if it's a timeout
-                                if e.kind() == io::ErrorKind::WouldBlock || e.raw_os_error() == Some(libc::EAGAIN) {
-                                    // Timeout - check if channel is still open
-                                    if icmp_tx.is_closed() {
-                                        break;
-                                    }
-                                } else {
-                                    // Other error - brief pause before retry
-                                    std::thread::sleep(Duration::from_millis(10));
-                                    if icmp_tx.is_closed() {
-                                        break;
-                                    }
-                                }
-                            }
                         }
                     }
-                    (total_icmp_received, total_packets_checked)
-                })
-                .await;
-
-                if let Ok((icmp_count, packet_count)) = result {
-                    let _ = icmp_count;
-                    let _ = packet_count;
                 }
             }
-        })
+        });
+
+        // Return a dummy handle since we're using std::thread
+        tokio::spawn(async {})
     }
 
     /// Parses an ICMP response from raw packet data.
@@ -1935,7 +2121,8 @@ impl ParallelScanEngine {
         }
 
         // Parse inner UDP header - get destination port (the port we probed)
-        let orig_dst_port = u16::from_be_bytes([data[inner_udp_start + 2], data[inner_udp_start + 3]]);
+        let orig_dst_port =
+            u16::from_be_bytes([data[inner_udp_start + 2], data[inner_udp_start + 3]]);
 
         // Get original destination IP (the target we probed) - bytes 16-19 of inner IP header
         let orig_dst_ip = Ipv4Addr::new(

@@ -1029,15 +1029,13 @@ impl ScanOrchestrator {
                         }
                     }
                 }
-                ScanType::TcpAck => {
-                    match TcpAckScanner::new(local_addr, scanner_config.clone()) {
-                        Ok(scanner) => scanner.scan_ports_batch(target_ip, ports),
-                        Err(e) => {
-                            warn!(error = %e, "Failed to create ACK scanner");
-                            continue;
-                        }
+                ScanType::TcpAck => match TcpAckScanner::new(local_addr, scanner_config.clone()) {
+                    Ok(scanner) => scanner.scan_ports_batch(target_ip, ports),
+                    Err(e) => {
+                        warn!(error = %e, "Failed to create ACK scanner");
+                        continue;
                     }
-                }
+                },
                 ScanType::TcpWindow => {
                     match TcpWindowScanner::new(local_addr, scanner_config.clone()) {
                         Ok(scanner) => scanner.scan_ports_batch(target_ip, ports),
@@ -1231,7 +1229,10 @@ impl ScanOrchestrator {
             // Convert to PortResult format
             let mut port_results = Vec::new();
             for port in ports {
-                let common_state = port_states.get(port).copied().unwrap_or(rustnmap_common::PortState::Filtered);
+                let common_state = port_states
+                    .get(port)
+                    .copied()
+                    .unwrap_or(rustnmap_common::PortState::Filtered);
                 let state = match common_state {
                     rustnmap_common::PortState::Open => PortState::Open,
                     rustnmap_common::PortState::Closed => PortState::Closed,

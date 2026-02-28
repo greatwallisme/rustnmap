@@ -232,6 +232,10 @@ impl UdpScanner {
     /// # Errors
     ///
     /// Returns an error if packet transmission fails.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "UDP scan requires complex response handling"
+    )]
     fn send_udp_probe_v4(&self, dst_addr: Ipv4Addr, dst_port: Port) -> ScanResult<PortState> {
         // Generate a random source port
         let src_port = Self::generate_source_port();
@@ -253,19 +257,12 @@ impl UdpScanner {
             })?;
 
         // Wait for response with timeout
-        // Use a minimum timeout to ensure ICMP responses have time to arrive
+        // Use a minimum timeout of 3000ms to ensure ICMP responses have time to arrive
+        // This is based on nmap's behavior which uses adaptive RTT timing and retransmissions
+        // ICMP Port Unreachable responses can be delayed due to rate limiting
         let base_timeout = self.config.initial_rtt;
-        let timeout = base_timeout.max(Duration::from_millis(500));
+        let timeout = base_timeout.max(Duration::from_millis(3000));
 
-        // Try the `AF_PACKET` engine first for the full timeout to capture `ICMP` errors
-        if let Some(icmp_resp) = self.recv_icmp_from_packet_engine(timeout) {
-            if let Some(state) = Self::handle_icmp_response_v4(icmp_resp, dst_addr, dst_port) {
-                return Ok(state);
-            }
-            // `ICMP` response for different probe - continue to socket checks
-        }
-
-        // If no matching `ICMP` response from packet engine, try the sockets
         let mut recv_buf = vec![0u8; 65535];
         let start = std::time::Instant::now();
 
@@ -275,10 +272,36 @@ impl UdpScanner {
                 return Ok(PortState::OpenOrFiltered);
             }
 
-            // Try `ICMP` socket for backward compatibility
+            let remaining = timeout - elapsed;
+
+            // Try AF_PACKET engine first for ICMP errors (if available)
+            if let Some(engine) = &self.packet_engine_v4 {
+                // Non-blocking check for ICMP packet
+                if let Ok(Some(packet)) = engine.recv_packet() {
+                    let data = packet.data();
+                    // Skip Ethernet header (14 bytes) to get IP packet
+                    if data.len() > ETH_HEADER_SIZE {
+                        let ip_packet = &data[ETH_HEADER_SIZE..];
+                        // Check if this is an ICMP packet (protocol = 1)
+                        if ip_packet.len() >= 10 && ip_packet[9] == 1 {
+                            if let Some(icmp_resp) = parse_icmp_response(ip_packet) {
+                                if let Some(state) =
+                                    Self::handle_icmp_response_v4(icmp_resp, dst_addr, dst_port)
+                                {
+                                    return Ok(state);
+                                }
+                                // Non-matching ICMP - continue
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Try ICMP socket for ICMP error responses
+            let icmp_timeout = Duration::from_millis(50).min(remaining);
             match self
                 .socket_icmp_v4
-                .recv_packet(recv_buf.as_mut_slice(), Some(Duration::from_millis(50)))
+                .recv_packet(recv_buf.as_mut_slice(), Some(icmp_timeout))
             {
                 Ok(len) if len > 0 => {
                     if let Some(icmp_resp) = parse_icmp_response(&recv_buf[..len]) {
@@ -294,10 +317,7 @@ impl UdpScanner {
                     if matches!(
                         e.kind(),
                         io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
-                    ) =>
-                {
-                    // Continue to UDP socket check
-                }
+                    ) => {}
                 Err(e) => {
                     return Err(rustnmap_common::ScanError::Network(
                         rustnmap_common::Error::Network(
@@ -307,10 +327,11 @@ impl UdpScanner {
                 }
             }
 
-            // Try UDP socket for actual UDP responses (non-blocking check)
+            // Try UDP socket for actual UDP responses
+            let udp_timeout = Duration::from_millis(50).min(remaining);
             match self
                 .socket_v4
-                .recv_packet(recv_buf.as_mut_slice(), Some(Duration::from_millis(50)))
+                .recv_packet(recv_buf.as_mut_slice(), Some(udp_timeout))
             {
                 Ok(len) if len > 0 => {
                     let src_ip = if len >= 20 {
@@ -320,7 +341,15 @@ impl UdpScanner {
                         continue;
                     };
 
+                    // Skip packets from our own IP
                     if src_ip == self.local_addr_v4 {
+                        continue;
+                    }
+
+                    // CRITICAL: Verify the UDP response is from the TARGET IP
+                    // Without this check, any UDP packet from any host with matching
+                    // source port would be incorrectly treated as "open"
+                    if src_ip != dst_addr {
                         continue;
                     }
 
@@ -335,12 +364,8 @@ impl UdpScanner {
                     if e.kind() == io::ErrorKind::WouldBlock
                         || e.kind() == io::ErrorKind::TimedOut =>
                 {
-                    // Continue waiting, but check if timeout expired
-                    if start.elapsed() >= timeout {
-                        return Ok(PortState::OpenOrFiltered);
-                    }
                     // Small sleep to avoid busy-waiting
-                    std::thread::sleep(Duration::from_millis(50));
+                    std::thread::sleep(Duration::from_millis(10));
                 }
                 Err(e) => {
                     return Err(rustnmap_common::ScanError::Network(
@@ -417,6 +442,34 @@ impl UdpScanner {
                 .recv_packet(recv_buf.as_mut_slice(), Some(remaining_timeout))
             {
                 Ok(len) if len > 0 => {
+                    // Extract source IPv6 address from packet (bytes 8-23)
+                    // IPv6 header format: version/traffic/flow (4 bytes) + payload len/next hop/hop limit (4 bytes)
+                    // + source address (16 bytes at offset 8) + dest address (16 bytes at offset 24)
+                    let src_ip = if len >= 24 {
+                        let mut addr_bytes = [0u8; 16];
+                        addr_bytes.copy_from_slice(&recv_buf[8..24]);
+                        std::net::Ipv6Addr::from(addr_bytes)
+                    } else {
+                        continue;
+                    };
+
+                    // CRITICAL: Verify the UDP response is from the TARGET IP
+                    // Without this check, any UDP packet from any host with matching
+                    // source port would be incorrectly treated as "open"
+                    if src_ip != dst_addr {
+                        // Check for ICMPv6 response before continuing
+                        if let Some((code, orig_ip, orig_port)) =
+                            parse_icmpv6_unreachable(&recv_buf[..len])
+                        {
+                            if let Some(state) = Self::handle_icmpv6_response(
+                                code, orig_ip, orig_port, dst_addr, dst_port,
+                            ) {
+                                return Ok(state);
+                            }
+                        }
+                        continue;
+                    }
+
                     // Check for UDP response first
                     if let Some((src_port, _payload)) = parse_ipv6_udp_response(&recv_buf[..len]) {
                         // Verify this is a response to our probe
@@ -595,50 +648,6 @@ impl UdpScanner {
             let ring_config = RingConfig::default();
             if AfPacketEngine::new(if_name, ring_config).is_ok() {
                 return Some(if_name.to_string());
-            }
-        }
-
-        None
-    }
-
-    /// Receives an `ICMP` packet from the `AF_PACKET` engine.
-    ///
-    /// This captures all Ethernet frames including `ICMP` error responses
-    /// that are not delivered to protocol-specific raw sockets.
-    fn recv_icmp_from_packet_engine(&self, timeout: Duration) -> Option<IcmpResponse> {
-        let Some(engine) = &self.packet_engine_v4 else {
-            return None;
-        };
-
-        let start = std::time::Instant::now();
-
-        // Use a minimum timeout of 500ms to ensure ICMP responses have time to arrive
-        let effective_timeout = timeout.max(Duration::from_millis(500));
-
-        // Poll for packets with timeout
-        while start.elapsed() < effective_timeout {
-            match engine.recv_packet() {
-                Ok(Some(packet)) => {
-                    let data = packet.data();
-                    // Skip Ethernet header (14 bytes) to get IP packet
-                    if data.len() > ETH_HEADER_SIZE {
-                        let ip_packet = &data[ETH_HEADER_SIZE..];
-                        // Check if this is an ICMP packet (protocol = 1)
-                        if ip_packet.len() >= 10 && ip_packet[9] == 1 {
-                            if let Some(icmp_resp) = parse_icmp_response(ip_packet) {
-                                return Some(icmp_resp);
-                            }
-                        }
-                    }
-                }
-                Ok(None) => {
-                    // No packet available, delay before retry
-                    std::thread::sleep(Duration::from_millis(50));
-                }
-                Err(_) => {
-                    // Error receiving, stop polling
-                    return None;
-                }
             }
         }
 
