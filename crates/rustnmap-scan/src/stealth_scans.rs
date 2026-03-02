@@ -62,6 +62,105 @@ const ETH_P_ALL: u16 = 0x0003;
 /// Ethernet header size.
 const ETH_HDR_SIZE: usize = 14;
 
+// ============================================================================
+// Adaptive Timing (nmap-style RTT estimation)
+// ============================================================================
+
+/// Adaptive timing for stealth scans using nmap's RTT estimation algorithm.
+///
+/// Uses EWMA (Exponentially Weighted Moving Average) for RTT tracking,
+/// following RFC 2988: `SRTT = (7/8)*SRTT + (1/8)*RTT`
+///
+/// The timeout is calculated as: `SRTT + 4*RTTVAR`, clamped to nmap's bounds
+/// (100ms to 10000ms).
+///
+/// See nmap `timing.cc:adjust_timeouts2` (lines 99-167).
+#[derive(Debug)]
+struct AdaptiveTiming {
+    /// Smoothed RTT in microseconds.
+    srtt_micros: u64,
+    /// RTT variance in microseconds.
+    rttvar_micros: u64,
+    /// Whether this is the first RTT measurement.
+    first_measurement: bool,
+}
+
+impl AdaptiveTiming {
+    /// Creates new adaptive timing with nmap T3 (Normal) defaults.
+    ///
+    /// Initial values:
+    /// - SRTT: 1000ms (`INITIAL_RTT_TIMEOUT`)
+    /// - RTTVAR: 1000ms (clamped between 5ms-2000ms)
+    const fn new() -> Self {
+        Self {
+            // Nmap INITIAL_RTT_TIMEOUT = 1000ms
+            srtt_micros: 1_000_000,
+            // Nmap: rttvar = box(5000, 2000000, srtt) = clamp(srtt, 5ms, 2000ms)
+            rttvar_micros: 1_000_000,
+            first_measurement: true,
+        }
+    }
+
+    /// Updates RTT estimate using EWMA.
+    ///
+    /// For the first measurement, uses the measurement directly (nmap behavior).
+    /// See nmap `timing.cc:adjust_timeouts2` (lines 99-167).
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "RTT values are bounded to reasonable network latencies (< 30s)"
+    )]
+    fn update_rtt(&mut self, rtt: Duration) {
+        let rtt_micros = rtt.as_micros() as u64;
+
+        if self.first_measurement {
+            // First measurement: use RTT directly (nmap timing.cc:119-124)
+            self.srtt_micros = rtt_micros;
+            // RTTVAR = clamp(RTT, 5ms, 2000ms) - nmap: box(5000, 2000000, delta)
+            self.rttvar_micros = rtt_micros.clamp(5_000, 2_000_000);
+            self.first_measurement = false;
+            return;
+        }
+
+        // Subsequent measurements: RFC 2988 EWMA
+        // SRTT = (7/8)*SRTT + (1/8)*RTT
+        let new_srtt = (7 * self.srtt_micros + rtt_micros) / 8;
+        // RTTVAR = (3/4)*RTTVAR + (1/4)*|SRTT-RTT|
+        let diff = new_srtt.abs_diff(rtt_micros);
+        let new_rttvar = (3 * self.rttvar_micros + diff) / 4;
+
+        // Clamp RTTVAR to nmap's bounds: 5ms to 2000ms
+        self.rttvar_micros = new_rttvar.clamp(5_000, 2_000_000);
+        self.srtt_micros = new_srtt;
+    }
+
+    /// Returns the recommended timeout.
+    ///
+    /// Before any RTT measurements, returns the initial RTT (1000ms).
+    /// After measurements, returns `SRTT + 4*RTTVAR`, clamped to nmap's bounds
+    /// (`MIN_RTT_TIMEOUT` 100ms to `MAX_RTT_TIMEOUT` 10000ms).
+    ///
+    /// This matches nmap's behavior in `timing.cc`:
+    /// - If `to.srtt == -1`: use `initialRttTimeout`
+    /// - Otherwise: use `srtt + 4*rttvar`
+    #[must_use]
+    fn recommended_timeout(&self) -> Duration {
+        if self.first_measurement {
+            // No measurements yet - use initial RTT (nmap behavior)
+            return Duration::from_micros(self.srtt_micros);
+        }
+        let timeout_micros = self.srtt_micros.saturating_add(4 * self.rttvar_micros);
+        // Clamp to nmap's MIN_RTT_TIMEOUT (100ms) and MAX_RTT_TIMEOUT (10000ms)
+        let clamped = timeout_micros.clamp(100_000, 10_000_000);
+        Duration::from_micros(clamped)
+    }
+}
+
+impl Default for AdaptiveTiming {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Simple `AF_PACKET` socket for L2 packet capture.
 /// Uses standard `recvfrom` (not `PACKET_MMAP`) for simplicity.
 #[derive(Debug)]
@@ -630,7 +729,13 @@ impl TcpFinScanner {
     /// Generates a random source port.
     #[must_use]
     fn generate_source_port() -> Port {
-        let offset = (std::process::id() % 1000) as u16;
+        // Mix PID with current time for randomness
+        let pid_component = (std::process::id() % 1000) as u16;
+        let time_component = (std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .subsec_nanos() % 1000) as u16;
+        let offset = (pid_component + time_component) % 1000;
         SOURCE_PORT_START + offset
     }
 
@@ -677,12 +782,33 @@ impl TcpFinScanner {
     ///
     /// # Errors
     ///
-    /// Returns an error if:
-    /// - Packet transmission fails due to network issues
-    /// - Raw socket receive fails with a non-timeout error
+    /// Scans multiple ports in batch mode with nmap-style retransmissions.
+    ///
+    /// Sends FIN probes, collects responses, and resends probes for unresponsive
+    /// ports up to `max_retries` times with exponential backoff.
+    /// This handles rate limiting and packet loss like nmap does.
+    ///
+    /// # Arguments
+    ///
+    /// * `dst_addr` - Target IP address
+    /// * `ports` - List of ports to scan
+    ///
+    /// # Returns
+    ///
+    /// A `ScanResult` containing a map of port numbers to port states.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if packet transmission or reception fails.
+    ///
+    /// # Port State Mapping
+    ///
+    /// - RST received -> Closed
+    /// - ICMP unreachable -> Filtered (or Closed for Port Unreachable)
+    /// - No response after retries -> Open|Filtered
     #[expect(
         clippy::too_many_lines,
-        reason = "Batch scanning requires handling send, receive, and result collection in one method for clarity"
+        reason = "Batch scanning with retransmissions requires handling send, receive, retry, and result collection in one method for clarity"
     )]
     pub fn scan_ports_batch(
         &self,
@@ -696,30 +822,82 @@ impl TcpFinScanner {
         // Limit batch size to prevent memory issues
         let ports_to_scan: Vec<Port> = ports.iter().copied().take(MAX_BATCH_SIZE).collect();
 
-        // Phase 1: Send all probes
-        // Forward map: (dst_port, src_port) -> (seq, sent_time)
-        let mut outstanding: HashMap<(Port, u16), (u32, Instant)> = HashMap::new();
-        // Reverse map: src_port -> dst_port for O(1) TCP response matching
-        let mut src_to_dst: HashMap<u16, Port> = HashMap::new();
-        // Port tracking: dst_port -> set of src_ports for O(1) ICMP matching
-        let mut port_srcs: HashMap<Port, std::collections::HashSet<u16>> = HashMap::new();
+        // Track ports that still need responses (not yet classified)
+        let mut pending_ports: std::collections::HashSet<Port> =
+            ports_to_scan.iter().copied().collect();
+        let mut results: HashMap<Port, PortState> = HashMap::new();
 
-        for dst_port in &ports_to_scan {
-            let src_port = Self::generate_source_port();
-            let seq = Self::generate_sequence_number();
+        // Maximum retries from config (nmap default: 2, cap at 3 for stealth scans)
+        // Using a lower cap because stealth scans are more likely to be rate-limited
+        let max_retries = u32::from(self.config.max_retries.min(3));
 
-            // Handle decoy scanning: send from multiple source IPs
-            if let Some(scheduler) = &self.decoy_scheduler {
-                let mut scheduler = scheduler.clone();
-                scheduler.reset();
+        // Adaptive timing for nmap-style RTT estimation
+        let mut timing = AdaptiveTiming::new();
 
-                while let Some(src_ip) = scheduler.next_source() {
-                    let src_ipv4 = match src_ip {
-                        IpAddr::V4(addr) => addr,
-                        IpAddr::V6(_) => continue, // Skip IPv6 for now
-                    };
+        // Flush any stale packets from the AF_PACKET socket BEFORE starting
+        if let Some(ref pkt_sock) = self.packet_socket {
+            pkt_sock.flush_buffer();
+        }
 
-                    let packet = TcpPacketBuilder::new(src_ipv4, dst_addr, src_port, *dst_port)
+        // Nmap-style retry loop with adaptive timeout
+        for _retry_round in 0..=max_retries {
+            if pending_ports.is_empty() {
+                break; // All ports have been classified
+            }
+
+            // Phase 1: Send probes for pending ports only
+            // Forward map: (dst_port, src_port) -> (seq, sent_time)
+            let mut outstanding: HashMap<(Port, u16), (u32, Instant)> = HashMap::new();
+            // Reverse map: src_port -> dst_port for O(1) TCP response matching
+            let mut src_to_dst: HashMap<u16, Port> = HashMap::new();
+            // Port tracking: dst_port -> set of src_ports for O(1) ICMP matching
+            let mut port_srcs: HashMap<Port, std::collections::HashSet<u16>> = HashMap::new();
+
+            for dst_port in &pending_ports {
+                let src_port = Self::generate_source_port();
+                let seq = Self::generate_sequence_number();
+
+                // Handle decoy scanning: send from multiple source IPs
+                if let Some(scheduler) = &self.decoy_scheduler {
+                    let mut scheduler = scheduler.clone();
+                    scheduler.reset();
+
+                    while let Some(src_ip) = scheduler.next_source() {
+                        let src_ipv4 = match src_ip {
+                            IpAddr::V4(addr) => addr,
+                            IpAddr::V6(_) => continue,
+                        };
+
+                        let packet = TcpPacketBuilder::new(src_ipv4, dst_addr, src_port, *dst_port)
+                            .seq(seq)
+                            .fin()
+                            .window(65535)
+                            .build();
+
+                        let port_sockaddr =
+                            SocketAddr::new(std::net::IpAddr::V4(dst_addr), *dst_port);
+                        self.socket
+                            .send_packet(&packet, &port_sockaddr)
+                            .map_err(|e| {
+                                rustnmap_common::ScanError::Network(
+                                    rustnmap_common::Error::Network(
+                                        rustnmap_common::error::NetworkError::SendError {
+                                            source: e,
+                                        },
+                                    ),
+                                )
+                            })?;
+
+                        // Only track probes sent from the real IP
+                        if scheduler.is_real_ip(&src_ip) {
+                            outstanding.insert((*dst_port, src_port), (seq, Instant::now()));
+                            src_to_dst.insert(src_port, *dst_port);
+                            port_srcs.entry(*dst_port).or_default().insert(src_port);
+                        }
+                    }
+                } else {
+                    // No decoy: original behavior
+                    let packet = TcpPacketBuilder::new(self.local_addr, dst_addr, src_port, *dst_port)
                         .seq(seq)
                         .fin()
                         .window(65535)
@@ -734,162 +912,134 @@ impl TcpFinScanner {
                             ))
                         })?;
 
-                    // Only track probes sent from the real IP
-                    if scheduler.is_real_ip(&src_ip) {
-                        outstanding.insert((*dst_port, src_port), (seq, Instant::now()));
-                        src_to_dst.insert(src_port, *dst_port);
-                        port_srcs.entry(*dst_port).or_default().insert(src_port);
-                    }
+                    outstanding.insert((*dst_port, src_port), (seq, Instant::now()));
+                    src_to_dst.insert(src_port, *dst_port);
+                    port_srcs.entry(*dst_port).or_default().insert(src_port);
                 }
-            } else {
-                // No decoy: original behavior
-                let packet = TcpPacketBuilder::new(self.local_addr, dst_addr, src_port, *dst_port)
-                    .seq(seq)
-                    .fin()
-                    .window(65535)
-                    .build();
-
-                let port_sockaddr = SocketAddr::new(std::net::IpAddr::V4(dst_addr), *dst_port);
-                self.socket
-                    .send_packet(&packet, &port_sockaddr)
-                    .map_err(|e| {
-                        rustnmap_common::ScanError::Network(rustnmap_common::Error::Network(
-                            rustnmap_common::error::NetworkError::SendError { source: e },
-                        ))
-                    })?;
-
-                outstanding.insert((*dst_port, src_port), (seq, Instant::now()));
-                src_to_dst.insert(src_port, *dst_port);
-                port_srcs.entry(*dst_port).or_default().insert(src_port);
-            }
-        }
-
-        // Flush any stale packets from the AF_PACKET socket before receiving responses
-        // This prevents processing stale packets from previous scans or network activity
-        if let Some(ref pkt_sock) = self.packet_socket {
-            pkt_sock.flush_buffer();
-        }
-
-        // Phase 2: Collect responses until timeout
-        let mut results: HashMap<Port, PortState> = HashMap::new();
-        let deadline = Instant::now() + self.config.initial_rtt;
-        let mut recv_buf = vec![0u8; 65535];
-        let mut _af_packet_count = 0;
-        let mut _raw_socket_count = 0;
-
-        while Instant::now() < deadline && !outstanding.is_empty() {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                break;
             }
 
-            // Try AF_PACKET first if available (L2 capture - receives all TCP responses)
-            // Use a short timeout (200ms or remaining timeout) to wait for RST responses
-            // Fall back to raw socket if packet socket is not available or times out
-            #[expect(
-                unused_assignments,
-                reason = "packet_data extends lifetime of received data"
-            )]
-            let mut packet_data = None;
-            let packet_timeout = remaining.min(Duration::from_millis(200));
-            let received = if let Some(ref pkt_sock) = self.packet_socket {
-                match pkt_sock.recv_packet_with_timeout(packet_timeout) {
-                    Ok(Some(data)) if data.len() > ETH_HDR_SIZE => {
-                        _af_packet_count += 1;
-                        packet_data = Some(data);
-                        packet_data
-                            .as_ref()
-                            .map(|d| (&d[ETH_HDR_SIZE..], d.len() - ETH_HDR_SIZE))
-                    }
-                    _ => None,
-                }
-            } else {
-                None
-            };
+            // Phase 2: Collect responses with adaptive timeout
+            // Nmap-style: timeout = SRTT + 4*RTTVAR (clamped to 100ms-10000ms)
+            let current_timeout = timing.recommended_timeout();
+            let deadline = Instant::now() + current_timeout;
+            let mut recv_buf = vec![0u8; 65535];
 
-            // Fall back to raw socket if AF_PACKET didn't receive data
-            let data = if let Some((slice, len)) = received {
-                (slice, len)
-            } else {
-                match self
-                    .socket
-                    .recv_packet(recv_buf.as_mut_slice(), Some(remaining))
-                {
-                    Ok(len) if len > 0 => {
-                        _raw_socket_count += 1;
-                        (&recv_buf[..len], len)
+            while Instant::now() < deadline && !outstanding.is_empty() {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    break;
+                }
+
+                // Try AF_PACKET first if available
+                #[expect(
+                    unused_assignments,
+                    reason = "packet_data extends lifetime of received data"
+                )]
+                let mut packet_data = None;
+                let packet_timeout = remaining.min(Duration::from_millis(200));
+                let received = if let Some(ref pkt_sock) = self.packet_socket {
+                    match pkt_sock.recv_packet_with_timeout(packet_timeout) {
+                        Ok(Some(data)) if data.len() > ETH_HDR_SIZE => {
+                            packet_data = Some(data);
+                            packet_data
+                                .as_ref()
+                                .map(|d| (&d[ETH_HDR_SIZE..], d.len() - ETH_HDR_SIZE))
+                        }
+                        _ => None,
                     }
-                    Ok(_) => continue,
-                    Err(e)
-                        if e.kind() == io::ErrorKind::WouldBlock
-                            || e.kind() == io::ErrorKind::TimedOut =>
+                } else {
+                    None
+                };
+
+                // Fall back to raw socket if AF_PACKET didn't receive data
+                let data = if let Some((slice, len)) = received {
+                    (slice, len)
+                } else {
+                    match self
+                        .socket
+                        .recv_packet(recv_buf.as_mut_slice(), Some(remaining))
                     {
-                        continue;
+                        Ok(len) if len > 0 => (&recv_buf[..len], len),
+                        Ok(_) => continue,
+                        Err(e)
+                            if e.kind() == io::ErrorKind::WouldBlock
+                                || e.kind() == io::ErrorKind::TimedOut =>
+                        {
+                            continue;
+                        }
+                        Err(e) => {
+                            return Err(rustnmap_common::ScanError::Network(
+                                rustnmap_common::Error::Network(
+                                    rustnmap_common::error::NetworkError::ReceiveError {
+                                        source: e,
+                                    },
+                                ),
+                            ))
+                        }
                     }
-                    Err(e) => {
-                        return Err(rustnmap_common::ScanError::Network(
-                            rustnmap_common::Error::Network(
-                                rustnmap_common::error::NetworkError::ReceiveError { source: e },
-                            ),
-                        ))
-                    }
-                }
-            };
+                };
 
-            // Check for TCP response
-            if let Some((flags, _seq, _ack, src_port, dst_port, src_ip)) =
-                parse_tcp_response(data.0)
-            {
-                if src_ip == dst_addr {
-                    // For stealth scans, RST responses come FROM the target port TO our source port
-                    // So we match based on dst_port (our source port) instead of src_port
-                    if let Some(scanned_port) = src_to_dst.remove(&dst_port) {
-                        let state = if (flags & tcp_flags::RST) != 0 {
-                            PortState::Closed
-                        } else {
-                            PortState::Filtered
-                        };
-                        results.insert(scanned_port, state);
-                        // O(1) removal instead of O(n) retain
-                        outstanding.remove(&(scanned_port, src_port));
-                        // Also remove from port_srcs
-                        if let Some(srcs) = port_srcs.get_mut(&scanned_port) {
-                            srcs.remove(&src_port);
-                            if srcs.is_empty() {
-                                port_srcs.remove(&scanned_port);
+                // Check for TCP response
+                if let Some((flags, _seq, _ack, src_port, dst_port, src_ip)) =
+                    parse_tcp_response(data.0)
+                {
+                    if src_ip == dst_addr {
+                        // For stealth scans, RST responses come FROM the target port TO our source port
+                        if let Some(scanned_port) = src_to_dst.remove(&dst_port) {
+                            // Update RTT estimate for adaptive timing
+                            if let Some((_, sent_time)) = outstanding.get(&(scanned_port, src_port)) {
+                                timing.update_rtt(sent_time.elapsed());
+                            }
+                            let state = if (flags & tcp_flags::RST) != 0 {
+                                PortState::Closed
+                            } else {
+                                PortState::Filtered
+                            };
+                            results.insert(scanned_port, state);
+                            pending_ports.remove(&scanned_port);
+                            outstanding.remove(&(scanned_port, src_port));
+                            if let Some(srcs) = port_srcs.get_mut(&scanned_port) {
+                                srcs.remove(&src_port);
+                                if srcs.is_empty() {
+                                    port_srcs.remove(&scanned_port);
+                                }
+                            }
+                        }
+                    }
+                } else if let Some(IcmpResponse::DestinationUnreachable {
+                    code,
+                    original_dst_ip,
+                    original_dst_port,
+                }) = parse_icmp_response(data.0)
+                {
+                    if original_dst_ip == dst_addr {
+                        if let Some(srcs) = port_srcs.remove(&original_dst_port) {
+                            // Update RTT for first src_port ( ICMP doesn't have original src_port)
+                            if let Some(&first_src) = srcs.iter().next() {
+                                if let Some((_, sent_time)) = outstanding.get(&(original_dst_port, first_src)) {
+                                    timing.update_rtt(sent_time.elapsed());
+                                }
+                            }
+                            let state = match code {
+                                IcmpUnreachableCode::PortUnreachable => PortState::Closed,
+                                _ => PortState::Filtered,
+                            };
+                            results.insert(original_dst_port, state);
+                            pending_ports.remove(&original_dst_port);
+                            for src_port in srcs {
+                                outstanding.remove(&(original_dst_port, src_port));
+                                src_to_dst.remove(&src_port);
                             }
                         }
                     }
                 }
-            } else if let Some(IcmpResponse::DestinationUnreachable {
-                code,
-                original_dst_ip,
-                original_dst_port,
-            }) = parse_icmp_response(data.0)
-            {
-                // O(1) check if we have probes for this port
-                if original_dst_ip == dst_addr {
-                    if let Some(srcs) = port_srcs.remove(&original_dst_port) {
-                        let state = match code {
-                            IcmpUnreachableCode::PortUnreachable => PortState::Closed,
-                            _ => PortState::Filtered,
-                        };
-                        results.insert(original_dst_port, state);
-                        // Remove all src_ports for this dst_port
-                        for src_port in srcs {
-                            outstanding.remove(&(original_dst_port, src_port));
-                            src_to_dst.remove(&src_port);
-                        }
-                    }
-                }
             }
+            // No artificial delay between retry rounds - nmap doesn't have this
         }
 
-        // Phase 3: Mark remaining ports as Open|Filtered (no response)
-        for (dst_port, _) in outstanding.keys() {
-            results
-                .entry(*dst_port)
-                .or_insert(PortState::OpenOrFiltered);
+        // Phase 3: Mark remaining ports as Open|Filtered (no response after all retries)
+        for port in pending_ports {
+            results.entry(port).or_insert(PortState::OpenOrFiltered);
         }
 
         Ok(results)
@@ -1158,7 +1308,13 @@ impl TcpNullScanner {
     /// Generates a random source port.
     #[must_use]
     fn generate_source_port() -> Port {
-        let offset = (std::process::id() % 1000) as u16;
+        // Mix PID with current time for randomness
+        let pid_component = (std::process::id() % 1000) as u16;
+        let time_component = (std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .subsec_nanos() % 1000) as u16;
+        let offset = (pid_component + time_component) % 1000;
         SOURCE_PORT_START + offset
     }
 
@@ -1178,18 +1334,32 @@ impl TcpNullScanner {
         now_lower.wrapping_add(pid)
     }
 
-    /// Scans multiple ports in batch mode for improved performance.
+    /// Scans multiple ports in batch mode with nmap-style retransmissions.
     ///
-    /// See [`TcpFinScanner::scan_ports_batch`] for detailed documentation.
+    /// Sends NULL probes (no flags), collects responses, and resends probes for
+    /// unresponsive ports up to `max_retries` times with exponential backoff.
+    ///
+    /// # Arguments
+    ///
+    /// * `dst_addr` - Target IP address
+    /// * `ports` - List of ports to scan
+    ///
+    /// # Returns
+    ///
+    /// A `ScanResult` containing a map of port numbers to port states.
     ///
     /// # Errors
     ///
-    /// Returns an error if:
-    /// - Packet transmission fails due to network issues
-    /// - Raw socket receive fails with a non-timeout error
+    /// Returns an error if packet transmission or reception fails.
+    ///
+    /// # Port State Mapping
+    ///
+    /// - RST received -> Closed
+    /// - ICMP unreachable -> Filtered (or Closed for Port Unreachable)
+    /// - No response after retries -> Open|Filtered
     #[expect(
         clippy::too_many_lines,
-        reason = "Batch scanning requires handling send, receive, and result collection in one method for clarity"
+        reason = "Batch scanning with retransmissions requires handling send, receive, retry, and result collection in one method for clarity"
     )]
     pub fn scan_ports_batch(
         &self,
@@ -1200,31 +1370,79 @@ impl TcpNullScanner {
             return Ok(HashMap::new());
         }
 
+        // Limit batch size to prevent memory issues
         let ports_to_scan: Vec<Port> = ports.iter().copied().take(MAX_BATCH_SIZE).collect();
-        // Forward map: (dst_port, src_port) -> (seq, sent_time)
-        let mut outstanding: HashMap<(Port, u16), (u32, Instant)> = HashMap::new();
-        // Reverse map: src_port -> dst_port for O(1) TCP response matching
-        let mut src_to_dst: HashMap<u16, Port> = HashMap::new();
-        // Port tracking: dst_port -> set of src_ports for O(1) ICMP matching
-        let mut port_srcs: HashMap<Port, std::collections::HashSet<u16>> = HashMap::new();
 
-        // Phase 1: Send all probes (NULL = no flags)
-        for dst_port in &ports_to_scan {
-            let src_port = Self::generate_source_port();
-            let seq = Self::generate_sequence_number();
+        // Track ports that still need responses (not yet classified)
+        let mut pending_ports: std::collections::HashSet<Port> =
+            ports_to_scan.iter().copied().collect();
+        let mut results: HashMap<Port, PortState> = HashMap::new();
 
-            // Handle decoy scanning: send from multiple source IPs
-            if let Some(scheduler) = &self.decoy_scheduler {
-                let mut scheduler = scheduler.clone();
-                scheduler.reset();
+        // Maximum retries from config (nmap default: 2, cap at 3 for stealth scans)
+        let max_retries = u32::from(self.config.max_retries.min(3));
 
-                while let Some(src_ip) = scheduler.next_source() {
-                    let src_ipv4 = match src_ip {
-                        IpAddr::V4(addr) => addr,
-                        IpAddr::V6(_) => continue,
-                    };
+        // Adaptive timing for nmap-style RTT estimation
+        let mut timing = AdaptiveTiming::new();
 
-                    let packet = TcpPacketBuilder::new(src_ipv4, dst_addr, src_port, *dst_port)
+        // Flush any stale packets from the AF_PACKET socket BEFORE starting
+        if let Some(ref pkt_sock) = self.packet_socket {
+            pkt_sock.flush_buffer();
+        }
+
+        // Nmap-style retry loop with adaptive timeout
+        for _retry_round in 0..=max_retries {
+            if pending_ports.is_empty() {
+                break; // All ports have been classified
+            }
+
+            // Phase 1: Send probes for pending ports only
+            let mut outstanding: HashMap<(Port, u16), (u32, Instant)> = HashMap::new();
+            let mut src_to_dst: HashMap<u16, Port> = HashMap::new();
+            let mut port_srcs: HashMap<Port, std::collections::HashSet<u16>> = HashMap::new();
+
+            for dst_port in &pending_ports {
+                let src_port = Self::generate_source_port();
+                let seq = Self::generate_sequence_number();
+
+                // Handle decoy scanning: send from multiple source IPs
+                if let Some(scheduler) = &self.decoy_scheduler {
+                    let mut scheduler = scheduler.clone();
+                    scheduler.reset();
+
+                    while let Some(src_ip) = scheduler.next_source() {
+                        let src_ipv4 = match src_ip {
+                            IpAddr::V4(addr) => addr,
+                            IpAddr::V6(_) => continue,
+                        };
+
+                        // NULL scan: no flags set
+                        let packet = TcpPacketBuilder::new(src_ipv4, dst_addr, src_port, *dst_port)
+                            .seq(seq)
+                            .window(65535)
+                            .build();
+
+                        let port_sockaddr =
+                            SocketAddr::new(std::net::IpAddr::V4(dst_addr), *dst_port);
+                        self.socket
+                            .send_packet(&packet, &port_sockaddr)
+                            .map_err(|e| {
+                                rustnmap_common::ScanError::Network(
+                                    rustnmap_common::Error::Network(
+                                        rustnmap_common::error::NetworkError::SendError {
+                                            source: e,
+                                        },
+                                    ),
+                                )
+                            })?;
+
+                        if scheduler.is_real_ip(&src_ip) {
+                            outstanding.insert((*dst_port, src_port), (seq, Instant::now()));
+                            src_to_dst.insert(src_port, *dst_port);
+                            port_srcs.entry(*dst_port).or_default().insert(src_port);
+                        }
+                    }
+                } else {
+                    let packet = TcpPacketBuilder::new(self.local_addr, dst_addr, src_port, *dst_port)
                         .seq(seq)
                         .window(65535)
                         .build();
@@ -1238,155 +1456,130 @@ impl TcpNullScanner {
                             ))
                         })?;
 
-                    // Only track probes sent from the real IP
-                    if scheduler.is_real_ip(&src_ip) {
-                        outstanding.insert((*dst_port, src_port), (seq, Instant::now()));
-                        src_to_dst.insert(src_port, *dst_port);
-                        port_srcs.entry(*dst_port).or_default().insert(src_port);
-                    }
+                    outstanding.insert((*dst_port, src_port), (seq, Instant::now()));
+                    src_to_dst.insert(src_port, *dst_port);
+                    port_srcs.entry(*dst_port).or_default().insert(src_port);
                 }
-            } else {
-                // No decoy: original behavior
-                let packet = TcpPacketBuilder::new(self.local_addr, dst_addr, src_port, *dst_port)
-                    .seq(seq)
-                    .window(65535)
-                    .build();
-
-                let port_sockaddr = SocketAddr::new(std::net::IpAddr::V4(dst_addr), *dst_port);
-                self.socket
-                    .send_packet(&packet, &port_sockaddr)
-                    .map_err(|e| {
-                        rustnmap_common::ScanError::Network(rustnmap_common::Error::Network(
-                            rustnmap_common::error::NetworkError::SendError { source: e },
-                        ))
-                    })?;
-
-                outstanding.insert((*dst_port, src_port), (seq, Instant::now()));
-                src_to_dst.insert(src_port, *dst_port);
-                port_srcs.entry(*dst_port).or_default().insert(src_port);
-            }
-        }
-
-        // Flush any stale packets from the AF_PACKET socket before receiving responses
-        // This prevents processing stale packets from previous scans or network activity
-        if let Some(ref pkt_sock) = self.packet_socket {
-            pkt_sock.flush_buffer();
-        }
-
-        // Phase 2: Collect responses
-        let mut results: HashMap<Port, PortState> = HashMap::new();
-        let deadline = Instant::now() + self.config.initial_rtt;
-        let mut recv_buf = vec![0u8; 65535];
-        let mut _af_packet_count = 0;
-        let mut _raw_socket_count = 0;
-
-        while Instant::now() < deadline && !outstanding.is_empty() {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                break;
             }
 
-            // Try AF_PACKET first if available (L2 capture - receives all TCP responses)
-            // Use a short timeout (200ms or remaining timeout) to wait for RST responses
-            // Fall back to raw socket if packet socket is not available or times out
-            #[expect(
-                unused_assignments,
-                reason = "packet_data extends lifetime of received data"
-            )]
-            let mut packet_data = None;
-            let packet_timeout = remaining.min(Duration::from_millis(200));
-            let received = if let Some(ref pkt_sock) = self.packet_socket {
-                match pkt_sock.recv_packet_with_timeout(packet_timeout) {
-                    Ok(Some(data)) if data.len() > ETH_HDR_SIZE => {
-                        _af_packet_count += 1;
-                        packet_data = Some(data);
-                        packet_data
-                            .as_ref()
-                            .map(|d| (&d[ETH_HDR_SIZE..], d.len() - ETH_HDR_SIZE))
-                    }
-                    _ => None,
-                }
-            } else {
-                None
-            };
+            // Phase 2: Collect responses with adaptive timeout
+            // Nmap-style: timeout = SRTT + 4*RTTVAR (clamped to 100ms-10000ms)
+            let current_timeout = timing.recommended_timeout();
+            let deadline = Instant::now() + current_timeout;
+            let mut recv_buf = vec![0u8; 65535];
 
-            // Fall back to raw socket if AF_PACKET didn't receive data
-            let data = if let Some((slice, len)) = received {
-                (slice, len)
-            } else {
-                match self
-                    .socket
-                    .recv_packet(recv_buf.as_mut_slice(), Some(remaining))
-                {
-                    Ok(len) if len > 0 => {
-                        _raw_socket_count += 1;
-                        (&recv_buf[..len], len)
+            while Instant::now() < deadline && !outstanding.is_empty() {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    break;
+                }
+
+                #[expect(
+                    unused_assignments,
+                    reason = "packet_data extends lifetime of received data"
+                )]
+                let mut packet_data = None;
+                let packet_timeout = remaining.min(Duration::from_millis(200));
+                let received = if let Some(ref pkt_sock) = self.packet_socket {
+                    match pkt_sock.recv_packet_with_timeout(packet_timeout) {
+                        Ok(Some(data)) if data.len() > ETH_HDR_SIZE => {
+                            packet_data = Some(data);
+                            packet_data
+                                .as_ref()
+                                .map(|d| (&d[ETH_HDR_SIZE..], d.len() - ETH_HDR_SIZE))
+                        }
+                        _ => None,
                     }
-                    Ok(_) => continue,
-                    Err(e)
-                        if e.kind() == io::ErrorKind::WouldBlock
-                            || e.kind() == io::ErrorKind::TimedOut =>
+                } else {
+                    None
+                };
+
+                let data = if let Some((slice, len)) = received {
+                    (slice, len)
+                } else {
+                    match self
+                        .socket
+                        .recv_packet(recv_buf.as_mut_slice(), Some(remaining))
                     {
-                        continue;
+                        Ok(len) if len > 0 => (&recv_buf[..len], len),
+                        Ok(_) => continue,
+                        Err(e)
+                            if e.kind() == io::ErrorKind::WouldBlock
+                                || e.kind() == io::ErrorKind::TimedOut =>
+                        {
+                            continue;
+                        }
+                        Err(e) => {
+                            return Err(rustnmap_common::ScanError::Network(
+                                rustnmap_common::Error::Network(
+                                    rustnmap_common::error::NetworkError::ReceiveError {
+                                        source: e,
+                                    },
+                                ),
+                            ))
+                        }
                     }
-                    Err(e) => {
-                        return Err(rustnmap_common::ScanError::Network(
-                            rustnmap_common::Error::Network(
-                                rustnmap_common::error::NetworkError::ReceiveError { source: e },
-                            ),
-                        ))
-                    }
-                }
-            };
+                };
 
-            if let Some((flags, _seq, _ack, src_port, _dst_port, src_ip)) =
-                parse_tcp_response(data.0)
-            {
-                if src_ip == dst_addr {
-                    // O(1) lookup
-                    if let Some(dst_port) = src_to_dst.remove(&src_port) {
-                        let state = if (flags & tcp_flags::RST) != 0 {
-                            PortState::Closed
-                        } else {
-                            PortState::Filtered
-                        };
-                        results.insert(dst_port, state);
-                        outstanding.remove(&(dst_port, src_port));
-                        if let Some(srcs) = port_srcs.get_mut(&dst_port) {
-                            srcs.remove(&src_port);
-                            if srcs.is_empty() {
-                                port_srcs.remove(&dst_port);
+                if let Some((flags, _seq, _ack, src_port, _dst_port, src_ip)) =
+                    parse_tcp_response(data.0)
+                {
+                    if src_ip == dst_addr {
+                        if let Some(dst_port) = src_to_dst.remove(&src_port) {
+                            // Update RTT estimate for adaptive timing
+                            if let Some((_, sent_time)) = outstanding.get(&(dst_port, src_port)) {
+                                timing.update_rtt(sent_time.elapsed());
+                            }
+                            let state = if (flags & tcp_flags::RST) != 0 {
+                                PortState::Closed
+                            } else {
+                                PortState::Filtered
+                            };
+                            results.insert(dst_port, state);
+                            pending_ports.remove(&dst_port);
+                            outstanding.remove(&(dst_port, src_port));
+                            if let Some(srcs) = port_srcs.get_mut(&dst_port) {
+                                srcs.remove(&src_port);
+                                if srcs.is_empty() {
+                                    port_srcs.remove(&dst_port);
+                                }
+                            }
+                        }
+                    }
+                } else if let Some(IcmpResponse::DestinationUnreachable {
+                    code,
+                    original_dst_ip,
+                    original_dst_port,
+                }) = parse_icmp_response(data.0)
+                {
+                    if original_dst_ip == dst_addr {
+                        if let Some(srcs) = port_srcs.remove(&original_dst_port) {
+                            // Update RTT for first src_port
+                            if let Some(&first_src) = srcs.iter().next() {
+                                if let Some((_, sent_time)) = outstanding.get(&(original_dst_port, first_src)) {
+                                    timing.update_rtt(sent_time.elapsed());
+                                }
+                            }
+                            let state = match code {
+                                IcmpUnreachableCode::PortUnreachable => PortState::Closed,
+                                _ => PortState::Filtered,
+                            };
+                            results.insert(original_dst_port, state);
+                            pending_ports.remove(&original_dst_port);
+                            for src_port in srcs {
+                                outstanding.remove(&(original_dst_port, src_port));
+                                src_to_dst.remove(&src_port);
                             }
                         }
                     }
                 }
-            } else if let Some(IcmpResponse::DestinationUnreachable {
-                code,
-                original_dst_ip,
-                original_dst_port,
-            }) = parse_icmp_response(data.0)
-            {
-                if original_dst_ip == dst_addr {
-                    if let Some(srcs) = port_srcs.remove(&original_dst_port) {
-                        let state = match code {
-                            IcmpUnreachableCode::PortUnreachable => PortState::Closed,
-                            _ => PortState::Filtered,
-                        };
-                        results.insert(original_dst_port, state);
-                        for src_port in srcs {
-                            outstanding.remove(&(original_dst_port, src_port));
-                            src_to_dst.remove(&src_port);
-                        }
-                    }
-                }
             }
+            // No artificial delay between retry rounds - nmap doesn't have this
         }
 
-        // Phase 3: Mark remaining as Open|Filtered
-        for (dst_port, _) in outstanding.keys() {
-            results
-                .entry(*dst_port)
-                .or_insert(PortState::OpenOrFiltered);
+        // Phase 3: Mark remaining ports as Open|Filtered (no response after all retries)
+        for port in pending_ports {
+            results.entry(port).or_insert(PortState::OpenOrFiltered);
         }
 
         Ok(results)
@@ -1658,7 +1851,13 @@ impl TcpXmasScanner {
     /// Generates a random source port.
     #[must_use]
     fn generate_source_port() -> Port {
-        let offset = (std::process::id() % 1000) as u16;
+        // Mix PID with current time for randomness
+        let pid_component = (std::process::id() % 1000) as u16;
+        let time_component = (std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .subsec_nanos() % 1000) as u16;
+        let offset = (pid_component + time_component) % 1000;
         SOURCE_PORT_START + offset
     }
 
@@ -1678,18 +1877,32 @@ impl TcpXmasScanner {
         now_lower.wrapping_add(pid)
     }
 
-    /// Scans multiple ports in batch mode for improved performance.
+    /// Scans multiple ports in batch mode with nmap-style retransmissions.
     ///
-    /// See [`TcpFinScanner::scan_ports_batch`] for detailed documentation.
+    /// Sends XMAS probes (FIN+PSH+URG flags), collects responses, and resends
+    /// probes for unresponsive ports up to `max_retries` times with exponential backoff.
+    ///
+    /// # Arguments
+    ///
+    /// * `dst_addr` - Target IP address
+    /// * `ports` - List of ports to scan
+    ///
+    /// # Returns
+    ///
+    /// A `ScanResult` containing a map of port numbers to port states.
     ///
     /// # Errors
     ///
-    /// Returns an error if:
-    /// - Packet transmission fails due to network issues
-    /// - Raw socket receive fails with a non-timeout error
+    /// Returns an error if packet transmission or reception fails.
+    ///
+    /// # Port State Mapping
+    ///
+    /// - RST received -> Closed
+    /// - ICMP unreachable -> Filtered (or Closed for Port Unreachable)
+    /// - No response after retries -> Open|Filtered
     #[expect(
         clippy::too_many_lines,
-        reason = "Batch scanning requires handling send, receive, and result collection in one method for clarity"
+        reason = "Batch scanning with retransmissions requires handling send, receive, retry, and result collection in one method for clarity"
     )]
     pub fn scan_ports_batch(
         &self,
@@ -1700,28 +1913,82 @@ impl TcpXmasScanner {
             return Ok(HashMap::new());
         }
 
+        // Limit batch size to prevent memory issues
         let ports_to_scan: Vec<Port> = ports.iter().copied().take(MAX_BATCH_SIZE).collect();
-        let mut outstanding: HashMap<(Port, u16), (u32, Instant)> = HashMap::new();
-        let mut src_to_dst: HashMap<u16, Port> = HashMap::new();
-        let mut port_srcs: HashMap<Port, std::collections::HashSet<u16>> = HashMap::new();
 
-        // Phase 1: Send all probes (XMAS = FIN+PSH+URG)
-        for dst_port in &ports_to_scan {
-            let src_port = Self::generate_source_port();
-            let seq = Self::generate_sequence_number();
+        // Track ports that still need responses (not yet classified)
+        let mut pending_ports: std::collections::HashSet<Port> =
+            ports_to_scan.iter().copied().collect();
+        let mut results: HashMap<Port, PortState> = HashMap::new();
 
-            // Handle decoy scanning: send from multiple source IPs
-            if let Some(scheduler) = &self.decoy_scheduler {
-                let mut scheduler = scheduler.clone();
-                scheduler.reset();
+        // Maximum retries from config (nmap default: 2, cap at 3 for stealth scans)
+        let max_retries = u32::from(self.config.max_retries.min(3));
 
-                while let Some(src_ip) = scheduler.next_source() {
-                    let src_ipv4 = match src_ip {
-                        IpAddr::V4(addr) => addr,
-                        IpAddr::V6(_) => continue,
-                    };
+        // Adaptive timing for nmap-style RTT estimation
+        let mut timing = AdaptiveTiming::new();
 
-                    let packet = TcpPacketBuilder::new(src_ipv4, dst_addr, src_port, *dst_port)
+        // Flush any stale packets from the AF_PACKET socket BEFORE starting
+        if let Some(ref pkt_sock) = self.packet_socket {
+            pkt_sock.flush_buffer();
+        }
+
+        // Nmap-style retry loop with adaptive timeout
+        for _retry_round in 0..=max_retries {
+            if pending_ports.is_empty() {
+                break; // All ports have been classified
+            }
+
+            // Phase 1: Send probes for pending ports only
+            let mut outstanding: HashMap<(Port, u16), (u32, Instant)> = HashMap::new();
+            let mut src_to_dst: HashMap<u16, Port> = HashMap::new();
+            let mut port_srcs: HashMap<Port, std::collections::HashSet<u16>> = HashMap::new();
+
+            for dst_port in &pending_ports {
+                let src_port = Self::generate_source_port();
+                let seq = Self::generate_sequence_number();
+
+                // Handle decoy scanning: send from multiple source IPs
+                if let Some(scheduler) = &self.decoy_scheduler {
+                    let mut scheduler = scheduler.clone();
+                    scheduler.reset();
+
+                    while let Some(src_ip) = scheduler.next_source() {
+                        let src_ipv4 = match src_ip {
+                            IpAddr::V4(addr) => addr,
+                            IpAddr::V6(_) => continue,
+                        };
+
+                        // XMAS scan: FIN+PSH+URG flags
+                        let packet = TcpPacketBuilder::new(src_ipv4, dst_addr, src_port, *dst_port)
+                            .seq(seq)
+                            .fin()
+                            .psh()
+                            .urg()
+                            .window(65535)
+                            .build();
+
+                        let port_sockaddr =
+                            SocketAddr::new(std::net::IpAddr::V4(dst_addr), *dst_port);
+                        self.socket
+                            .send_packet(&packet, &port_sockaddr)
+                            .map_err(|e| {
+                                rustnmap_common::ScanError::Network(
+                                    rustnmap_common::Error::Network(
+                                        rustnmap_common::error::NetworkError::SendError {
+                                            source: e,
+                                        },
+                                    ),
+                                )
+                            })?;
+
+                        if scheduler.is_real_ip(&src_ip) {
+                            outstanding.insert((*dst_port, src_port), (seq, Instant::now()));
+                            src_to_dst.insert(src_port, *dst_port);
+                            port_srcs.entry(*dst_port).or_default().insert(src_port);
+                        }
+                    }
+                } else {
+                    let packet = TcpPacketBuilder::new(self.local_addr, dst_addr, src_port, *dst_port)
                         .seq(seq)
                         .fin()
                         .psh()
@@ -1738,157 +2005,130 @@ impl TcpXmasScanner {
                             ))
                         })?;
 
-                    // Only track probes sent from the real IP
-                    if scheduler.is_real_ip(&src_ip) {
-                        outstanding.insert((*dst_port, src_port), (seq, Instant::now()));
-                        src_to_dst.insert(src_port, *dst_port);
-                        port_srcs.entry(*dst_port).or_default().insert(src_port);
-                    }
+                    outstanding.insert((*dst_port, src_port), (seq, Instant::now()));
+                    src_to_dst.insert(src_port, *dst_port);
+                    port_srcs.entry(*dst_port).or_default().insert(src_port);
                 }
-            } else {
-                // No decoy: original behavior
-                let packet = TcpPacketBuilder::new(self.local_addr, dst_addr, src_port, *dst_port)
-                    .seq(seq)
-                    .fin()
-                    .psh()
-                    .urg()
-                    .window(65535)
-                    .build();
-
-                let port_sockaddr = SocketAddr::new(std::net::IpAddr::V4(dst_addr), *dst_port);
-                self.socket
-                    .send_packet(&packet, &port_sockaddr)
-                    .map_err(|e| {
-                        rustnmap_common::ScanError::Network(rustnmap_common::Error::Network(
-                            rustnmap_common::error::NetworkError::SendError { source: e },
-                        ))
-                    })?;
-
-                outstanding.insert((*dst_port, src_port), (seq, Instant::now()));
-                src_to_dst.insert(src_port, *dst_port);
-                port_srcs.entry(*dst_port).or_default().insert(src_port);
-            }
-        }
-
-        // Flush any stale packets from the AF_PACKET socket before receiving responses
-        // This prevents processing stale packets from previous scans or network activity
-        if let Some(ref pkt_sock) = self.packet_socket {
-            pkt_sock.flush_buffer();
-        }
-
-        // Phase 2: Collect responses
-        let mut results: HashMap<Port, PortState> = HashMap::new();
-        let deadline = Instant::now() + self.config.initial_rtt;
-        let mut recv_buf = vec![0u8; 65535];
-        let mut _af_packet_count = 0;
-        let mut _raw_socket_count = 0;
-
-        while Instant::now() < deadline && !outstanding.is_empty() {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                break;
             }
 
-            // Try AF_PACKET first if available (L2 capture - receives all TCP responses)
-            // Use a short timeout (200ms or remaining timeout) to wait for RST responses
-            // Fall back to raw socket if packet socket is not available or times out
-            #[expect(
-                unused_assignments,
-                reason = "packet_data extends lifetime of received data"
-            )]
-            let mut packet_data = None;
-            let packet_timeout = remaining.min(Duration::from_millis(200));
-            let received = if let Some(ref pkt_sock) = self.packet_socket {
-                match pkt_sock.recv_packet_with_timeout(packet_timeout) {
-                    Ok(Some(data)) if data.len() > ETH_HDR_SIZE => {
-                        _af_packet_count += 1;
-                        packet_data = Some(data);
-                        packet_data
-                            .as_ref()
-                            .map(|d| (&d[ETH_HDR_SIZE..], d.len() - ETH_HDR_SIZE))
-                    }
-                    _ => None,
-                }
-            } else {
-                None
-            };
+            // Phase 2: Collect responses with adaptive timeout
+            // Nmap-style: timeout = SRTT + 4*RTTVAR (clamped to 100ms-10000ms)
+            let current_timeout = timing.recommended_timeout();
+            let deadline = Instant::now() + current_timeout;
+            let mut recv_buf = vec![0u8; 65535];
 
-            // Fall back to raw socket if AF_PACKET didn't receive data
-            let data = if let Some((slice, len)) = received {
-                (slice, len)
-            } else {
-                match self
-                    .socket
-                    .recv_packet(recv_buf.as_mut_slice(), Some(remaining))
-                {
-                    Ok(len) if len > 0 => {
-                        _raw_socket_count += 1;
-                        (&recv_buf[..len], len)
+            while Instant::now() < deadline && !outstanding.is_empty() {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    break;
+                }
+
+                #[expect(
+                    unused_assignments,
+                    reason = "packet_data extends lifetime of received data"
+                )]
+                let mut packet_data = None;
+                let packet_timeout = remaining.min(Duration::from_millis(200));
+                let received = if let Some(ref pkt_sock) = self.packet_socket {
+                    match pkt_sock.recv_packet_with_timeout(packet_timeout) {
+                        Ok(Some(data)) if data.len() > ETH_HDR_SIZE => {
+                            packet_data = Some(data);
+                            packet_data
+                                .as_ref()
+                                .map(|d| (&d[ETH_HDR_SIZE..], d.len() - ETH_HDR_SIZE))
+                        }
+                        _ => None,
                     }
-                    Ok(_) => continue,
-                    Err(e)
-                        if e.kind() == io::ErrorKind::WouldBlock
-                            || e.kind() == io::ErrorKind::TimedOut =>
+                } else {
+                    None
+                };
+
+                let data = if let Some((slice, len)) = received {
+                    (slice, len)
+                } else {
+                    match self
+                        .socket
+                        .recv_packet(recv_buf.as_mut_slice(), Some(remaining))
                     {
-                        continue;
+                        Ok(len) if len > 0 => (&recv_buf[..len], len),
+                        Ok(_) => continue,
+                        Err(e)
+                            if e.kind() == io::ErrorKind::WouldBlock
+                                || e.kind() == io::ErrorKind::TimedOut =>
+                        {
+                            continue;
+                        }
+                        Err(e) => {
+                            return Err(rustnmap_common::ScanError::Network(
+                                rustnmap_common::Error::Network(
+                                    rustnmap_common::error::NetworkError::ReceiveError {
+                                        source: e,
+                                    },
+                                ),
+                            ))
+                        }
                     }
-                    Err(e) => {
-                        return Err(rustnmap_common::ScanError::Network(
-                            rustnmap_common::Error::Network(
-                                rustnmap_common::error::NetworkError::ReceiveError { source: e },
-                            ),
-                        ))
-                    }
-                }
-            };
+                };
 
-            if let Some((flags, _seq, _ack, src_port, _dst_port, src_ip)) =
-                parse_tcp_response(data.0)
-            {
-                if src_ip == dst_addr {
-                    if let Some(dst_port) = src_to_dst.remove(&src_port) {
-                        let state = if (flags & tcp_flags::RST) != 0 {
-                            PortState::Closed
-                        } else {
-                            PortState::Filtered
-                        };
-                        results.insert(dst_port, state);
-                        outstanding.remove(&(dst_port, src_port));
-                        if let Some(srcs) = port_srcs.get_mut(&dst_port) {
-                            srcs.remove(&src_port);
-                            if srcs.is_empty() {
-                                port_srcs.remove(&dst_port);
+                if let Some((flags, _seq, _ack, src_port, _dst_port, src_ip)) =
+                    parse_tcp_response(data.0)
+                {
+                    if src_ip == dst_addr {
+                        if let Some(dst_port) = src_to_dst.remove(&src_port) {
+                            // Update RTT estimate for adaptive timing
+                            if let Some((_, sent_time)) = outstanding.get(&(dst_port, src_port)) {
+                                timing.update_rtt(sent_time.elapsed());
+                            }
+                            let state = if (flags & tcp_flags::RST) != 0 {
+                                PortState::Closed
+                            } else {
+                                PortState::Filtered
+                            };
+                            results.insert(dst_port, state);
+                            pending_ports.remove(&dst_port);
+                            outstanding.remove(&(dst_port, src_port));
+                            if let Some(srcs) = port_srcs.get_mut(&dst_port) {
+                                srcs.remove(&src_port);
+                                if srcs.is_empty() {
+                                    port_srcs.remove(&dst_port);
+                                }
+                            }
+                        }
+                    }
+                } else if let Some(IcmpResponse::DestinationUnreachable {
+                    code,
+                    original_dst_ip,
+                    original_dst_port,
+                }) = parse_icmp_response(data.0)
+                {
+                    if original_dst_ip == dst_addr {
+                        if let Some(srcs) = port_srcs.remove(&original_dst_port) {
+                            // Update RTT for first src_port
+                            if let Some(&first_src) = srcs.iter().next() {
+                                if let Some((_, sent_time)) = outstanding.get(&(original_dst_port, first_src)) {
+                                    timing.update_rtt(sent_time.elapsed());
+                                }
+                            }
+                            let state = match code {
+                                IcmpUnreachableCode::PortUnreachable => PortState::Closed,
+                                _ => PortState::Filtered,
+                            };
+                            results.insert(original_dst_port, state);
+                            pending_ports.remove(&original_dst_port);
+                            for src_port in srcs {
+                                outstanding.remove(&(original_dst_port, src_port));
+                                src_to_dst.remove(&src_port);
                             }
                         }
                     }
                 }
-            } else if let Some(IcmpResponse::DestinationUnreachable {
-                code,
-                original_dst_ip,
-                original_dst_port,
-            }) = parse_icmp_response(data.0)
-            {
-                if original_dst_ip == dst_addr {
-                    if let Some(srcs) = port_srcs.remove(&original_dst_port) {
-                        let state = match code {
-                            IcmpUnreachableCode::PortUnreachable => PortState::Closed,
-                            _ => PortState::Filtered,
-                        };
-                        results.insert(original_dst_port, state);
-                        for src_port in srcs {
-                            outstanding.remove(&(original_dst_port, src_port));
-                            src_to_dst.remove(&src_port);
-                        }
-                    }
-                }
             }
+            // No artificial delay between retry rounds - nmap doesn't have this
         }
 
-        // Phase 3: Mark remaining as Open|Filtered
-        for (dst_port, _) in outstanding.keys() {
-            results
-                .entry(*dst_port)
-                .or_insert(PortState::OpenOrFiltered);
+        // Phase 3: Mark remaining ports as Open|Filtered (no response after all retries)
+        for port in pending_ports {
+            results.entry(port).or_insert(PortState::OpenOrFiltered);
         }
 
         Ok(results)
@@ -2134,7 +2374,13 @@ impl TcpAckScanner {
     /// Generates a random source port.
     #[must_use]
     fn generate_source_port() -> Port {
-        let offset = (std::process::id() % 1000) as u16;
+        // Mix PID with current time for randomness
+        let pid_component = (std::process::id() % 1000) as u16;
+        let time_component = (std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .subsec_nanos() % 1000) as u16;
+        let offset = (pid_component + time_component) % 1000;
         SOURCE_PORT_START + offset
     }
 
@@ -2154,10 +2400,10 @@ impl TcpAckScanner {
         now_lower.wrapping_add(pid)
     }
 
-    /// Scans multiple ports in batch mode for improved performance.
+    /// Scans multiple ports in batch mode with nmap-style retransmissions.
     ///
-    /// Sends all ACK probes first, then collects responses. This is much faster
-    /// than sequential scanning for remote targets with high latency.
+    /// Sends ACK probes, collects responses, and resends probes for unresponsive
+    /// ports up to `max_retries` times with exponential backoff.
     ///
     /// # Arguments
     ///
@@ -2176,10 +2422,10 @@ impl TcpAckScanner {
     ///
     /// - RST received -> Unfiltered
     /// - ICMP unreachable -> Filtered
-    /// - No response -> Filtered
+    /// - No response after retries -> Filtered
     #[expect(
         clippy::too_many_lines,
-        reason = "Batch scanning requires handling send, receive, and result collection in one method for clarity"
+        reason = "Batch scanning with retransmissions requires handling send, receive, retry, and result collection in one method for clarity"
     )]
     pub fn scan_ports_batch(
         &self,
@@ -2193,110 +2439,121 @@ impl TcpAckScanner {
         // Limit batch size to prevent memory issues
         let ports_to_scan: Vec<Port> = ports.iter().copied().take(MAX_BATCH_SIZE).collect();
 
-        // Flush any stale packets from the AF_PACKET socket BEFORE sending probes
-        // This prevents processing stale packets from previous scans or network activity
-        // Must flush BEFORE sending, not after, to avoid flushing our own responses
+        // Track ports that still need responses (not yet classified)
+        let mut pending_ports: std::collections::HashSet<Port> =
+            ports_to_scan.iter().copied().collect();
+        let mut results: HashMap<Port, PortState> = HashMap::new();
+
+        // Maximum retries from config (nmap default: 2, cap at 3 for stealth scans)
+        let max_retries = u32::from(self.config.max_retries.min(3));
+
+        // Adaptive timing for nmap-style RTT estimation
+        let mut timing = AdaptiveTiming::new();
+
+        // Flush any stale packets from the AF_PACKET socket BEFORE starting
         if let Some(ref pkt_sock) = self.packet_socket {
             pkt_sock.flush_buffer();
         }
 
-        // Phase 1: Send all probes
-        // Track scanned ports for O(1) lookup
-        let mut scanned_ports: std::collections::HashSet<Port> =
-            ports_to_scan.iter().copied().collect();
-        // Port tracking: dst_port -> set of src_ports for O(1) ICMP matching
-        let mut port_srcs: HashMap<Port, std::collections::HashSet<u16>> = HashMap::new();
-
-        let src_port = Self::generate_source_port();
-
-        for dst_port in &ports_to_scan {
-            let seq = Self::generate_sequence_number();
-
-            // Build TCP packet with ACK flag only
-            let packet = TcpPacketBuilder::new(self.local_addr, dst_addr, src_port, *dst_port)
-                .seq(seq)
-                .ack_flag()
-                .window(65535)
-                .build();
-
-            let port_sockaddr = SocketAddr::new(std::net::IpAddr::V4(dst_addr), *dst_port);
-            self.socket
-                .send_packet(&packet, &port_sockaddr)
-                .map_err(|e| {
-                    rustnmap_common::ScanError::Network(rustnmap_common::Error::Network(
-                        rustnmap_common::error::NetworkError::SendError { source: e },
-                    ))
-                })?;
-
-            port_srcs.entry(*dst_port).or_default().insert(src_port);
-        }
-
-        // Phase 2: Collect responses until timeout
-        let mut results: HashMap<Port, PortState> = HashMap::new();
-        let deadline = Instant::now() + self.config.initial_rtt;
-        let mut recv_buf = vec![0u8; 65535];
-
-        while Instant::now() < deadline && !scanned_ports.is_empty() {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                break;
+        // Nmap-style retry loop with adaptive timeout
+        for _retry_round in 0..=max_retries {
+            if pending_ports.is_empty() {
+                break; // All ports have been classified
             }
 
-            // Try AF_PACKET first if available (L2 capture - receives all TCP responses)
-            #[expect(
-                unused_assignments,
-                reason = "packet_data extends lifetime of received data"
-            )]
-            let mut packet_data = None;
-            let packet_timeout = remaining.min(Duration::from_millis(200));
-            let received = if let Some(ref pkt_sock) = self.packet_socket {
-                match pkt_sock.recv_packet_with_timeout(packet_timeout) {
-                    Ok(Some(data)) if data.len() > ETH_HDR_SIZE => {
-                        packet_data = Some(data);
-                        packet_data
-                            .as_ref()
-                            .map(|d| (&d[ETH_HDR_SIZE..], d.len() - ETH_HDR_SIZE))
-                    }
-                    _ => None,
-                }
-            } else {
-                None
-            };
+            // Phase 1: Send probes for pending ports only
+            // Use same source port for all probes in this round
+            let src_port = Self::generate_source_port();
+            let round_start = Instant::now();
 
-            // Fall back to raw socket if AF_PACKET didn't receive data
-            let data = if let Some((slice, len)) = received {
-                (slice, len)
-            } else {
-                match self
-                    .socket
-                    .recv_packet(recv_buf.as_mut_slice(), Some(remaining))
-                {
-                    Ok(len) if len > 0 => (&recv_buf[..len], len),
-                    Ok(_) => continue,
-                    Err(e)
-                        if e.kind() == io::ErrorKind::WouldBlock
-                            || e.kind() == io::ErrorKind::TimedOut =>
-                    {
-                        continue;
-                    }
-                    Err(e) => {
-                        return Err(rustnmap_common::ScanError::Network(
-                            rustnmap_common::Error::Network(
-                                rustnmap_common::error::NetworkError::ReceiveError { source: e },
-                            ),
+            for dst_port in &pending_ports {
+                let seq = Self::generate_sequence_number();
+
+                // Build TCP packet with ACK flag only
+                let packet = TcpPacketBuilder::new(self.local_addr, dst_addr, src_port, *dst_port)
+                    .seq(seq)
+                    .ack_flag()
+                    .window(65535)
+                    .build();
+
+                let port_sockaddr = SocketAddr::new(std::net::IpAddr::V4(dst_addr), *dst_port);
+                self.socket
+                    .send_packet(&packet, &port_sockaddr)
+                    .map_err(|e| {
+                        rustnmap_common::ScanError::Network(rustnmap_common::Error::Network(
+                            rustnmap_common::error::NetworkError::SendError { source: e },
                         ))
-                    }
-                }
-            };
+                    })?;
+            }
 
-            // Check for TCP response
-            if let Some((flags, _seq, _ack, resp_src_port, _resp_dst_port, src_ip)) =
-                parse_tcp_response(data.0)
-            {
-                if src_ip == dst_addr {
-                    // For ACK scan, RST responses come FROM the target port
-                    // So resp_src_port is the port we scanned
-                    if scanned_ports.remove(&resp_src_port) {
+            // Phase 2: Collect responses with adaptive timeout
+            // Nmap-style: timeout = SRTT + 4*RTTVAR (clamped to 100ms-10000ms)
+            let current_timeout = timing.recommended_timeout();
+            let deadline = Instant::now() + current_timeout;
+            let mut recv_buf = vec![0u8; 65535];
+
+            while Instant::now() < deadline && !pending_ports.is_empty() {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    break;
+                }
+
+                // Try AF_PACKET first if available
+                #[expect(
+                    unused_assignments,
+                    reason = "packet_data extends lifetime of received data"
+                )]
+                let mut packet_data = None;
+                let packet_timeout = remaining.min(Duration::from_millis(200));
+                let received = if let Some(ref pkt_sock) = self.packet_socket {
+                    match pkt_sock.recv_packet_with_timeout(packet_timeout) {
+                        Ok(Some(data)) if data.len() > ETH_HDR_SIZE => {
+                            packet_data = Some(data);
+                            packet_data
+                                .as_ref()
+                                .map(|d| (&d[ETH_HDR_SIZE..], d.len() - ETH_HDR_SIZE))
+                        }
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
+
+                // Fall back to raw socket if AF_PACKET didn't receive data
+                let data = if let Some((slice, len)) = received {
+                    (slice, len)
+                } else {
+                    match self
+                        .socket
+                        .recv_packet(recv_buf.as_mut_slice(), Some(remaining))
+                    {
+                        Ok(len) if len > 0 => (&recv_buf[..len], len),
+                        Ok(_) => continue,
+                        Err(e)
+                            if e.kind() == io::ErrorKind::WouldBlock
+                                || e.kind() == io::ErrorKind::TimedOut =>
+                        {
+                            continue;
+                        }
+                        Err(e) => {
+                            return Err(rustnmap_common::ScanError::Network(
+                                rustnmap_common::Error::Network(
+                                    rustnmap_common::error::NetworkError::ReceiveError {
+                                        source: e,
+                                    },
+                                ),
+                            ))
+                        }
+                    }
+                };
+
+                // Check for TCP response
+                if let Some((flags, _seq, _ack, resp_src_port, _resp_dst_port, src_ip)) =
+                    parse_tcp_response(data.0)
+                {
+                    if src_ip == dst_addr && pending_ports.remove(&resp_src_port) {
+                        // Update RTT estimate for adaptive timing
+                        timing.update_rtt(round_start.elapsed());
                         // For ACK scan, RST means unfiltered
                         let state = if (flags & tcp_flags::RST) != 0 {
                             PortState::Unfiltered
@@ -2304,28 +2561,26 @@ impl TcpAckScanner {
                             PortState::Filtered
                         };
                         results.insert(resp_src_port, state);
-                        // Also remove from port_srcs
-                        port_srcs.remove(&resp_src_port);
+                    }
+                } else if let Some(IcmpResponse::DestinationUnreachable {
+                    original_dst_ip,
+                    original_dst_port,
+                    ..
+                }) = parse_icmp_response(data.0)
+                {
+                    if original_dst_ip == dst_addr && pending_ports.remove(&original_dst_port) {
+                        // Update RTT estimate for adaptive timing
+                        timing.update_rtt(round_start.elapsed());
+                        // ICMP unreachable means filtered
+                        results.insert(original_dst_port, PortState::Filtered);
                     }
                 }
-            } else if let Some(IcmpResponse::DestinationUnreachable {
-                code,
-                original_dst_ip,
-                original_dst_port,
-            }) = parse_icmp_response(data.0)
-            {
-                // O(1) check if we have probes for this port
-                if original_dst_ip == dst_addr && scanned_ports.remove(&original_dst_port) {
-                    // For ACK scan, ICMP unreachable means filtered
-                    let _ = code; // All ICMP unreachable types mean filtered for ACK scan
-                    results.insert(original_dst_port, PortState::Filtered);
-                    port_srcs.remove(&original_dst_port);
-                }
             }
+            // No artificial delay between retry rounds - nmap doesn't have this
         }
 
-        // Phase 3: Mark remaining ports as Filtered (no response)
-        for port in scanned_ports {
+        // Phase 3: Mark remaining ports as Filtered (no response after all retries)
+        for port in pending_ports {
             results.entry(port).or_insert(PortState::Filtered);
         }
 
@@ -2596,7 +2851,13 @@ impl TcpMaimonScanner {
     /// Generates a random source port.
     #[must_use]
     fn generate_source_port() -> Port {
-        let offset = (std::process::id() % 1000) as u16;
+        // Mix PID with current time for randomness
+        let pid_component = (std::process::id() % 1000) as u16;
+        let time_component = (std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .subsec_nanos() % 1000) as u16;
+        let offset = (pid_component + time_component) % 1000;
         SOURCE_PORT_START + offset
     }
 
@@ -2616,18 +2877,32 @@ impl TcpMaimonScanner {
         now_lower.wrapping_add(pid)
     }
 
-    /// Scans multiple ports in batch mode for improved performance.
+    /// Scans multiple ports in batch mode with nmap-style retransmissions.
     ///
-    /// See [`TcpFinScanner::scan_ports_batch`] for detailed documentation.
+    /// Sends MAIMON probes (FIN+ACK flags), collects responses, and resends
+    /// probes for unresponsive ports up to `max_retries` times with exponential backoff.
+    ///
+    /// # Arguments
+    ///
+    /// * `dst_addr` - Target IP address
+    /// * `ports` - List of ports to scan
+    ///
+    /// # Returns
+    ///
+    /// A `ScanResult` containing a map of port numbers to port states.
     ///
     /// # Errors
     ///
-    /// Returns an error if:
-    /// - Packet transmission fails due to network issues
-    /// - Raw socket receive fails with a non-timeout error
+    /// Returns an error if packet transmission or reception fails.
+    ///
+    /// # Port State Mapping
+    ///
+    /// - RST received -> Closed
+    /// - ICMP unreachable -> Filtered (or Closed for Port Unreachable)
+    /// - No response after retries -> Open|Filtered
     #[expect(
         clippy::too_many_lines,
-        reason = "Batch scanning requires handling send, receive, and result collection in one method for clarity"
+        reason = "Batch scanning with retransmissions requires handling send, receive, retry, and result collection in one method for clarity"
     )]
     pub fn scan_ports_batch(
         &self,
@@ -2638,28 +2913,81 @@ impl TcpMaimonScanner {
             return Ok(HashMap::new());
         }
 
+        // Limit batch size to prevent memory issues
         let ports_to_scan: Vec<Port> = ports.iter().copied().take(MAX_BATCH_SIZE).collect();
-        let mut outstanding: HashMap<(Port, u16), (u32, Instant)> = HashMap::new();
-        let mut src_to_dst: HashMap<u16, Port> = HashMap::new();
-        let mut port_srcs: HashMap<Port, std::collections::HashSet<u16>> = HashMap::new();
 
-        // Phase 1: Send all probes (Maimon = FIN+ACK)
-        for dst_port in &ports_to_scan {
-            let src_port = Self::generate_source_port();
-            let seq = Self::generate_sequence_number();
+        // Track ports that still need responses (not yet classified)
+        let mut pending_ports: std::collections::HashSet<Port> =
+            ports_to_scan.iter().copied().collect();
+        let mut results: HashMap<Port, PortState> = HashMap::new();
 
-            // Handle decoy scanning: send from multiple source IPs
-            if let Some(scheduler) = &self.decoy_scheduler {
-                let mut scheduler = scheduler.clone();
-                scheduler.reset();
+        // Maximum retries from config (nmap default: 2, cap at 3 for stealth scans)
+        let max_retries = u32::from(self.config.max_retries.min(3));
 
-                while let Some(src_ip) = scheduler.next_source() {
-                    let src_ipv4 = match src_ip {
-                        IpAddr::V4(addr) => addr,
-                        IpAddr::V6(_) => continue,
-                    };
+        // Adaptive timing for nmap-style RTT estimation
+        let mut timing = AdaptiveTiming::new();
 
-                    let packet = TcpPacketBuilder::new(src_ipv4, dst_addr, src_port, *dst_port)
+        // Flush any stale packets from the AF_PACKET socket BEFORE starting
+        if let Some(ref pkt_sock) = self.packet_socket {
+            pkt_sock.flush_buffer();
+        }
+
+        // Nmap-style retry loop with adaptive timeout
+        for _retry_round in 0..=max_retries {
+            if pending_ports.is_empty() {
+                break; // All ports have been classified
+            }
+
+            // Phase 1: Send probes for pending ports only
+            let mut outstanding: HashMap<(Port, u16), (u32, Instant)> = HashMap::new();
+            let mut src_to_dst: HashMap<u16, Port> = HashMap::new();
+            let mut port_srcs: HashMap<Port, std::collections::HashSet<u16>> = HashMap::new();
+
+            for dst_port in &pending_ports {
+                let src_port = Self::generate_source_port();
+                let seq = Self::generate_sequence_number();
+
+                // Handle decoy scanning: send from multiple source IPs
+                if let Some(scheduler) = &self.decoy_scheduler {
+                    let mut scheduler = scheduler.clone();
+                    scheduler.reset();
+
+                    while let Some(src_ip) = scheduler.next_source() {
+                        let src_ipv4 = match src_ip {
+                            IpAddr::V4(addr) => addr,
+                            IpAddr::V6(_) => continue,
+                        };
+
+                        // MAIMON scan: FIN+ACK flags
+                        let packet = TcpPacketBuilder::new(src_ipv4, dst_addr, src_port, *dst_port)
+                            .seq(seq)
+                            .fin()
+                            .ack_flag()
+                            .window(65535)
+                            .build();
+
+                        let port_sockaddr =
+                            SocketAddr::new(std::net::IpAddr::V4(dst_addr), *dst_port);
+                        self.socket
+                            .send_packet(&packet, &port_sockaddr)
+                            .map_err(|e| {
+                                rustnmap_common::ScanError::Network(
+                                    rustnmap_common::Error::Network(
+                                        rustnmap_common::error::NetworkError::SendError {
+                                            source: e,
+                                        },
+                                    ),
+                                )
+                            })?;
+
+                        if scheduler.is_real_ip(&src_ip) {
+                            outstanding.insert((*dst_port, src_port), (seq, Instant::now()));
+                            src_to_dst.insert(src_port, *dst_port);
+                            port_srcs.entry(*dst_port).or_default().insert(src_port);
+                        }
+                    }
+                } else {
+                    let packet = TcpPacketBuilder::new(self.local_addr, dst_addr, src_port, *dst_port)
                         .seq(seq)
                         .fin()
                         .ack_flag()
@@ -2675,156 +3003,130 @@ impl TcpMaimonScanner {
                             ))
                         })?;
 
-                    // Only track probes sent from the real IP
-                    if scheduler.is_real_ip(&src_ip) {
-                        outstanding.insert((*dst_port, src_port), (seq, Instant::now()));
-                        src_to_dst.insert(src_port, *dst_port);
-                        port_srcs.entry(*dst_port).or_default().insert(src_port);
-                    }
+                    outstanding.insert((*dst_port, src_port), (seq, Instant::now()));
+                    src_to_dst.insert(src_port, *dst_port);
+                    port_srcs.entry(*dst_port).or_default().insert(src_port);
                 }
-            } else {
-                // No decoy: original behavior
-                let packet = TcpPacketBuilder::new(self.local_addr, dst_addr, src_port, *dst_port)
-                    .seq(seq)
-                    .fin()
-                    .ack_flag()
-                    .window(65535)
-                    .build();
-
-                let port_sockaddr = SocketAddr::new(std::net::IpAddr::V4(dst_addr), *dst_port);
-                self.socket
-                    .send_packet(&packet, &port_sockaddr)
-                    .map_err(|e| {
-                        rustnmap_common::ScanError::Network(rustnmap_common::Error::Network(
-                            rustnmap_common::error::NetworkError::SendError { source: e },
-                        ))
-                    })?;
-
-                outstanding.insert((*dst_port, src_port), (seq, Instant::now()));
-                src_to_dst.insert(src_port, *dst_port);
-                port_srcs.entry(*dst_port).or_default().insert(src_port);
-            }
-        }
-
-        // Flush any stale packets from the AF_PACKET socket before receiving responses
-        // This prevents processing stale packets from previous scans or network activity
-        if let Some(ref pkt_sock) = self.packet_socket {
-            pkt_sock.flush_buffer();
-        }
-
-        // Phase 2: Collect responses
-        let mut results: HashMap<Port, PortState> = HashMap::new();
-        let deadline = Instant::now() + self.config.initial_rtt;
-        let mut recv_buf = vec![0u8; 65535];
-        let mut _af_packet_count = 0;
-        let mut _raw_socket_count = 0;
-
-        while Instant::now() < deadline && !outstanding.is_empty() {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                break;
             }
 
-            // Try AF_PACKET first if available (L2 capture - receives all TCP responses)
-            // Use a short timeout (200ms or remaining timeout) to wait for RST responses
-            // Fall back to raw socket if packet socket is not available or times out
-            #[expect(
-                unused_assignments,
-                reason = "packet_data extends lifetime of received data"
-            )]
-            let mut packet_data = None;
-            let packet_timeout = remaining.min(Duration::from_millis(200));
-            let received = if let Some(ref pkt_sock) = self.packet_socket {
-                match pkt_sock.recv_packet_with_timeout(packet_timeout) {
-                    Ok(Some(data)) if data.len() > ETH_HDR_SIZE => {
-                        _af_packet_count += 1;
-                        packet_data = Some(data);
-                        packet_data
-                            .as_ref()
-                            .map(|d| (&d[ETH_HDR_SIZE..], d.len() - ETH_HDR_SIZE))
-                    }
-                    _ => None,
-                }
-            } else {
-                None
-            };
+            // Phase 2: Collect responses with adaptive timeout
+            // Nmap-style: timeout = SRTT + 4*RTTVAR (clamped to 100ms-10000ms)
+            let current_timeout = timing.recommended_timeout();
+            let deadline = Instant::now() + current_timeout;
+            let mut recv_buf = vec![0u8; 65535];
 
-            // Fall back to raw socket if AF_PACKET didn't receive data
-            let data = if let Some((slice, len)) = received {
-                (slice, len)
-            } else {
-                match self
-                    .socket
-                    .recv_packet(recv_buf.as_mut_slice(), Some(remaining))
-                {
-                    Ok(len) if len > 0 => {
-                        _raw_socket_count += 1;
-                        (&recv_buf[..len], len)
+            while Instant::now() < deadline && !outstanding.is_empty() {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    break;
+                }
+
+                #[expect(
+                    unused_assignments,
+                    reason = "packet_data extends lifetime of received data"
+                )]
+                let mut packet_data = None;
+                let packet_timeout = remaining.min(Duration::from_millis(200));
+                let received = if let Some(ref pkt_sock) = self.packet_socket {
+                    match pkt_sock.recv_packet_with_timeout(packet_timeout) {
+                        Ok(Some(data)) if data.len() > ETH_HDR_SIZE => {
+                            packet_data = Some(data);
+                            packet_data
+                                .as_ref()
+                                .map(|d| (&d[ETH_HDR_SIZE..], d.len() - ETH_HDR_SIZE))
+                        }
+                        _ => None,
                     }
-                    Ok(_) => continue,
-                    Err(e)
-                        if e.kind() == io::ErrorKind::WouldBlock
-                            || e.kind() == io::ErrorKind::TimedOut =>
+                } else {
+                    None
+                };
+
+                let data = if let Some((slice, len)) = received {
+                    (slice, len)
+                } else {
+                    match self
+                        .socket
+                        .recv_packet(recv_buf.as_mut_slice(), Some(remaining))
                     {
-                        continue;
+                        Ok(len) if len > 0 => (&recv_buf[..len], len),
+                        Ok(_) => continue,
+                        Err(e)
+                            if e.kind() == io::ErrorKind::WouldBlock
+                                || e.kind() == io::ErrorKind::TimedOut =>
+                        {
+                            continue;
+                        }
+                        Err(e) => {
+                            return Err(rustnmap_common::ScanError::Network(
+                                rustnmap_common::Error::Network(
+                                    rustnmap_common::error::NetworkError::ReceiveError {
+                                        source: e,
+                                    },
+                                ),
+                            ))
+                        }
                     }
-                    Err(e) => {
-                        return Err(rustnmap_common::ScanError::Network(
-                            rustnmap_common::Error::Network(
-                                rustnmap_common::error::NetworkError::ReceiveError { source: e },
-                            ),
-                        ))
-                    }
-                }
-            };
+                };
 
-            if let Some((flags, _seq, _ack, src_port, _dst_port, src_ip)) =
-                parse_tcp_response(data.0)
-            {
-                if src_ip == dst_addr {
-                    if let Some(dst_port) = src_to_dst.remove(&src_port) {
-                        let state = if (flags & tcp_flags::RST) != 0 {
-                            PortState::Closed
-                        } else {
-                            PortState::Filtered
-                        };
-                        results.insert(dst_port, state);
-                        outstanding.remove(&(dst_port, src_port));
-                        if let Some(srcs) = port_srcs.get_mut(&dst_port) {
-                            srcs.remove(&src_port);
-                            if srcs.is_empty() {
-                                port_srcs.remove(&dst_port);
+                if let Some((flags, _seq, _ack, src_port, _dst_port, src_ip)) =
+                    parse_tcp_response(data.0)
+                {
+                    if src_ip == dst_addr {
+                        if let Some(dst_port) = src_to_dst.remove(&src_port) {
+                            // Update RTT estimate for adaptive timing
+                            if let Some((_, sent_time)) = outstanding.get(&(dst_port, src_port)) {
+                                timing.update_rtt(sent_time.elapsed());
+                            }
+                            let state = if (flags & tcp_flags::RST) != 0 {
+                                PortState::Closed
+                            } else {
+                                PortState::Filtered
+                            };
+                            results.insert(dst_port, state);
+                            pending_ports.remove(&dst_port);
+                            outstanding.remove(&(dst_port, src_port));
+                            if let Some(srcs) = port_srcs.get_mut(&dst_port) {
+                                srcs.remove(&src_port);
+                                if srcs.is_empty() {
+                                    port_srcs.remove(&dst_port);
+                                }
+                            }
+                        }
+                    }
+                } else if let Some(IcmpResponse::DestinationUnreachable {
+                    code,
+                    original_dst_ip,
+                    original_dst_port,
+                }) = parse_icmp_response(data.0)
+                {
+                    if original_dst_ip == dst_addr {
+                        if let Some(srcs) = port_srcs.remove(&original_dst_port) {
+                            // Update RTT for first src_port
+                            if let Some(&first_src) = srcs.iter().next() {
+                                if let Some((_, sent_time)) = outstanding.get(&(original_dst_port, first_src)) {
+                                    timing.update_rtt(sent_time.elapsed());
+                                }
+                            }
+                            let state = match code {
+                                IcmpUnreachableCode::PortUnreachable => PortState::Closed,
+                                _ => PortState::Filtered,
+                            };
+                            results.insert(original_dst_port, state);
+                            pending_ports.remove(&original_dst_port);
+                            for src_port in srcs {
+                                outstanding.remove(&(original_dst_port, src_port));
+                                src_to_dst.remove(&src_port);
                             }
                         }
                     }
                 }
-            } else if let Some(IcmpResponse::DestinationUnreachable {
-                code,
-                original_dst_ip,
-                original_dst_port,
-            }) = parse_icmp_response(data.0)
-            {
-                if original_dst_ip == dst_addr {
-                    if let Some(srcs) = port_srcs.remove(&original_dst_port) {
-                        let state = match code {
-                            IcmpUnreachableCode::PortUnreachable => PortState::Closed,
-                            _ => PortState::Filtered,
-                        };
-                        results.insert(original_dst_port, state);
-                        for src_port in srcs {
-                            outstanding.remove(&(original_dst_port, src_port));
-                            src_to_dst.remove(&src_port);
-                        }
-                    }
-                }
             }
+            // No artificial delay between retry rounds - nmap doesn't have this
         }
 
-        // Phase 3: Mark remaining as Open|Filtered
-        for (dst_port, _) in outstanding.keys() {
-            results
-                .entry(*dst_port)
-                .or_insert(PortState::OpenOrFiltered);
+        // Phase 3: Mark remaining ports as Open|Filtered (no response after all retries)
+        for port in pending_ports {
+            results.entry(port).or_insert(PortState::OpenOrFiltered);
         }
 
         Ok(results)
@@ -3092,7 +3394,13 @@ impl TcpWindowScanner {
     /// Generates a random source port.
     #[must_use]
     fn generate_source_port() -> Port {
-        let offset = (std::process::id() % 1000) as u16;
+        // Mix PID with current time for randomness
+        let pid_component = (std::process::id() % 1000) as u16;
+        let time_component = (std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .subsec_nanos() % 1000) as u16;
+        let offset = (pid_component + time_component) % 1000;
         SOURCE_PORT_START + offset
     }
 
@@ -3112,10 +3420,11 @@ impl TcpWindowScanner {
         now_lower.wrapping_add(pid)
     }
 
-    /// Scans multiple ports in batch mode for improved performance.
+    /// Scans multiple ports in batch mode with nmap-style retransmissions.
     ///
-    /// Sends all ACK probes first, then collects responses and analyzes TCP window
-    /// field to determine port state. This is much faster than sequential scanning.
+    /// Sends ACK probes, collects responses, and resends probes for unresponsive
+    /// ports up to `max_retries` times with exponential backoff.
+    /// This handles rate limiting and packet loss like nmap does.
     ///
     /// # Arguments
     ///
@@ -3135,10 +3444,10 @@ impl TcpWindowScanner {
     /// - RST + Window > 0 -> Open
     /// - RST + Window == 0 -> Closed
     /// - ICMP unreachable -> Filtered
-    /// - No response -> Filtered
+    /// - No response after retries -> Filtered
     #[expect(
         clippy::too_many_lines,
-        reason = "Batch scanning requires handling send, receive, and result collection in one method for clarity"
+        reason = "Batch scanning with retransmissions requires handling send, receive, retry, and result collection in one method for clarity"
     )]
     pub fn scan_ports_batch(
         &self,
@@ -3152,110 +3461,119 @@ impl TcpWindowScanner {
         // Limit batch size to prevent memory issues
         let ports_to_scan: Vec<Port> = ports.iter().copied().take(MAX_BATCH_SIZE).collect();
 
-        // Flush any stale packets from the AF_PACKET socket BEFORE sending probes
-        // This prevents processing stale packets from previous scans or network activity
-        // Must flush BEFORE sending, not after, to avoid flushing our own responses
+        // Track ports that still need responses (not yet classified)
+        let mut pending_ports: std::collections::HashSet<Port> =
+            ports_to_scan.iter().copied().collect();
+        let mut results: HashMap<Port, PortState> = HashMap::new();
+
+        // Maximum retries from config (nmap default: 2, cap at 3 for stealth scans)
+        // Using a lower cap because stealth scans are more likely to be rate-limited
+        let max_retries = u32::from(self.config.max_retries.min(3));
+
+        // Adaptive timing for nmap-style RTT estimation
+        let mut timing = AdaptiveTiming::new();
+
+        // Flush any stale packets from the AF_PACKET socket BEFORE starting
         if let Some(ref pkt_sock) = self.packet_socket {
             pkt_sock.flush_buffer();
         }
 
-        // Phase 1: Send all probes
-        // Track scanned ports for O(1) lookup
-        let mut scanned_ports: std::collections::HashSet<Port> =
-            ports_to_scan.iter().copied().collect();
-        // Port tracking: dst_port -> set of src_ports for O(1) ICMP matching
-        let mut port_srcs: HashMap<Port, std::collections::HashSet<u16>> = HashMap::new();
-
-        let src_port = Self::generate_source_port();
-
-        for dst_port in &ports_to_scan {
-            let seq = Self::generate_sequence_number();
-
-            // Build TCP packet with ACK flag only
-            let packet = TcpPacketBuilder::new(self.local_addr, dst_addr, src_port, *dst_port)
-                .seq(seq)
-                .ack_flag()
-                .window(65535)
-                .build();
-
-            let port_sockaddr = SocketAddr::new(std::net::IpAddr::V4(dst_addr), *dst_port);
-            self.socket
-                .send_packet(&packet, &port_sockaddr)
-                .map_err(|e| {
-                    rustnmap_common::ScanError::Network(rustnmap_common::Error::Network(
-                        rustnmap_common::error::NetworkError::SendError { source: e },
-                    ))
-                })?;
-
-            port_srcs.entry(*dst_port).or_default().insert(src_port);
-        }
-
-        // Phase 2: Collect responses until timeout
-        let mut results: HashMap<Port, PortState> = HashMap::new();
-        let deadline = Instant::now() + self.config.initial_rtt;
-        let mut recv_buf = vec![0u8; 65535];
-
-        while Instant::now() < deadline && !scanned_ports.is_empty() {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                break;
+        // Nmap-style retry loop with adaptive timeout
+        for _retry_round in 0..=max_retries {
+            if pending_ports.is_empty() {
+                break; // All ports have been classified
             }
 
-            // Try AF_PACKET first if available
-            #[expect(
-                unused_assignments,
-                reason = "packet_data extends lifetime of received data"
-            )]
-            let mut packet_data = None;
-            let packet_timeout = remaining.min(Duration::from_millis(200));
-            let received = if let Some(ref pkt_sock) = self.packet_socket {
-                match pkt_sock.recv_packet_with_timeout(packet_timeout) {
-                    Ok(Some(data)) if data.len() > ETH_HDR_SIZE => {
-                        packet_data = Some(data);
-                        packet_data
-                            .as_ref()
-                            .map(|d| (&d[ETH_HDR_SIZE..], d.len() - ETH_HDR_SIZE))
-                    }
-                    _ => None,
-                }
-            } else {
-                None
-            };
+            // Phase 1: Send probes for pending ports only
+            let src_port = Self::generate_source_port();
+            let round_start = Instant::now();
 
-            // Fall back to raw socket if AF_PACKET didn't receive data
-            let data = if let Some((slice, len)) = received {
-                (slice, len)
-            } else {
-                match self
-                    .socket
-                    .recv_packet(recv_buf.as_mut_slice(), Some(remaining))
-                {
-                    Ok(len) if len > 0 => (&recv_buf[..len], len),
-                    Ok(_) => continue,
-                    Err(e)
-                        if e.kind() == io::ErrorKind::WouldBlock
-                            || e.kind() == io::ErrorKind::TimedOut =>
-                    {
-                        continue;
-                    }
-                    Err(e) => {
-                        return Err(rustnmap_common::ScanError::Network(
-                            rustnmap_common::Error::Network(
-                                rustnmap_common::error::NetworkError::ReceiveError { source: e },
-                            ),
+            for dst_port in &pending_ports {
+                let seq = Self::generate_sequence_number();
+
+                // Build TCP packet with ACK flag only
+                let packet = TcpPacketBuilder::new(self.local_addr, dst_addr, src_port, *dst_port)
+                    .seq(seq)
+                    .ack_flag()
+                    .window(65535)
+                    .build();
+
+                let port_sockaddr = SocketAddr::new(std::net::IpAddr::V4(dst_addr), *dst_port);
+                self.socket
+                    .send_packet(&packet, &port_sockaddr)
+                    .map_err(|e| {
+                        rustnmap_common::ScanError::Network(rustnmap_common::Error::Network(
+                            rustnmap_common::error::NetworkError::SendError { source: e },
                         ))
-                    }
-                }
-            };
+                    })?;
+            }
 
-            // Check for TCP response with window field
-            if let Some((flags, _seq, _ack, resp_src_port, _resp_dst_port, src_ip, window)) =
-                parse_tcp_response_with_window(data.0)
-            {
-                if src_ip == dst_addr {
-                    // For Window scan, RST responses come FROM the target port
-                    // So resp_src_port is the port we scanned
-                    if scanned_ports.contains(&resp_src_port) {
+            // Phase 2: Collect responses with adaptive timeout
+            // Nmap-style: timeout = SRTT + 4*RTTVAR (clamped to 100ms-10000ms)
+            let current_timeout = timing.recommended_timeout();
+            let deadline = Instant::now() + current_timeout;
+            let mut recv_buf = vec![0u8; 65535];
+
+            while Instant::now() < deadline && !pending_ports.is_empty() {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    break;
+                }
+
+                // Try AF_PACKET first if available
+                #[expect(
+                    unused_assignments,
+                    reason = "packet_data extends lifetime of received data"
+                )]
+                let mut packet_data = None;
+                let packet_timeout = remaining.min(Duration::from_millis(200));
+                let received = if let Some(ref pkt_sock) = self.packet_socket {
+                    match pkt_sock.recv_packet_with_timeout(packet_timeout) {
+                        Ok(Some(data)) if data.len() > ETH_HDR_SIZE => {
+                            packet_data = Some(data);
+                            packet_data
+                                .as_ref()
+                                .map(|d| (&d[ETH_HDR_SIZE..], d.len() - ETH_HDR_SIZE))
+                        }
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
+
+                // Fall back to raw socket if AF_PACKET didn't receive data
+                let data = if let Some((slice, len)) = received {
+                    (slice, len)
+                } else {
+                    match self
+                        .socket
+                        .recv_packet(recv_buf.as_mut_slice(), Some(remaining))
+                    {
+                        Ok(len) if len > 0 => (&recv_buf[..len], len),
+                        Ok(_) => continue,
+                        Err(e)
+                            if e.kind() == io::ErrorKind::WouldBlock
+                                || e.kind() == io::ErrorKind::TimedOut =>
+                        {
+                            continue;
+                        }
+                        Err(e) => {
+                            return Err(rustnmap_common::ScanError::Network(
+                                rustnmap_common::Error::Network(
+                                    rustnmap_common::error::NetworkError::ReceiveError { source: e },
+                                ),
+                            ))
+                        }
+                    }
+                };
+
+                // Check for TCP response with window field
+                if let Some((flags, _seq, _ack, resp_src_port, _resp_dst_port, src_ip, window)) =
+                    parse_tcp_response_with_window(data.0)
+                {
+                    if src_ip == dst_addr && pending_ports.contains(&resp_src_port) {
+                        // Update RTT estimate for adaptive timing
+                        timing.update_rtt(round_start.elapsed());
                         // For Window scan, analyze TCP window field in RST response
                         let state = if (flags & tcp_flags::RST) != 0 {
                             // Window scan: Window == 0 = Closed (Linux), Window > 0 = Open (some systems)
@@ -3268,27 +3586,27 @@ impl TcpWindowScanner {
                             PortState::Filtered
                         };
                         results.insert(resp_src_port, state);
-                        scanned_ports.remove(&resp_src_port);
-                        port_srcs.remove(&resp_src_port);
+                        pending_ports.remove(&resp_src_port);
+                    }
+                } else if let Some(IcmpResponse::DestinationUnreachable {
+                    original_dst_ip,
+                    original_dst_port,
+                    ..
+                }) = parse_icmp_response(data.0)
+                {
+                    if original_dst_ip == dst_addr && pending_ports.remove(&original_dst_port) {
+                        // Update RTT estimate for adaptive timing
+                        timing.update_rtt(round_start.elapsed());
+                        // ICMP unreachable means filtered
+                        results.insert(original_dst_port, PortState::Filtered);
                     }
                 }
-            } else if let Some(IcmpResponse::DestinationUnreachable {
-                code,
-                original_dst_ip,
-                original_dst_port,
-            }) = parse_icmp_response(data.0)
-            {
-                if original_dst_ip == dst_addr && scanned_ports.remove(&original_dst_port) {
-                    // For Window scan, ICMP unreachable means filtered
-                    let _ = code;
-                    results.insert(original_dst_port, PortState::Filtered);
-                    port_srcs.remove(&original_dst_port);
-                }
             }
+            // No artificial delay between retry rounds - nmap doesn't have this
         }
 
-        // Phase 3: Mark remaining ports as Filtered (no response)
-        for port in scanned_ports {
+        // Phase 3: Mark remaining ports as Filtered (no response after all retries)
+        for port in pending_ports {
             results.entry(port).or_insert(PortState::Filtered);
         }
 

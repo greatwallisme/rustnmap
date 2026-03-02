@@ -6,6 +6,7 @@ skills:
   - rust-guidelines
   - rust-concurrency
   - rust-hex-arch
+  - rust-design-patterns
   - zero-rust
 ---
 

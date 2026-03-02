@@ -1,7 +1,6 @@
 ---
 name: code-quality
 description: Comprehensive code quality analysis across Go, Rust, Python, JavaScript, and TypeScript. Use for feature reviews, pre-commit checks, test coverage verification, and configuration audits. ANALYSIS ONLY - no code modifications.
-
 model: opus
 color: yellow
 ---

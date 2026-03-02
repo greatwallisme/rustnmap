@@ -345,72 +345,60 @@ bench-nse:
     cargo bench --package rustnmap-benchmarks nse_benchmarks
 
 # Comparison tests (rustnmap vs nmap)
-# Install Python dependencies for comparison tests
-bench-compare-install:
-    cd benchmarks && uv sync
-
-# Run all comparison tests
-bench-compare *args="":
+# Run all comparison tests (41 tests across 8 test suites)
+bench-compare:
     cargo build --release
-    cd benchmarks && uv run python comparison_test.py {{args}}
+    ./benchmarks/comparison_test.sh
 
-# Run basic scan comparison
-bench-compare-basic:
-    cargo build --release
-    cd benchmarks && uv run python comparison_test.py --suite basic
-
-# Run service detection comparison
-bench-compare-service:
-    cargo build --release
-    cd benchmarks && uv run python comparison_test.py --suite service
-
-# Run OS detection comparison
-bench-compare-os:
-    cargo build --release
-    cd benchmarks && uv run python comparison_test.py --suite os
-
-# Run advanced scan comparison
-bench-compare-advanced:
-    cargo build --release
-    cd benchmarks && uv run python comparison_test.py --suite advanced
-
-# Run comparison tests with custom target
+# Run all comparison tests with custom target
 bench-compare-target target:
     cargo build --release
-    cd benchmarks && uv run python comparison_test.py --target {{target}}
+    TARGET_IP={{target}} ./benchmarks/comparison_test.sh
 
-# Run comparison tests (text report only)
-bench-compare-text:
+# Run all comparison tests with custom ports
+bench-compare-ports ports:
     cargo build --release
-    cd benchmarks && uv run python comparison_test.py --format text
+    TEST_PORTS={{ports}} ./benchmarks/comparison_test.sh
 
-# Run comparison tests (JSON report only)
-bench-compare-json:
-    cargo build --release
-    cd benchmarks && uv run python comparison_test.py --format json
+# Alias for bench-compare (runs all 41 tests)
+bench-compare-basic: bench-compare
 
-# Run comparison tests with verbose output
-bench-compare-verbose:
-    cargo build --release
-    cd benchmarks && uv run python comparison_test.py -v
+# Alias for bench-compare (runs all 41 tests)
+bench-compare-stealth: bench-compare
 
-# Run timing template comparison
-bench-compare-timing:
-    cargo build --release
-    cd benchmarks && uv run python comparison_test.py --suite timing
+# Alias for bench-compare (runs all 41 tests)
+bench-compare-advanced: bench-compare
 
-# Run output format comparison
-bench-compare-output:
-    cargo build --release
-    cd benchmarks && uv run python comparison_test.py --suite output
+# Alias for bench-compare (runs all 41 tests)
+bench-compare-timing: bench-compare
 
-# Run multi-target comparison
-bench-compare-multi:
-    cargo build --release
-    cd benchmarks && uv run python comparison_test.py --suite multi
+# Alias for bench-compare (runs all 41 tests)
+bench-compare-output: bench-compare
 
-# Run extended stealth scan comparison
-bench-compare-stealth:
+# Alias for bench-compare (runs all 41 tests)
+bench-compare-multi: bench-compare
+
+# Alias for bench-compare (runs all 41 tests)
+bench-compare-service: bench-compare
+
+# Alias for bench-compare (runs all 41 tests)
+bench-compare-os: bench-compare
+
+# Note: The shell script runs all 41 tests at once with no option to run
+# individual suites. See benchmarks/comparison_test.sh for test suite functions.
+
+# RustNmap standalone CLI tests (covers all 85 CLI options)
+bench-rustnmap-test:
     cargo build --release
-    cd benchmarks && uv run python comparison_test.py --suite stealth
+    ./benchmarks/rustnmap_test.sh
+
+# Run rustnmap tests with custom target
+bench-rustnmap-target target:
+    cargo build --release
+    TARGET_IP={{target}} ./benchmarks/rustnmap_test.sh
+
+# Run rustnmap tests with custom ports
+bench-rustnmap-ports ports:
+    cargo build --release
+    TEST_PORTS={{ports}} ./benchmarks/rustnmap_test.sh
 
