@@ -1921,12 +1921,9 @@ impl ScanOrchestrator {
             warn!("OS fingerprint database not loaded, skipping OS detection");
             return Ok(());
         };
-        let os_db = os_db.clone();
 
         // Get local address for OS detection probes
         let local_addr = std::net::Ipv4Addr::UNSPECIFIED;
-        let detector = rustnmap_fingerprint::OsDetector::new(os_db, local_addr)
-            .with_timeout(std::time::Duration::from_secs(5));
 
         for host_result in host_results.iter_mut() {
             // OS detection only works with IPv4
@@ -1935,12 +1932,25 @@ impl ScanOrchestrator {
                 continue;
             };
 
-            // Use first open port for OS detection, or default to port 80
+            // Find open and closed ports for OS detection probes
+            // Nmap requires both: open port for SEQ/ECN probes, closed port for T2-T7 tests
             let open_port = host_result
                 .ports
                 .iter()
                 .find(|p| p.state == PortState::Open)
                 .map_or(80, |p| p.number);
+
+            let closed_port = host_result
+                .ports
+                .iter()
+                .find(|p| p.state == PortState::Closed)
+                .map_or(443, |p| p.number);
+
+            // Create detector with the correct ports for this host
+            let detector = rustnmap_fingerprint::OsDetector::new(os_db.clone(), local_addr)
+                .with_open_port(open_port)
+                .with_closed_port(closed_port)
+                .with_timeout(std::time::Duration::from_secs(5));
 
             let target_addr = SocketAddr::new(IpAddr::V4(target_ip), open_port);
 
