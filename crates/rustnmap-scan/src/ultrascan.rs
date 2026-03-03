@@ -1037,9 +1037,11 @@ impl ParallelScanEngine {
         // Create rate limiter for min/max rate enforcement
         let rate_limiter = RateLimiter::new(config.min_rate, config.max_rate);
 
-        // Initialize last probe send time to None (first probe has no delay, like nmap)
-        // See nmap timing.cc:183-188: first call to enforce_scan_delay() returns immediately
-        let last_probe_send_time = Arc::new(Mutex::new(None));
+        // Initialize last probe send time to now so the first probe respects scan_delay.
+        // This is important when the engine is created after host discovery - we want
+        // the first port probe to wait for scan_delay after the discovery phase.
+        // See nmap's behavior where scan_delay is enforced after host discovery probes.
+        let last_probe_send_time = Arc::new(Mutex::new(Some(Instant::now())));
 
         Ok(Self {
             local_addr,

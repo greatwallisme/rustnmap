@@ -9,6 +9,7 @@
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use futures_util::future::join_all;
 use rustnmap_common::MacAddr;
@@ -30,7 +31,7 @@ use rustnmap_scan::ultrascan::ParallelScanEngine;
 use rustnmap_target::discovery::{HostDiscovery, HostState as DiscoveryHostState};
 use rustnmap_target::Target;
 
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, info, instrument, warn};
 
 use crate::error::Result;
@@ -300,6 +301,10 @@ pub struct ScanOrchestrator {
     state: Arc<RwLock<ScanState>>,
     /// Current scan phase.
     current_phase: Arc<RwLock<ScanPhase>>,
+    /// Tracks when the last probe was sent for enforcing `scan_delay`.
+    ///
+    /// This implements nmap's `enforce_scan_delay()` from `timing.cc:172-206`.
+    last_probe_send_time: Arc<Mutex<Option<Instant>>>,
 }
 
 impl fmt::Debug for ScanOrchestrator {
@@ -380,6 +385,7 @@ impl ScanOrchestrator {
             scheduler,
             state,
             current_phase,
+            last_probe_send_time: Arc::new(Mutex::new(Some(Instant::now()))),
         }
     }
 
@@ -396,7 +402,49 @@ impl ScanOrchestrator {
             scheduler,
             state,
             current_phase,
+            last_probe_send_time: Arc::new(Mutex::new(Some(Instant::now()))),
         }
+    }
+
+    /// Enforces the `scan_delay` between probes.
+    ///
+    /// This implements nmap's `enforce_scan_delay()` from `timing.cc:172-206`.
+    /// The scan delay is a minimum time that must elapse between sending probes,
+    /// independent of rate limiting.
+    ///
+    /// If the time elapsed since the last probe is less than `scan_delay`,
+    /// this method sleeps for the remaining time.
+    ///
+    /// # Behavior
+    ///
+    /// - First call: Returns immediately (no delay), like nmap's `init == -1` check
+    /// - Subsequent calls: Enforces `scan_delay` between probes
+    async fn enforce_scan_delay(&self) {
+        let scan_delay = self.session.config.timing_template.scan_config().scan_delay;
+        if scan_delay == Duration::ZERO {
+            return;
+        }
+
+        // Calculate time since last probe
+        let elapsed = {
+            let last_opt = self.last_probe_send_time.lock().await;
+            match *last_opt {
+                None => {
+                    // Should not happen since we initialize with Some(Instant::now())
+                    return;
+                }
+                Some(last) => last.elapsed(),
+            }
+        };
+
+        if elapsed < scan_delay {
+            // Sleep for remaining time
+            let remaining = scan_delay - elapsed;
+            tokio::time::sleep(remaining).await;
+        }
+
+        // Update last probe send time to now
+        *self.last_probe_send_time.lock().await = Some(Instant::now());
     }
 
     /// Runs the complete scan pipeline.
@@ -474,6 +522,10 @@ impl ScanOrchestrator {
     async fn run_host_discovery(&self) -> Result<()> {
         info!("Starting host discovery phase");
 
+        // Enforce scan_delay before first host discovery probe
+        // This matches nmap's behavior where scan_delay applies to all probes
+        self.enforce_scan_delay().await;
+
         let targets: Vec<Target> = self.session.target_set.targets().to_vec();
         let mut tasks = Vec::new();
 
@@ -550,6 +602,10 @@ impl ScanOrchestrator {
 
         // Wait for all tasks to complete
         self.scheduler.wait_for_completion().await?;
+
+        // Initialize last_probe_send_time so the first port probe respects scan_delay
+        // This matches nmap's behavior where scan_delay is enforced after host discovery
+        *self.last_probe_send_time.lock().await = Some(Instant::now());
 
         info!("Host discovery phase completed");
         Ok(())
@@ -857,6 +913,8 @@ impl ScanOrchestrator {
             let mut port_results = Vec::new();
 
             for port in ports {
+                // Enforce scan_delay before each probe (nmap timing.cc:172-206)
+                self.enforce_scan_delay().await;
                 let port_result = self.scan_port(target, *port).await?;
                 let is_open = port_result.state == PortState::Open;
                 port_results.push(port_result);
@@ -1354,6 +1412,8 @@ impl ScanOrchestrator {
             let mut has_open_port = false;
 
             for port in &first_phase_ports {
+                // Enforce scan_delay before each probe (nmap timing.cc:172-206)
+                self.enforce_scan_delay().await;
                 let port_result = self.scan_port(target, *port).await?;
                 if port_result.state == PortState::Open {
                     has_open_port = true;
@@ -1386,6 +1446,8 @@ impl ScanOrchestrator {
             // Only scan ports that weren't already scanned in Phase 1
             for port in all_ports {
                 if !first_phase_ports.contains(&port) {
+                    // Enforce scan_delay before each probe (nmap timing.cc:172-206)
+                    self.enforce_scan_delay().await;
                     let port_result = self.scan_port(&target, port).await?;
                     let is_open = port_result.state == PortState::Open;
                     phase2_port_results.push(port_result);

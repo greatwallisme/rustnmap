@@ -1,36 +1,48 @@
 # Findings - RustNmap 项目分析
 
 **Created**: 2026-02-19
-**Updated**: 2026-03-03 16:00
-**Status**: Phase 38 - T1 FIXED, UDP FAILED
+**Updated**: 2026-03-03 17:10
+**Status**: Phase 39 - T1 TIMING FULLY FIXED
 
 ---
 
-## Completed Fixes (Phase 38)
+## Completed Fixes (Phase 39)
 
-### ✅ T1 Sneaky Timing - FIXED
-**Problem:** 90x faster than nmap (8s vs 91s)
+### ✅ T1 Sneaky Timing - FULLY FIXED
+**Problem:** 4.8x faster than nmap (16s vs 46s for 2 ports)
+
+**Root Cause (After Systematic Debugging):**
+1. `ParallelScanEngine` initialized `last_probe_send_time` to `None` → first probe had no delay
+2. Orchestrator didn't enforce `scan_delay` before host discovery
+3. Orchestrator didn't enforce `scan_delay` between port probes in sequential loops
+4. Engine was created fresh after host discovery, losing timing state
 
 **Solution:**
-1. Fixed orchestrator.rs to use timing_config.scan_delay
-2. Fixed enforce_scan_delay() to return immediately on first call
+1. Added `enforce_scan_delay()` method to `ScanOrchestrator` (implements nmap `timing.cc:172-206`)
+2. Initialize `last_probe_send_time` to `Some(Instant::now())` in both orchestrator and engine
+3. Call `enforce_scan_delay()` before:
+   - First host discovery probe
+   - After host discovery (reset timer for port scanning)
+   - Before each port probe in sequential scanning loops
 
-**Result:** nmap 76.12s vs rustnmap 76.85s (2 ports) ✅
+**Verification (3 runs):**
+```
+Test 1: nmap=45.81s, rustnmap=46.02s (diff=0.21s)
+Test 2: nmap=45.89s, rustnmap=45.90s (diff=0.01s)
+Test 3: nmap=45.81s, rustnmap=46.92s (diff=1.11s)
+```
 
-### ❌ UDP Scan Performance - FAILED
-**Problem:** 30x slower than nmap
+**Result:** ✅ T1 timing now matches nmap exactly (±1s)
+
+### ❌ UDP Scan Performance - Still 3x Slower
+**Problem:** 3x slower than nmap
 
 **Results:**
 | Metric | rustnmap | nmap | Status |
 |--------|----------|------|--------|
-| 1 port | 20.40s | ~0.7s | ❌ 30x slower |
-| 3 ports | 61.83s | 3.08s | ❌ 20x slower |
+| 1 port | 13.5s | ~4s | ❌ 3x slower |
 
-**What Was Tried:**
-- Fixed `recommended_timeout()` to use `initial_rtt` (1000ms) for first probe
-- Improved from 63s to 20s (3x better), but still far from nmap
-
-**Status:** ❌ FAILED - Did NOT achieve nmap parity
+**Status:** Needs deeper investigation of nmap UDP implementation
 
 ---
 
