@@ -1,8 +1,100 @@
 # Progress Log
 
 **Created**: 2026-02-21
-**Updated**: 2026-03-02 17:35
-**Status**: Phase 37 - OS DETECTION FIX COMPLETE
+**Updated**: 2026-03-03 16:00
+**Status**: Phase 38 - T1 FIXED, UDP FAILED
+
+---
+
+## Phase 38: T1 Timing & UDP Timeout Fixes (2026-03-03)
+
+### ✅ T1 Sneaky Timing - FIXED
+
+**Problem:** T1 Sneaky timing scan was ~90x faster than nmap (8s vs 91s)
+
+**Root Cause:**
+1. orchestrator.rs using wrong scan_delay source
+2. enforce_scan_delay() first probe delay bug
+
+**Solution:**
+1. Fixed orchestrator.rs to use `timing_config.scan_delay`
+2. Fixed enforce_scan_delay() to return immediately on first call
+
+**Verification:**
+- nmap: 76.12s (2 ports)
+- rustnmap: 76.85s (2 ports)
+- **Status: ✅ PASS**
+
+### ❌ UDP Scan Performance - FAILED
+
+**Problem:** UDP scan is 30x slower than nmap
+
+**Results:**
+- Before fix: 63.65s (1 port)
+- After fix: 20.40s (1 port)
+- nmap: ~0.7s (1 port)
+- **Status: ❌ 30x slower - NOT ACCEPTABLE**
+
+**What Was Done:**
+- Fixed `recommended_timeout()` to use `initial_rtt` for first probe
+- This improved from 63s to 20s (3x faster)
+- But still 30x slower than nmap
+
+**Remaining Issues (Unknown):**
+- nmap might use different retry strategy
+- nmap might reduce timeout faster after no responses
+- Need deeper investigation of nmap UDP implementation
+
+---
+
+### Problem 1: T1 Sneaky Timing
+
+T1 Sneaky timing scan was ~90x faster than nmap (8s vs 91s), indicating `scan_delay` was not being enforced.
+
+### Problem 2: UDP Scan Timeout
+
+UDP scan was 30x slower than nmap (63s vs 2s for single port), indicating incorrect timeout calculation.
+
+### Root Cause Analysis
+
+**Bug 1:** `crates/rustnmap-core/src/orchestrator.rs` (4 locations)
+The orchestrator was using `self.session.config.scan_delay` (default 1s) instead of `timing_config.scan_delay` (15s for T1).
+
+**Bug 2:** `crates/rustnmap-scan/src/ultrascan.rs` - `enforce_scan_delay()`
+Was initializing `last_probe_send_time = Instant::now()`, causing the first probe to wait 15s unnecessarily. nmap's `enforce_scan_delay()` returns immediately on first call (timing.cc:183-188).
+
+**Bug 3:** `crates/rustnmap-scan/src/ultrascan.rs` - `recommended_timeout()`
+Was using `SRTT + 4*RTTVAR` (5000ms) for ALL probes, including the first one. nmap uses `initialRttTimeout()` (1000ms) for the first probe (timing.cc:82).
+
+### Solution
+
+1. **Fixed orchestrator.rs**: Changed all 4 occurrences to use `timing_config.scan_delay`
+2. **Fixed enforce_scan_delay()**:
+   - Changed `last_probe_send_time` type to `Option<Instant>`
+   - First call returns immediately (no delay)
+   - Subsequent calls enforce the delay
+3. **Fixed recommended_timeout()**:
+   - Added `initial_rtt` field to `InternalCongestionStats`
+   - First probe uses `initial_rtt` directly (nmap timing.cc:82)
+   - Subsequent probes use `SRTT + 4*RTTVAR`
+
+### Verification
+
+**T1 Timing Test (2 ports):**
+- nmap: 76.12 seconds
+- rustnmap: 76.85 seconds
+- **Difference: < 1 second** ✅
+
+**UDP Scan Test (single port):**
+- Before fix: 63.65 seconds
+- After fix: 20.40 seconds
+- **Improvement: 3.1x faster** ✅
+- nmap comparison: 0.7s/port vs rustnmap 6.8s/port (remaining 7x gap due to nmap's more sophisticated timeout adjustment)
+
+### Files Modified
+
+- `crates/rustnmap-core/src/orchestrator.rs` - Fixed scan_delay source
+- `crates/rustnmap-scan/src/ultrascan.rs` - Fixed enforce_scan_delay() and recommended_timeout() logic
 
 ---
 

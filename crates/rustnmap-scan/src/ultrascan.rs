@@ -48,7 +48,7 @@ use std::time::{Duration, Instant};
 
 use rustnmap_common::{Port, PortState, RateLimiter, ScanConfig};
 use rustnmap_net::raw_socket::{parse_tcp_response, RawSocket, TcpPacketBuilder};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, Mutex};
 use tokio::task::JoinHandle;
 use tokio::time::timeout as tokio_timeout;
 
@@ -63,8 +63,13 @@ use tokio::time::timeout as tokio_timeout;
 ///
 /// Implements nmap's `cc_scale` mechanism for adaptive congestion window growth
 /// when packet loss is detected. See `timing.cc:209-218` in nmap source.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct InternalCongestionStats {
+    /// Initial RTT timeout from config.
+    ///
+    /// This is used for the first probe before any RTT measurement.
+    /// See nmap timing.cc:82: `to->timeout = o.initialRttTimeout() * 1000;`
+    initial_rtt: Duration,
     /// Smoothed RTT in microseconds.
     srtt_micros: std::sync::atomic::AtomicU64,
     /// RTT variance in microseconds.
@@ -91,17 +96,27 @@ struct InternalCongestionStats {
 }
 
 impl InternalCongestionStats {
-    /// Creates new congestion statistics with default values.
+    /// Creates new congestion statistics with the given initial RTT.
     ///
-    /// Uses nmap T3 (Normal) defaults:
+    /// Uses nmap T3 (Normal) defaults for RTTVAR:
     /// - Initial SRTT: 1000ms (`INITIAL_RTT_TIMEOUT`)
     /// - Initial RTTVAR: 1000ms (clamped between 5ms-2000ms, based on SRTT)
-    fn new() -> Self {
+    ///
+    /// # Panics
+    ///
+    /// Panics if `initial_rtt` is larger than 30 seconds (overflow in u64).
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "RTT values are bounded to reasonable network latencies (< 30s)"
+    )]
+    fn new(initial_rtt: Duration) -> Self {
+        let srtt_micros = initial_rtt.as_micros() as u64;
+        // Nmap: rttvar = box(5000, 2000000, srtt) = clamp(srtt, 5ms, 2000ms)
+        let rttvar_micros = srtt_micros.clamp(5_000, 2_000_000);
         Self {
-            // Nmap INITIAL_RTT_TIMEOUT = 1000ms
-            srtt_micros: std::sync::atomic::AtomicU64::new(1_000_000),
-            // Nmap: rttvar = box(5000, 2000000, srtt) = clamp(srtt, 5ms, 2000ms)
-            rttvar_micros: std::sync::atomic::AtomicU64::new(1_000_000),
+            initial_rtt,
+            srtt_micros: std::sync::atomic::AtomicU64::new(srtt_micros),
+            rttvar_micros: std::sync::atomic::AtomicU64::new(rttvar_micros),
             // Track if this is the first RTT measurement (nmap uses -1 sentinel)
             first_measurement: std::sync::atomic::AtomicBool::new(true),
             packets_sent: std::sync::atomic::AtomicU64::new(0),
@@ -159,14 +174,25 @@ impl InternalCongestionStats {
     ///
     /// The result is clamped to nmap's bounds: `MIN_RTT_TIMEOUT` (100ms) to
     /// `MAX_RTT_TIMEOUT` (10000ms).
+    ///
+    /// For the first probe (before any RTT measurement), returns `initial_rtt` directly.
+    /// This matches nmap's behavior: `to->timeout = o.initialRttTimeout() * 1000;`
+    /// (see timing.cc:82).
     fn recommended_timeout(&self) -> Duration {
         use std::sync::atomic::Ordering;
-        let srtt = self.srtt_micros.load(Ordering::Relaxed);
-        let rttvar = self.rttvar_micros.load(Ordering::Relaxed);
-        let timeout_micros = srtt.saturating_add(4 * rttvar);
-        // Clamp to nmap's MIN_RTT_TIMEOUT (100ms) and MAX_RTT_TIMEOUT (10000ms)
-        let clamped = timeout_micros.clamp(100_000, 10_000_000);
-        Duration::from_micros(clamped)
+        // Check if this is the first measurement
+        if self.first_measurement.load(Ordering::Relaxed) {
+            // First probe: use initial_rtt directly (nmap timing.cc:82)
+            self.initial_rtt
+        } else {
+            // Subsequent probes: use SRTT + 4*RTTVAR
+            let srtt = self.srtt_micros.load(Ordering::Relaxed);
+            let rttvar = self.rttvar_micros.load(Ordering::Relaxed);
+            let timeout_micros = srtt.saturating_add(4 * rttvar);
+            // Clamp to nmap's MIN_RTT_TIMEOUT (100ms) and MAX_RTT_TIMEOUT (10000ms)
+            let clamped = timeout_micros.clamp(100_000, 10_000_000);
+            Duration::from_micros(clamped)
+        }
     }
 
     /// Records a packet sent.
@@ -264,7 +290,7 @@ impl InternalCongestionController {
     /// From nmap `timing.cc:276-279`:
     /// - `timing_level` < 4: `ca_incr` = 1
     /// - `timing_level` >= 4: `ca_incr` = 2
-    fn new(max_cwnd: usize, timing_level: u8) -> Self {
+    fn new(max_cwnd: usize, timing_level: u8, initial_rtt: Duration) -> Self {
         // Nmap timing.cc:272 - group_initial_cwnd = box(low_cwnd, max_cwnd, 10)
         // low_cwnd=1, max_cwnd=300, box() returns 10 since 1 < 10 < 300
         const GROUP_INITIAL_CWND: usize = 10;
@@ -277,7 +303,7 @@ impl InternalCongestionController {
         let ca_incr = if timing_level < 4 { 1 } else { 2 };
 
         Self {
-            stats: std::sync::Arc::new(InternalCongestionStats::new()),
+            stats: std::sync::Arc::new(InternalCongestionStats::new(initial_rtt)),
             cwnd: std::sync::atomic::AtomicUsize::new(GROUP_INITIAL_CWND),
             ssthresh: std::sync::atomic::AtomicUsize::new(INITIAL_SSTHRESH),
             ca_ack_counter: std::sync::atomic::AtomicUsize::new(0),
@@ -947,6 +973,19 @@ pub struct ParallelScanEngine {
     max_parallelism: usize,
     /// Timeout for the entire scan.
     scan_timeout: Duration,
+    /// Tracks when the last probe was sent for enforcing `scan_delay`.
+    ///
+    /// This implements nmap's `enforce_scan_delay()` from `timing.cc:172-206`.
+    /// The scan delay is a minimum time that must elapse between sending probes,
+    /// independent of rate limiting.
+    /// Tracks when the last probe was sent for enforcing `scan_delay`.
+    ///
+    /// This implements nmap's `enforce_scan_delay()` from `timing.cc:172-206`.
+    /// The scan delay is a minimum time that must elapse between sending probes,
+    /// independent of rate limiting.
+    ///
+    /// `None` means no probe has been sent yet (first call should not delay).
+    last_probe_send_time: Arc<Mutex<Option<Instant>>>,
 }
 
 impl ParallelScanEngine {
@@ -992,10 +1031,15 @@ impl ParallelScanEngine {
         let congestion = Arc::new(InternalCongestionController::new(
             max_parallel,
             config.timing_level,
+            config.initial_rtt,
         ));
 
         // Create rate limiter for min/max rate enforcement
         let rate_limiter = RateLimiter::new(config.min_rate, config.max_rate);
+
+        // Initialize last probe send time to None (first probe has no delay, like nmap)
+        // See nmap timing.cc:183-188: first call to enforce_scan_delay() returns immediately
+        let last_probe_send_time = Arc::new(Mutex::new(None));
 
         Ok(Self {
             local_addr,
@@ -1006,6 +1050,7 @@ impl ParallelScanEngine {
             rate_limiter,
             max_parallelism: max_parallel,
             scan_timeout: DEFAULT_SCAN_TIMEOUT,
+            last_probe_send_time,
         })
     }
 
@@ -1097,6 +1142,7 @@ impl ParallelScanEngine {
         self.congestion = Arc::new(InternalCongestionController::new(
             value,
             self.config.timing_level,
+            self.config.initial_rtt,
         ));
         self
     }
@@ -1120,6 +1166,49 @@ impl ParallelScanEngine {
     #[must_use]
     pub fn congestion(&self) -> &InternalCongestionController {
         &self.congestion
+    }
+
+    /// Enforces the `scan_delay` between probes.
+    ///
+    /// This implements nmap's `enforce_scan_delay()` from `timing.cc:172-206`.
+    /// The scan delay is a minimum time that must elapse between sending probes,
+    /// independent of rate limiting.
+    ///
+    /// If the time elapsed since the last probe is less than `scan_delay`,
+    /// this method sleeps for the remaining time.
+    ///
+    /// # Behavior
+    ///
+    /// - First call: Returns immediately (no delay), like nmap's `init == -1` check
+    /// - Subsequent calls: Enforces `scan_delay` between probes
+    async fn enforce_scan_delay(&self) {
+        let scan_delay = self.config.scan_delay;
+        if scan_delay == Duration::ZERO {
+            return;
+        }
+
+        // Calculate time since last probe
+        let elapsed = {
+            let last_opt = *self.last_probe_send_time.lock().await;
+            match last_opt {
+                None => {
+                    // First call - initialize and return immediately
+                    // See nmap timing.cc:183-188
+                    *self.last_probe_send_time.lock().await = Some(Instant::now());
+                    return;
+                }
+                Some(last) => last.elapsed(),
+            }
+        };
+
+        if elapsed < scan_delay {
+            // Sleep for remaining time
+            let remaining = scan_delay - elapsed;
+            tokio::time::sleep(remaining).await;
+        }
+
+        // Update last probe send time to now
+        *self.last_probe_send_time.lock().await = Some(Instant::now());
     }
 
     /// Scans multiple ports on a target in parallel.
@@ -1206,6 +1295,9 @@ impl ParallelScanEngine {
                 }
 
                 if let Some(port) = ports_iter.next() {
+                    // Enforce scan_delay before sending each probe
+                    // This implements nmap's enforce_scan_delay() from timing.cc:172-206
+                    self.enforce_scan_delay().await;
                     self.send_probe(target, port, &mut outstanding)?;
                     // Record packet sent for congestion stats and rate limiting
                     self.congestion.on_packet_sent();
@@ -1715,6 +1807,9 @@ impl ParallelScanEngine {
                 }
 
                 if let Some(port) = ports_iter.next() {
+                    // Enforce scan_delay before sending each probe
+                    // This implements nmap's enforce_scan_delay() from timing.cc:172-206
+                    self.enforce_scan_delay().await;
                     self.send_udp_probe(target, port, &mut outstanding)?;
                     self.congestion.on_packet_sent();
                     self.rate_limiter.record_sent();
@@ -1723,6 +1818,7 @@ impl ParallelScanEngine {
                     // UDP scans need inter-probe delay to avoid ICMP rate limiting
                     // Nmap uses 50ms delay for UDP scans (see timing.cc)
                     // The 2000ms final wait ensures we capture late ICMP responses
+                    // NOTE: This is a UDP-specific delay, independent of scan_delay
                     tokio::time::sleep(Duration::from_millis(50)).await;
                 } else {
                     break;
@@ -1748,11 +1844,12 @@ impl ParallelScanEngine {
 
             let initial_wait = if has_more_ports {
                 // Give ICMP responses time to arrive before sending more probes
-                // Must be at least as long as the probe timeout to avoid premature timeouts
-                // Nmap uses 1 second; we use 500ms minimum for reliability
-                Duration::from_millis(500)
+                // Use short wait to send more probes quickly
+                Duration::from_millis(50)
             } else if !outstanding.is_empty() {
-                earliest_timeout.min(Duration::from_millis(500))
+                // All probes sent, wait for earliest timeout (no artificial limit)
+                // This allows proper timeout behavior instead of artificially extending scan time
+                earliest_timeout
             } else {
                 Duration::from_millis(10)
             };

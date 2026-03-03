@@ -621,7 +621,10 @@ impl ScanOrchestrator {
                     .as_millis()
                     .try_into()
                     .unwrap_or(30000),
-                scan_delay: self.session.config.scan_delay,
+                // Use scan_delay from timing template (T0-T5 have specific delays)
+                // For T1 Sneaky, this is 15 seconds; for T0 Paranoid, 5 minutes
+                // session.config.scan_delay is only set when user specifies --scan-delay
+                scan_delay: timing_config.scan_delay,
                 dns_server: self.session.config.dns_server.clone(),
                 min_rate: self.session.config.min_rate,
                 max_rate: self.session.config.max_rate,
@@ -948,7 +951,8 @@ impl ScanOrchestrator {
                 .as_millis()
                 .try_into()
                 .unwrap_or(30000),
-            scan_delay: self.session.config.scan_delay,
+            // Use scan_delay from timing template (T0-T5 have specific delays)
+            scan_delay: timing_config.scan_delay,
             dns_server: self.session.config.dns_server.clone(),
             min_rate: self.session.config.min_rate,
             max_rate: self.session.config.max_rate,
@@ -1210,7 +1214,8 @@ impl ScanOrchestrator {
                 .as_millis()
                 .try_into()
                 .unwrap_or(30000),
-            scan_delay: self.session.config.scan_delay,
+            // Use scan_delay from timing template (T0-T5 have specific delays)
+            scan_delay: timing_config.scan_delay,
             dns_server: self.session.config.dns_server.clone(),
             min_rate: self.session.config.min_rate,
             max_rate: self.session.config.max_rate,
@@ -1524,7 +1529,8 @@ impl ScanOrchestrator {
                 .as_millis()
                 .try_into()
                 .unwrap_or(30000),
-            scan_delay: self.session.config.scan_delay,
+            // Use scan_delay from timing template (T0-T5 have specific delays)
+            scan_delay: timing_config.scan_delay,
             dns_server: self.session.config.dns_server.clone(),
             min_rate: self.session.config.min_rate,
             max_rate: self.session.config.max_rate,

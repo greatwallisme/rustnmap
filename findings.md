@@ -1,8 +1,36 @@
 # Findings - RustNmap 项目分析
 
 **Created**: 2026-02-19
-**Updated**: 2026-03-02 16:15
-**Status**: Phase 36 - BENCHMARK VERIFIED
+**Updated**: 2026-03-03 16:00
+**Status**: Phase 38 - T1 FIXED, UDP FAILED
+
+---
+
+## Completed Fixes (Phase 38)
+
+### ✅ T1 Sneaky Timing - FIXED
+**Problem:** 90x faster than nmap (8s vs 91s)
+
+**Solution:**
+1. Fixed orchestrator.rs to use timing_config.scan_delay
+2. Fixed enforce_scan_delay() to return immediately on first call
+
+**Result:** nmap 76.12s vs rustnmap 76.85s (2 ports) ✅
+
+### ❌ UDP Scan Performance - FAILED
+**Problem:** 30x slower than nmap
+
+**Results:**
+| Metric | rustnmap | nmap | Status |
+|--------|----------|------|--------|
+| 1 port | 20.40s | ~0.7s | ❌ 30x slower |
+| 3 ports | 61.83s | 3.08s | ❌ 20x slower |
+
+**What Was Tried:**
+- Fixed `recommended_timeout()` to use `initial_rtt` (1000ms) for first probe
+- Improved from 63s to 20s (3x better), but still far from nmap
+
+**Status:** ❌ FAILED - Did NOT achieve nmap parity
 
 ---
 
@@ -35,7 +63,31 @@ Pass Rate: 94.8%
 
 ## Remaining Issues
 
-### 1. OS Detection (FAILED + 0.68x speed)
+### 1. OS Detection - INTERMITTENT (Previous Phase)
+
+**Original Problem:**
+- T1 Sneaky scan was 90x faster than nmap (8s vs 91s)
+
+**Root Cause 1:** `orchestrator.rs` using wrong scan_delay source
+- Was using `session.config.scan_delay` (default 1s)
+- Should use `timing_config.scan_delay` (15s for T1)
+
+**Root Cause 2:** `enforce_scan_delay()` had first-call bug
+- Was initializing `last_probe_send_time = Instant::now()`
+- First probe would wait 15s unnecessarily
+- nmap returns immediately on first call (timing.cc:183-188)
+
+**Fix:**
+1. Changed all 4 occurrences in orchestrator.rs to use `timing_config.scan_delay`
+2. Changed `last_probe_send_time` type to `Option<Instant>`
+3. First call to `enforce_scan_delay()` now returns immediately
+
+**Verification:**
+- nmap T1 (2 ports): 76 seconds
+- rustnmap T1 (2 ports): 77 seconds
+- Difference: 1 second (acceptable)
+
+### 2. OS Detection (FAILED + 0.68x speed)
 
 **Test Failure:**
 - Port 9929/tcp: rustnmap=filtered, nmap=open
