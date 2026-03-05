@@ -321,3 +321,104 @@ All 5 issues from Phase 42 audit have been fixed or verified as non-issues.
 ### Verification Result
 - Blocking issues: **0**
 - Non-blocking optimization: `doc/architecture.md` contains duplicate `Cargo.toml` dependency snippets in the Stream section; can be merged for clarity.
+
+---
+
+## Phase 44: Core Infrastructure Implementation (2026-03-05)
+
+### Completed: Task 1.1 - System Call Wrappers
+
+**Files Created:**
+- `crates/rustnmap-packet/src/sys/mod.rs` - Module entry point
+- `crates/rustnmap-packet/src/sys/tpacket.rs` - TPACKET_V2 structures
+- `crates/rustnmap-packet/src/sys/if_packet.rs` - AF_PACKET constants
+
+**Key Implementations:**
+1. `Tpacket2Hdr` struct (32 bytes):
+   - Correct field layout: `tp_status`, `tp_len`, `tp_snaplen`, `tp_mac`, `tp_net`, `tp_sec`, `tp_nsec`, `tp_vlan_tci`, `tp_vlan_tpid`, `tp_padding`
+   - V2 uses `tp_nsec` (nanoseconds), NOT `tp_usec` (microseconds)
+   - `tp_padding` is `[u8; 4]`, NOT `[u8; 8]`
+
+2. `TpacketReq` struct:
+   - `validate()` method with proper error handling
+   - `ring_size()` calculation with overflow protection
+   - Uses `is_multiple_of()` for alignment checks
+
+3. `TpacketReqError` enum:
+   - Comprehensive error variants for validation failures
+   - Proper thiserror derive
+
+4. Constants exported:
+   - `AF_PACKET`, `SOCK_RAW`, `SOCK_DGRAM`
+   - `ETH_P_ALL`, `ETH_P_IP`, `ETH_P_IPV6`, `ETH_P_ARP`
+   - `PACKET_RX_RING`, `PACKET_TX_RING`, `PACKET_VERSION`, `PACKET_RESERVE`
+   - `TPACKET_V2`, `TPACKET_ALIGNMENT`, `TPACKET2_HDRLEN`
+   - `TP_STATUS_KERNEL`, `TP_STATUS_USER`, etc.
+
+**Quality Verification:**
+- All 22 tests pass
+- Zero clippy warnings (`cargo clippy -- -D warnings`)
+- All documentation has proper backticks for code items
+- SAFETY comments for unsafe blocks
+- Proper use of `std::ptr::from_ref().cast()` for pointer conversion
+
+### Next Steps
+- [x] Task 1.1: System call wrappers (COMPLETED)
+- [x] Task 1.2: Create `engine.rs` - PacketEngine trait (COMPLETED)
+- [x] Task 1.3: Create `error.rs` - PacketError enum (COMPLETED)
+- [ ] Task 1.4: Create `mmap.rs` - MmapPacketEngine
+- [ ] Task 1.5: Create `bpf.rs` - BPF filter utilities
+- [ ] Task 1.6: Create `async_engine.rs` - AsyncPacketEngine
+- [ ] Task 1.7: Create `stream.rs` - PacketStream
+
+---
+
+## Phase 44.5: Task 1.2 & 1.3 Completion (2026-03-05)
+
+### Completed: Task 1.2 - PacketEngine Trait & Task 1.3 - Error Types
+
+**Files Modified/Created:**
+- `crates/rustnmap-packet/src/engine.rs` - Fixed file corruption, completed implementation
+- `crates/rustnmap-packet/src/error.rs` - Already completed in previous session
+- `crates/rustnmap-packet/src/lib.rs` - Removed duplicate tests
+
+**Key Implementations:**
+
+1. **`PacketEngine` trait** (async with async-trait):
+   - `start()` - Start the packet engine
+   - `recv()` - Receive a packet (async)
+   - `send()` - Send a packet (async)
+   - `stop()` - Stop the packet engine
+   - `stats()` - Get engine statistics
+   - `flush()` - Flush buffered packets
+   - `set_filter()` - Set BPF filter
+
+2. **`RingConfig` struct**:
+   - `block_size`, `block_nr`, `frame_size`, `frame_timeout`
+   - `enable_rx`, `enable_tx` flags
+   - `validate()` method with proper error handling
+   - Builder methods: `with_frame_timeout()`, `with_rx()`, `with_tx()`
+   - `total_size()` and `frames_per_block()` helpers
+
+3. **`PacketBuffer` struct**:
+   - Zero-copy using `Bytes`
+   - Timestamp tracking
+   - Captured/original length tracking
+   - VLAN TCI/TPID support
+   - Methods: `from_data()`, `empty()`, `with_capacity()`, `resize()`, etc.
+
+4. **`EngineStats` struct**:
+   - Packets received/sent/dropped counters
+   - Bytes received/sent counters
+   - Error counters
+
+**Quality Verification:**
+- All 28 tests pass (16 new tests in engine.rs)
+- Zero clippy warnings
+- Proper rustfmt formatting
+- Documentation with proper backticks
+- SAFETY comments for unsafe blocks
+- Proper `#[expect]` attributes for allowed lints
+
+**Next Steps:**
+- [ ] Task 1.4: Create `mmap.rs` - MmapPacketEngine (ring buffer implementation)
