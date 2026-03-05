@@ -366,8 +366,8 @@ All 5 issues from Phase 42 audit have been fixed or verified as non-issues.
 - [x] Task 1.1: System call wrappers (COMPLETED)
 - [x] Task 1.2: Create `engine.rs` - PacketEngine trait (COMPLETED)
 - [x] Task 1.3: Create `error.rs` - PacketError enum (COMPLETED)
-- [ ] Task 1.4: Create `mmap.rs` - MmapPacketEngine
-- [ ] Task 1.5: Create `bpf.rs` - BPF filter utilities
+- [x] Task 1.4: Create `mmap.rs` - MmapPacketEngine (COMPLETED)
+- [x] Task 1.5: Create `bpf.rs` - BPF filter utilities (COMPLETED)
 - [ ] Task 1.6: Create `async_engine.rs` - AsyncPacketEngine
 - [ ] Task 1.7: Create `stream.rs` - PacketStream
 
@@ -421,7 +421,9 @@ All 5 issues from Phase 42 audit have been fixed or verified as non-issues.
 - Proper `#[expect]` attributes for allowed lints
 
 **Next Steps:**
-- [ ] Task 1.4: Create `mmap.rs` - MmapPacketEngine (ring buffer implementation)
+- [x] Task 1.4: Create `mmap.rs` - MmapPacketEngine (COMPLETED)
+- [x] Task 1.5: Create `bpf.rs` - BPF filter utilities (COMPLETED)
+- [ ] Task 1.6: Create `async_engine.rs` - AsyncPacketEngine
 
 ---
 
@@ -503,6 +505,56 @@ Completely rewrote mmap.rs following rust-guidelines and zero-rust standards:
   - `cast_ptr_alignment` for kernel contract alignment guarantee
 
 **Next Steps:**
-- [ ] Task 1.5: BPF filter utilities
-- [ ] Task 1.6: AsyncPacketEngine
-- [ ] Task 1.7: PacketStream
+- [x] Task 1.4: BPF filter utilities (COMPLETED)
+- [ ] Task 1.5: AsyncPacketEngine
+- [ ] Task 1.6: PacketStream
+
+---
+
+## Phase 44.7: Task 1.4 - BPF Filter Implementation (2026-03-05)
+
+### Status: COMPLETED
+
+**Files Created:**
+- `crates/rustnmap-packet/src/bpf.rs` - BPF filter utilities (960+ lines)
+
+**Files Modified:**
+- `crates/rustnmap-packet/src/lib.rs` - Added bpf module and re-exports
+
+**Key Implementations:**
+
+1. **`BpfInstruction` struct** (8 bytes, matches kernel `sock_filter`):
+   - `code`: Operation code (load, jump, ret, etc.)
+   - `jt`: Jump target if true
+   - `jf`: Jump target if false
+   - `k`: Generic multiuse field
+
+2. **`BpfFilter` struct**:
+   - Wraps `Vec<BpfInstruction>` for filter programs
+   - `attach()` - Attach filter to socket via `SO_ATTACH_FILTER`
+   - `detach()` - Detach filter via `SO_DETACH_FILTER`
+
+3. **Predefined Filters**:
+   - Port filters: `tcp_dst_port()`, `tcp_src_port()`, `udp_dst_port()`, `udp_src_port()`
+   - ICMP filters: `icmp()`, `icmp_echo_request()`, `icmp_echo_reply()`
+   - TCP flag filters: `tcp_syn()`, `tcp_ack()`
+   - Protocol filters: `ipv4()`, `ipv6()`, `arp()`
+   - Address filters: `ipv4_src()`, `ipv4_dst()`
+   - Combinator: `any()` for OR logic
+
+4. **BPF Opcodes** (complete set for reference):
+   - Load/Store: `BPF_LD`, `BPF_LDX`, `BPF_ST`, `BPF_STX`
+   - ALU: `BPF_ADD`, `BPF_SUB`, `BPF_MUL`, `BPF_DIV`, `BPF_AND`, `BPF_OR`, `BPF_LSH`, `BPF_RSH`, `BPF_NEG`
+   - Jump: `BPF_JMP`, `BPF_JEQ`, `BPF_JGT`, `BPF_JGE`, `BPF_JSET`, `BPF_JA`
+   - Mode: `BPF_IMM`, `BPF_ABS`, `BPF_IND`, `BPF_MEM`, `BPF_LEN`
+
+**Quality Verification:**
+- All 58 tests pass (24 new BPF tests)
+- Zero clippy warnings (`cargo clippy -- -D warnings`)
+- Proper rustfmt formatting
+- All unsafe blocks have SAFETY comments
+- Reserved BPF opcodes use `#[expect(dead_code, reason = "...")]`
+
+**Next Steps:**
+- [ ] Task 1.5: AsyncPacketEngine (Tokio AsyncFd wrapper)
+- [ ] Task 1.6: PacketStream (impl Stream trait)

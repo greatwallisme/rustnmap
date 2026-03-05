@@ -67,10 +67,15 @@ mod engine;
 /// PACKET_MMAP V2 ring buffer implementation.
 mod mmap;
 
+/// BPF (Berkeley Packet Filter) utilities.
+pub mod bpf;
+
 // ============================================================================
 // Public re-exports
 // ============================================================================
 
+#[doc(inline)]
+pub use crate::bpf::{BpfFilter, BpfInstruction};
 #[doc(inline)]
 pub use crate::engine::{EngineStats, PacketBuffer, PacketEngine, RingConfig};
 #[doc(inline)]

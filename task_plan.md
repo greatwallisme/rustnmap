@@ -80,14 +80,24 @@ Implement true PACKET_MMAP V2 ring buffer in `rustnmap-packet`
   - [x] Unit tests added (34 tests pass)
   - [x] Exported from `lib.rs`
 
-### 1.4 BPF Filter (Day 4-5)
+### 1.4 BPF Filter (Day 4-5) - COMPLETED
 
-- [ ] Create `src/bpf.rs`
-  - [ ] `BpfFilter` struct
-  - [ ] `compile()` - Compile filter expression
-  - [ ] `attach()` - Attach to socket
-  - [ ] Predefined filters: `tcp_dst_port()`, `udp_dst_port()`, `icmp()`
-- [ ] Add unit tests
+- [x] Create `src/bpf.rs`
+  - [x] `BpfFilter` struct
+  - [x] `BpfInstruction` struct for raw BPF instructions
+  - [x] `attach()` - Attach to socket
+  - [x] `detach()` - Detach filter from socket
+  - [x] Predefined filters:
+    - [x] `tcp_dst_port()`, `tcp_src_port()`
+    - [x] `udp_dst_port()`, `udp_src_port()`
+    - [x] `icmp()`, `icmp_echo_request()`, `icmp_echo_reply()`
+    - [x] `tcp_syn()`, `tcp_ack()`
+    - [x] `ipv4()`, `ipv6()`, `arp()`
+    - [x] `ipv4_src()`, `ipv4_dst()`
+    - [x] `any()` for OR combination
+- [x] Add unit tests (24 new tests)
+- [x] Zero clippy warnings
+- [x] Exported from `lib.rs`
 
 ### 1.5 Async Integration (Day 5-7)
 
