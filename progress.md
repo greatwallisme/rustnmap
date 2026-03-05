@@ -422,3 +422,87 @@ All 5 issues from Phase 42 audit have been fixed or verified as non-issues.
 
 **Next Steps:**
 - [ ] Task 1.4: Create `mmap.rs` - MmapPacketEngine (ring buffer implementation)
+
+---
+
+## Phase 44.6: Task 1.4 - MmapPacketEngine Implementation (2026-03-05)
+
+### Status: COMPLETED
+
+**Problem Found and Fixed:**
+The original mmap.rs had ~95 lines of `#![allow(...)]` directives at the file header - a forbidden practice that bypasses clippy instead of fixing actual code issues.
+
+**Solution:**
+Completely rewrote mmap.rs following rust-guidelines and zero-rust standards:
+- Removed ALL global `#![allow(...)]` directives
+- Fixed all clippy warnings at the source
+- Used item-level `#[expect(...)]` only when absolutely necessary with justification
+- Added `#[derive(Debug)]` for MmapPacketEngine
+- Added type alias for complex return type
+
+**Files Modified:**
+- `crates/rustnmap-packet/src/mmap.rs` - Complete rewrite (928 lines, clean)
+- `crates/rustnmap-packet/src/lib.rs` - Added `MmapPacketEngine` export
+- `crates/rustnmap-packet/src/error.rs` - Removed unused import
+
+**Key Implementations:**
+
+1. **`MmapPacketEngine` struct** with `#[derive(Debug)]`:
+   - Socket file descriptor (`OwnedFd`)
+   - Ring buffer configuration (`RingConfig`) with `#[expect(dead_code)]`
+   - Memory-mapped ring buffer pointer (`NonNull<u8>`)
+   - Frame pointers array (`Vec<NonNull<Tpacket2Hdr>>`)
+   - Interface index and name
+   - MAC address
+   - Statistics tracking with atomics
+   - Running state flag
+
+2. **Socket setup with correct option sequence**:
+   1. `socket(PF_PACKET, SOCK_RAW, ETH_P_ALL)`
+   2. `setsockopt(PACKET_VERSION, TPACKET_V2)` - MUST be first
+   3. `setsockopt(PACKET_RESERVE, 4)` - MUST be before RX_RING
+   4. `setsockopt(PACKET_AUXDATA, 1)` - Optional
+   5. `setsockopt(PACKET_RX_RING, &req)`
+   6. `mmap()`
+   7. `bind()`
+
+3. **Ring buffer setup with ENOMEM recovery**:
+   - 5% iterative reduction strategy from nmap
+   - Maximum 10 retry attempts
+   - Uses `div_ceil()` for alignment calculation
+
+4. **Frame operations**:
+   - `frame_is_available()` - Acquire memory ordering
+   - `release_frame()` - Release memory ordering
+   - `try_recv()` - Non-blocking packet receive
+   - VLAN tag reconstruction
+
+5. **`PacketEngine` trait implementation**:
+   - `start()`, `stop()` - Running state management
+   - `recv()` - Async packet receive with yield
+   - `send()` - Packet transmission via sendto
+   - `stats()` - Statistics retrieval
+   - `flush()` - Flush all available packets
+   - `set_filter()` - BPF filter attachment
+
+6. **`Drop` implementation**:
+   - CRITICAL: `munmap` BEFORE `close(fd)`
+   - Proper cleanup order
+
+7. **Thread safety with SAFETY comments**:
+   - `unsafe impl Send for MmapPacketEngine {}`
+   - `unsafe impl Sync for MmapPacketEngine {}`
+
+**Quality Verification:**
+- All 34 tests pass
+- Zero clippy warnings (`cargo clippy -- -D warnings -D clippy::all`)
+- Proper rustfmt formatting
+- All unsafe blocks have SAFETY comments
+- Item-level `#[expect(...)]` only for justified cases:
+  - `dead_code` for `config` field (stored for future reference)
+  - `cast_ptr_alignment` for kernel contract alignment guarantee
+
+**Next Steps:**
+- [ ] Task 1.5: BPF filter utilities
+- [ ] Task 1.6: AsyncPacketEngine
+- [ ] Task 1.7: PacketStream

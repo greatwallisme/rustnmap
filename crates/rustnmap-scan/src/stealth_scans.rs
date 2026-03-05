@@ -734,7 +734,8 @@ impl TcpFinScanner {
         let time_component = (std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
-            .subsec_nanos() % 1000) as u16;
+            .subsec_nanos()
+            % 1000) as u16;
         let offset = (pid_component + time_component) % 1000;
         SOURCE_PORT_START + offset
     }
@@ -897,11 +898,12 @@ impl TcpFinScanner {
                     }
                 } else {
                     // No decoy: original behavior
-                    let packet = TcpPacketBuilder::new(self.local_addr, dst_addr, src_port, *dst_port)
-                        .seq(seq)
-                        .fin()
-                        .window(65535)
-                        .build();
+                    let packet =
+                        TcpPacketBuilder::new(self.local_addr, dst_addr, src_port, *dst_port)
+                            .seq(seq)
+                            .fin()
+                            .window(65535)
+                            .build();
 
                     let port_sockaddr = SocketAddr::new(std::net::IpAddr::V4(dst_addr), *dst_port);
                     self.socket
@@ -987,7 +989,8 @@ impl TcpFinScanner {
                         // For stealth scans, RST responses come FROM the target port TO our source port
                         if let Some(scanned_port) = src_to_dst.remove(&dst_port) {
                             // Update RTT estimate for adaptive timing
-                            if let Some((_, sent_time)) = outstanding.get(&(scanned_port, src_port)) {
+                            if let Some((_, sent_time)) = outstanding.get(&(scanned_port, src_port))
+                            {
                                 timing.update_rtt(sent_time.elapsed());
                             }
                             let state = if (flags & tcp_flags::RST) != 0 {
@@ -1016,7 +1019,9 @@ impl TcpFinScanner {
                         if let Some(srcs) = port_srcs.remove(&original_dst_port) {
                             // Update RTT for first src_port ( ICMP doesn't have original src_port)
                             if let Some(&first_src) = srcs.iter().next() {
-                                if let Some((_, sent_time)) = outstanding.get(&(original_dst_port, first_src)) {
+                                if let Some((_, sent_time)) =
+                                    outstanding.get(&(original_dst_port, first_src))
+                                {
                                     timing.update_rtt(sent_time.elapsed());
                                 }
                             }
@@ -1313,7 +1318,8 @@ impl TcpNullScanner {
         let time_component = (std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
-            .subsec_nanos() % 1000) as u16;
+            .subsec_nanos()
+            % 1000) as u16;
         let offset = (pid_component + time_component) % 1000;
         SOURCE_PORT_START + offset
     }
@@ -1442,10 +1448,11 @@ impl TcpNullScanner {
                         }
                     }
                 } else {
-                    let packet = TcpPacketBuilder::new(self.local_addr, dst_addr, src_port, *dst_port)
-                        .seq(seq)
-                        .window(65535)
-                        .build();
+                    let packet =
+                        TcpPacketBuilder::new(self.local_addr, dst_addr, src_port, *dst_port)
+                            .seq(seq)
+                            .window(65535)
+                            .build();
 
                     let port_sockaddr = SocketAddr::new(std::net::IpAddr::V4(dst_addr), *dst_port);
                     self.socket
@@ -1556,7 +1563,9 @@ impl TcpNullScanner {
                         if let Some(srcs) = port_srcs.remove(&original_dst_port) {
                             // Update RTT for first src_port
                             if let Some(&first_src) = srcs.iter().next() {
-                                if let Some((_, sent_time)) = outstanding.get(&(original_dst_port, first_src)) {
+                                if let Some((_, sent_time)) =
+                                    outstanding.get(&(original_dst_port, first_src))
+                                {
                                     timing.update_rtt(sent_time.elapsed());
                                 }
                             }
@@ -1856,7 +1865,8 @@ impl TcpXmasScanner {
         let time_component = (std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
-            .subsec_nanos() % 1000) as u16;
+            .subsec_nanos()
+            % 1000) as u16;
         let offset = (pid_component + time_component) % 1000;
         SOURCE_PORT_START + offset
     }
@@ -1988,13 +1998,14 @@ impl TcpXmasScanner {
                         }
                     }
                 } else {
-                    let packet = TcpPacketBuilder::new(self.local_addr, dst_addr, src_port, *dst_port)
-                        .seq(seq)
-                        .fin()
-                        .psh()
-                        .urg()
-                        .window(65535)
-                        .build();
+                    let packet =
+                        TcpPacketBuilder::new(self.local_addr, dst_addr, src_port, *dst_port)
+                            .seq(seq)
+                            .fin()
+                            .psh()
+                            .urg()
+                            .window(65535)
+                            .build();
 
                     let port_sockaddr = SocketAddr::new(std::net::IpAddr::V4(dst_addr), *dst_port);
                     self.socket
@@ -2105,7 +2116,9 @@ impl TcpXmasScanner {
                         if let Some(srcs) = port_srcs.remove(&original_dst_port) {
                             // Update RTT for first src_port
                             if let Some(&first_src) = srcs.iter().next() {
-                                if let Some((_, sent_time)) = outstanding.get(&(original_dst_port, first_src)) {
+                                if let Some((_, sent_time)) =
+                                    outstanding.get(&(original_dst_port, first_src))
+                                {
                                     timing.update_rtt(sent_time.elapsed());
                                 }
                             }
@@ -2379,7 +2392,8 @@ impl TcpAckScanner {
         let time_component = (std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
-            .subsec_nanos() % 1000) as u16;
+            .subsec_nanos()
+            % 1000) as u16;
         let offset = (pid_component + time_component) % 1000;
         SOURCE_PORT_START + offset
     }
@@ -2856,7 +2870,8 @@ impl TcpMaimonScanner {
         let time_component = (std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
-            .subsec_nanos() % 1000) as u16;
+            .subsec_nanos()
+            % 1000) as u16;
         let offset = (pid_component + time_component) % 1000;
         SOURCE_PORT_START + offset
     }
@@ -2987,12 +3002,13 @@ impl TcpMaimonScanner {
                         }
                     }
                 } else {
-                    let packet = TcpPacketBuilder::new(self.local_addr, dst_addr, src_port, *dst_port)
-                        .seq(seq)
-                        .fin()
-                        .ack_flag()
-                        .window(65535)
-                        .build();
+                    let packet =
+                        TcpPacketBuilder::new(self.local_addr, dst_addr, src_port, *dst_port)
+                            .seq(seq)
+                            .fin()
+                            .ack_flag()
+                            .window(65535)
+                            .build();
 
                     let port_sockaddr = SocketAddr::new(std::net::IpAddr::V4(dst_addr), *dst_port);
                     self.socket
@@ -3103,7 +3119,9 @@ impl TcpMaimonScanner {
                         if let Some(srcs) = port_srcs.remove(&original_dst_port) {
                             // Update RTT for first src_port
                             if let Some(&first_src) = srcs.iter().next() {
-                                if let Some((_, sent_time)) = outstanding.get(&(original_dst_port, first_src)) {
+                                if let Some((_, sent_time)) =
+                                    outstanding.get(&(original_dst_port, first_src))
+                                {
                                     timing.update_rtt(sent_time.elapsed());
                                 }
                             }
@@ -3399,7 +3417,8 @@ impl TcpWindowScanner {
         let time_component = (std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
-            .subsec_nanos() % 1000) as u16;
+            .subsec_nanos()
+            % 1000) as u16;
         let offset = (pid_component + time_component) % 1000;
         SOURCE_PORT_START + offset
     }
@@ -3560,7 +3579,9 @@ impl TcpWindowScanner {
                         Err(e) => {
                             return Err(rustnmap_common::ScanError::Network(
                                 rustnmap_common::Error::Network(
-                                    rustnmap_common::error::NetworkError::ReceiveError { source: e },
+                                    rustnmap_common::error::NetworkError::ReceiveError {
+                                        source: e,
+                                    },
                                 ),
                             ))
                         }

@@ -2798,6 +2798,7 @@ dependencies = [
  "bytes",
  "futures",
  "libc",
+ "log",
  "memmap2",
  "rustnmap-common",
  "socket2 0.5.10",

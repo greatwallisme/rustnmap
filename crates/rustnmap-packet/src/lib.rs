@@ -64,6 +64,9 @@ mod error;
 /// Packet engine trait and core types.
 mod engine;
 
+/// PACKET_MMAP V2 ring buffer implementation.
+mod mmap;
+
 // ============================================================================
 // Public re-exports
 // ============================================================================
@@ -72,6 +75,8 @@ mod engine;
 pub use crate::engine::{EngineStats, PacketBuffer, PacketEngine, RingConfig};
 #[doc(inline)]
 pub use crate::error::{PacketError, Result};
+#[doc(inline)]
+pub use crate::mmap::MmapPacketEngine;
 
 // ============================================================================
 // Constants

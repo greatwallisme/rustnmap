@@ -126,6 +126,10 @@ pub enum PacketError {
         attempts: u32,
     },
 
+    /// Ring buffer setup failed with I/O error.
+    #[error("ring buffer setup failed: {0}")]
+    RingBufferSetup(#[source] io::Error),
+
     /// No frame available.
     #[error("no frame available")]
     NoFrameAvailable,
@@ -214,7 +218,6 @@ pub type Result<T> = std::result::Result<T, PacketError>;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io;
 
     #[test]
     fn test_packet_error_display() {
