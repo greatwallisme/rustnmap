@@ -342,11 +342,19 @@ impl PacketReceiver {
 
 ---
 
-### 3.10.4 Linux PACKET_MMAP V3 零拷贝优化
+### 3.10.4 Linux PACKET_MMAP V2 零拷贝优化
 
-基于 Deepseek 设计文档和 Linux 内核特性，使用 PACKET_MMAP V3 实现零拷贝数据包处理。
+> **架构决策**: 使用 TPACKET_V2 而非 V3。V3 在内核 < 3.19 存在已知 bug。
+>
+> **nmap 版本协商策略** (参考 `reference/nmap/libpcap/pcap-linux.c:2974-3013`):
+> - 非 immediate mode: 先尝试 TPACKET_V3，失败则回退 TPACKET_V2
+> - immediate mode (扫描器常用): 直接使用 TPACKET_V2
+>
+> **RustNmap 决策**: 直接使用 V2，因为扫描器通常需要 immediate mode（低延迟响应）。
 
-#### PACKET_MMAP V3 架构
+基于 nmap 参考实现和 Linux 内核特性，使用 PACKET_MMAP V2 实现零拷贝数据包处理。
+
+#### PACKET_MMAP V2 架构
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -366,7 +374,7 @@ impl PacketReceiver {
 │  ─────────────┼───────────────────────────────┼──────────────────────  │
 │               │                            │                          │
 │  ┌───────────▼────────────────────────────▼───────────────────────┐  │
-│  │                    Kernel Space (tpacket_v3)                    │  │
+│  │                    Kernel Space (tpacket_v2)                    │  │
 │  └──────────────────────────────────────────────────────────────────────┘  │
 │                                                                         │
 └─────────────────────────────────────────────────────────────────────────┘
@@ -378,36 +386,34 @@ impl PacketReceiver {
 use std::mem::size_of_val;
 use libc::{c_uint, c_int, sockaddr_ll, timeval};
 
-/// PACKET_MMAP V3 环形缓冲区配置
+/// PACKET_MMAP V2 环形缓冲区配置
+/// 注意: V2 使用 tpacket_req (非 V3 的 tpacket_req3)
 #[derive(Debug, Clone)]
 pub struct RingConfig {
-    /// 块大小 (建议 1MB = 1 << 20)
+    /// 块大小 (推荐: 2MB = 2_097_152，必须是页大小的倍数)
     pub block_size: usize,
-    /// 块数量 (接收: 64-256, 发送: 128-512)
+    /// 块数量 (推荐: 2，最小配置)
     pub block_nr: usize,
-    /// 帧大小 (建议 2048，足够容纳最大以太网帧 + VLAN)
+    /// 帧大小 (推荐: TPACKET_ALIGNMENT = 16 的倍数，通常 2048)
     pub frame_size: usize,
     /// 帧数量 = (block_size * block_nr) / frame_size
     pub frame_nr: usize,
-    /// 块超时 (毫秒)，内核强制刷新已填充的块
-    pub block_timeout: u32,
 }
 
 impl Default for RingConfig {
     fn default() -> Self {
-        // 高性能默认配置 (适合千兆网卡)
+        // 基于 nmap 的高性能默认配置
         Self {
-            block_size: 1 << 20,    // 1MB
-            block_nr: 256,           // 256MB total
-            frame_size: 2048,        // 标准 MTU 1500 + 头部
-            frame_nr: 0,             // 计算得出
-            block_timeout: 64,        // 64ms
+            block_size: 2_097_152,   // 2MB per block
+            block_nr: 2,              // 4MB total (nmap 默认)
+            frame_size: 2048,         // 标准 MTU 1500 + 头部
+            frame_nr: 0,              // 计算得出
         }
     }
 }
 
 impl RingConfig {
-    /// 计算派生值
+    /// 计算派生值 (基于 nmap pcap-linux.c)
     pub fn derive_frame_nr(&mut self) {
         self.frame_nr = (self.block_size * self.block_nr) / self.frame_size;
     }
@@ -416,60 +422,57 @@ impl RingConfig {
     pub fn total_size(&self) -> usize {
         self.block_size * self.block_nr
     }
+
+    /// 验证配置有效性
+    pub fn validate(&self) -> Result<(), PacketError> {
+        if self.block_size % 4096 != 0 {
+            return Err(PacketError::InvalidConfig("block_size must be page-aligned".into()));
+        }
+        if self.frame_size % 16 != 0 {
+            return Err(PacketError::InvalidConfig("frame_size must be TPACKET_ALIGNMENT aligned".into()));
+        }
+        Ok(())
+    }
 }
 
-/// tpacket_req3 结构 (对应 Linux kernel tpacket_req3)
+/// tpacket_req 结构 (对应 Linux kernel tpacket_req, V2 使用)
+/// 参考: /usr/include/linux/if_packet.h
 #[repr(C)]
 #[derive(Debug, Clone)]
-pub struct TPacketReq3 {
-    pub block_size: u32,
-    pub block_nr: u32,
-    pub frame_size: u32,
-    pub frame_nr: u32,
-    pub retire_blk_tov: u32,
-    pub sizeof_priv: u32,
-    pub feature_req_word: u32,
+pub struct TPacketReq {
+    pub tp_block_size: u32,   // 块大小
+    pub tp_block_nr: u32,     // 块数量
+    pub tp_frame_size: u32,   // 帧大小
+    pub tp_frame_nr: u32,     // 帧数量
 }
 
-/// tpacket_block_desc 结构 (V3 块描述符)
+/// tpacket2_hdr 结构 (V2 帧头, 32 字节)
+/// 参考: /usr/include/linux/if_packet.h:146-157
+/// CRITICAL: tp_nsec 字段在 V2 中是纳秒，不是微秒
+/// CRITICAL: tp_padding 是 [u8; 4]，不是 [u8; 8]
 #[repr(C)]
-pub struct TPacketBlockDesc {
-    pub version: u32,
-    pub h1: TPacketHdrVariant1,
-}
+pub struct TPacket2Hdr {
+    pub tp_status: u32,       // 帧状态 (TP_STATUS_*) - 4 bytes
+    pub tp_len: u32,          // 数据包长度 - 4 bytes
+    pub tp_snaplen: u32,      // 捕获长度 - 4 bytes
+    pub tp_mac: u16,          // MAC 头偏移 - 2 bytes
+    pub tp_net: u16,          // 网络头偏移 - 2 bytes
+    pub tp_sec: u32,          // 时间戳 (秒) - 4 bytes
+    pub tp_nsec: u32,         // 时间戳 (纳秒) - 4 bytes - NOT tp_usec!
+    pub tp_vlan_tci: u16,     // VLAN TCI - 2 bytes
+    pub tp_vlan_tpid: u16,    // VLAN TPID - 2 bytes
+    pub tp_padding: [u8; 4],  // 填充 - 4 bytes - NOT [u8; 8]!
+}  // Total: 4+4+4+2+2+4+4+2+2+4 = 32 bytes
 
-/// tpacket_hdr_variant1 结构 (V3 块头)
-#[repr(C)]
-pub struct TPacketHdrVariant1 {
-    pub block_status: u32,
-    pub num_pkts: u32,
-    pub offset_to_first_pkt: u32,
-    pub blk_len: u32,
-    pub seq_num: u64,
-    pub ts_first_pkt: timeval,
-    pub ts_last_pkt: timeval,
-}
+// V2 状态常量
+const TP_STATUS_KERNEL: u32 = 0;     // 内核拥有，用户空间应跳过
+const TP_STATUS_USER: u32 = 1;       // 用户空间拥有，可读取
+const TP_STATUS_COPY: u32 = 2;       // 正在复制
+const TP_STATUS_LOSING: u32 = 4;     // 有丢包
 
-/// tpacket3_hdr 结构 (V3 帧头)
-#[repr(C)]
-pub struct TPacket3Hdr {
-    pub tp_next_offset: u32,
-    pub tp_sec: u32,
-    pub tp_nsec: u32,
-    pub tp_snaplen: u32,
-    pub tp_len: u32,
-    pub tp_status: u32,
-    pub tp_mac: u16,
-    pub tp_net: u16,
-    pub tp_vlan_tci: u16,
-    pub tp_vlan_tpid: u16,
-}
-
-// V3 状态常量
-const TP_STATUS_KERNEL: u32 = 0;
-const TP_STATUS_USER: u32 = 1;
-const TP_STATUS_COPYING: u32 = 2;
-const TP_STATUS_LOSING: u32 = 4;
+// TPACKET 对齐常量
+const TPACKET_ALIGNMENT: usize = 16;
+const TPACKET2_HDRLEN: usize = 32;   // sizeof(tpacket2_hdr) - 修正为 32 字节
 ```
 
 #### AfPacketEngine 实现 (零拷贝版本)
@@ -481,7 +484,8 @@ use std::fs::File;
 use std::os::unix::io::FromRawFd;
 use memmap2::MmapMut;
 
-/// 基于 PACKET_MMAP V3 的数据包引擎
+/// 基于 PACKET_MMAP V2 的数据包引擎
+/// 注意: 使用 V2 而非 V3，V3 在旧内核有 bug
 pub struct AfPacketEngine {
     /// 套接字文件描述符
     fd: std::os::unix::io::RawFd,
@@ -495,14 +499,13 @@ pub struct AfPacketEngine {
     if_index: c_uint,
     /// 本机 MAC 地址
     mac_addr: [u8; 6],
-    /// 当前处理的块索引 (接收)
-    rx_block_idx: usize,
-    /// 当前处理的帧偏移 (接收)
-    rx_frame_offset: usize,
+    /// 当前帧索引 (V2 使用帧索引，非块索引)
+    rx_frame_idx: usize,
 }
 
 impl AfPacketEngine {
-    /// 创建新的 PACKET_MMAP V3 引擎
+    /// 创建新的 PACKET_MMAP V2 引擎
+    /// 参考 nmap: reference/nmap/libpcap/pcap-linux.c
     pub fn new(interface: &str, config: RingConfig) -> Result<Self, PacketError> {
         // 1. 创建 AF_PACKET 套接字
         let fd = unsafe {
@@ -516,8 +519,9 @@ impl AfPacketEngine {
             return Err(PacketError::SocketCreationFailed);
         }
 
-        // 2. 设置 PACKET_VERSION 为 TPACKET_V3
-        let version = libc::TPACKET_V3 as i32;
+        // 2. 设置 PACKET_VERSION 为 TPACKET_V2
+        // CRITICAL: 必须在所有 TPACKET 操作之前设置
+        let version = libc::TPACKET_V2 as i32;
         let ret = unsafe {
             libc::setsockopt(
                 fd,
@@ -528,6 +532,7 @@ impl AfPacketEngine {
             )
         };
         if ret < 0 {
+            unsafe { libc::close(fd); }
             return Err(PacketError::VersionSetFailed);
         }
 
@@ -552,10 +557,11 @@ impl AfPacketEngine {
             )
         };
         if ret < 0 {
+            unsafe { libc::close(fd); }
             return Err(PacketError::BindFailed);
         }
 
-        // 5. 配置并映射接收环
+        // 5. 配置并映射接收环 (使用 V2 的 tpacket_req)
         let rx_ring = Self::setup_rx_ring(fd, &config)?;
 
         // 6. 获取本机 MAC 地址
@@ -564,29 +570,25 @@ impl AfPacketEngine {
         Ok(Self {
             fd,
             rx_ring,
-            tx_ring: None,  // TODO: 实现发送环
+            tx_ring: None,
             config,
             if_index,
             mac_addr,
-            rx_block_idx: 0,
-            rx_frame_offset: 0,
+            rx_frame_idx: 0,
         })
     }
 
-    /// 设置接收环形缓冲区
+    /// 设置接收环形缓冲区 (V2 版本)
     fn setup_rx_ring(
         fd: std::os::unix::io::RawFd,
         config: &RingConfig
     ) -> Result<MmapMut, PacketError> {
-        // 构建 tpacket_req3
-        let req = TPacketReq3 {
-            block_size: config.block_size as u32,
-            block_nr: config.block_nr as u32,
-            frame_size: config.frame_size as u32,
-            frame_nr: config.frame_nr as u32,
-            retire_blk_tov: config.block_timeout,
-            sizeof_priv: 0,
-            feature_req_word: 0,
+        // 构建 tpacket_req (V2 使用此结构，非 tpacket_req3)
+        let req = TPacketReq {
+            tp_block_size: config.block_size as u32,
+            tp_block_nr: config.block_nr as u32,
+            tp_frame_size: config.frame_size as u32,
+            tp_frame_nr: config.frame_nr as u32,
         };
 
         // 应用接收环配置
@@ -595,7 +597,7 @@ impl AfPacketEngine {
                 fd,
                 libc::SOL_PACKET,
                 libc::PACKET_RX_RING,
-                &req as *const TPacketReq3 as *const libc::c_void,
+                &req as *const TPacketReq as *const libc::c_void,
                 std::mem::size_of_val(&req) as libc::socklen_t,
             )
         };
@@ -610,55 +612,48 @@ impl AfPacketEngine {
                 std::ptr::null_mut(),
                 size,
                 libc::PROT_READ | libc::PROT_WRITE,
-                libc::MAP_SHARED | libc::MAP_LOCKED,
+                libc::MAP_SHARED,
                 fd,
                 0,
             );
             if mmap == libc::MAP_FAILED {
                 return Err(PacketError::MmapFailed);
             }
-            Ok(MmapMut::map_raw(size, mmap as *mut u8)?
+            Ok(MmapMut::map_raw(size, mmap as *mut u8)?)
         }
     }
 
-    /// 从接收环读取数据包 (零拷贝)
+    /// 从接收环读取数据包 (零拷贝, V2 版本)
+    /// 使用帧索引而非块索引
     pub fn recv_packet(&mut self) -> Option<PacketBuffer> {
-        // 获取当前块
-        let block_addr = unsafe {
-            self.rx_ring.as_ptr().add(
-                self.rx_block_idx * self.config.block_size
-            ) as *const TPacketBlockDesc
-        };
+        let frame_size = self.config.frame_size;
+        let frame_idx = self.rx_frame_idx;
+        let total_frames = self.config.frame_nr;
 
-        let block_desc = unsafe { &*block_addr };
-        let block_hdr = &block_desc.h1;
-
-        // 检查块状态
-        if block_hdr.block_status & TP_STATUS_USER == 0 {
-            // 块尚未准备好，返回 None
-            return None;
-        }
-
-        // 遍历块内的帧
+        // 计算当前帧地址
         let frame_addr = unsafe {
-            (block_addr as *const u8).add(
-                self.rx_block_idx * self.config.block_size +
-                block_hdr.offset_to_first_pkt as usize +
-                self.rx_frame_offset
-            ) as *const TPacket3Hdr
+            self.rx_ring.as_ptr().add(frame_idx * frame_size)
+                as *const TPacket2Hdr
         };
 
         let frame_hdr = unsafe { &*frame_addr };
 
-        // 检查帧状态
-        if frame_hdr.tp_status & TP_STATUS_COPYING != 0 {
-            // 内核正在复制，跳过
+        // 检查帧状态 (使用 Acquire 语义确保数据可见性)
+        // 参考 nmap: __atomic_load_n(&pkt->tp_status, __ATOMIC_ACQUIRE)
+        let status = unsafe {
+            std::sync::atomic::AtomicU32::from_ptr(
+                std::ptr::addr_of!((*frame_addr).tp_status)
+            ).load(std::sync::atomic::Ordering::Acquire)
+        };
+
+        if status & TP_STATUS_USER == 0 {
+            // 帧尚未准备好
             return None;
         }
 
         // 创建零拷贝数据包缓冲区
         let data_ptr = unsafe {
-            (frame_addr as *const u8).add(std::mem::size_of_val(&frame_hdr))
+            (frame_addr as *const u8).add(std::mem::size_of::<TPacket2Hdr>())
         };
         let data_len = frame_hdr.tp_snaplen as usize;
 
@@ -670,24 +665,21 @@ impl AfPacketEngine {
             len: data_len,
             timestamp: Duration::new(
                 frame_hdr.tp_sec as u64,
-                frame_hdr.tp_nsec as u32,
+                frame_hdr.tp_nsec as u32,  // V2 使用 tp_nsec (纳秒)
             ),
             protocol: frame_hdr.tp_vlan_tpid,
         };
 
-        // 移动到下一帧
-        self.rx_frame_offset += frame_hdr.tp_next_offset as usize;
-
-        // 检查是否到达块尾
-        if self.rx_frame_offset >= block_hdr.blk_len as usize {
-            // 标记块为可用
-            unsafe {
-                *(block_addr as *const u32).offset(1) = TP_STATUS_KERNEL;
-            }
-            // 移动到下一块
-            self.rx_block_idx = (self.rx_block_idx + 1) % self.config.block_nr;
-            self.rx_frame_offset = 0;
+        // 释放帧回内核 (使用 Release 语义)
+        // 参考 nmap: __atomic_store_n(&pkt->tp_status, TP_STATUS_KERNEL, __ATOMIC_RELEASE)
+        unsafe {
+            std::sync::atomic::AtomicU32::from_ptr(
+                std::ptr::addr_of!((*frame_addr).tp_status)
+            ).store(TP_STATUS_KERNEL, std::sync::atomic::Ordering::Release);
         }
+
+        // 移动到下一帧
+        self.rx_frame_idx = (self.rx_frame_idx + 1) % total_frames;
 
         Some(packet)
     }
@@ -703,8 +695,6 @@ pub struct PacketBuffer {
 ```
 
 #### 性能优化要点
-
-根据 rust-concurrency 指南和 Deepseek 设计：
 
 1. **内存序**: 使用 `Ordering::Acquire/Release` 处理环形缓冲区索引
 2. **无锁队列**: 考虑使用 lock-free MPSC 队列传递数据包

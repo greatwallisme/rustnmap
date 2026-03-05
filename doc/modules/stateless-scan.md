@@ -435,18 +435,19 @@ pub async fn send_batch_optimized(&self, packets: &[TcpPacket]) -> Result<usize>
 ### 零拷贝接收
 
 ```rust
-/// 使用 PACKET_MMAP V3 零拷贝接收
+/// 使用 PACKET_MMAP V2 零拷贝接收
+/// 参考: doc/modules/packet-engineering.md, reference/nmap/libpcap/pcap-linux.c
 pub struct ZeroCopyReceiver {
-    ring: PacketRing,
+    engine: MmapPacketEngine,
 }
 
 impl ZeroCopyReceiver {
     pub async fn recv_next(&mut self) -> Result<Option<&TcpPacket>> {
         // 直接从 ring buffer 获取引用，无需拷贝
-        let slot = self.ring.next_slot().await?;
-        if let Some(slot) = slot {
-            let packet = TcpPacket::parse(slot.data())?;
-            Ok(Some(packet))
+        let packet = self.engine.recv_packet();
+        if let Some(pkt) = packet {
+            let tcp = TcpPacket::parse(&pkt.data)?;
+            Ok(Some(tcp))
         } else {
             Ok(None)
         }

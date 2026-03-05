@@ -48,6 +48,26 @@
 |Linux 特性优化|CPU 亲和性、大页内存、XDP|P1|
 |systemd 集成|systemd service 和 socket 激活|P2|
 
+## Phase 40: 数据包引擎架构重设计 (P0 - 当前)
+
+> **Status**: 阻塞所有性能修复
+> **Reference**: `doc/modules/packet-engineering.md`, `task_plan.md`
+
+**问题**: `rustnmap-packet` 声称 PACKET_MMAP V3 但实际使用 `recvfrom()` 系统调用
+
+| 任务 | 描述 | 优先级 |
+|------|------|--------|
+| 核心基础设施 | TPACKET_V2 结构定义、syscall 包装 | P0 |
+| Ring Buffer | mmap 环形缓冲区管理、帧迭代器 | P0 |
+| Async 集成 | AsyncFd 包装、Channel 分发、Stream trait | P0 |
+| Scanner 迁移 | 将所有扫描器迁移到 PacketEngine trait | P0 |
+| 测试验证 | 单元测试、集成测试、nmap 对比测试 | P0 |
+| 文档完善 | API 文档、性能基准 | P1 |
+
+**架构决策**: 使用 TPACKET_V2 (非 V3)，参考 nmap 的 `libpcap/pcap-linux.c`
+
+**性能目标**: PPS 50K → 1M (20x), CPU 80% → 30% (2.7x)
+
 ---
 # 7. 风险与挑战 (Linux x86_64 平台)
 
@@ -117,7 +137,7 @@
 │  │                                                                   │  │
 │  │  接收聚合:                                                        │  │
 │  │  ├── recvmmsg() 批量接收                                         │  │
-│  │  └── 使用 PF_RING 或 AF_PACKET V3 (Linux)                        │  │
+│  │  └── 使用 PACKET_MMAP V2 (Linux, 参考 nmap libpcap)              │  │
 │  │                                                                   │  │
 │  └───────────────────────────────────────────────────────────────────┘  │
 │                                                                         │

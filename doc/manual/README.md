@@ -84,9 +84,9 @@ All examples use `sudo` for scans requiring root privileges.
 
 ## Related Documentation / 相关文档
 
-- [User Guide](../user-guide.md) - Comprehensive user guide / 综合用户指南
 - [README](../../README.md) - Project overview / 项目概览
 - [Architecture](../architecture.md) - System architecture / 系统架构
+- [Manual](../rustnmap.1) - Unix man page / Unix 手册页
 
 ---
 

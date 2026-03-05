@@ -425,4 +425,5 @@ if __name__ == '__main__':
 ## Related Documentation / 相关文档
 
 - [Options Reference](options.md) - Command-line options / 命令行选项
-- [User Guide](../user-guide.md) - Comprehensive guide / 综合指南
+- [Manual README](README.md) - Manual overview / 手册概览
+- [Architecture](../architecture.md) - System architecture / 系统架构

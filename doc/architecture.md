@@ -214,7 +214,608 @@ rustnmap-sdk (2.0)
 
 ---
 
-## 2.3 核心抽象：ScanSession
+## 2.3 数据包引擎架构 (PACKET_MMAP V2 重构)
+
+> **重要**: 当前 `rustnmap-packet` 使用 `recvfrom()` 系统调用，而非真正的 PACKET_MMAP 环形缓冲区。
+> 这是导致 T5 Insane 扫描不稳定、UDP 扫描性能低下的根本原因。
+> 本节描述基于 nmap 参考实现的完整架构重构方案。
+
+### 2.3.1 当前问题诊断
+
+| 问题 | 当前实现 | nmap 实现 | 影响 |
+|------|---------|-----------|------|
+| 包捕获方式 | `recvfrom()` 系统调用 | PACKET_MMAP V2 环形缓冲区 | 每包一次 syscall，开销大 |
+| 缓冲区大小 | Socket 队列 (默认) | 4MB 环形缓冲区 | 高负载丢包 |
+| 异步 I/O | `spawn_blocking` | nsock + epoll | 线程阻塞，效率低 |
+| 零拷贝 | 无 (内存复制) | 有 (mmap) | CPU 和内存带宽浪费 |
+| TPACKET 版本 | 声称 V3，实际未实现 | V2 (稳定性优先) | V3 在旧内核有 bug |
+
+**nmap 版本协商策略** (参考 `reference/nmap/libpcap/pcap-linux.c:2974-3013`):
+```c
+// nmap 实际实现: 先尝试 V3，失败则回退 V2
+// 但在 immediate mode 下直接使用 V2
+if (!immediate_mode) {
+    // 尝试 TPACKET_V3
+    if (setsockopt(fd, SOL_PACKET, PACKET_VERSION, &v3, sizeof(v3)) == 0) {
+        // V3 设置成功，继续配置
+    } else {
+        // V3 失败，回退到 V2
+        setsockopt(fd, SOL_PACKET, PACKET_VERSION, &v2, sizeof(v2));
+    }
+} else {
+    // immediate mode 直接使用 V2
+    setsockopt(fd, SOL_PACKET, PACKET_VERSION, &v2, sizeof(v2));
+}
+```
+
+**RustNmap 架构决策**: 直接使用 V2，因为：
+1. 扫描器通常需要 immediate mode（低延迟响应）
+2. V2 在所有内核版本上稳定
+3. nmap 在大多数情况下最终也使用 V2
+
+**代码证据** (`crates/rustnmap-packet/src/lib.rs:764-765`):
+```rust
+/// This implementation uses recvfrom. Future versions will implement
+/// the full `PACKET_MMAP` ring buffer for zero-copy operation.
+```
+
+### 2.3.2 新架构：分层设计
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    Packet Engine Architecture (Redesigned)                   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  ┌───────────────────────────────────────────────────────────────────────┐  │
+│  │                    Scanner Layer (rustnmap-scan)                       │  │
+│  │  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐ ┌─────────────────┐  │  │
+│  │  │ SYN Scanner │ │ UDP Scanner │ │Stealth Scan │ │  OS Fingerprint │  │  │
+│  │  └──────┬──────┘ └──────┬──────┘ └──────┬──────┘ └────────┬────────┘  │  │
+│  │         │               │               │                  │           │  │
+│  │         └───────────────┴───────────────┴──────────────────┘           │  │
+│  │                                   │                                    │  │
+│  │                         dyn PacketEngine                               │  │
+│  └───────────────────────────────────┬───────────────────────────────────┘  │
+│                                      │                                       │
+│  ┌───────────────────────────────────▼───────────────────────────────────┐  │
+│  │                  Async Integration Layer (NEW)                         │  │
+│  │  ┌─────────────────────────────────────────────────────────────────┐  │  │
+│  │  │                    AsyncPacketEngine                             │  │  │
+│  │  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────┐   │  │  │
+│  │  │  │ AsyncFd<Raw> │  │ mpsc Channel │  │  PacketStream        │   │  │  │
+│  │  │  │  (Tokio)     │  │  (Backpress) │  │  (impl Stream)       │   │  │  │
+│  │  │  └──────────────┘  └──────────────┘  └──────────────────────┘   │  │  │
+│  │  └─────────────────────────────────────────────────────────────────┘  │  │
+│  │                                   │                                    │  │
+│  │                         PacketEngine trait                             │  │
+│  └───────────────────────────────────┬───────────────────────────────────┘  │
+│                                      │                                       │
+│  ┌───────────────────────────────────▼───────────────────────────────────┐  │
+│  │                  Core Engine Layer (rustnmap-packet)                   │  │
+│  │  ┌─────────────────────────────────────────────────────────────────┐  │  │
+│  │  │                   MmapPacketEngine (NEW)                         │  │  │
+│  │  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────┐   │  │  │
+│  │  │  │ RingBuffer   │  │ BlockManager │  │  FrameIterator       │   │  │  │
+│  │  │  │ (mmap ptr)   │  │ (V2 Blocks)  │  │  (Zero-copy)         │   │  │  │
+│  │  │  └──────────────┘  └──────────────┘  └──────────────────────┘   │  │  │
+│  │  └─────────────────────────────────────────────────────────────────┘  │  │
+│  │  ┌─────────────────────────────────────────────────────────────────┐  │  │
+│  │  │                   BpfFilter (NEW)                                │  │  │
+│  │  │  - Kernel-space packet filtering                                 │  │  │
+│  │  │  - Compile BPF instructions from filter expression               │  │  │
+│  │  └─────────────────────────────────────────────────────────────────┘  │  │
+│  └───────────────────────────────────┬───────────────────────────────────┘  │
+│                                      │                                       │
+│  ┌───────────────────────────────────▼───────────────────────────────────┐  │
+│  │                     Linux Kernel Interface                             │  │
+│  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────────────┐ │  │
+│  │  │ AF_PACKET    │  │ TPACKET_V2   │  │  PACKET_MMAP                 │ │  │
+│  │  │ Socket       │  │ Ring Buffer  │  │  (4MB: 2 blocks x 2MB)       │ │  │
+│  │  └──────────────┘  └──────────────┘  └──────────────────────────────┘ │  │
+│  └───────────────────────────────────────────────────────────────────────┘  │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 2.3.3 核心组件定义
+
+#### PacketEngine Trait
+
+```rust
+use std::sync::Arc;
+use async_trait::async_trait;
+use bytes::Bytes;
+use tokio::sync::mpsc;
+
+/// 数据包引擎核心抽象
+#[async_trait]
+pub trait PacketEngine: Send + Sync {
+    /// 启动引擎 (初始化环形缓冲区)
+    async fn start(&mut self) -> Result<(), PacketError>;
+
+    /// 接收单个数据包 (零拷贝)
+    async fn recv(&mut self) -> Result<Option<PacketBuffer>, PacketError>;
+
+    /// 发送单个数据包
+    async fn send(&self, packet: &[u8]) -> Result<usize, PacketError>;
+
+    /// 停止引擎
+    async fn stop(&mut self) -> Result<(), PacketError>;
+
+    /// 设置 BPF 过滤器
+    fn set_filter(&self, filter: &BpfFilter) -> Result<(), PacketError>;
+
+    /// 刷新缓冲区
+    fn flush(&self) -> Result<(), PacketError>;
+
+    /// 获取统计信息
+    fn stats(&self) -> EngineStats;
+}
+
+/// 零拷贝数据包缓冲区
+#[derive(Debug)]
+pub struct PacketBuffer {
+    /// 数据引用 (Bytes 实现零拷贝克隆)
+    pub data: Bytes,
+    /// 实际长度
+    pub len: usize,
+    /// 捕获时间戳
+    pub timestamp: std::time::Instant,
+    /// 协议类型
+    pub protocol: u16,
+    /// VLAN 标签 (可选)
+    pub vlan_tci: Option<u16>,
+}
+
+/// 引擎统计信息
+#[derive(Debug, Default)]
+pub struct EngineStats {
+    pub packets_received: u64,
+    pub packets_dropped: u64,
+    pub bytes_received: u64,
+    pub filter_accepts: u64,
+    pub filter_rejects: u64,
+}
+```
+
+#### MmapPacketEngine 实现
+
+```rust
+use std::ptr::NonNull;
+use libc::{mmap, munmap, PROT_READ, PROT_WRITE, MAP_SHARED};
+
+/// TPACKET_V2 环形缓冲区配置
+#[derive(Debug, Clone)]
+pub struct RingConfig {
+    /// 块数量 (推荐: 2)
+    pub block_count: u32,
+    /// 每块大小 (推荐: 2MB = 2097152)
+    pub block_size: u32,
+    /// 每帧大小 (推荐: TPACKET_ALIGNMENT = 512)
+    pub frame_size: u32,
+}
+
+impl Default for RingConfig {
+    fn default() -> Self {
+        Self {
+            block_count: 2,
+            block_size: 2_097_152,  // 2MB per block
+            frame_size: 512,         // TPACKET_ALIGNMENT
+        }
+    }
+}
+
+/// TPACKET_V2 头结构 (32 字节)
+/// 参考: /usr/include/linux/if_packet.h:146-157
+/// CRITICAL: tp_padding 是 [u8; 4]，不是 [u8; 8]
+#[repr(C)]
+pub struct Tpacket2Hdr {
+    pub tp_status: u32,      // 帧状态 (TP_STATUS_*)
+    pub tp_len: u32,         // 数据包长度
+    pub tp_snaplen: u32,     // 捕获长度
+    pub tp_mac: u16,         // MAC 头偏移
+    pub tp_net: u16,         // 网络头偏移
+    pub tp_sec: u32,         // 时间戳 (秒)
+    pub tp_nsec: u32,        // 时间戳 (纳秒) - NOT tp_usec!
+    pub tp_vlan_tci: u16,    // VLAN TCI
+    pub tp_vlan_tpid: u16,   // VLAN TPID
+    pub tp_padding: [u8; 4], // 填充 - NOT [u8; 8]!
+}
+
+/// PACKET_MMAP V2 引擎实现
+pub struct MmapPacketEngine {
+    /// 原始套接字文件描述符
+    fd: i32,
+    /// 环形缓冲区配置
+    config: RingConfig,
+    /// mmap 内存区域指针
+    ring_ptr: NonNull<u8>,
+    /// 环形缓冲区总大小
+    ring_size: usize,
+    /// 当前块索引
+    current_block: u32,
+    /// 当前帧索引
+    current_frame: u32,
+    /// 接口索引
+    if_index: u32,
+    /// 统计信息
+    stats: EngineStats,
+}
+
+impl MmapPacketEngine {
+    /// 创建新的 PACKET_MMAP 引擎
+    pub fn new(interface: &str, config: RingConfig) -> Result<Self, PacketError> {
+        // 1. 创建 AF_PACKET 套接字
+        // 2. 设置 TPACKET_V2 版本
+        // 3. 配置环形缓冲区
+        // 4. mmap 映射内存
+        // 5. 绑定到网络接口
+        // ...
+    }
+
+    /// 获取当前帧指针
+    fn current_frame_ptr(&self) -> *mut Tpacket2Hdr {
+        // 计算当前帧在环形缓冲区中的位置
+        let block_offset = self.current_block as usize * self.config.block_size as usize;
+        let frame_offset = self.current_frame as usize * self.config.frame_size as usize;
+        unsafe {
+            self.ring_ptr.as_ptr().add(block_offset + frame_offset)
+                as *mut Tpacket2Hdr
+        }
+    }
+
+    /// 等待帧可用
+    fn wait_for_frame(&self, hdr: &Tpacket2Hdr) -> Result<(), PacketError> {
+        // CRITICAL: 使用 Acquire 语义确保数据可见性
+        // 来自 nmap 研究: __ATOMIC_ACQUIRE
+        use std::sync::atomic::{AtomicU32, Ordering};
+        loop {
+            let status = unsafe {
+                AtomicU32::from_ptr(std::ptr::addr_of!((*hdr).tp_status))
+                    .load(Ordering::Acquire)
+            };
+            if status & TP_STATUS_USER != 0 {
+                return Ok(());
+            }
+            // 短暂让出 CPU
+            std::hint::spin_loop();
+        }
+    }
+
+    /// 释放帧回内核
+    fn release_frame(&self, hdr: &mut Tpacket2Hdr) {
+        // CRITICAL: 使用 Release 语义确保之前的读取完成
+        // 来自 nmap 研究: __ATOMIC_RELEASE
+        use std::sync::atomic::{AtomicU32, Ordering};
+        unsafe {
+            AtomicU32::from_ptr(std::ptr::addr_of!((*hdr).tp_status))
+                .store(TP_STATUS_KERNEL, Ordering::Release);
+        }
+    }
+}
+
+impl Drop for MmapPacketEngine {
+    fn drop(&mut self) {
+        // 清理 mmap 内存
+        if !self.ring_ptr.is_null() {
+            unsafe {
+                munmap(self.ring_ptr.as_ptr() as *mut _, self.ring_size);
+            }
+        }
+        // 关闭套接字
+        if self.fd >= 0 {
+            unsafe { libc::close(self.fd); }
+        }
+    }
+}
+```
+
+#### AsyncPacketEngine 包装器
+
+```rust
+use tokio::io::{AsyncFd, AsyncFdReadyGuard, Interest};
+use tokio::sync::mpsc::{channel, Sender, Receiver};
+use std::os::unix::io::OwnedFd;
+
+/// 异步数据包引擎 (Tokio 集成)
+pub struct AsyncPacketEngine {
+    /// 底层 MMAP 引擎
+    engine: MmapPacketEngine,
+    /// AsyncFd 用于非阻塞通知 (包装在 Arc 中以便共享)
+    /// CRITICAL: AsyncFd<T> 不是 Clone，必须用 Arc 包装
+    async_fd: std::sync::Arc<AsyncFd<OwnedFd>>,
+    /// 数据包发送通道
+    packet_tx: Sender<PacketBuffer>,
+    /// 数据包接收通道
+    packet_rx: Receiver<PacketBuffer>,
+    /// 运行标志
+    running: Arc<AtomicBool>,
+}
+
+impl AsyncPacketEngine {
+    /// 创建异步引擎
+    pub async fn new(interface: &str, config: RingConfig) -> Result<Self, PacketError> {
+        let engine = MmapPacketEngine::new(interface, config)?;
+
+        // CRITICAL: 不能使用 File::from_raw_fd(engine.fd)
+        // 因为 engine 仍然持有 fd 所有权，会导致 double-close
+        // 正确做法: 使用 libc::dup() 复制 fd，然后包装为 OwnedFd
+        let async_fd = unsafe {
+            // 复制 fd，避免所有权问题
+            let dup_fd = libc::dup(engine.fd);
+            if dup_fd < 0 {
+                return Err(PacketError::FdDupFailed);
+            }
+            // OwnedFd 会在 drop 时自动关闭 fd
+            let owned_fd = OwnedFd::from_raw_fd(dup_fd);
+            AsyncFd::new(owned_fd)?
+        };
+
+        let (packet_tx, packet_rx) = channel(1024);
+
+        Ok(Self {
+            engine,
+            async_fd: std::sync::Arc::new(async_fd),
+            packet_tx,
+            packet_rx,
+            running: Arc::new(AtomicBool::new(false)),
+        })
+    }
+
+    /// 启动异步接收循环
+    pub async fn start(&mut self) -> Result<(), PacketError> {
+        self.running.store(true, Ordering::Release);
+        self.engine.start()?;
+
+        // 启动后台接收任务
+        let running = self.running.clone();
+
+        // CRITICAL: 不能将 &mut self.engine 裸指针传入 async block
+        // 正确做法: 使用 Arc<Mutex<>> 或移动 engine 到 task
+        let engine = std::sync::Arc::new(tokio::sync::Mutex::new(
+            std::mem::replace(&mut self.engine, MmapPacketEngine::placeholder())
+        ));
+        // CRITICAL: AsyncFd 不是 Clone，必须使用 Arc 共享
+        let async_fd = self.async_fd.clone();  // Arc::clone()
+        let packet_tx = self.packet_tx.clone();
+
+        tokio::spawn(async move {
+            while running.load(Ordering::Acquire) {
+                // 等待套接字可读
+                let mut ready_guard = match async_fd.readable().await {
+                    Ok(guard) => guard,
+                    Err(_) => break,
+                };
+
+                // 批量读取数据包
+                let mut engine_guard = engine.lock().await;
+                while let Some(packet) = engine_guard.try_recv().unwrap_or(None) {
+                    if packet_tx.send(packet).await.is_err() {
+                        break;
+                    }
+                }
+                drop(engine_guard);
+
+                ready_guard.clear_ready_matching(Interest::READABLE);
+            }
+        });
+
+        Ok(())
+    }
+
+    /// 异步接收数据包
+    pub async fn recv(&mut self) -> Result<Option<PacketBuffer>, PacketError> {
+        self.packet_rx.recv().await.ok_or(PacketError::ChannelClosed)
+    }
+}
+```
+
+#### PacketStream 实现 (impl Stream)
+
+**推荐模式: 使用 ReceiverStream 避免 busy-spin**
+
+```rust
+use futures::Stream;
+use std::pin::Pin;
+use std::task::{Context, Poll};
+use tokio_stream::wrappers::ReceiverStream;
+
+/// 数据包流 (基于 channel，避免 busy-spin)
+///
+/// CRITICAL: 不要在 poll_next 中无条件 wake_by_ref()
+/// 这会导致 CPU 高频自唤醒（busy-spin）
+/// 正确做法: 使用 channel 的 readiness 驱动唤醒
+pub struct PacketStream {
+    /// 使用 ReceiverStream 包装 channel receiver
+    /// 当 channel 为空时，Stream 会正确地 Pending 而非自唤醒
+    inner: ReceiverStream<Result<PacketBuffer, PacketError>>,
+}
+
+impl Stream for PacketStream {
+    type Item = Result<PacketBuffer, PacketError>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        // 委托给 ReceiverStream，它有正确的 readiness 语义
+        Pin::new(&mut self.inner).poll_next(cx)
+    }
+}
+
+impl AsyncPacketEngine {
+    /// 转换为 Stream
+    ///
+    /// 使用 channel 作为背压机制，避免 busy-spin
+    #[must_use]
+    pub fn into_stream(self) -> PacketStream {
+        // 获取内部的 packet_rx channel receiver
+        // 注意: 这需要 AsyncPacketEngine 暴露 packet_rx 的 getter
+        // 或者使用 split() 模式分离 sender/receiver
+        let packet_rx = self.packet_rx;
+        PacketStream {
+            inner: ReceiverStream::new(packet_rx),
+        }
+    }
+}
+```
+
+**Cargo.toml 依赖:**
+```toml
+[dependencies]
+futures = "0.3"       # REQUIRED: for Stream trait
+tokio-stream = "0.1"  # REQUIRED: for ReceiverStream
+```
+
+#### Drop 实现安全顺序 (CRITICAL)
+
+**MUST munmap BEFORE close fd - 顺序错误会导致资源泄漏**
+
+```rust
+impl Drop for MmapPacketEngine {
+    fn drop(&mut self) {
+        // 1. 首先取消 mmap 映射
+        // SAFETY: ring_ptr 和 ring_size 在有效状态
+        if !self.ring_ptr.is_null() {
+            unsafe {
+                // MUST come first - kernel expects mmap to be released before socket
+                libc::munmap(self.ring_ptr.as_ptr() as *mut _, self.ring_size);
+            }
+            self.ring_ptr = NonNull::dangling(); // 防止 double-free
+        }
+
+        // 2. 然后关闭 socket
+        // SAFETY: fd is valid and owned
+        if self.fd >= 0 {
+            unsafe {
+                // MUST come second - after munmap
+                libc::close(self.fd);
+            }
+            self.fd = -1; // 防止 double-close
+        }
+    }
+}
+```
+
+**顺序错误后果:**
+- 先 `close()` 后 `munmap()` 会导致 `EBADF` 错误
+- 内核可能在 munmap 时访问已关闭的 fd
+- 可能导致内存泄漏或 undefined behavior
+
+### 2.3.4 网络波动处理架构
+
+基于 nmap `timing.cc` 和 `scan_engine.cc` 的研究，实现完整的网络波动处理机制：
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    Network Volatility Handling Architecture                  │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  ┌───────────────────────────────────────────────────────────────────────┐  │
+│  │                        AdaptiveTiming (RFC 6298)                       │  │
+│  │  ┌─────────────────────────────────────────────────────────────────┐  │  │
+│  │  │  SRTT = (7/8) * SRTT + (1/8) * RTT                              │  │  │
+│  │  │  RTTVAR = (3/4) * RTTVAR + (1/4) * |RTT - SRTT|                 │  │  │
+│  │  │  Timeout = SRTT + 4 * RTTVAR                                    │  │  │
+│  │  │  Timeout = clamp(Timeout, min_rtt, max_rtt)                     │  │  │
+│  │  └─────────────────────────────────────────────────────────────────┘  │  │
+│  └───────────────────────────────────────────────────────────────────────┘  │
+│                                      │                                       │
+│                                      ▼                                       │
+│  ┌───────────────────────────────────────────────────────────────────────┐  │
+│  │                    CongestionController (TCP-like)                     │  │
+│  │  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────────┐ │  │
+│  │  │ cwnd (拥塞窗口)  │  │ ssthresh (阈值)  │  │ Phase Detection      │ │  │
+│  │  │                  │  │                  │  │ - Slow Start         │ │  │
+│  │  │ Initial: 1       │  │ Initial: ∞       │  │ - Congestion Avoid   │ │  │
+│  │  │ Min: 1           │  │ On drop: cwnd/2  │  │ - Recovery           │ │  │
+│  │  │ Max: max_cwnd    │  │                  │  │                      │ │  │
+│  │  └──────────────────┘  └──────────────────┘  └──────────────────────┘ │  │
+│  └───────────────────────────────────────────────────────────────────────┘  │
+│                                      │                                       │
+│                                      ▼                                       │
+│  ┌───────────────────────────────────────────────────────────────────────┐  │
+│  │                      ScanDelayBoost (动态延迟)                         │  │
+│  │  ┌─────────────────────────────────────────────────────────────────┐  │  │
+│  │  │  On high drop rate:                                              │  │  │
+│  │  │    if timing_level < 4: delay = min(10000, max(1000, delay*10)) │  │  │
+│  │  │    else: delay = min(1000, max(100, delay*2))                   │  │  │
+│  │  │                                                                  │  │  │
+│  │  │  Decay after good responses:                                     │  │  │
+│  │  │    if good_responses > threshold: delay = max(default, delay/2) │  │  │
+│  │  └─────────────────────────────────────────────────────────────────┘  │  │
+│  └───────────────────────────────────────────────────────────────────────┘  │
+│                                      │                                       │
+│                                      ▼                                       │
+│  ┌───────────────────────────────────────────────────────────────────────┐  │
+│  │                      RateLimiter (Token Bucket)                        │  │
+│  │  ┌─────────────────────────────────────────────────────────────────┐  │  │
+│  │  │  --min-rate: 保证最小发包速率                                     │  │  │
+│  │  │  --max-rate: 限制最大发包速率                                     │  │  │
+│  │  │  Tokens replenish at rate R per second                           │  │  │
+│  │  │  Burst size = min_rate * burst_factor                            │  │  │
+│  │  └─────────────────────────────────────────────────────────────────┘  │  │
+│  └───────────────────────────────────────────────────────────────────────┘  │
+│                                      │                                       │
+│                                      ▼                                       │
+│  ┌───────────────────────────────────────────────────────────────────────┐  │
+│  │                      ErrorRecovery (ICMP 分类)                         │  │
+│  │  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────────┐ │  │
+│  │  │ HOST_UNREACH     │  │ NET_UNREACH      │  │ PORT_UNREACH (UDP)   │ │  │
+│  │  │ -> Mark Down     │  │ -> Reduce cwnd   │  │ -> Mark Closed       │ │  │
+│  │  │                  │  │ -> Boost delay   │  │                      │ │  │
+│  │  ├──────────────────┤  ├──────────────────┤  ├──────────────────────┤ │  │
+│  │  │ ADMIN_PROHIBITED │  │ FRAG_NEEDED      │  │ TIMEOUT              │ │  │
+│  │  │ -> Mark Filtered │  │ -> Set DF=0      │  │ -> Retry w/ backoff  │ │  │
+│  │  └──────────────────┘  └──────────────────┘  └──────────────────────┘ │  │
+│  └───────────────────────────────────────────────────────────────────────┘  │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 2.3.5 时序模板参数对照表
+
+| 参数 | T0 Paranoid | T1 Sneaky | T2 Polite | T3 Normal | T4 Aggressive | T5 Insane |
+|------|-------------|-----------|-----------|-----------|---------------|-----------|
+| `min_rtt_timeout` | 100ms | 100ms | 100ms | 100ms | 100ms | 50ms |
+| `max_rtt_timeout` | 10s | 10s | 10s | 10s | 10s | 300ms |
+| `initial_rtt` | 1s | 1s | 1s | 1s | 500ms | 250ms |
+| `max_retries` | 10 | 10 | 10 | 10 | 6 | 2 |
+| `scan_delay` | 5min | 15s | 400ms | 0ms | 0ms | 0ms |
+| `max_parallelism` | 1 | 1 | 1 | dynamic | dynamic | dynamic |
+| `min_host_group` | 1 | 1 | 1 | 1 | 1 | 1 |
+| `max_host_group` | 1 | 1 | 1 | 100 | 100 | 256 |
+| `min_rate` | 0 | 0 | 0 | 0 | 0 | 0 |
+| `max_rate` | 0 | 0 | 0 | 0 | 0 | 0 |
+| `cwnd_initial` | 1 | 1 | 1 | 1 | 1 | 1 |
+| `cwnd_max` | 10 | 10 | 10 | dynamic | dynamic | dynamic |
+
+### 2.3.6 文件结构规划
+
+```
+crates/rustnmap-packet/src/
+├── lib.rs              # 公开 API 导出
+├── engine.rs           # PacketEngine trait 定义
+├── mmap.rs             # MmapPacketEngine 实现
+│   ├── RingBuffer      # 环形缓冲区管理
+│   ├── BlockManager    # TPACKET_V2 块管理
+│   └── FrameIterator   # 零拷贝帧迭代器
+├── async_engine.rs     # AsyncPacketEngine (Tokio 集成)
+│   ├── AsyncFd 包装
+│   └── Channel 分发
+├── bpf.rs              # BPF 过滤器
+│   ├── BpfFilter       # 过滤器结构
+│   ├── compile()       # 编译表达式
+│   └── attach()        # 附加到套接字
+├── stream.rs           # PacketStream (impl Stream)
+├── stats.rs            # EngineStats 统计
+├── error.rs            # PacketError 错误类型
+└── sys/
+    ├── mod.rs          # Linux 系统调用封装
+    ├── tpacket.rs      # TPACKET_V2 常量和结构
+    └── if_packet.rs    # AF_PACKET 常量
+```
+
+---
+
+## 2.4 核心抽象：ScanSession
 
 基于 Deepseek 设计文档，所有功能模块通过 `ScanSession` 上下文交互，便于依赖注入、模拟测试和会话恢复。
 
@@ -429,4 +1030,3 @@ mod tests {
 ```
 
 ---
-
