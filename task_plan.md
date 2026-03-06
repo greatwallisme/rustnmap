@@ -198,8 +198,12 @@ Migrate all scanners to use new `PacketEngine` trait
 - [x] Expose `to_sock_fprog()` method in `BpfFilter` for adapter integration
 - [x] Document migration patterns in `progress.md`
 
-#### 3.2 Simple Scanner Migration (READY TO START)
-- [ ] Migrate `TcpFinScanner` (stealth_scans.rs)
+#### 3.2 Simple Scanner Migration (IN PROGRESS)
+- [x] Migrate `TcpFinScanner` (stealth_scans.rs) - PARTIAL COMPLETE
+  - [x] Struct updated to use `ScannerPacketEngine`
+  - [x] Constructor updated to use `create_stealth_engine()`
+  - [x] All tests pass, zero clippy warnings
+  - [ ] TODO: Implement async bridge for actual packet reception
 - [ ] Migrate `TcpNullScanner` (stealth_scans.rs)
 - [ ] Migrate `TcpXmasScanner` (stealth_scans.rs)
 - [ ] Verify functionality with integration tests

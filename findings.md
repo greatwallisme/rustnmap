@@ -42,6 +42,71 @@ All infrastructure preparation tasks have been completed:
 | `ScannerPacketEngine` adapter | COMPLETE | Created in `packet_adapter.rs` |
 | `to_sock_fprog()` exposure | COMPLETE | Made public in `BpfFilter` |
 
+### Phase 3.2: Simple Scanner Migration (IN PROGRESS - 2026-03-06)
+
+#### TcpFinScanner Migration (PARTIAL COMPLETE - 2026-03-06)
+
+**Completed Changes:**
+- Updated `TcpFinScanner` struct to use `Option<Arc<Mutex<ScannerPacketEngine>>>`
+- Updated constructor to call `create_stealth_engine()` helper
+- Fixed `config` ownership issue by cloning
+- Fixed all clippy warnings (doc_markdown, manual_ok_err)
+- All 16 tests pass, zero compiler warnings
+
+**Files Modified:**
+- `crates/rustnmap-scan/src/stealth_scans.rs` - `TcpFinScanner` struct and constructor
+- `crates/rustnmap-scan/src/packet_adapter.rs` - Fixed `create_stealth_engine()` to use `.ok()`
+
+**Status: PARTIAL MIGRATION**
+The migration is structurally complete but functionally equivalent to the old implementation. The scanner currently falls back to raw socket for packet reception because the async bridge has not been implemented yet.
+
+**Remaining Work for Full Migration:**
+1. Implement async bridge using `tokio::task::spawn_blocking` or similar
+2. Update `send_fin_probe()` to use `ScannerPacketEngine::recv_with_timeout()`
+3. Update `scan_ports_batch()` to use `ScannerPacketEngine::recv_with_timeout()`
+4. Consider making `PortScanner` trait async for better integration
+
+**Quality Metrics:**
+- All 16 tests pass
+- Zero clippy warnings (`cargo clippy -- -D warnings`)
+- Code compiles cleanly
+
+#### Challenge: Async vs Synchronous Architecture
+
+**Current Architecture:**
+- `SimpleAfPacket` with blocking `recvfrom()` operations
+- Synchronous scanner methods (`send_fin_probe()` returns `ScanResult<PortState>`)
+- Direct packet reception in scanner methods
+
+**New Architecture:**
+- `ScannerPacketEngine` with async `recv_with_timeout()` method
+- Requires async/await for packet reception
+- Channel-based packet distribution
+
+**Migration Complexity:**
+This is **not** a simple drop-in replacement. The scanner methods need to be converted from synchronous to asynchronous, which affects:
+1. Method signatures (adding `async fn`)
+2. Call sites (adding `.await`)
+3. Error propagation (from `ScanError` to async-compatible types)
+4. Test structure (adding `tokio::test`)
+
+#### Migration Strategy: Incremental Approach
+
+**Step 1: Convert `SimpleAfPacket` to `ScannerPacketEngine`**
+- Replace `Option<Arc<SimpleAfPacket>>` with `Option<Arc<Mutex<ScannerPacketEngine>>>`
+- Update `create_packet_socket()` to use `create_stealth_engine()` helper
+- Keep synchronous pattern initially for compatibility
+
+**Step 2: Introduce Async Methods**
+- Add `async fn send_fin_probe_async()` alongside `send_fin_probe()`
+- Use `spawn_blocking` wrapper initially for compatibility
+- Gradually migrate to true async
+
+**Step 3: Full Async Migration**
+- Replace sync methods with async versions
+- Update trait implementations
+- Update all call sites
+
 ### ScannerPacketEngine Adapter Features
 
 **File**: `crates/rustnmap-scan/src/packet_adapter.rs`

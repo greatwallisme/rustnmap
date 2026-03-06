@@ -242,11 +242,11 @@ mod tests {
 
     #[test]
     fn test_packet_error_helpers() {
-        let io_err = io::Error::new(io::ErrorKind::Other, "test");
+        let io_err = io::Error::other("test");
         let err = PacketError::socket_option("TEST", io_err);
         assert!(matches!(err, PacketError::SocketOption { .. }));
 
-        let io_err = io::Error::new(io::ErrorKind::Other, "test");
+        let io_err = io::Error::other("test");
         let err = PacketError::bind_failed("eth0", io_err);
         assert!(matches!(err, PacketError::BindFailed { .. }));
     }

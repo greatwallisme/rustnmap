@@ -13,7 +13,7 @@
 //!
 //! # Design Decisions
 //!
-//! - Uses `AsyncPacketEngine` internally for PACKET_MMAP V2
+//! - Uses `AsyncPacketEngine` internally for `PACKET_MMAP` V2
 //! - Provides synchronous-style `recv_with_timeout` method for compatibility
 //! - Implements `Send + Sync` for sharing across async tasks
 //! - Caches interface properties to avoid blocking lookups
@@ -55,7 +55,7 @@ use tokio::sync::Mutex;
 /// for scanners currently using `SimpleAfPacket`.
 ///
 /// This struct provides:
-/// - Async-first packet capture using PACKET_MMAP V2
+/// - Async-first packet capture using `PACKET_MMAP` V2
 /// - Timeout-aware receive methods
 /// - BPF filter support
 /// - Thread-safe sharing via `Arc<Mutex>`
@@ -327,10 +327,7 @@ pub fn create_stealth_engine(
     let if_name = detect_interface_from_addr(local_addr);
 
     // Create the engine
-    match ScannerPacketEngine::new_shared(&if_name, config) {
-        Ok(engine) => Some(engine),
-        Err(_) => None,
-    }
+    ScannerPacketEngine::new_shared(&if_name, config).ok()
 }
 
 /// Detects the network interface name from a local IP address.

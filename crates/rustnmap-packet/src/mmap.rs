@@ -979,7 +979,7 @@ mod tests {
     #[test]
     fn test_ring_config_validation() {
         let config = RingConfig::default();
-        assert!(config.validate().is_ok());
+        config.validate().unwrap();
     }
 
     #[test]

@@ -245,7 +245,7 @@ mod tests {
         assert!(req.validate().is_err());
 
         let req = TpacketReq::with_values(4096, 2, 2048, 2048);
-        assert!(req.validate().is_ok());
+        req.validate().unwrap();
 
         // Invalid: block size not page aligned
         let req = TpacketReq::with_values(4095, 2, 2048, 2048);

@@ -1028,7 +1028,7 @@ mod tests {
 
     #[test]
     fn test_bpf_filter_icmp_dst() {
-        let filter = BpfFilter::icmp_dst(0x01020304);
+        let filter = BpfFilter::icmp_dst(0x0102_0304);
         assert!(!filter.is_empty());
         // Should check for IPv4, ICMP, and destination IP
         assert!(filter.len() > 7);
@@ -1073,7 +1073,7 @@ mod tests {
 
     #[test]
     fn test_bpf_filter_ipv4_dst() {
-        let addr: u32 = 0xC0A80001; // 192.168.0.1
+        let addr: u32 = 0xC0A8_0001; // 192.168.0.1
         let filter = BpfFilter::ipv4_dst(addr);
         assert!(!filter.is_empty());
         assert!(filter.len() > 3);
@@ -1081,7 +1081,7 @@ mod tests {
 
     #[test]
     fn test_bpf_filter_ipv4_src() {
-        let addr: u32 = 0xC0A80001; // 192.168.0.1
+        let addr: u32 = 0xC0A8_0001; // 192.168.0.1
         let filter = BpfFilter::ipv4_src(addr);
         assert!(!filter.is_empty());
         assert!(filter.len() > 3);

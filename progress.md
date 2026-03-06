@@ -908,6 +908,43 @@ pub struct ScannerPacketEngine {
 
 ---
 
+## Phase 3.2: Scanner Migration (IN PROGRESS - 2026-03-06)
+
+### TcpFinScanner Migration (PARTIAL COMPLETE)
+
+**Status**: PARTIAL MIGRATION COMPLETE
+
+**Completed Changes:**
+1. Updated `TcpFinScanner` struct to use `Option<Arc<Mutex<ScannerPacketEngine>>>`
+2. Updated constructor to call `create_stealth_engine()` helper
+3. Fixed `config` ownership issue by cloning
+4. Fixed all clippy warnings (doc_markdown, manual_ok_err)
+5. All 3 FIN scan tests pass, zero compiler warnings
+
+**Quality Metrics:**
+- All 16 tests pass in rustnmap-scan
+- Zero clippy warnings (`cargo clippy -- -D warnings`)
+- Code compiles cleanly
+
+**Status: PARTIAL MIGRATION**
+The migration is structurally complete but functionally equivalent to the old implementation. The scanner currently falls back to raw socket for packet reception because the async bridge has not been implemented yet.
+
+**Remaining Work for Full Migration:**
+1. Implement async bridge using `tokio::task::spawn_blocking`
+2. Update `send_fin_probe()` to use `ScannerPacketEngine::recv_with_timeout()`
+3. Update `scan_ports_batch()` to use `ScannerPacketEngine::recv_with_timeout()`
+4. Consider making `PortScanner` trait async for better integration
+
+### TcpNullScanner Migration (IN PROGRESS - 2026-03-06)
+
+Migrating struct to use `ScannerPacketEngine` instead of `SimpleAfPacket`.
+
+### TcpXmasScanner Migration (PENDING)
+
+Migrating struct to use `ScannerPacketEngine` instead of `SimpleAfPacket`.
+
+---
+
 ## Phase 3.2: Scanner Migration (READY TO START)
 
 ### Migration Targets
