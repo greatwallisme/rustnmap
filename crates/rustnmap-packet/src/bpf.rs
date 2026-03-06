@@ -435,6 +435,19 @@ impl BpfFilter {
         Self::new(Self::build_icmp_type_filter(0))
     }
 
+    /// Creates a filter for ICMP packets with a specific destination address.
+    ///
+    /// This filter matches ICMP packets destined for the specified IPv4 address.
+    /// It is useful for filtering ICMP responses in scanning applications.
+    ///
+    /// # Arguments
+    ///
+    /// * `addr` - IPv4 address in network byte order
+    #[must_use]
+    pub fn icmp_dst(addr: u32) -> Self {
+        Self::new(Self::build_icmp_dst_filter(addr))
+    }
+
     /// Creates a filter for TCP SYN packets.
     #[must_use]
     pub fn tcp_syn() -> Self {
@@ -639,6 +652,34 @@ impl BpfFilter {
             // Not matching, reject
             BpfInstruction::ret_reject(),
             // Accept
+            BpfInstruction::ret_accept(),
+        ]
+    }
+
+    /// Builds an ICMP filter with destination address.
+    ///
+    /// This filter matches ICMP packets destined for the specified IPv4 address.
+    fn build_icmp_dst_filter(addr: u32) -> Vec<BpfInstruction> {
+        vec![
+            // Load EtherType (bytes 12-13)
+            BpfInstruction::load_half(ETH_HLEN),
+            // Check if IPv4 (0x0800) - jump to next if true, else skip 5 to reject
+            BpfInstruction::jump_eq(u32::from(ETHERTYPE_IP), 0, 5),
+            // Not IPv4, reject
+            BpfInstruction::ret_reject(),
+            // Load IP protocol (byte at offset 23 = 14 + 9)
+            BpfInstruction::load_byte(ETH_HLEN + IP_PROTO_OFFSET),
+            // Check if ICMP (1) - jump to next if true, else skip 3 to reject
+            BpfInstruction::jump_eq(IPPROTO_ICMP, 0, 3),
+            // Not ICMP, reject
+            BpfInstruction::ret_reject(),
+            // Load destination IP (offset 30, 4 bytes) - 14 + 16 (IP dst offset)
+            BpfInstruction::load_word(ETH_HLEN + IP_DST_OFFSET),
+            // Check if matches local IP - jump to accept if true, else reject
+            BpfInstruction::jump_eq(addr, 0, 1),
+            // Not matching, reject
+            BpfInstruction::ret_reject(),
+            // Accept packet (return full packet length)
             BpfInstruction::ret_accept(),
         ]
     }
@@ -982,6 +1023,14 @@ mod tests {
         assert!(!filter.is_empty());
         // Should check for ICMP type 0
         assert!(filter.len() > 5);
+    }
+
+    #[test]
+    fn test_bpf_filter_icmp_dst() {
+        let filter = BpfFilter::icmp_dst(0x01020304);
+        assert!(!filter.is_empty());
+        // Should check for IPv4, ICMP, and destination IP
+        assert!(filter.len() > 7);
     }
 
     #[test]
