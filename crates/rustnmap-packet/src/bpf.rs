@@ -820,7 +820,8 @@ impl BpfFilter {
     /// The returned `sock_fprog` contains a pointer to the filter's internal
     /// instructions. The filter must remain valid for the lifetime of the
     /// `sock_fprog`.
-    fn to_sock_fprog(&self) -> libc::sock_fprog {
+    #[must_use]
+    pub fn to_sock_fprog(&self) -> libc::sock_fprog {
         libc::sock_fprog {
             len: u16::try_from(self.instructions.len()).unwrap_or(u16::MAX),
             filter: self.instructions.as_ptr() as *mut libc::sock_filter,

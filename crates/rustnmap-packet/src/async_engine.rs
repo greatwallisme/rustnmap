@@ -56,6 +56,7 @@ use tokio::io::unix::AsyncFd;
 use tokio::io::Ready;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::sync::Mutex;
+use tokio::time::{timeout, Duration};
 
 /// Channel size for packet distribution.
 ///
@@ -221,6 +222,53 @@ impl AsyncPacketEngine {
     #[must_use]
     pub const fn mac_address(&self) -> MacAddr {
         self.mac_addr
+    }
+
+    /// Receives a packet with a timeout.
+    ///
+    /// This method is similar to `recv()` but returns `Ok(None)` if no
+    /// packet is received within the specified timeout duration.
+    ///
+    /// # Arguments
+    ///
+    /// * `timeout_duration` - Maximum time to wait for a packet
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The engine is not running
+    /// - A packet receive error occurs
+    /// - The timeout elapses (returns `Ok(None)`)
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use std::time::Duration;
+    /// use rustnmap_packet::{AsyncPacketEngine, RingConfig, PacketEngine};
+    ///
+    /// # async fn example(mut engine: AsyncPacketEngine) -> Result<(), rustnmap_packet::PacketError> {
+    /// engine.start().await?;
+    ///
+    /// match engine.recv_timeout(Duration::from_millis(200)).await? {
+    ///     Some(packet) => process(packet),
+    ///     None => handle_timeout(),
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn recv_timeout(
+        &mut self,
+        timeout_duration: Duration,
+    ) -> Result<Option<PacketBuffer>> {
+        if !self.running.load(Ordering::Acquire) {
+            return Err(PacketError::NotStarted);
+        }
+
+        // Use tokio::time::timeout to wrap the channel receive
+        match timeout(timeout_duration, self.packet_rx.recv()).await {
+            Ok(Some(result)) => result.map(Some),
+            Ok(None) | Err(_) => Ok(None), // Channel closed or timeout elapsed
+        }
     }
 
     /// Converts the engine into a packet stream.

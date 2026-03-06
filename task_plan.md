@@ -190,17 +190,25 @@ Migrate all scanners to use new `PacketEngine` trait
 
 ### Migration Plan
 
-#### 3.1 Infrastructure Preparation
+#### 3.1 Infrastructure Preparation (COMPLETED 2026-03-06)
 - [x] Add `icmp_dst()` filter to `BpfFilter` for ICMP with destination filtering
-- [ ] Create adapter layer for gradual migration
-- [ ] Add timeout support to `AsyncPacketEngine`
-- [ ] Document migration patterns
+- [x] Fix critical atomic status check bug in `mmap.rs`
+- [x] Add timeout support to `AsyncPacketEngine` (`recv_timeout` method)
+- [x] Create adapter layer (`ScannerPacketEngine`) for gradual migration
+- [x] Expose `to_sock_fprog()` method in `BpfFilter` for adapter integration
+- [x] Document migration patterns in `progress.md`
 
-#### 3.2 Simple Scanner Migration
+#### 3.2 Simple Scanner Migration (READY TO START)
 - [ ] Migrate `TcpFinScanner` (stealth_scans.rs)
 - [ ] Migrate `TcpNullScanner` (stealth_scans.rs)
 - [ ] Migrate `TcpXmasScanner` (stealth_scans.rs)
 - [ ] Verify functionality with integration tests
+
+**Adapter Layer Status:**
+- `ScannerPacketEngine` adapter created in `packet_adapter.rs`
+- Thread-safe via `Arc<Mutex<ScannerPacketEngine>>`
+- API matches `SimpleAfPacket::recv_packet_with_timeout()`
+- All 95 tests pass,- Zero clippy warnings
 
 #### 3.3 Complex Scanner Migration
 - [ ] Migrate `ParallelScanEngine` (ultrascan.rs)

@@ -772,3 +772,212 @@ This is not a simple drop-in replacement but requires architectural refactoring.
 2. Implement timeout support
 3. Start with stealth_scanners.rs migration (simpler than ultrascan.rs)
 4. Verify each migration before proceeding to next
+
+---
+
+## Phase 3.1: Critical Bug Fix (2026-03-06)
+
+### Status: COMPLETED
+
+**Critical Bug Fixed in mmap.rs:**
+
+**Location**: `crates/rustnmap-packet/src/mmap.rs:646-668`
+
+**Bug Description**: The `frame_is_available()` method created a NEW `AtomicU32` from the raw `tp_status` value instead of accessing the kernel-shared memory atomically. This breaks atomicity and can cause race conditions.
+
+**Before (BROKEN):**
+```rust
+let status = AtomicU32::new(hdr.tp_status).load(Ordering::Acquire);
+```
+
+**After (FIXED):**
+```rust
+let status_ptr = std::ptr::addr_of!(hdr.tp_status).cast::<AtomicU32>();
+unsafe {
+    (*status_ptr).load(Ordering::Acquire) & TP_STATUS_USER != 0
+}
+```
+
+**Impact**: This bug could cause race conditions and missed packets under load.
+
+**Verification**: All 61 tests pass, zero clippy warnings.
+
+---
+
+## Phase 3.1: Timeout Support Added (2026-03-06)
+
+### Status: COMPLETED
+
+**New Method Added to AsyncPacketEngine:**
+
+```rust
+pub async fn recv_timeout(
+    &mut self,
+    timeout_duration: Duration,
+) -> Result<Option<PacketBuffer>> {
+    if !self.running.load(Ordering::Acquire) {
+        return Err(PacketError::NotStarted);
+    }
+
+    match timeout(timeout_duration, self.packet_rx.recv()).await {
+        Ok(Some(result)) => result.map(Some),
+        Ok(None) | Err(_) => Ok(None), // Channel closed or timeout elapsed
+    }
+}
+```
+
+**Purpose**: Provides timeout-based receive for scanner migration compatibility.
+
+**Usage Example:**
+```rust
+match engine.recv_timeout(Duration::from_millis(200)).await? {
+    Some(packet) => process(packet),
+    None => handle_timeout(),
+}
+```
+
+**Quality Verification**:
+- All 61 tests pass
+- Zero clippy warnings with `-W clippy::pedantic`
+
+---
+
+## Phase 3.1: Scanner Adapter Layer (COMPLETED 2026-03-06)
+
+### Status: COMPLETED
+
+**Implementation Summary:**
+
+Created adapter layer in `crates/rustnmap-scan/src/packet_adapter.rs`:
+
+**ScannerPacketEngine Features:**
+1. Wraps `AsyncPacketEngine` to provide familiar interface
+2. `recv_with_timeout()` method similar to `SimpleAfPacket::recv_packet_with_timeout`
+3. `set_filter()` method for BPF filter attachment
+4. `Arc<Mutex<>>` wrapping for thread-safe sharing
+5. Helper functions: `create_stealth_engine()`, `detect_interface_from_addr()`
+
+**Key Methods:**
+```rust
+pub async fn recv_with_timeout(&mut self, timeout: Duration) -> Result<Option<Vec<u8>>>
+pub fn set_filter(&self, filter: &BpfFilter) -> Result<()>
+pub fn start(&mut self) -> Result<()>
+pub fn stop(&mut self) -> Result<()>
+```
+
+**API Changes:**
+- Exposed `BpfFilter::to_sock_fprog()` as public method for filter conversion
+- Added `recv_timeout()` to `AsyncPacketEngine` for timeout support
+
+**Quality Verification:**
+- All tests pass (61 tests in rustnmap-packet,- Zero clippy warnings with `-W clippy::pedantic`
+
+---
+
+## Phase 3.1: ScannerPacketEngine Adapter (COMPLETED 2026-03-06)
+
+### Status: COMPLETED
+
+**Created `crates/rustnmap-scan/src/packet_adapter.rs`:**
+
+```rust
+pub struct ScannerPacketEngine {
+    inner: AsyncPacketEngine,
+    if_name: String,
+    if_index: u32,
+    mac_addr: MacAddr,
+    config: ScanConfig,
+}
+```
+
+**Key Methods:**
+- `new(if_name, config)` - Create engine
+- `new_shared(if_name, config)` - Create wrapped in `Arc<Mutex>`
+- `start()` / `stop()` - Lifecycle management
+- `recv_with_timeout(duration)` - Timeout-based receive (similar to `SimpleAfPacket::recv_packet_with_timeout`)
+- `set_filter(filter)` - BPF filter attachment
+
+**Helper Functions:**
+- `create_stealth_engine(local_addr, config)` - Create engine for stealth scanners
+- `detect_interface_from_addr(local_addr)` - Interface detection
+
+**Quality Verification:**
+- Exposed `BpfFilter::to_sock_fprog()` as public method
+- All tests pass
+- Zero clippy warnings with `-W clippy::pedantic`
+
+---
+
+## Phase 3.2: Scanner Migration (READY TO START)
+
+### Migration Targets
+1. `TcpFinScanner` (stealth_scans.rs)
+2. `TcpNullScanner` (stealth_scans.rs)
+3. `TcpXmasScanner` (stealth_scans.rs)
+
+### Migration Pattern
+Replace `Option<Arc<SimpleAfPacket>>` with `Option<Arc<Mutex<ScannerPacketEngine>>>`
+
+**Current Architecture:**
+```rust
+let packet_socket = Arc::clone(&packet_socket);
+tokio::task::spawn_blocking(move || {
+    pkt_sock.recv_packet_with_timeout(timeout)
+});
+```
+
+**Target Architecture:**
+```rust
+let engine = engine.lock().await;
+engine.recv_with_timeout(timeout).await
+```
+
+---
+
+## Next Steps
+
+1. ~~Fix compilation errors in `packet_adapter.rs`~~ ✅ COMPLETED
+2. ~~Run full test suite to verify zero warnings~~ ✅ COMPLETED (95 tests pass)
+3. Begin `TcpFinScanner` migration using `ScannerPacketEngine`
+4. Validate each scanner migration before proceeding to next
+
+---
+
+## Session Summary (2026-03-06)
+
+### Completed Tasks
+
+1. **Critical Bug Fixed in mmap.rs**:
+   - Fixed atomic status check that was creating NEW `AtomicU32` instead of accessing kernel-shared memory atomically
+   - Impact: Eliminates race conditions in packet capture
+
+2. **Timeout Support Added to AsyncPacketEngine**:
+   - New `recv_timeout()` method for scanner migration compatibility
+   - Zero clippy warnings, all 61 tests pass
+
+3. **ScannerPacketEngine Adapter Created**:
+   - New file: `crates/rustnmap-scan/src/packet_adapter.rs`
+   - Provides similar API to `SimpleAfPacket` for gradual migration
+   - Thread-safe via `Arc<Mutex<>>`
+   - BPF filter support
+   - 95 tests pass, zero clippy warnings
+
+4. **BpfFilter::to_sock_fprog() Exposed**:
+   - Made public for adapter integration
+   - Enables filter conversion for `PacketEngine::set_filter()`
+
+### Quality Metrics
+
+- **rustnmap-packet**: 61 tests pass, zero clippy warnings
+- **rustnmap-scan**: 95 tests pass, zero clippy warnings
+
+### Files Modified
+
+- `crates/rustnmap-packet/src/mmap.rs` - Critical bug fix
+- `crates/rustnmap-packet/src/async_engine.rs` - Timeout support
+- `crates/rustnmap-packet/src/bpf.rs` - Public `to_sock_fprog()`
+- `crates/rustnmap-scan/src/packet_adapter.rs` - NEW adapter layer
+- `crates/rustnmap-scan/src/lib.rs` - Module export
+- `findings.md` - Updated with bug analysis
+- `task_plan.md` - Phase 3.1 marked complete
+- `progress.md` - This update

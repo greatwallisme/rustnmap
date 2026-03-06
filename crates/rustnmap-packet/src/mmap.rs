@@ -647,8 +647,16 @@ impl MmapPacketEngine {
         let frame_ptr = self.frame_ptrs[self.rx_frame_idx as usize];
         // SAFETY: frame_ptr is valid and within the mmap'd region
         let hdr = unsafe { frame_ptr.as_ref() };
-        let status = AtomicU32::new(hdr.tp_status).load(Ordering::Acquire);
-        (status & TP_STATUS_USER) != 0
+        // The first field of Tpacket2Hdr is tp_status (u32), which we
+        // access atomically to synchronize with the kernel.
+        // CRITICAL: We must access the kernel-shared memory directly,
+        // NOT create a new AtomicU32 (which would break atomicity).
+        let status_ptr = std::ptr::addr_of!(hdr.tp_status).cast::<AtomicU32>();
+        // SAFETY: status_ptr points to the first field of Tpacket2Hdr,
+        // which is a naturally aligned u32 in kernel-shared memory.
+        unsafe {
+            (*status_ptr).load(Ordering::Acquire) & TP_STATUS_USER != 0
+        }
     }
 
     /// Releases a frame back to the kernel.
