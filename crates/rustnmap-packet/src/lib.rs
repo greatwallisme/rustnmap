@@ -18,7 +18,7 @@
 //!
 //! # Requirements
 //!
-//! - Linux kernel 2.19+ (for `TPACKET_V3` support)
+//! - Linux kernel 3.2+ (for `TPACKET_V2` support)
 //! - Root privileges or `CAP_NET_RAW` capability
 //! - `x86_64` architecture
 //!
