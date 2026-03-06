@@ -67,6 +67,12 @@ mod engine;
 /// PACKET_MMAP V2 ring buffer implementation.
 mod mmap;
 
+/// Async packet engine with Tokio integration.
+mod async_engine;
+
+/// Packet stream implementation.
+mod stream;
+
 /// BPF (Berkeley Packet Filter) utilities.
 pub mod bpf;
 
@@ -82,6 +88,10 @@ pub use crate::engine::{EngineStats, PacketBuffer, PacketEngine, RingConfig};
 pub use crate::error::{PacketError, Result};
 #[doc(inline)]
 pub use crate::mmap::MmapPacketEngine;
+#[doc(inline)]
+pub use crate::async_engine::AsyncPacketEngine;
+#[doc(inline)]
+pub use crate::stream::PacketStream;
 
 // ============================================================================
 // Constants

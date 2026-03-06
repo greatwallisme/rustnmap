@@ -78,7 +78,10 @@ pub trait PacketEngine: Send + Sync {
 }
 ```
 
-### TPACKET_V2 Header (48 bytes)
+### TPACKET_V2 Header (32 bytes)
+
+> **CRITICAL**: The header is **32 bytes**, NOT 48 bytes.
+> `tp_padding` is `[u8; 4]`, NOT `[u8; 8]`.
 
 ```rust
 #[repr(C)]
@@ -89,12 +92,14 @@ pub struct Tpacket2Hdr {
     pub tp_mac: u16,         // MAC header offset
     pub tp_net: u16,         // Network header offset
     pub tp_sec: u32,         // Timestamp (seconds)
-    pub tp_nsec: u32,        // Timestamp (nanoseconds) - V2 uses nsec!
+    pub tp_nsec: u32,        // Timestamp (nanoseconds) - NOT tp_usec!
     pub tp_vlan_tci: u16,    // VLAN TCI
     pub tp_vlan_tpid: u16,   // VLAN TPID
-    pub tp_padding: [u8; 8], // Padding
-}
+    pub tp_padding: [u8; 4], // Padding - NOT [u8; 8]!
+}  // Total: 32 bytes
 ```
+
+Reference: Linux kernel `include/uapi/linux/if_packet.h:146-157`
 
 ### Ring Buffer Configuration
 

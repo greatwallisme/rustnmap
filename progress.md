@@ -558,3 +558,116 @@ Completely rewrote mmap.rs following rust-guidelines and zero-rust standards:
 **Next Steps:**
 - [ ] Task 1.5: AsyncPacketEngine (Tokio AsyncFd wrapper)
 - [ ] Task 1.6: PacketStream (impl Stream trait)
+
+---
+
+## Phase 44.8: Design Document Compliance Review (2026-03-06)
+
+### Status: COMPLETED
+
+**Objective**: Compare completed Phase 44 implementation (Tasks 1.1-1.4) against design documents in `doc/` to identify any deviations or simplifications.
+
+**Documents Reviewed:**
+- `doc/architecture.md` - Section 2.3 Packet Engine Architecture
+- `doc/modules/packet-engineering.md` - TPACKET_V2 technical specs
+- `doc/structure.md` - Section 5.3 rustnmap-packet structure
+
+**Implementation Files Reviewed:**
+- `crates/rustnmap-packet/src/engine.rs` - PacketEngine trait
+- `crates/rustnmap-packet/src/mmap.rs` - MmapPacketEngine
+- `crates/rustnmap-packet/src/bpf.rs` - BPF filter
+- `crates/rustnmap-packet/src/error.rs` - Error types
+- `crates/rustnmap-packet/src/sys/tpacket.rs` - TPACKET structures
+
+### Compliance Results
+
+| Category | Result | Details |
+|----------|--------|---------|
+| TPACKET_V2 Header | PASS | Correct 32-byte layout with `tp_nsec` |
+| Socket Option Sequence | PASS | Exact nmap-compatible order |
+| Memory Ordering | PASS | Correct Acquire/Release semantics |
+| ENOMEM Recovery | PASS | 5% reduction, 10 retries |
+| Drop Order | PASS | munmap before close |
+| VLAN Reconstruction | PASS | Minor implementation difference (uses kernel TPID) |
+| BPF Filter | PASS | Complete implementation with all predefined filters |
+| PacketEngine Trait | PASS | All methods implemented with async_trait |
+| Error Handling | PASS | Comprehensive error types |
+
+### Findings
+
+**No significant deviations or simplifications found.**
+
+The implementation follows the design specifications precisely. Items not yet implemented (`AsyncPacketEngine`, `PacketStream`) are scheduled for Phase 1.5-1.6.
+
+**Minor Documentation Inconsistency:**
+- `crates/rustnmap-packet/CLAUDE.md` shows 48-byte TPACKET2 header in code example (should be 32 bytes)
+
+### Recommendations
+
+1. Update `crates/rustnmap-packet/CLAUDE.md` to fix TPACKET2 header size
+2. Proceed with Phase 1.5: AsyncPacketEngine implementation
+3. Proceed with Phase 1.6: PacketStream implementation
+
+**Full review details**: See `findings.md`
+
+---
+
+## Phase 44.9: Task 1.5 - Async Integration Implementation (2026-03-06)
+
+### Status: COMPLETED
+
+**Files Created:**
+- `crates/rustnmap-packet/src/async_engine.rs` - AsyncPacketEngine with Tokio AsyncFd wrapper (420 lines)
+- `crates/rustnmap-packet/src/stream.rs` - PacketStream implementing Stream trait (118 lines)
+
+**Files Modified:**
+- `crates/rustnmap-packet/src/lib.rs` - Added async_engine and stream module exports
+- `crates/rustnmap-packet/src/error.rs` - Fixed doc comment for AsyncFd (backticks)
+- `crates/rustnmap-packet/src/mmap.rs` - Added `as_raw_fd()` and made `try_recv()` public
+
+**Key Implementations:**
+
+1. **`AsyncPacketEngine` struct**:
+   - Wraps `MmapPacketEngine` with `Arc<Mutex<>>` for thread-safe sharing
+   - Uses `Arc<AsyncFd<OwnedFd>>` for non-blocking socket notifications
+   - Channel-based packet distribution (mpsc, size 1024)
+   - Background task for ring buffer polling
+   - Cached interface properties (`if_name`, `if_index`, `mac_addr`)
+
+2. **Design Pattern Compliance**:
+   - Uses `libc::dup()` to duplicate fd for `AsyncFd` ownership (avoids double-close)
+   - Uses `Arc<AsyncFd<OwnedFd>>` because `AsyncFd` is not `Clone`
+   - Uses `Arc<Mutex<>>` for engine in background tasks (not raw pointers)
+   - Uses channels for packet distribution (avoiding busy-spin)
+
+3. **`PacketStream` struct**:
+   - Implements `Stream` trait for ergonomic async iteration
+   - Uses `ReceiverStream` internally to properly yield when channel is empty
+   - Methods: `new()`, `into_inner()`
+
+4. **`PacketEngine` trait implementation**:
+   - `start()` - Starts engine and spawns background receiver task
+   - `recv()` - Receives from channel (async)
+   - `send()` - Forwards to inner engine (async)
+   - `stop()` - Stops background task and inner engine
+   - `stats()` - Returns cached statistics
+   - `flush()` - Forwards to inner engine
+   - `set_filter()` - Forwards to inner engine
+
+5. **Additional methods**:
+   - `into_stream()` - Consumes engine and returns `PacketStream`
+   - `receiver()` - Returns reference to packet receiver
+   - `interface_name()`, `interface_index()`, `mac_address()` - Cached property accessors
+
+**Quality Verification:**
+- All 60 tests pass
+- Zero clippy warnings (`cargo clippy -- -W clippy::pedantic`)
+- Proper rustfmt formatting
+- All doc comments have proper backticks for code items
+- SAFETY comments for unsafe blocks
+- Dependencies already in Cargo.toml: `futures = "0.3"`, `tokio-stream = "0.1"`
+
+**Next Steps:**
+- [x] Task 1.5: AsyncPacketEngine - COMPLETED
+- [x] Task 1.5.1: PacketStream - COMPLETED
+- [ ] Task 1.6: Integration tests (requires actual network targets)

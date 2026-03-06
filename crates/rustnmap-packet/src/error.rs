@@ -145,6 +145,18 @@ pub enum PacketError {
     /// Channel receive error.
     #[error("channel receive error")]
     ChannelReceive,
+
+    /// Failed to duplicate file descriptor.
+    #[error("failed to duplicate file descriptor: {0}")]
+    FdDupFailed(#[source] io::Error),
+
+    /// Failed to create `AsyncFd`.
+    #[error("failed to create AsyncFd: {0}")]
+    AsyncFdCreate(#[source] io::Error),
+
+    /// Receiver stream ended.
+    #[error("receiver stream ended")]
+    StreamEnded,
 }
 
 impl PacketError {

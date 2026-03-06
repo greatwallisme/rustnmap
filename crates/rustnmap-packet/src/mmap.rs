@@ -680,7 +680,7 @@ impl MmapPacketEngine {
     /// Returns an error if:
     /// - The engine is not running
     /// - Frame access fails
-    fn try_recv(&mut self) -> Result<Option<PacketBuffer>> {
+    pub fn try_recv(&mut self) -> Result<Option<PacketBuffer>> {
         if !self.running.load(Ordering::Acquire) {
             return Err(PacketError::NotStarted);
         }
@@ -786,6 +786,15 @@ impl MmapPacketEngine {
     #[must_use]
     pub const fn mac_address(&self) -> MacAddr {
         self.mac_addr
+    }
+
+    /// Returns the raw file descriptor for the socket.
+    ///
+    /// This is used for async integration with `AsyncFd`.
+    /// The caller should NOT close this fd as it is owned by the engine.
+    #[must_use]
+    pub fn as_raw_fd(&self) -> i32 {
+        self.fd.as_raw_fd()
     }
 }
 
