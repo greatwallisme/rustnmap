@@ -499,6 +499,9 @@ pub struct TcpFinScanner {
     decoy_scheduler: Option<DecoyScheduler>,
     /// Optional packet engine for zero-copy packet capture using `PACKET_MMAP` V2.
     packet_engine: Option<Arc<Mutex<ScannerPacketEngine>>>,
+    /// Tracks whether packet engine has been started.
+    #[allow(dead_code, reason = "Reserved for Phase 3.4 async receive path migration")]
+    packet_engine_started: bool,
 }
 
 impl TcpFinScanner {
@@ -565,6 +568,7 @@ impl TcpFinScanner {
             config,
             decoy_scheduler,
             packet_engine,
+            packet_engine_started: false,
         })
     }
 
@@ -1035,6 +1039,9 @@ pub struct TcpNullScanner {
     decoy_scheduler: Option<DecoyScheduler>,
     /// Optional packet engine for zero-copy packet capture using `PACKET_MMAP` V2.
     packet_engine: Option<Arc<Mutex<ScannerPacketEngine>>>,
+    /// Tracks whether packet engine has been started.
+    #[allow(dead_code, reason = "Reserved for Phase 3.4 async receive path migration")]
+    packet_engine_started: bool,
 }
 
 impl TcpNullScanner {
@@ -1101,6 +1108,7 @@ impl TcpNullScanner {
             config,
             decoy_scheduler,
             packet_engine,
+            packet_engine_started: false,
         })
     }
 
@@ -1530,6 +1538,9 @@ pub struct TcpXmasScanner {
     decoy_scheduler: Option<DecoyScheduler>,
     /// Optional packet engine for zero-copy packet capture using `PACKET_MMAP` V2.
     packet_engine: Option<Arc<Mutex<ScannerPacketEngine>>>,
+    /// Tracks whether packet engine has been started.
+    #[allow(dead_code, reason = "Reserved for Phase 3.4 async receive path migration")]
+    packet_engine_started: bool,
 }
 
 impl TcpXmasScanner {
@@ -1596,6 +1607,7 @@ impl TcpXmasScanner {
             config,
             decoy_scheduler,
             packet_engine,
+            packet_engine_started: false,
         })
     }
 

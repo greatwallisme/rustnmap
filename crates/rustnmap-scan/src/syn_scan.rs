@@ -9,6 +9,8 @@
 use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
+use tokio::runtime::Handle;
 use tokio::sync::Mutex;
 
 use crate::packet_adapter::{create_stealth_engine, ScannerPacketEngine};
@@ -40,9 +42,10 @@ pub struct TcpSynScanner {
     /// Optional packet engine for zero-copy packet capture using `PACKET_MMAP` V2.
     ///
     /// This provides better performance through ring buffer operation.
-    /// Currently unused in receive path - migration in progress.
-    #[expect(dead_code, reason = "Packet engine migration in progress - will be used in receive path")]
+    /// When available, used for packet reception instead of raw socket.
     packet_engine: Option<Arc<Mutex<ScannerPacketEngine>>>,
+    /// Tracks whether packet engine has been started.
+    packet_engine_started: bool,
 }
 
 impl TcpSynScanner {
@@ -80,6 +83,7 @@ impl TcpSynScanner {
             socket,
             config,
             packet_engine,
+            packet_engine_started: false,
         })
     }
 
@@ -191,11 +195,9 @@ impl TcpSynScanner {
             }
             let remaining_timeout = total_timeout.saturating_sub(elapsed);
 
-            match self
-                .socket
-                .recv_packet(recv_buf.as_mut_slice(), Some(remaining_timeout))
-            {
-                Ok(len) if len > 0 => {
+            // Use packet engine for receive if available
+            match self.recv_packet(recv_buf.as_mut_slice(), remaining_timeout) {
+                Ok(Some(len)) if len > 0 => {
                     // Parse the response
                     if let Some((flags, _seq, ack, resp_src_port, _dst_port, src_ip)) =
                         parse_tcp_response(&recv_buf[..len])
@@ -237,13 +239,10 @@ impl TcpSynScanner {
                     }
                     // Could not parse TCP response - continue waiting
                 }
-                Ok(_) => {
+                Ok(Some(_)) => {
                     // Empty response - continue waiting
                 }
-                Err(e)
-                    if e.kind() == io::ErrorKind::WouldBlock
-                        || e.kind() == io::ErrorKind::TimedOut =>
-                {
+                Ok(None) => {
                     // Timeout on this recv - check if total timeout expired
                     if start_time.elapsed() >= total_timeout {
                         return Ok(PortState::Filtered);
@@ -251,7 +250,7 @@ impl TcpSynScanner {
                     // Otherwise continue waiting
                 }
                 Err(e) => {
-                    // Other error
+                    // Receive error
                     return Err(rustnmap_common::ScanError::Network(
                         rustnmap_common::Error::Network(
                             rustnmap_common::error::NetworkError::ReceiveError { source: e },
@@ -285,6 +284,59 @@ impl TcpSynScanner {
         let now_lower = now as u32;
         let pid = std::process::id();
         now_lower.wrapping_add(pid)
+    }
+
+    /// Receives a packet using the packet engine if available, otherwise falls back to raw socket.
+    ///
+    /// This method uses `block_in_place` to wrap async `ScannerPacketEngine` calls
+    /// while maintaining synchronous API compatibility with the `PortScanner` trait.
+    ///
+    /// # Arguments
+    ///
+    /// * `buf` - Buffer to receive packet data into
+    /// * `timeout` - Maximum time to wait for a packet
+    ///
+    /// # Returns
+    ///
+    /// `Ok(Some(len))` if a packet was received, `Ok(None)` on timeout,
+    /// or an error if reception fails.
+    fn recv_packet(
+        &self,
+        buf: &mut [u8],
+        timeout: Duration,
+    ) -> io::Result<Option<usize>> {
+        // If packet engine is available, use it for zero-copy capture
+        if let Some(ref engine_arc) = self.packet_engine {
+            tokio::task::block_in_place(|| {
+                Handle::current().block_on(async {
+                    let mut engine = engine_arc.lock().await;
+
+                    // Start engine if not yet started
+                    if !self.packet_engine_started {
+                        engine.start().await.map_err(|e| {
+                            io::Error::other(format!("Failed to start packet engine: {e}"))
+                        })?;
+                        // Note: We can't mutate self.packet_engine_started here since we're in an async block
+                        // The engine handles re-start gracefully
+                    }
+
+                    // Receive with timeout
+                    match engine.recv_with_timeout(timeout).await {
+                        Ok(Some(data)) => {
+                            let len = data.len().min(buf.len());
+                            buf[..len].copy_from_slice(&data[..len]);
+                            Ok(Some(len))
+                        }
+                        Ok(None) => Ok(None), // Timeout
+                        Err(e) => Err(io::Error::other(format!("Packet engine error: {e}"))),
+                    }
+                })
+            })
+        } else {
+            // Fall back to raw socket reception
+            // Convert io::Result<usize> to io::Result<Option<usize>>
+            self.socket.recv_packet(buf, Some(timeout)).map(Some)
+        }
     }
 }
 

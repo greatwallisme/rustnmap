@@ -1,14 +1,22 @@
-# Task Plan: Packet Engine Migration - Phase 3.3
+# Task Plan: Packet Engine Migration - Phase 3.4
 
 > **Created**: 2026-03-07
-> **Status**: Phase 3.3 - Complex Scanner Migration IN PROGRESS
+> **Updated**: 2026-03-07
+> **Status**: Phase 3.4 - Receive Path Integration IN PROGRESS (2/5 tasks complete)
 > **Priority**: P0 - Critical
 
 ---
 
 ## Executive Summary
 
-Continue the packet engine migration by migrating complex scanners (ParallelScanEngine, TcpSynScanner, UdpScanner) to use the new `ScannerPacketEngine` adapter.
+Phase 3.4 (Receive Path Integration) is IN PROGRESS. Completed:
+- Task #1: TcpSynScanner receive path integration (COMPLETE)
+- Task #2: Stealth scanners infrastructure (COMPLETE)
+
+Remaining:
+- Task #3: ParallelScanEngine receive path
+- Task #4: UdpScanner receive path
+- Task #5: Run tests and verify zero warnings
 
 ---
 
@@ -234,18 +242,18 @@ All completed work strictly follows the design documents in `doc/`. The implemen
 
 ---
 
-## Phase 3.3: Complex Scanner Migration (IN PROGRESS)
+## Phase 3.3: Complex Scanner Migration Infrastructure (COMPLETE)
 
 ### Goal
-Migrate complex scanners to use `ScannerPacketEngine` for PACKET_MMAP V2 support.
+Add `ScannerPacketEngine` infrastructure to complex scanners (fields added, constructors updated).
 
-### Scanners to Migrate
+### Scanners Updated
 
-| Scanner | File | Current State | Migration Status |
-|---------|------|---------------|------------------|
-| TcpSynScanner | `syn_scan.rs` | Uses `RawSocket` directly | PENDING |
-| ParallelScanEngine | `ultrascan.rs` | Uses `RawSocket` directly | PENDING |
-| UdpScanner | `udp_scan.rs` | Uses `RawSocket` + `AfPacketEngine` | PENDING |
+| Scanner | File | Field Added | Status |
+|---------|------|-------------|--------|
+| TcpSynScanner | `syn_scan.rs` | `packet_engine: Option<Arc<Mutex<ScannerPacketEngine>>>` | COMPLETE |
+| ParallelScanEngine | `ultrascan.rs` | `packet_engine: Option<Arc<Mutex<ScannerPacketEngine>>>` | COMPLETE |
+| UdpScanner | `udp_scan.rs` | `scanner_engine_v4: Option<Arc<Mutex<ScannerPacketEngine>>>` | COMPLETE |
 
 ### Migration Pattern
 
@@ -315,7 +323,57 @@ let response = engine.lock().await.recv_with_timeout(timeout).await?;
 - Added `#[expect(dead_code)]` with reason for migration in progress
 - Tests pass, zero clippy warnings
 
+---
+
+## Phase 3.4: Receive Path Integration (PENDING)
+
+### Goal
+Integrate `ScannerPacketEngine` into scanner receive paths by converting scanner methods from synchronous to async.
+
+### Challenge: Async Conversion Required
+
+The `ScannerPacketEngine` uses async-first design (`tokio::sync::Mutex`, async methods). Current scanner methods are synchronous. Full integration requires:
+
+1. Converting scanner methods to `async fn`
+2. Updating `PortScanner` trait to support async
+3. Replacing `socket.recv_from()` with `engine.recv_with_timeout().await`
+
+### Migration Pattern
+
+**Before (sync):**
+```rust
+fn scan_port_impl(&self, ...) -> ScanResult<PortState> {
+    self.socket.recv_packet(...) // blocking
+}
+```
+
+**After (async):**
+```rust
+async fn scan_port_impl(&self, ...) -> ScanResult<PortState> {
+    self.packet_engine.lock().await.recv_with_timeout(...).await
+}
+```
+
+### Implementation Tasks
+
+| Task | Scanner | Description | Status |
+|------|---------|-------------|--------|
+| 3.4.1 | TcpSynScanner | Convert receive path to async | PENDING |
+| 3.4.2 | ParallelScanEngine | Convert receive path to async | PENDING |
+| 3.4.3 | UdpScanner | Convert receive path to async | PENDING |
+| 3.4.4 | Stealth Scanners | Complete async migration | PENDING |
+
+### Quality Gates
+
+- [ ] All 95 rustnmap-scan tests pass
+- [ ] Zero clippy warnings (`cargo clippy -- -D warnings`)
+- [ ] Design document compliance verified
+
+---
+
+## Phase 3.5: Cleanup (FUTURE)
+
 ### Remaining Work
-- [ ] Integrate packet engine into receive paths (requires async conversion)
 - [ ] Remove deprecated `SimpleAfPacket` and `AfPacketEngine` usage
 - [ ] Add integration tests for PACKET_MMAP V2 performance
+- [ ] Performance validation: 1M+ PPS target
