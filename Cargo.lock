@@ -2811,6 +2811,7 @@ dependencies = [
 name = "rustnmap-scan"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "libc",
  "pnet",
  "proptest",

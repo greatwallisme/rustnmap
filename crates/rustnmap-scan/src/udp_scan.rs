@@ -14,10 +14,11 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
+use async_trait::async_trait;
 use tokio::sync::Mutex;
 
 use crate::packet_adapter::{create_stealth_engine, ScannerPacketEngine};
-use crate::scanner::{PortScanner, ScanResult};
+use crate::scanner::{AsyncPortScanner, PortScanner, ScanResult};
 use rustnmap_common::ScanConfig;
 use rustnmap_common::{IpAddr, Ipv4Addr, Port, PortState, Protocol};
 use rustnmap_net::raw_socket::{
@@ -25,7 +26,6 @@ use rustnmap_net::raw_socket::{
     IcmpResponse, IcmpUnreachableCode, Icmpv6UnreachableCode, Ipv6UdpPacketBuilder, RawSocket,
     UdpPacketBuilder,
 };
-use rustnmap_packet::{AfPacketEngine, RingConfig};
 use rustnmap_target::Target;
 
 /// Default source port range for outbound UDP probes.
@@ -49,24 +49,16 @@ pub struct UdpScanner {
     socket_v4: RawSocket,
     /// Raw socket for `ICMPv4` error responses.
     socket_icmp_v4: RawSocket,
-    /// `AF_PACKET` engine for capturing ICMP errors (optional).
-    packet_engine_v4: Option<AfPacketEngine>,
     /// Modern packet engine for zero-copy capture using `PACKET_MMAP` V2 (optional).
     ///
-    /// This is the replacement for `packet_engine_v4`, providing better performance.
-    #[expect(
-        dead_code,
-        reason = "Packet engine migration in progress - will be used in receive path"
-    )]
+    /// This provides better performance than the old `AfPacketEngine` through
+    /// ring buffer operation and async I/O.
     scanner_engine_v4: Option<Arc<Mutex<ScannerPacketEngine>>>,
     /// Raw socket for IPv6 packet transmission (optional).
     socket_v6: Option<RawSocket>,
     /// Raw socket for `ICMPv6` error responses (optional).
     #[expect(dead_code, reason = "IPv6 ICMP error capture not yet implemented")]
     socket_icmp_v6: Option<RawSocket>,
-    /// `AF_PACKET` engine for IPv6 (optional).
-    #[expect(dead_code, reason = "IPv6 ICMP error capture not yet implemented")]
-    packet_engine_v6: Option<AfPacketEngine>,
     /// Scanner configuration.
     config: ScanConfig,
 }
@@ -104,12 +96,8 @@ impl UdpScanner {
             }
         })?;
 
-        // Try to create `AF_PACKET` engine for ICMP error capture
-        // This is optional - if it fails, we fall back to raw socket only
-        let packet_engine_v4 = Self::create_packet_engine(local_addr);
-
         // Try to create ScannerPacketEngine for zero-copy capture using PACKET_MMAP V2.
-        // This provides better performance than AfPacketEngine through ring buffer operation.
+        // This provides better performance than the old AfPacketEngine through ring buffer operation.
         let scanner_engine_v4 = create_stealth_engine(Some(local_addr), config.clone());
 
         Ok(Self {
@@ -117,11 +105,9 @@ impl UdpScanner {
             local_addr_v6: None,
             socket_v4,
             socket_icmp_v4,
-            packet_engine_v4,
             scanner_engine_v4,
             socket_v6: None,
             socket_icmp_v6: None,
-            packet_engine_v6: None,
             config,
         })
     }
@@ -163,8 +149,8 @@ impl UdpScanner {
             }
         })?;
 
-        // Try to create `AF_PACKET` engine for IPv4 ICMP error capture
-        let packet_engine_v4 = Self::create_packet_engine(local_addr_v4);
+        // Try to create ScannerPacketEngine for zero-copy capture
+        let scanner_engine_v4 = create_stealth_engine(Some(local_addr_v4), config.clone());
 
         // Create IPv6 socket
         let socket_v6 = RawSocket::with_protocol_ipv6(17).map_err(|e| {
@@ -180,22 +166,14 @@ impl UdpScanner {
             }
         })?;
 
-        // Try to create AF_PACKET engine for IPv6 (optional)
-        let packet_engine_v6 = Self::create_packet_engine_v6();
-
-        // Try to create ScannerPacketEngine for zero-copy capture
-        let scanner_engine_v4 = create_stealth_engine(Some(local_addr_v4), config.clone());
-
         Ok(Self {
             local_addr_v4,
             local_addr_v6: Some(local_addr_v6),
             socket_v4,
             socket_icmp_v4,
-            packet_engine_v4,
             scanner_engine_v4,
             socket_v6: Some(socket_v6),
             socket_icmp_v6: Some(socket_icmp_v6),
-            packet_engine_v6,
             config,
         })
     }
@@ -253,10 +231,6 @@ impl UdpScanner {
     /// # Errors
     ///
     /// Returns an error if packet transmission fails.
-    #[expect(
-        clippy::too_many_lines,
-        reason = "UDP scan requires complex response handling"
-    )]
     fn send_udp_probe_v4(&self, dst_addr: Ipv4Addr, dst_port: Port) -> ScanResult<PortState> {
         // Generate a random source port
         let src_port = Self::generate_source_port();
@@ -295,28 +269,10 @@ impl UdpScanner {
 
             let remaining = timeout - elapsed;
 
-            // Try AF_PACKET engine first for ICMP errors (if available)
-            if let Some(engine) = &self.packet_engine_v4 {
-                // Non-blocking check for ICMP packet
-                if let Ok(Some(packet)) = engine.recv_packet() {
-                    let data = packet.data();
-                    // Skip Ethernet header (14 bytes) to get IP packet
-                    if data.len() > ETH_HEADER_SIZE {
-                        let ip_packet = &data[ETH_HEADER_SIZE..];
-                        // Check if this is an ICMP packet (protocol = 1)
-                        if ip_packet.len() >= 10 && ip_packet[9] == 1 {
-                            if let Some(icmp_resp) = parse_icmp_response(ip_packet) {
-                                if let Some(state) =
-                                    Self::handle_icmp_response_v4(icmp_resp, dst_addr, dst_port)
-                                {
-                                    return Ok(state);
-                                }
-                                // Non-matching ICMP - continue
-                            }
-                        }
-                    }
-                }
-            }
+            // Note: AF_PACKET engine has been removed. The receive path now uses
+            // ScannerPacketEngine in the async version. This sync version falls back
+            // to raw sockets only, which works for localhost but may miss ICMP errors
+            // from remote hosts. Use scan_port_async() for full ICMP error support.
 
             // Try ICMP socket for ICMP error responses
             let icmp_timeout = Duration::from_millis(50).min(remaining);
@@ -396,6 +352,186 @@ impl UdpScanner {
                     ))
                 }
             }
+        }
+    }
+
+    /// Sends a UDP probe to an IPv4 target asynchronously using `ScannerPacketEngine`.
+    ///
+    /// This is the async version of `send_udp_probe_v4` that uses the new
+    /// `ScannerPacketEngine` for zero-copy packet capture with `PACKET_MMAP` V2.
+    ///
+    /// # Arguments
+    ///
+    /// * `dst_addr` - Target IPv4 address
+    /// * `dst_port` - Target port
+    ///
+    /// # Returns
+    ///
+    /// Port state based on response.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if packet transmission fails.
+    #[allow(clippy::too_many_lines, reason = "UDP scan requires complex response handling")]
+    #[allow(clippy::single_match_else, reason = "UDP scan requires complex response handling with multiple receive sources")]
+    async fn scan_port_impl_async_v4(
+        &self,
+        dst_addr: Ipv4Addr,
+        dst_port: Port,
+    ) -> ScanResult<PortState> {
+        // Generate a random source port
+        let src_port = Self::generate_source_port();
+
+        // Build UDP packet with empty payload
+        let packet =
+            UdpPacketBuilder::new(self.local_addr_v4, dst_addr, src_port, dst_port).build();
+
+        // Create destination socket address
+        let dst_sockaddr = SocketAddr::new(std::net::IpAddr::V4(dst_addr), dst_port);
+
+        // Send the packet
+        self.socket_v4
+            .send_packet(&packet, &dst_sockaddr)
+            .map_err(|e| {
+                rustnmap_common::ScanError::Network(rustnmap_common::Error::Network(
+                    rustnmap_common::error::NetworkError::SendError { source: e },
+                ))
+            })?;
+
+        // Wait for response with timeout
+        let base_timeout = self.config.initial_rtt;
+        let timeout = base_timeout.max(Duration::from_millis(3000));
+
+        let start = std::time::Instant::now();
+
+        // Use ScannerPacketEngine if available for ICMP error capture
+        if let Some(engine_ref) = &self.scanner_engine_v4 {
+            let mut engine = engine_ref.lock().await;
+
+            loop {
+                let elapsed = start.elapsed();
+                if elapsed >= timeout {
+                    return Ok(PortState::OpenOrFiltered);
+                }
+
+                let remaining = timeout - elapsed;
+
+                // Try ScannerPacketEngine for ICMP errors
+                let icmp_timeout = Duration::from_millis(50).min(remaining);
+                match engine.recv_with_timeout(icmp_timeout).await {
+                    Ok(Some(data)) => {
+                        // Skip Ethernet header (14 bytes) to get IP packet
+                        if data.len() > ETH_HEADER_SIZE {
+                            let ip_packet = &data[ETH_HEADER_SIZE..];
+                            // Check if this is an ICMP packet (protocol = 1)
+                            if ip_packet.len() >= 10 && ip_packet[9] == 1 {
+                                if let Some(icmp_resp) = parse_icmp_response(ip_packet) {
+                                    if let Some(state) =
+                                        Self::handle_icmp_response_v4(icmp_resp, dst_addr, dst_port)
+                                    {
+                                        return Ok(state);
+                                    }
+                                    // Non-matching ICMP - continue
+                                }
+                            }
+                        }
+                    }
+                    Ok(None) | Err(_) => {
+                        // Timeout or error receiving - continue to check other sources
+                    }
+                }
+
+                // Try ICMP socket for ICMP error responses
+                let mut recv_buf = vec![0u8; 65535];
+                let icmp_timeout = Duration::from_millis(50).min(remaining);
+                match self
+                    .socket_icmp_v4
+                    .recv_packet(recv_buf.as_mut_slice(), Some(icmp_timeout))
+                {
+                    Ok(len) if len > 0 => {
+                        if let Some(icmp_resp) = parse_icmp_response(&recv_buf[..len]) {
+                            if let Some(state) =
+                                Self::handle_icmp_response_v4(icmp_resp, dst_addr, dst_port)
+                            {
+                                return Ok(state);
+                            }
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(e)
+                        if matches!(
+                            e.kind(),
+                            io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                        ) => {}
+                    Err(e) => {
+                        return Err(rustnmap_common::ScanError::Network(
+                            rustnmap_common::Error::Network(
+                                rustnmap_common::error::NetworkError::ReceiveError { source: e },
+                            ),
+                        ))
+                    }
+                }
+
+                // Try UDP socket for actual UDP responses
+                let udp_timeout = Duration::from_millis(50).min(remaining);
+                match self
+                    .socket_v4
+                    .recv_packet(recv_buf.as_mut_slice(), Some(udp_timeout))
+                {
+                    Ok(len) if len > 0 => {
+                        let src_ip = if len >= 20 {
+                            let bytes = [recv_buf[12], recv_buf[13], recv_buf[14], recv_buf[15]];
+                            Ipv4Addr::new(bytes[0], bytes[1], bytes[2], bytes[3])
+                        } else {
+                            continue;
+                        };
+
+                        // Skip packets from our own IP
+                        if src_ip == self.local_addr_v4 {
+                            continue;
+                        }
+
+                        // CRITICAL: Verify the UDP response is from the TARGET IP
+                        if src_ip != dst_addr {
+                            continue;
+                        }
+
+                        if let Some((src_port, _payload)) = parse_udp_response(&recv_buf[..len]) {
+                            if src_port == dst_port {
+                                return Ok(PortState::Open);
+                            }
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(e)
+                        if e.kind() == io::ErrorKind::WouldBlock
+                            || e.kind() == io::ErrorKind::TimedOut =>
+                    {
+                        // Small sleep to avoid busy-waiting
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                    Err(e) => {
+                        return Err(rustnmap_common::ScanError::Network(
+                            rustnmap_common::Error::Network(
+                                rustnmap_common::error::NetworkError::ReceiveError { source: e },
+                            ),
+                        ))
+                    }
+                }
+            }
+        } else {
+            // Fallback to sync implementation if no ScannerPacketEngine available
+            // Use the existing scan_port_impl method
+            self.scan_port_impl(
+                &Target {
+                    ip: IpAddr::V4(dst_addr),
+                    hostname: None,
+                    ports: None,
+                    ipv6_scope: None,
+                },
+                dst_port,
+                Protocol::Udp,
+            )
         }
     }
 
@@ -621,64 +757,39 @@ impl UdpScanner {
         SOURCE_PORT_START + offset
     }
 
-    /// Creates an `AF_PACKET` engine for `ICMP` error capture.
-    ///
-    /// This is optional - if creation fails, returns `None` and the scanner
-    /// falls back to raw socket only (which works for localhost but not remote hosts).
-    fn create_packet_engine(local_addr: Ipv4Addr) -> Option<AfPacketEngine> {
-        // Get the network interface name for the local address
-        let if_name = Self::get_interface_for_ip(local_addr)?;
-
-        let ring_config = RingConfig::default();
-        let engine = AfPacketEngine::new(&if_name, ring_config).ok()?;
-
-        // Set promiscuous mode to capture all packets
-        let _ = engine.set_promiscuous(true);
-
-        Some(engine)
-    }
-
-    /// Creates an `AF_PACKET` engine for IPv6 `ICMP` error capture.
-    fn create_packet_engine_v6() -> Option<AfPacketEngine> {
-        // For IPv6, we use the same interface as IPv4
-        // Try common interface names
-        for if_name in ["eth0", "ens33", "enp0s3", "wlan0"] {
-            let ring_config = RingConfig::default();
-            if let Ok(engine) = AfPacketEngine::new(if_name, ring_config) {
-                let _ = engine.set_promiscuous(true);
-                return Some(engine);
-            }
-        }
-        None
-    }
-
-    /// Gets the network interface name for the given local IP address.
-    fn get_interface_for_ip(local_addr: Ipv4Addr) -> Option<String> {
-        // For localhost, use lo
-        if local_addr == Ipv4Addr::LOCALHOST || local_addr.is_loopback() {
-            return Some("lo".to_string());
-        }
-
-        // For other addresses, try common interface names
-        // Includes both wired and wireless interface naming conventions
-        for if_name in [
-            "eth0", "eth1", "ens33", "ens34", "ens37", "enp0s3", "enp0s8", "enp1s0", "wlan0",
-            "wlp3s0", "wlp2s0", "wlp1s0", "en0", "en1",
-        ] {
-            // Try to create the engine - if successful, this interface exists
-            let ring_config = RingConfig::default();
-            if AfPacketEngine::new(if_name, ring_config).is_ok() {
-                return Some(if_name.to_string());
-            }
-        }
-
-        None
-    }
 }
 
 impl PortScanner for UdpScanner {
     fn scan_port(&self, target: &Target, port: Port, protocol: Protocol) -> ScanResult<PortState> {
         self.scan_port_impl(target, port, protocol)
+    }
+
+    fn requires_root(&self) -> bool {
+        true
+    }
+}
+
+#[async_trait]
+impl AsyncPortScanner for UdpScanner {
+    async fn scan_port_async(
+        &self,
+        target: &Target,
+        port: Port,
+        protocol: Protocol,
+    ) -> ScanResult<PortState> {
+        match target.ip {
+            IpAddr::V4(dst_addr) if protocol == Protocol::Udp => {
+                self.scan_port_impl_async_v4(dst_addr, port).await
+            }
+            IpAddr::V6(_dst_addr) if protocol == Protocol::Udp => {
+                // IPv6 scanning not yet fully migrated to async
+                // Fall back to sync implementation
+                self.scan_port_impl(target, port, protocol)
+            }
+            _ => Err(rustnmap_common::ScanError::Network(
+                rustnmap_common::Error::Other(format!("Invalid protocol for UDP scan: {protocol:?}")),
+            )),
+        }
     }
 
     fn requires_root(&self) -> bool {
@@ -709,7 +820,7 @@ mod tests {
 
         // Test that scanner creation requires root
         if let Ok(scanner) = UdpScanner::new(local_addr, config) {
-            assert!(scanner.requires_root());
+            assert!(PortScanner::requires_root(&scanner));
         } else {
             // Expected if not running as root
         }
