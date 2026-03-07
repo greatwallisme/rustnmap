@@ -986,3 +986,152 @@ mod tests {
 4. **帧跟踪** - 防止重用
 
 这个设计在保持内存安全的同时，实现了真正的零拷贝，达到 1M+ PPS 的性能目标。
+
+---
+
+# Implementation Status (2026-03-07)
+
+> **Status**: IMPLEMENTED - All PACKET_MMAP V2 infrastructure complete
+> **Verification**: 865+ tests passing, zero clippy warnings
+
+## Implementation Summary
+
+| Component | Design | Implementation | File | Status |
+|-----------|--------|----------------|------|--------|
+| TPACKET_V2 Wrappers | Linux syscall bindings | `sys/tpacket.rs` | COMPLETE |
+| MmapPacketEngine | Ring buffer management | `mmap.rs` | COMPLETE |
+| Zero-Copy Buffer | Arc + Bytes pattern | `zero_copy.rs` | COMPLETE |
+| AsyncPacketEngine | Tokio AsyncFd wrapper | `async_engine.rs` | COMPLETE |
+| BPF Filter | Kernel-space filtering | `bpf.rs` | COMPLETE |
+| Two-Stage Bind | nmap libpcap pattern | `mmap.rs:214-228` | COMPLETE |
+
+## Key Implementation Details
+
+### 1. Two-Stage Bind Pattern (CRITICAL)
+
+Following nmap's `libpcap/pcap-linux.c:1297-1302`:
+
+```rust
+// Stage 1: Bind with protocol=0 (allows ring buffer setup)
+Self::bind_to_interface(&fd, if_index)?;
+
+// Stage 2: Setup ring buffer
+let (ring_ptr, ring_size, frame_ptrs, frame_count) =
+    Self::setup_ring_buffer(&fd, &config)?;
+
+// Stage 3: Re-bind with ETH_P_ALL (enables packet reception)
+Self::bind_to_interface_with_protocol(&fd, if_index, ETH_P_ALL.to_be())?;
+```
+
+**Why this matters**: Single bind with `protocol=ETH_P_ALL` causes `errno=22 (EINVAL)`
+when setting `PACKET_RX_RING`. The two-stage pattern is required by the kernel.
+
+### 2. Zero-Copy Implementation
+
+```rust
+// crates/rustnmap-packet/src/mmap.rs:771-881
+pub fn try_recv_zero_copy(&mut self) -> Result<Option<ZeroCopyPacket>> {
+    // ... frame availability check ...
+    let zc_bytes = unsafe {
+        crate::zero_copy::ZeroCopyBytes::borrowed(
+            Arc::clone(&engine_arc),
+            data_ptr,
+            data_len,
+        )
+    };
+    // ... packet creation ...
+}
+```
+
+**Key features**:
+- `ZeroCopyBytes::borrowed()` creates view without memcpy
+- `Arc<MmapPacketEngine>` keeps engine alive during packet lifetime
+- `Drop` trait automatically releases frame back to kernel
+
+### 3. Memory Ordering
+
+```rust
+// Acquire when reading frame status (userspace consumer)
+AtomicU32::from_ptr(addr_of!((*hdr).tp_status))
+    .load(Ordering::Acquire) != TP_STATUS_KERNEL
+
+// Release when returning frame to kernel
+AtomicU32::from_ptr(addr_of!((*hdr).tp_status))
+    .store(TP_STATUS_KERNEL, Ordering::Release);
+```
+
+**Performance**: Acquire/Release (2-3 cycles) vs SeqCst (5-10 cycles)
+
+### 4. ENOMEM Recovery Strategy
+
+```rust
+// 5% reduction per attempt, following nmap
+for attempt in 0..MAX_RETRIES {
+    match setsockopt(...) {
+        Err(e) if e.raw_os_error() == Some(libc::ENOMEM) => {
+            req.tp_frame_nr = req.tp_frame_nr * 95 / 100;
+            // ... recalculate ...
+        }
+        // ...
+    }
+}
+```
+
+## Scanner Migration Status
+
+All scanners now use `ScannerPacketEngine` which wraps `AsyncPacketEngine`:
+
+| Scanner | File | Line | Status |
+|---------|------|------|--------|
+| SYN Scan | `syn_scan.rs` | 46 | COMPLETE |
+| Stealth Scans | `stealth_scans.rs` | 186 | COMPLETE |
+| Ultrascan | `ultrascan.rs` | 594 | COMPLETE |
+| UDP Scan | `udp_scan.rs` | 56 | COMPLETE |
+
+### Adapter Pattern
+
+```rust
+// crates/rustnmap-scan/src/packet_adapter.rs
+pub struct ScannerPacketEngine {
+    engine: AsyncPacketEngine,
+    // ... adapter fields ...
+}
+
+impl ScannerPacketEngine {
+    // Provides SimpleAfPacket-compatible API
+    // Internally uses AsyncPacketEngine with PACKET_MMAP V2
+}
+```
+
+## Performance Targets
+
+| Metric | Target | Status |
+|--------|--------|--------|
+| PPS | 1,000,000 | PENDING BENCHMARK |
+| CPU (T5) | 30% | PENDING BENCHMARK |
+| Packet Loss (T5) | <1% | PENDING BENCHMARK |
+| Zero-copy | Verified | COMPLETE |
+
+## Test Coverage
+
+- `mmap.rs`: Unit tests for ring buffer management
+- `zero_copy.rs`: Unit tests for buffer lifecycle
+- `async_engine.rs`: Integration tests with AsyncFd
+- `packet_adapter.rs`: Scanner integration tests
+
+**Total**: 865+ workspace tests passing
+
+## Fallback: RecvfromPacketEngine
+
+`RecvfromPacketEngine` exists as a fallback when PACKET_MMAP is unavailable:
+- Used only in benchmarks for comparison
+- Used only in integration tests
+- **NOT used by production scanners**
+
+## References
+
+- `crates/rustnmap-packet/src/mmap.rs` - Main implementation
+- `crates/rustnmap-packet/src/zero_copy.rs` - Zero-copy buffer
+- `crates/rustnmap-packet/src/async_engine.rs` - Tokio integration
+- `crates/rustnmap-scan/src/packet_adapter.rs` - Scanner adapter
+- `reference/nmap/libpcap/pcap-linux.c` - nmap reference

@@ -332,12 +332,56 @@ TEST_INTERFACE=ens33 sudo cargo bench -p rustnmap-benchmarks -- recvfrom_pps
 
 ---
 
-## Phase 5: Testing & Documentation (PENDING)
+## Phase 5: Testing & Documentation (IN PROGRESS)
 
-**Files**:
-- `doc/architecture.md` - Update performance tables
-- `doc/modules/timing.md` (CREATE) - Timing module documentation
-- `doc/modules/congestion.md` (CREATE) - Congestion control documentation
+> **Started**: 2026-03-07
+
+### Task 5.1: Documentation Updates
+
+**Files to Update**:
+- `doc/modules/packet-engineering.md` - Add implementation status section
+- `doc/architecture.md` - Update performance tables with actual results
+- `doc/structure.md` - Update crate descriptions
+
+**Status**: IN PROGRESS
+
+---
+
+### Task 5.2: Performance Validation
+
+**Goal**: Verify 1M PPS target after PACKET_MMAP V2 completion
+
+**Command**:
+```bash
+TEST_INTERFACE=ens33 sudo cargo bench -p rustnmap-benchmarks -- recvfrom_pps
+```
+
+**Target Metrics**:
+
+| Metric | Current (recvfrom) | Target (PACKET_MMAP) | Improvement |
+|--------|-------------------|---------------------|-------------|
+| PPS | ~50,000 | ~1,000,000 | 20x |
+| CPU (T5) | 80% | 30% | 2.7x |
+| Packet Loss (T5) | ~30% | <1% | 30x |
+
+**Acceptance Criteria**:
+- [ ] PPS >= 500,000 (50% of target)
+- [ ] CPU (T5) <= 50%
+- [ ] Packet Loss (T5) <= 5%
+- [ ] Zero-copy verified (no memcpy in hot path)
+
+**Status**: PENDING
+
+---
+
+### Task 5.3: Integration Testing
+
+**Goal**: Test with actual network targets
+
+**Requirements**:
+- Test all 12 scan types against live targets
+- Verify network volatility handling under real conditions
+- Compare results with nmap output
 
 **Status**: PENDING
 
