@@ -37,7 +37,8 @@
 
 // Rust guideline compliant 2026-03-06
 
-use crate::engine::{PacketBuffer, Result};
+use crate::engine::Result;
+use crate::zero_copy::ZeroCopyPacket;
 use futures::Stream;
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -75,13 +76,13 @@ use tokio_stream::wrappers::ReceiverStream;
 #[derive(Debug)]
 pub struct PacketStream {
     /// Inner receiver stream.
-    inner: ReceiverStream<Result<PacketBuffer>>,
+    inner: ReceiverStream<Result<ZeroCopyPacket>>,
 }
 
 impl PacketStream {
     /// Creates a new packet stream from a receiver.
     #[must_use]
-    pub fn new(receiver: tokio::sync::mpsc::Receiver<Result<PacketBuffer>>) -> Self {
+    pub fn new(receiver: tokio::sync::mpsc::Receiver<Result<ZeroCopyPacket>>) -> Self {
         Self {
             inner: ReceiverStream::new(receiver),
         }
@@ -89,13 +90,13 @@ impl PacketStream {
 
     /// Returns the inner receiver for manual control.
     #[must_use]
-    pub fn into_inner(self) -> tokio::sync::mpsc::Receiver<Result<PacketBuffer>> {
+    pub fn into_inner(self) -> tokio::sync::mpsc::Receiver<Result<ZeroCopyPacket>> {
         self.inner.into_inner()
     }
 }
 
 impl Stream for PacketStream {
-    type Item = Result<PacketBuffer>;
+    type Item = Result<ZeroCopyPacket>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         // Delegate to ReceiverStream, which has correct readiness semantics
@@ -110,7 +111,7 @@ mod tests {
 
     #[test]
     fn test_packet_stream_new() {
-        let (_, rx) = tokio::sync::mpsc::channel::<Result<PacketBuffer>>(1);
+        let (_, rx) = tokio::sync::mpsc::channel::<Result<ZeroCopyPacket>>(1);
         let stream = PacketStream::new(rx);
         drop(stream); // Just verify it can be created
     }

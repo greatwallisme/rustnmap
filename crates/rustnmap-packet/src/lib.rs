@@ -76,6 +76,9 @@ mod stream;
 /// BPF (Berkeley Packet Filter) utilities.
 pub mod bpf;
 
+/// Zero-copy packet buffer implementation.
+pub mod zero_copy;
+
 // ============================================================================
 // Public re-exports
 // ============================================================================
@@ -92,6 +95,8 @@ pub use crate::error::{PacketError, Result};
 pub use crate::mmap::MmapPacketEngine;
 #[doc(inline)]
 pub use crate::stream::PacketStream;
+#[doc(inline)]
+pub use crate::zero_copy::ZeroCopyPacket;
 
 // ============================================================================
 // Constants

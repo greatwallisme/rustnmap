@@ -8,6 +8,7 @@
 // Rust guideline compliant 2026-03-05
 
 use crate::error::PacketError;
+use crate::zero_copy::ZeroCopyPacket;
 use async_trait::async_trait;
 use bytes::Bytes;
 use std::time::Instant;
@@ -489,12 +490,16 @@ pub trait PacketEngine: Send + Sync {
     /// Returns an error if the engine cannot be started.
     async fn start(&mut self) -> Result<()>;
 
-    /// Receives a packet.
+    /// Receives a packet (zero-copy).
+    ///
+    /// Returns a `ZeroCopyPacket` that holds a reference to the engine's
+    /// memory-mapped region without copying data. The frame is automatically
+    /// released back to the kernel when the packet is dropped.
     ///
     /// # Errors
     ///
     /// Returns an error if packet reception fails.
-    async fn recv(&mut self) -> Result<Option<PacketBuffer>>;
+    async fn recv(&mut self) -> Result<Option<ZeroCopyPacket>>;
 
     /// Sends a packet.
     ///

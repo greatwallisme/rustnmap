@@ -235,7 +235,11 @@ impl ScannerPacketEngine {
     ) -> rustnmap_packet::Result<Option<Vec<u8>>> {
         let result = self.inner.recv_timeout(timeout_duration).await?;
         match result {
-            Some(packet) => Ok(Some(packet.into_vec())),
+            Some(packet) => {
+                // Convert ZeroCopyPacket to Vec<u8> by copying the data
+                // Note: This defeats zero-copy, but maintains API compatibility
+                Ok(Some(packet.data().as_ref().to_vec()))
+            }
             None => Ok(None),
         }
     }

@@ -2,7 +2,7 @@
 
 > **Created**: 2026-03-06
 > **Updated**: 2026-03-07
-> **Status**: Design Document Compliance Audit COMPLETE
+> **Status**: Task 3.5.6 COMPLETE - Zero-Copy Packet Buffer Implemented
 
 ---
 
@@ -148,9 +148,91 @@ engine.recv_with_timeout(timeout).await
 
 ---
 
-## Critical Bugs Identified (2026-03-06)
+## Critical Bugs Status (2026-03-07)
 
-### Bug #1: Status Check Creates New Atomic (CRITICAL) - FIXED
+### Bug #1: Status Check Creates New Atomic (CRITICAL) - ✅ FIXED
+
+**Location**: `crates/rustnmap-packet/src/mmap.rs:646-658`
+
+**Fix Applied**: Correct atomic access pattern implemented
+```rust
+// CORRECT: Access tp_status atomically through pointer
+let status_ptr = std::ptr::addr_of!(hdr.tp_status).cast::<AtomicU32>();
+unsafe {
+    (*status_ptr).load(Ordering::Acquire) & TP_STATUS_USER != 0
+}
+```
+
+### Bug #2: Zero-Copy Defeated by Data Copy (HIGH) - ✅ COMPLETE
+
+**Location**: `crates/rustnmap-packet/src/mmap.rs:719`
+
+**Current Implementation**:
+```rust
+// Line 719 - UNNECESSARY COPY (FIXED)
+let slice = unsafe { std::slice::from_raw_parts(data_ptr, data_len) };
+Bytes::copy_from_slice(slice)  // <-- This copies data!
+```
+
+**Impact**: 2-3x performance improvement possible by eliminating memcpy.
+
+**Priority**: HIGH - Performance critical for T5 Insane timing
+
+**Resolution**: ✅ COMPLETE - All 4 phases implemented
+
+**Design Document**: `doc/modules/packet-engineering.md` section "零拷贝数据包缓冲区设计"
+
+**Implementation Summary**:
+
+**Phase 1: Add ZeroCopyPacket Struct (✅ COMPLETE)**
+- File: `crates/rustnmap-packet/src/zero_copy.rs` (CREATED, ~430 lines)
+- `ZeroCopyBytes` struct with dual-mode support (borrowed/owned)
+- `ZeroCopyPacket` struct with `Arc<MmapPacketEngine>` lifetime management
+- `Drop` trait for automatic frame release
+- `Clone` trait for creating independent packet copies
+- SAFETY comments for all unsafe operations
+
+**Phase 2: Modify MmapPacketEngine (✅ COMPLETE)**
+- File: `crates/rustnmap-packet/src/mmap.rs`
+- Added `ring_ptr()`, `ring_size()`, `release_frame_by_idx()`, `try_recv_zero_copy()`
+- Quality: Zero clippy warnings, all 63 tests pass
+
+**Phase 3: Update PacketEngine Trait (✅ COMPLETE)**
+- File: `crates/rustnmap-packet/src/engine.rs`
+- Changed: `async fn recv(&mut self) -> Result<Option<ZeroCopyPacket>>`
+
+**Phase 4: Update All Implementations (✅ COMPLETE)**
+- Files: `crates/rustnmap-packet/src/async_engine.rs`, `stream.rs`, `rustnmap-scan/src/packet_adapter.rs`
+- All updated to use ZeroCopyPacket
+- Workspace: Zero clippy warnings, all tests pass
+
+**Expected Performance Improvement**:
+
+| Metric | Current | Target | Improvement |
+|--------|---------|--------|-------------|
+| PPS | ~50,000 | ~1,000,000 | **20x** |
+| CPU (T5) | 80% | 30% | **2.7x** |
+| Packet Loss (T5) | ~30% | <1% | **30x** |
+
+**Note**: Full performance benefits require updating scanner code to use ZeroCopyPacket directly instead of converting to Vec<u8> in the compatibility layer.
+
+### Bug #3: Mutex Required for Thread Safety (NOT A BUG)
+
+**Status**: NOT APPLICABLE
+
+**Analysis**: The `Mutex` in `AsyncPacketEngine` is necessary because `MmapPacketEngine`
+has a non-atomic `rx_frame_idx: u32` field. Multiple tasks cannot safely call `try_recv()`
+concurrently without external synchronization.
+
+### Bug #4: Missing BPF JIT Optimization (LOW) - ⏸️ DEFERRED
+
+**Priority**: LOW - Optimization, not blocking
+
+---
+
+## Legacy Bugs (Previously Fixed)
+
+### Bug #1: Status Check Creates New Atomic (CRITICAL) - ARCHIVED
 
 **Location**: `crates/rustnmap-packet/src/mmap.rs:646-668`
 

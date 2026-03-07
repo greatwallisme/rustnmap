@@ -74,6 +74,7 @@
 
 use crate::engine::{EngineStats, PacketBuffer, PacketEngine, Result, RingConfig};
 use crate::error::PacketError;
+use crate::zero_copy::ZeroCopyPacket;
 use crate::sys::{
     Tpacket2Hdr, TpacketReq, AF_PACKET, ETH_P_ALL, PACKET_AUXDATA, PACKET_RESERVE, PACKET_RX_RING,
     PACKET_VERSION, SOCK_RAW, TPACKET2_HDRLEN, TPACKET_ALIGNMENT, TPACKET_V2, TP_STATUS_KERNEL,
@@ -88,6 +89,7 @@ use std::mem;
 use std::os::fd::AsRawFd;
 use std::os::unix::io::{FromRawFd, OwnedFd};
 use std::ptr::NonNull;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 /// Maximum number of ENOMEM retry attempts.
@@ -143,7 +145,6 @@ pub struct MmapPacketEngine {
     /// Socket file descriptor.
     fd: OwnedFd,
     /// Ring buffer configuration.
-    #[expect(dead_code, reason = "Configuration stored for future reference")]
     config: RingConfig,
     /// Memory-mapped ring buffer pointer.
     /// SAFETY: This pointer is valid for the lifetime of the engine.
@@ -679,6 +680,202 @@ impl MmapPacketEngine {
         self.rx_frame_idx = (self.rx_frame_idx + 1) % self.frame_count;
     }
 
+    /// Returns the memory-mapped region pointer.
+    ///
+    /// This is used by `ZeroCopyPacket` to verify that data pointers
+    /// are within the valid region (in debug builds).
+    #[must_use]
+    pub const fn ring_ptr(&self) -> *const u8 {
+        self.ring_ptr.as_ptr()
+    }
+
+    /// Returns the memory-mapped region size in bytes.
+    ///
+    /// This is used by `ZeroCopyPacket` to verify that data pointers
+    /// are within the valid region (in debug builds).
+    #[must_use]
+    pub const fn ring_size(&self) -> usize {
+        self.ring_size
+    }
+
+    /// Releases a frame back to the kernel by its index.
+    ///
+    /// This is used by `ZeroCopyPacket`'s `Drop` implementation to release
+    /// the frame when the packet is dropped.
+    ///
+    /// # Arguments
+    ///
+    /// * `frame_idx` - Index of the frame to release
+    ///
+    /// # Panics
+    ///
+    /// In debug builds, panics if `frame_idx` >= `frame_count`.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that `frame_idx` is within bounds (0..`frame_count`).
+    /// This is guaranteed when the frame was obtained from a valid `ZeroCopyPacket`.
+    pub fn release_frame_by_idx(&self, frame_idx: u32) {
+        #[cfg(debug_assertions)]
+        assert!(
+            frame_idx < self.frame_count,
+            "frame_idx {} >= frame_count {}",
+            frame_idx,
+            self.frame_count
+        );
+
+        let frame_ptr = self.frame_ptrs[frame_idx as usize];
+        // SAFETY: frame_ptr is valid and within the mmap'd region
+        let hdr = unsafe { frame_ptr.as_ref() };
+
+        // The first field of Tpacket2Hdr is tp_status (u32), which we
+        // access atomically to synchronize with the kernel.
+        let status_ptr = std::ptr::addr_of!(hdr.tp_status).cast::<AtomicU32>();
+        // SAFETY: status_ptr points to the first field of Tpacket2Hdr (tp_status),
+        // which is a u32 that we access atomically to synchronize with the kernel.
+        unsafe {
+            (*status_ptr).store(TP_STATUS_KERNEL, Ordering::Release);
+        }
+    }
+
+    /// Tries to receive a packet without blocking (zero-copy variant).
+    ///
+    /// This method returns a `ZeroCopyPacket` that holds a reference to the engine
+    /// and points directly into the memory-mapped region without copying data.
+    /// The frame is automatically released back to the kernel when the packet is dropped.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The engine is not running
+    /// - Frame access fails
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use rustnmap_packet::{MmapPacketEngine, RingConfig};
+    ///
+    /// let mut engine = MmapPacketEngine::new("eth0", RingConfig::default())?;
+    /// engine.start().await?;
+    ///
+    /// if let Some(packet) = engine.try_recv_zero_copy()? {
+    ///     // Process packet without copying data
+    ///     let _len = packet.len();
+    /// } // Frame automatically released here
+    /// ```
+    pub fn try_recv_zero_copy(&mut self) -> Result<Option<crate::ZeroCopyPacket>> {
+        if !self.running.load(Ordering::Acquire) {
+            return Err(PacketError::NotStarted);
+        }
+
+        if !self.frame_is_available() {
+            return Ok(None);
+        }
+
+        let frame_ptr = self.frame_ptrs[self.rx_frame_idx as usize];
+        // SAFETY: frame_ptr is valid and we've verified frame is available
+        let hdr = unsafe { frame_ptr.as_ref() };
+
+        // Get packet data
+        let data_offset = TPACKET2_HDRLEN + hdr.tp_mac as usize;
+        let data_len = hdr.tp_snaplen as usize;
+        let original_len = hdr.tp_len as usize;
+
+        // Check for VLAN tag
+        let has_vlan = (hdr.tp_status & TP_STATUS_VLAN_VALID) != 0;
+
+        // Update statistics
+        self.packets_received.fetch_add(1, Ordering::Relaxed);
+        self.bytes_received
+            .fetch_add(data_len as u64, Ordering::Relaxed);
+
+        // Get the current frame index before advancing
+        let current_frame_idx = self.rx_frame_idx;
+
+        // Advance to the next frame (do NOT release the current frame yet)
+        // The frame will be released when the ZeroCopyPacket is dropped
+        self.advance_frame();
+
+        // Duplicate the socket file descriptor
+        // SAFETY: dup creates a new file descriptor referring to the same socket
+        let dup_fd = unsafe {
+            libc::dup(self.fd.as_raw_fd())
+        };
+        if dup_fd < 0 {
+            return Err(PacketError::SocketOption {
+                option: "dup".to_string(),
+                source: io::Error::last_os_error(),
+            });
+        }
+        // SAFETY: dup_fd is valid (>= 0) and OwnedFd takes ownership
+        let dup_fd = unsafe { OwnedFd::from_raw_fd(dup_fd) };
+
+        // Create Arc reference to the engine
+        // This keeps the engine alive for the lifetime of the packet
+        let engine_arc = Arc::new(Self {
+            fd: dup_fd,
+            config: self.config,
+            ring_ptr: self.ring_ptr,
+            ring_size: self.ring_size,
+            frame_ptrs: self.frame_ptrs.clone(),
+            rx_frame_idx: 0, // New independent index
+            frame_count: self.frame_count,
+            if_index: self.if_index,
+            if_name: self.if_name.clone(),
+            mac_addr: self.mac_addr,
+            stats: EngineStats::default(),
+            running: AtomicBool::new(false),
+            packets_received: AtomicU64::new(0),
+            packets_dropped: AtomicU64::new(0),
+            bytes_received: AtomicU64::new(0),
+        });
+
+        let (data, vlan_tci, vlan_tpid) = if has_vlan {
+            // For VLAN-tagged packets, the kernel strips the VLAN tag and sets
+            // TP_STATUS_VLAN_VALID. We need to reconstruct the Ethernet header
+            // with the VLAN tag inserted. This requires copying because we need
+            // to shift the packet data to make room for the 4-byte VLAN tag.
+            //
+            // This is a limitation of the TPACKET_V2 interface. When VLAN
+            // stripping is enabled, the zero-copy optimization is not possible.
+            let reconstructed = Self::reconstruct_vlan_packet(hdr, frame_ptr, data_offset, data_len);
+            // Convert the reconstructed Bytes to ZeroCopyBytes with owned data
+            let zc_bytes = crate::zero_copy::ZeroCopyBytes::owned(reconstructed.to_vec());
+            (zc_bytes, Some(hdr.tp_vlan_tci), Some(hdr.tp_vlan_tpid))
+        } else {
+            // Zero-copy: Create ZeroCopyBytes that points directly into the mmap region
+            // SAFETY: data_offset + data_len is within the frame by kernel contract
+            let data_ptr = unsafe { frame_ptr.as_ptr().cast::<u8>().add(data_offset) };
+            // SAFETY:
+            // - data_ptr points into the mmap region owned by engine_arc
+            // - The region remains valid for the lifetime of engine_arc
+            // - engine_arc is captured by ZeroCopyBytes
+            // - data_len is the captured length
+            let zc_bytes = unsafe {
+                crate::zero_copy::ZeroCopyBytes::borrowed(
+                    Arc::clone(&engine_arc),
+                    data_ptr,
+                    data_len,
+                )
+            };
+            (zc_bytes, None, None)
+        };
+
+        // Create the zero-copy packet
+        let packet = crate::ZeroCopyPacket::new(
+            engine_arc,
+            current_frame_idx,
+            data,
+            std::time::Instant::now(),
+            data_len,
+            original_len,
+            vlan_tci,
+            vlan_tpid,
+        );
+
+        Ok(Some(packet))
+    }
+
     /// Tries to receive a packet without blocking.
     ///
     /// # Errors
@@ -839,13 +1036,13 @@ impl PacketEngine for MmapPacketEngine {
         Ok(())
     }
 
-    async fn recv(&mut self) -> Result<Option<PacketBuffer>> {
+    async fn recv(&mut self) -> Result<Option<ZeroCopyPacket>> {
         if !self.running.load(Ordering::Acquire) {
             return Err(PacketError::NotStarted);
         }
 
-        // Try to receive a packet
-        if let Some(packet) = self.try_recv()? {
+        // Try to receive a packet (zero-copy)
+        if let Some(packet) = self.try_recv_zero_copy()? {
             return Ok(Some(packet));
         }
 
@@ -853,7 +1050,7 @@ impl PacketEngine for MmapPacketEngine {
         tokio::task::yield_now().await;
 
         // Try again after yielding
-        self.try_recv()
+        self.try_recv_zero_copy()
     }
 
     async fn send(&self, packet: &[u8]) -> Result<usize> {

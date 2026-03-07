@@ -42,9 +42,10 @@
 
 // Rust guideline compliant 2026-03-06
 
-use crate::engine::{EngineStats, PacketBuffer, PacketEngine, Result, RingConfig};
+use crate::engine::{EngineStats, PacketEngine, Result, RingConfig};
 use crate::error::PacketError;
 use crate::mmap::MmapPacketEngine;
+use crate::zero_copy::ZeroCopyPacket;
 use async_trait::async_trait;
 use rustnmap_common::MacAddr;
 use std::io;
@@ -108,10 +109,10 @@ pub struct AsyncPacketEngine {
     async_fd: Arc<AsyncFd<OwnedFd>>,
 
     /// Packet sender channel.
-    packet_tx: Sender<Result<PacketBuffer>>,
+    packet_tx: Sender<Result<ZeroCopyPacket>>,
 
     /// Packet receiver channel.
-    packet_rx: Receiver<Result<PacketBuffer>>,
+    packet_rx: Receiver<Result<ZeroCopyPacket>>,
 
     /// Running state flag.
     running: Arc<AtomicBool>,
@@ -202,7 +203,7 @@ impl AsyncPacketEngine {
     /// This method is used internally by `into_stream()` and can be used
     /// to get the receiver without consuming the engine.
     #[must_use]
-    pub fn receiver(&self) -> &Receiver<Result<PacketBuffer>> {
+    pub fn receiver(&self) -> &Receiver<Result<ZeroCopyPacket>> {
         &self.packet_rx
     }
 
@@ -259,7 +260,7 @@ impl AsyncPacketEngine {
     pub async fn recv_timeout(
         &mut self,
         timeout_duration: Duration,
-    ) -> Result<Option<PacketBuffer>> {
+    ) -> Result<Option<ZeroCopyPacket>> {
         if !self.running.load(Ordering::Acquire) {
             return Err(PacketError::NotStarted);
         }
@@ -337,10 +338,10 @@ impl PacketEngine for AsyncPacketEngine {
                         let mut received_any = false;
 
                         loop {
-                            // Try to receive a packet without blocking
+                            // Try to receive a packet without blocking (zero-copy)
                             let result = {
                                 let mut engine_guard = engine.lock().await;
-                                engine_guard.try_recv()
+                                engine_guard.try_recv_zero_copy()
                             };
 
                             match result {
@@ -397,7 +398,7 @@ impl PacketEngine for AsyncPacketEngine {
         Ok(())
     }
 
-    async fn recv(&mut self) -> Result<Option<PacketBuffer>> {
+    async fn recv(&mut self) -> Result<Option<ZeroCopyPacket>> {
         if !self.running.load(Ordering::Acquire) {
             return Err(PacketError::NotStarted);
         }
