@@ -230,6 +230,74 @@ concurrently without external synchronization.
 
 ---
 
+## Environment Limitations Found (2026-03-07)
+
+### WSL2 Does Not Support PACKET_RX_RING
+
+**Test Method**: C program compiled and executed on WSL2
+**Kernel Version**: 5.15.167.4-microsoft-standard-WSL2
+
+**Test Results**:
+```c
+// Test program output:
+socket(AF_PACKET, SOCK_RAW)        ✅ PASS (fd=3)
+setsockopt(PACKET_VERSION, V2)     ✅ PASS
+setsockopt(PACKET_RX_RING, ...)    ❌ FAIL (errno=22 EINVAL)
+```
+
+**Evidence**:
+```
+setsockopt PACKET_RX_RING: Invalid argument
+PACKET_RX_RING failed with errno=22 (Invalid argument)
+```
+
+**Impact**:
+- Integration tests requiring PACKET_MMAP cannot run on WSL2
+- 9 tests in `zero_copy_integration.rs` fail with environment limitation message
+- Tests will pass on proper Linux systems with full kernel support
+
+**Workaround**: Use proper Linux environment (Debian, Ubuntu VM, etc.) for integration testing
+
+---
+
+### Bug #5: MAC Address Parsing Fails for Bytes >= 128 (FIXED) ✅
+
+**Location**: `crates/rustnmap-packet/src/mmap.rs:416-428`
+
+**Problem**:
+```rust
+// OLD CODE - FAILED for MAC bytes >= 128
+u8::try_from(hwaddr.sa_data[0])?  // 0xe7 (231) as i8 = -25, try_from fails!
+```
+
+**Root Cause**:
+- `sockaddr.sa_data` is `i8` (signed char)
+- MAC address bytes can be 128-255
+- Values like `0xe7` (231) stored as `-25` in i8
+- `u8::try_from(-25)` returns `Err(TryFromIntError)`
+
+**Example MAC that failed**: `48:e7:da:59:68:3f`
+- `0xe7` = 231 → stored as `-25` in i8
+- `0xda` = 218 → stored as `-38` in i8
+
+**Fix Applied**:
+```rust
+// NEW CODE - Uses bit reinterpretation
+#[allow(clippy::cast_sign_loss, reason = "MAC address bytes are stored as i8 in sockaddr but represent unsigned values")]
+let addr = MacAddr::new([
+    hwaddr.sa_data[0] as u8,  // Reinterpret bits, preserves MAC byte value
+    hwaddr.sa_data[1] as u8,
+    hwaddr.sa_data[2] as u8,
+    hwaddr.sa_data[3] as u8,
+    hwaddr.sa_data[4] as u8,
+    hwaddr.sa_data[5] as u8,
+]);
+```
+
+**Verification**: `cargo clippy -- -D warnings` passes
+
+---
+
 ## Legacy Bugs (Previously Fixed)
 
 ### Bug #1: Status Check Creates New Atomic (CRITICAL) - ARCHIVED

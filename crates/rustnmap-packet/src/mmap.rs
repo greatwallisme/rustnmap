@@ -412,44 +412,20 @@ impl MmapPacketEngine {
         }
 
         // SAFETY: hwaddr is valid after successful ioctl
+        // SAFETY: sa_data is i8 (signed char), but MAC addresses are unsigned bytes.
+        // We use `as u8` to reinterpret the bits, which preserves the bit pattern.
+        // This is safe because MAC address bytes are always valid u8 values (0-255).
         let hwaddr = unsafe { ifreq.ifr_ifru.ifru_hwaddr };
+        // Cast i8 to u8 for MAC address bytes - this preserves the bit pattern
+        // which is what we want for MAC addresses (values 0-255 stored as signed bytes).
+        #[allow(clippy::cast_sign_loss, reason = "MAC address bytes are stored as i8 in sockaddr but represent unsigned values")]
         let addr = MacAddr::new([
-            u8::try_from(hwaddr.sa_data[0]).map_err(|overflow| {
-                PacketError::mac_address_failed(
-                    if_name,
-                    io::Error::new(io::ErrorKind::InvalidData, overflow),
-                )
-            })?,
-            u8::try_from(hwaddr.sa_data[1]).map_err(|overflow| {
-                PacketError::mac_address_failed(
-                    if_name,
-                    io::Error::new(io::ErrorKind::InvalidData, overflow),
-                )
-            })?,
-            u8::try_from(hwaddr.sa_data[2]).map_err(|overflow| {
-                PacketError::mac_address_failed(
-                    if_name,
-                    io::Error::new(io::ErrorKind::InvalidData, overflow),
-                )
-            })?,
-            u8::try_from(hwaddr.sa_data[3]).map_err(|overflow| {
-                PacketError::mac_address_failed(
-                    if_name,
-                    io::Error::new(io::ErrorKind::InvalidData, overflow),
-                )
-            })?,
-            u8::try_from(hwaddr.sa_data[4]).map_err(|overflow| {
-                PacketError::mac_address_failed(
-                    if_name,
-                    io::Error::new(io::ErrorKind::InvalidData, overflow),
-                )
-            })?,
-            u8::try_from(hwaddr.sa_data[5]).map_err(|overflow| {
-                PacketError::mac_address_failed(
-                    if_name,
-                    io::Error::new(io::ErrorKind::InvalidData, overflow),
-                )
-            })?,
+            hwaddr.sa_data[0] as u8,
+            hwaddr.sa_data[1] as u8,
+            hwaddr.sa_data[2] as u8,
+            hwaddr.sa_data[3] as u8,
+            hwaddr.sa_data[4] as u8,
+            hwaddr.sa_data[5] as u8,
         ]);
 
         Ok(addr)
