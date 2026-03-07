@@ -1618,10 +1618,34 @@ test result: FAILED. 6 passed; 1 failed (test_udp_scan_ipv6_target - pre-existin
 ```
 
 **Remaining Work (Phase 3.5):**
-- Task 3.5.1: Remove deprecated `SimpleAfPacket` and `AfPacketEngine` usage (IN PROGRESS)
-- Task 3.5.2: Add integration tests for PACKET_MMAP V2 performance (PENDING)
-- Task 3.5.3: Performance validation (1M+ PPS target) (PENDING)
+- ~~Task 3.5.1: Remove deprecated `SimpleAfPacket` from ultrascan.rs~~ ✅ COMPLETE
+- Task 3.5.2: Remove deprecated `AfPacketEngine` from rustnmap-packet (PENDING)
+- Task 3.5.3: Update documentation (PENDING)
+- Task 3.5.4: Add integration tests for PACKET_MMAP V2 performance (PENDING)
+- Task 3.5.5: Performance validation (1M+ PPS target) (PENDING)
 
-**Remaining Work (Phase 3.5):**
-- Task 3.5.2: Add integration tests for PACKET_MMAP V2 performance
-- Task 3.5.3: Performance validation (1M+ PPS target)
+## 2026-03-07: Phase 3.5.1 - Remove SimpleAfPacket from ultrascan.rs ✅ COMPLETE
+
+### Task: Remove deprecated SimpleAfPacket and migrate to ScannerPacketEngine
+
+**Completed Changes:**
+1. Removed `SimpleAfPacket` struct and impl block (~300 lines)
+2. Removed `SockFilter` and `SockFprog` helper structs
+3. Removed `ETH_P_ALL` constant
+4. Removed unused imports (`std::io`, `std::mem`, `std::ptr`, `std::os::fd`)
+5. Removed unused `get_interface_for_ip()` function
+
+**Migration:**
+- Updated `scan_udp_ports()` to use `ScannerPacketEngine` from `packet_adapter`
+- Replaced `SimpleAfPacket::new()` with `create_stealth_engine()`
+- Converted `start_icmp_receiver_task()` from `std::thread::spawn` to `tokio::spawn`
+- Uses `BpfFilter::icmp_dst()` for kernel-space filtering
+
+**Files Modified:**
+- `crates/rustnmap-scan/src/ultrascan.rs` - Removed `SimpleAfPacket`, updated UDP scanner
+
+**Verification:**
+- Zero clippy warnings: `cargo clippy --workspace -- -D warnings`
+- All tests pass (1 pre-existing failure unrelated to changes)
+
+

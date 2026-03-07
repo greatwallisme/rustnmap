@@ -37,17 +37,14 @@
 #![warn(missing_docs)]
 
 use std::collections::HashMap;
-use std::io;
-use std::mem;
 use std::net::{Ipv4Addr, SocketAddr};
-use std::os::fd::{AsRawFd, FromRawFd};
-use std::ptr;
 use std::sync::Arc as StdArc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::packet_adapter::{create_stealth_engine, ScannerPacketEngine};
 use rustnmap_common::{Port, PortState, RateLimiter, ScanConfig};
+use rustnmap_packet::BpfFilter;
 use rustnmap_net::raw_socket::{parse_tcp_response, RawSocket, TcpPacketBuilder};
 use tokio::sync::{mpsc, oneshot, Mutex};
 use tokio::task::JoinHandle;
@@ -412,352 +409,6 @@ impl InternalCongestionController {
         self.stats.recommended_timeout()
     }
 }
-
-/// BPF instruction structure for classic BPF filters.
-/// Matches the kernel's `struct sock_filter`.
-#[repr(C)]
-struct SockFilter {
-    /// Instruction code
-    code: u16,
-    /// Jump true offset
-    jt: u8,
-    /// Jump false offset
-    jf: u8,
-    /// Generic multiuse field
-    k: u32,
-}
-
-/// BPF program structure for `SO_ATTACH_FILTER`.
-/// Matches the kernel's `struct sock_fprog`.
-#[repr(C)]
-struct SockFprog {
-    /// Number of filter instructions
-    len: u16,
-    /// Padding for alignment
-    _pad: u16,
-    /// Pointer to filter instructions
-    filter: *const SockFilter,
-}
-
-/// Simple `AF_PACKET` socket for L2 packet capture.
-///
-/// # Deprecation
-///
-/// This struct is deprecated. Use `ScannerPacketEngine` from `packet_adapter` module
-/// for new implementations. `ScannerPacketEngine` provides better performance through
-/// zero-copy `PACKET_MMAP` V2 ring buffer operation.
-///
-/// This struct is kept for backward compatibility during the migration period.
-#[derive(Debug)]
-struct SimpleAfPacket {
-    #[expect(dead_code, reason = "Interface index stored for potential future use")]
-    if_index: i32,
-    fd: std::os::fd::OwnedFd,
-}
-
-impl SimpleAfPacket {
-    /// Creates a new `AF_PACKET` socket bound to the specified interface.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if socket creation, interface lookup, or binding fails.
-    fn new(if_name: &str) -> io::Result<Self> {
-        // SAFETY: Creating an AF_PACKET raw socket with valid libc constants.
-        // The returned fd is checked for errors before use.
-        let fd = unsafe {
-            libc::socket(
-                libc::AF_PACKET,
-                libc::SOCK_RAW,
-                i32::from(libc::htons(ETH_P_ALL)),
-            )
-        };
-        if fd < 0 {
-            return Err(io::Error::last_os_error());
-        }
-        // SAFETY: fd is a valid, non-negative file descriptor returned by socket().
-        // OwnedFd takes ownership and will close it on drop.
-        let fd = unsafe { std::os::fd::OwnedFd::from_raw_fd(fd) };
-
-        let if_index = Self::get_if_index(fd.as_raw_fd(), if_name)?;
-
-        // SAFETY: zeroed memory is valid for sockaddr_ll (POD struct with integer fields).
-        let mut addr: libc::sockaddr_ll = unsafe { mem::zeroed() };
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "AF_PACKET (17) fits in u16"
-        )]
-        {
-            addr.sll_family = libc::AF_PACKET as u16;
-        };
-        addr.sll_protocol = ETH_P_ALL.to_be();
-        addr.sll_ifindex = if_index;
-
-        // SAFETY: fd is a valid AF_PACKET socket. addr is properly initialized with
-        // family, protocol, and interface index. Size matches the struct.
-        let ret = unsafe {
-            libc::bind(
-                fd.as_raw_fd(),
-                (&raw const addr).cast::<libc::sockaddr>(),
-                u32::try_from(mem::size_of::<libc::sockaddr_ll>()).unwrap_or(u32::MAX),
-            )
-        };
-        if ret < 0 {
-            return Err(io::Error::last_os_error());
-        }
-
-        // Keep socket in BLOCKING mode for reliable ICMP reception
-        // Non-blocking mode causes timing gaps that result in packet loss
-        // We'll use SO_RCVTIMEO for timeout instead
-        let timeout = libc::timeval {
-            tv_sec: 0,
-            tv_usec: 100_000, // 100ms timeout
-        };
-        // SAFETY: fd is a valid socket, timeout is a valid libc::timeval struct,
-        // and setsockopt is safe to call with these parameters.
-        let ret = unsafe {
-            libc::setsockopt(
-                fd.as_raw_fd(),
-                libc::SOL_SOCKET,
-                libc::SO_RCVTIMEO,
-                (&raw const timeout).cast::<libc::c_void>(),
-                u32::try_from(mem::size_of::<libc::timeval>()).unwrap_or(u32::MAX),
-            )
-        };
-        if ret < 0 {
-            // Non-fatal: timeout is helpful but not required
-        }
-
-        // Increase socket receive buffer size to prevent packet loss
-        // Nmap uses pcap which has large buffers; AF_PACKET needs explicit configuration
-        let socket_rcvbuf_size: i32 = 2_097_152; // 2MB
-                                                 // SAFETY: fd is a valid socket, socket_rcvbuf_size is a valid i32,
-                                                 // and setsockopt is safe to call with these parameters.
-        let ret = unsafe {
-            libc::setsockopt(
-                fd.as_raw_fd(),
-                libc::SOL_SOCKET,
-                libc::SO_RCVBUF,
-                (&raw const socket_rcvbuf_size).cast::<libc::c_void>(),
-                u32::try_from(mem::size_of::<i32>()).unwrap_or(u32::MAX),
-            )
-        };
-        if ret < 0 {
-            // Non-fatal: larger buffer is helpful but not required
-        }
-
-        Ok(Self { if_index, fd })
-    }
-
-    fn get_if_index(fd: i32, if_name: &str) -> io::Result<i32> {
-        // SAFETY: zeroed memory is valid for ifreq (all-zero is a valid bit pattern
-        // for this POD struct containing integers and a char array).
-        let mut ifreq: libc::ifreq = unsafe { mem::zeroed() };
-        let bytes = if_name.as_bytes();
-        if bytes.len() >= libc::IFNAMSIZ {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "interface name too long",
-            ));
-        }
-        for (i, &b) in bytes.iter().enumerate() {
-            #[expect(
-                clippy::cast_possible_wrap,
-                reason = "ASCII interface name bytes (0-127) fit safely in i8"
-            )]
-            {
-                ifreq.ifr_name[i] = b as i8;
-            };
-        }
-        // SAFETY: fd is a valid open socket, ifreq is properly initialized with
-        // the interface name. SIOCGIFINDEX populates ifru_ifindex on success.
-        let ret = unsafe { libc::ioctl(fd, libc::SIOCGIFINDEX, &raw mut ifreq) };
-        if ret < 0 {
-            return Err(io::Error::last_os_error());
-        }
-        // SAFETY: After successful SIOCGIFINDEX ioctl, the kernel has populated
-        // the ifru_ifindex field of the ifreq union with the interface index.
-        Ok(unsafe { ifreq.ifr_ifru.ifru_ifindex })
-    }
-
-    /// Receives a packet from the `AF_PACKET` socket.
-    ///
-    /// Returns `Ok(Some(data))` if a packet was received,
-    /// `Ok(None)` on timeout (blocking socket with `SO_RCVTIMEO`), or `Err` on error.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if `recvfrom` fails with an error other than timeout.
-    fn recv_packet(&self) -> io::Result<Option<Vec<u8>>> {
-        let mut buffer = vec![0u8; 65_535];
-        // SAFETY: fd is a valid AF_PACKET socket. buffer is a properly allocated
-        // mutable slice. recvfrom with null src_addr/addrlen is valid and simply
-        // discards the sender address information.
-        let ret = unsafe {
-            libc::recvfrom(
-                self.fd.as_raw_fd(),
-                buffer.as_mut_ptr().cast::<libc::c_void>(),
-                buffer.len(),
-                0,
-                ptr::null_mut(),
-                ptr::null_mut(),
-            )
-        };
-        if ret < 0 {
-            let err = io::Error::last_os_error();
-            // EAGAIN/EWOULDBLOCK indicates timeout on blocking socket with SO_RCVTIMEO
-            if err.kind() == io::ErrorKind::WouldBlock || err.raw_os_error() == Some(libc::EAGAIN) {
-                return Ok(None);
-            }
-            return Err(err);
-        }
-        #[expect(
-            clippy::cast_sign_loss,
-            reason = "ret is non-negative (checked above), safe to cast to usize"
-        )]
-        let len = ret as usize;
-        buffer.truncate(len);
-        Ok(Some(buffer))
-    }
-
-    /// Flushes any pending packets from the socket receive buffer.
-    ///
-    /// This should be called before starting a new scan to ensure we don't
-    /// process stale packets from previous scans.
-    fn flush_buffer(&self) {
-        // Drain all pending packets
-        while self.recv_packet().is_ok_and(|p| p.is_some()) {
-            // Continue discarding packets
-        }
-    }
-
-    /// Sets a BPF filter to only capture ICMP packets destined to the local IP.
-    ///
-    /// This matches nmap's approach of filtering packets in kernel space using
-    /// libpcap's BPF filter. The filter is: `icmp and dst host <local_ip>`.
-    ///
-    /// # Arguments
-    ///
-    /// * `local_ip` - Local IP address to filter for (destination of ICMP responses)
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the BPF filter cannot be attached to the socket.
-    fn set_icmp_filter(&self, local_ip: Ipv4Addr) -> io::Result<()> {
-        // BPF instruction constants
-        const BPF_LD: u16 = 0x00; // Load
-        const BPF_H: u16 = 0x08; // Half word (2 bytes)
-        const BPF_B: u16 = 0x10; // Byte
-        const BPF_W: u16 = 0x00; // Word (4 bytes)
-        const BPF_ABS: u16 = 0x20; // Absolute offset
-        const BPF_JMP: u16 = 0x05; // Jump
-        const BPF_JEQ: u16 = 0x10; // Jump if equal
-        const BPF_K: u16 = 0x00; // Constant
-        const BPF_RET: u16 = 0x06; // Return
-        const BPF_MAXLEN: u32 = 65_535; // Accept full packet
-
-        // Ipv4Addr::to_bits() returns u32 in network byte order (big-endian)
-        let local_ip_bits = local_ip.to_bits();
-
-        // BPF filter: icmp and dst host <local_ip>
-        // This filters at the kernel level to only pass ICMP packets destined to our IP.
-        // Packet structure (Ethernet frame):
-        // - Bytes 0-5: Destination MAC
-        // - Bytes 6-11: Source MAC
-        // - Bytes 12-13: EtherType (0x0800 for IPv4)
-        // - Bytes 14-33: IPv4 header
-        //   - Byte 23: IP protocol (1 for ICMP)
-        //   - Bytes 30-33: Destination IP
-        //
-        // BPF instructions are validated by the kernel when attached.
-        // The filter structure matches the kernel's sock_filter struct.
-        let filter: [SockFilter; 8] = [
-            // Load EtherType (offset 12, 2 bytes)
-            SockFilter {
-                code: BPF_LD | BPF_H | BPF_ABS,
-                jt: 0,
-                jf: 0,
-                k: 12,
-            },
-            // Check if IPv4 (0x0800) - jump to next if true, else skip 5 to reject
-            SockFilter {
-                code: BPF_JMP | BPF_JEQ | BPF_K,
-                jt: 0,
-                jf: 5,
-                k: 0x0800,
-            },
-            // Load IP protocol (offset 23, 1 byte) - 14 (Eth hdr) + 9 (IP proto offset)
-            SockFilter {
-                code: BPF_LD | BPF_B | BPF_ABS,
-                jt: 0,
-                jf: 0,
-                k: 23,
-            },
-            // Check if ICMP (1) - jump to next if true, else skip 3 to reject
-            SockFilter {
-                code: BPF_JMP | BPF_JEQ | BPF_K,
-                jt: 0,
-                jf: 3,
-                k: 1,
-            },
-            // Load destination IP (offset 30, 4 bytes) - 14 + 16 (IP dst offset)
-            SockFilter {
-                code: BPF_LD | BPF_W | BPF_ABS,
-                jt: 0,
-                jf: 0,
-                k: 30,
-            },
-            // Check if matches local IP - jump to accept if true, else reject
-            SockFilter {
-                code: BPF_JMP | BPF_JEQ | BPF_K,
-                jt: 0,
-                jf: 1,
-                k: local_ip_bits,
-            },
-            // Accept packet (return full packet length)
-            SockFilter {
-                code: BPF_RET | BPF_K,
-                jt: 0,
-                jf: 0,
-                k: BPF_MAXLEN,
-            },
-            // Reject packet (return 0)
-            SockFilter {
-                code: BPF_RET | BPF_K,
-                jt: 0,
-                jf: 0,
-                k: 0,
-            },
-        ];
-
-        let prog = SockFprog {
-            len: u16::try_from(filter.len()).unwrap_or(u16::MAX),
-            _pad: 0,
-            filter: filter.as_ptr(),
-        };
-
-        // SAFETY: fd is a valid socket, prog is a valid SockFprog pointing to
-        // a properly constructed BPF filter. SO_ATTACH_FILTER is a standard
-        // socket option for AF_PACKET sockets.
-        let ret = unsafe {
-            libc::setsockopt(
-                self.fd.as_raw_fd(),
-                libc::SOL_SOCKET,
-                libc::SO_ATTACH_FILTER,
-                (&raw const prog).cast::<libc::c_void>(),
-                u32::try_from(mem::size_of::<SockFprog>()).unwrap_or(u32::MAX),
-            )
-        };
-
-        if ret < 0 {
-            return Err(io::Error::last_os_error());
-        }
-
-        Ok(())
-    }
-}
-
-/// Ethernet protocol for all traffic.
-const ETH_P_ALL: u16 = 0x0003;
 /// Ethernet header size.
 const ETH_HDR_SIZE: usize = 14;
 
@@ -1052,49 +703,6 @@ impl ParallelScanEngine {
             self.config.initial_rtt,
         ));
         self
-    }
-
-    /// Gets the network interface name for the given local IP address.
-    ///
-    /// This function tries to find the interface that has the given local IP address.
-    /// For localhost, returns "lo". For other addresses, reads from /proc/net/route
-    /// to find the default route interface.
-    fn get_interface_for_ip(local_addr: Ipv4Addr) -> Option<String> {
-        // For localhost, use lo
-        if local_addr == Ipv4Addr::LOCALHOST || local_addr.is_loopback() {
-            return Some("lo".to_string());
-        }
-
-        // Read /proc/net/route to find the default route interface
-        // This is the most reliable way to find the main network interface
-        if let Ok(route_data) = std::fs::read_to_string("/proc/net/route") {
-            for line in route_data.lines().skip(1) {
-                // Format: Iface Destination Gateway Flags ...
-                let parts: Vec<&str> = line.split_whitespace().collect();
-                if parts.len() >= 2 {
-                    let iface = parts[0];
-                    let dest = parts[1];
-                    // Dest 00000000 means default route
-                    if dest == "00000000" {
-                        // Found the default route interface, return it directly
-                        return Some(iface.to_string());
-                    }
-                }
-            }
-        }
-
-        // Fallback: try common interface names in order of likelihood
-        for if_name in [
-            "wlp3s0", "wlan0", "wlp2s0", "wlp1s0", // Wireless
-            "eth0", "eth1", "ens33", "ens34", "enp0s3", "enp0s8", // Wired
-        ] {
-            // Check if interface exists by reading /sys/class/net/
-            let path = format!("/sys/class/net/{if_name}/operstate");
-            if std::path::Path::new(&path).exists() {
-                return Some(if_name.to_string());
-            }
-        }
-        None
     }
 
     /// Returns the adaptive probe timeout based on current network conditions.
@@ -1661,25 +1269,19 @@ impl ParallelScanEngine {
     ) -> Result<HashMap<Port, PortState>, rustnmap_common::ScanError> {
         let start_time = Instant::now();
 
-        // Create dedicated ICMP socket with BPF filter BEFORE starting receiver
+        // Create dedicated packet engine with ICMP BPF filter BEFORE starting receiver
         // This ensures the filter is applied before any packets can arrive
-        let if_name = Self::get_interface_for_ip(self.local_addr);
-        let icmp_socket = if let Some(ref name) = if_name {
-            match SimpleAfPacket::new(name) {
-                Ok(sock) => {
-                    // Enable BPF filter to capture only ICMP packets destined to local IP
-                    // This prevents kernel buffer overflow under network load
-                    let _ = sock.set_icmp_filter(self.local_addr);
+        let scanner_engine = create_stealth_engine(Some(self.local_addr), self.config.clone());
 
-                    // Flush any stale packets before starting
-                    sock.flush_buffer();
-                    Some(Arc::new(sock))
-                }
-                Err(_) => None,
-            }
-        } else {
-            None
-        };
+        if let Some(ref engine) = scanner_engine {
+            // Enable BPF filter to capture only ICMP packets destined to local IP
+            // This prevents kernel buffer overflow under network load
+            let filter = BpfFilter::icmp_dst(u32::from(self.local_addr));
+            let _ = engine.lock().await.set_filter(&filter);
+
+            // Start the packet engine
+            let _ = engine.lock().await.start().await;
+        }
 
         // Channel for received ICMP responses
         let (icmp_tx, mut icmp_rx) = mpsc::unbounded_channel();
@@ -1687,8 +1289,8 @@ impl ParallelScanEngine {
         // Ready signal to ensure receiver is polling before we send probes
         let (ready_tx, ready_rx) = oneshot::channel();
 
-        // Start ICMP receiver task with pre-created socket
-        let receiver_handle = self.start_icmp_receiver_task(icmp_socket, icmp_tx.clone(), ready_tx);
+        // Start ICMP receiver task with packet engine
+        let receiver_handle = self.start_icmp_receiver_task(scanner_engine, icmp_tx.clone(), ready_tx);
 
         // Wait for receiver to be ready (with timeout to prevent deadlock)
         if tokio::time::timeout(Duration::from_millis(200), ready_rx)
@@ -1699,11 +1301,10 @@ impl ParallelScanEngine {
             // The receiver might still work, just took too long to signal ready
         }
 
-        // Small delay to ensure receiver is truly in recvfrom() call
-        // This is critical for AF_PACKET which doesn't have ring buffer like libpcap
-        // Without this delay, there's a race condition where probes are sent before
-        // the receiver is actively polling
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        // Small delay to ensure receiver is truly ready
+        // PACKET_MMAP V2 ring buffer doesn't need this delay like recvfrom did
+        // But we keep it for consistency with the previous implementation
+        tokio::time::sleep(Duration::from_millis(10)).await;
 
         // Outstanding UDP probes: (target, port) -> probe info
         let mut outstanding: HashMap<(Ipv4Addr, Port), UdpOutstandingProbe> = HashMap::new();
@@ -2001,23 +1602,23 @@ impl ParallelScanEngine {
 
     /// Starts the ICMP receiver task for UDP scanning.
     ///
-    /// Uses a pre-created `AF_PACKET` socket with BPF filter for ICMP reception.
+    /// Uses `PACKET_MMAP` V2 with BPF filter for ICMP reception.
     /// This matches nmap's approach of using libpcap with a BPF filter to capture
     /// only ICMP packets destined to the local IP address.
     fn start_icmp_receiver_task(
         &self,
-        icmp_socket: Option<Arc<SimpleAfPacket>>,
+        scanner_engine: Option<Arc<Mutex<ScannerPacketEngine>>>,
         icmp_tx: mpsc::UnboundedSender<IcmpResponse>,
         ready_tx: oneshot::Sender<()>,
     ) -> JoinHandle<()> {
         let local_addr = self.local_addr;
 
-        // Use std::thread to start the receiver immediately, not spawn_blocking
-        // This ensures the receiver is truly ready before we return
-        std::thread::spawn(move || {
-            // Use the pre-created ICMP socket with BPF filter
-            if let Some(sock) = icmp_socket {
+        // Use tokio::spawn for async receiver with PACKET_MMAP V2
+        tokio::spawn(async move {
+            // Use the pre-created packet engine with BPF filter
+            if let Some(engine) = scanner_engine {
                 let mut ready_tx = Some(ready_tx);
+                let timeout = Duration::from_millis(100);
 
                 loop {
                     // Check if channel is closed before receiving
@@ -2031,7 +1632,10 @@ impl ParallelScanEngine {
                         let _ = tx.send(());
                     }
 
-                    match sock.recv_packet() {
+                    // Receive packet with timeout
+                    let result = engine.lock().await.recv_with_timeout(timeout).await;
+
+                    match result {
                         Ok(Some(data)) => {
                             // Skip Ethernet header (14 bytes) to get IP packet
                             let ip_data = if data.len() > ETH_HEADER_SIZE {
@@ -2049,36 +1653,23 @@ impl ParallelScanEngine {
                             }
                         }
                         Ok(None) => {
-                            // Timeout on blocking socket (SO_RCVTIMEO)
-                            // Check if channel is still open and continue waiting
+                            // Timeout - check if channel is still open and continue waiting
                             if icmp_tx.is_closed() {
                                 break;
                             }
                         }
-                        Err(e) => {
-                            // Error receiving - check if it's a timeout
-                            if e.kind() == io::ErrorKind::WouldBlock
-                                || e.raw_os_error() == Some(libc::EAGAIN)
-                            {
-                                // Timeout - check if channel is still open
-                                if icmp_tx.is_closed() {
-                                    break;
-                                }
-                            } else {
-                                // Other error - brief pause before retry
-                                std::thread::sleep(Duration::from_millis(10));
-                                if icmp_tx.is_closed() {
-                                    break;
-                                }
+                        Err(_) => {
+                            // Error receiving - check if channel is still open
+                            if icmp_tx.is_closed() {
+                                break;
                             }
+                            // Brief pause before retry
+                            tokio::time::sleep(Duration::from_millis(10)).await;
                         }
                     }
                 }
             }
-        });
-
-        // Return a dummy handle since we're using std::thread
-        tokio::spawn(async {})
+        })
     }
 
     /// Parses an ICMP response from raw packet data.
