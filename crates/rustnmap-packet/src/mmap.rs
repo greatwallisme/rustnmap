@@ -74,12 +74,12 @@
 
 use crate::engine::{EngineStats, PacketBuffer, PacketEngine, Result, RingConfig};
 use crate::error::PacketError;
-use crate::zero_copy::ZeroCopyPacket;
 use crate::sys::{
     Tpacket2Hdr, TpacketReq, AF_PACKET, ETH_P_ALL, PACKET_AUXDATA, PACKET_RESERVE, PACKET_RX_RING,
     PACKET_VERSION, SOCK_RAW, TPACKET2_HDRLEN, TPACKET_ALIGNMENT, TPACKET_V2, TP_STATUS_KERNEL,
     TP_STATUS_USER, TP_STATUS_VLAN_VALID, VLAN_TAG_LEN,
 };
+use crate::zero_copy::ZeroCopyPacket;
 use async_trait::async_trait;
 use bytes::Bytes;
 use rustnmap_common::MacAddr;
@@ -89,8 +89,8 @@ use std::mem;
 use std::os::fd::AsRawFd;
 use std::os::unix::io::{FromRawFd, OwnedFd};
 use std::ptr::NonNull;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::Arc;
 
 /// Maximum number of ENOMEM retry attempts.
 const ENOMEM_MAX_RETRIES: u32 = 10;
@@ -430,7 +430,10 @@ impl MmapPacketEngine {
         let hwaddr = unsafe { ifreq.ifr_ifru.ifru_hwaddr };
         // Cast i8 to u8 for MAC address bytes - this preserves the bit pattern
         // which is what we want for MAC addresses (values 0-255 stored as signed bytes).
-        #[allow(clippy::cast_sign_loss, reason = "MAC address bytes are stored as i8 in sockaddr but represent unsigned values")]
+        #[allow(
+            clippy::cast_sign_loss,
+            reason = "MAC address bytes are stored as i8 in sockaddr but represent unsigned values"
+        )]
         let addr = MacAddr::new([
             hwaddr.sa_data[0] as u8,
             hwaddr.sa_data[1] as u8,
@@ -613,7 +616,7 @@ impl MmapPacketEngine {
             interface: format!("index {if_index}"),
             source: io::Error::new(io::ErrorKind::InvalidInput, e),
         })?;
-        addr.sll_protocol = protocol;  // Use the specified protocol
+        addr.sll_protocol = protocol; // Use the specified protocol
         addr.sll_ifindex = i32::try_from(if_index).map_err(|e| PacketError::BindFailed {
             interface: format!("index {if_index}"),
             source: io::Error::new(io::ErrorKind::InvalidInput, e),
@@ -800,9 +803,7 @@ impl MmapPacketEngine {
 
         // Duplicate the socket file descriptor
         // SAFETY: dup creates a new file descriptor referring to the same socket
-        let dup_fd = unsafe {
-            libc::dup(self.fd.as_raw_fd())
-        };
+        let dup_fd = unsafe { libc::dup(self.fd.as_raw_fd()) };
         if dup_fd < 0 {
             return Err(PacketError::SocketOption {
                 option: "dup".to_string(),
@@ -840,7 +841,8 @@ impl MmapPacketEngine {
             //
             // This is a limitation of the TPACKET_V2 interface. When VLAN
             // stripping is enabled, the zero-copy optimization is not possible.
-            let reconstructed = Self::reconstruct_vlan_packet(hdr, frame_ptr, data_offset, data_len);
+            let reconstructed =
+                Self::reconstruct_vlan_packet(hdr, frame_ptr, data_offset, data_len);
             // Convert the reconstructed Bytes to ZeroCopyBytes with owned data
             let zc_bytes = crate::zero_copy::ZeroCopyBytes::owned(reconstructed.to_vec());
             (zc_bytes, Some(hdr.tp_vlan_tci), Some(hdr.tp_vlan_tpid))

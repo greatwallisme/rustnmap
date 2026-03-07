@@ -6,8 +6,11 @@
 
 #![warn(missing_docs)]
 
+pub mod adaptive_delay;
+pub mod congestion;
 pub mod connect_scan;
 pub mod ftp_bounce_scan;
+pub mod icmp_handler;
 pub mod idle_scan;
 pub mod ip_protocol_scan;
 pub mod packet_adapter;
@@ -20,8 +23,11 @@ pub mod udp_scan;
 pub mod ultrascan;
 
 // Re-exports
+pub use adaptive_delay::AdaptiveDelay;
+pub use congestion::CongestionControl;
 pub use connect_scan::TcpConnectScanner;
 pub use ftp_bounce_scan::FtpBounceScanner;
+pub use icmp_handler::{classify_icmp_error, IcmpAction};
 pub use idle_scan::IdleScanner;
 pub use ip_protocol_scan::IpProtocolScanner;
 pub use packet_adapter::ScannerPacketEngine;

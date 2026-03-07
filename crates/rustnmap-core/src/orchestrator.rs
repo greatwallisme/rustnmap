@@ -18,6 +18,8 @@ use rustnmap_evasion::DecoyScheduler;
 use rustnmap_net::raw_socket::{parse_arp_reply, ArpPacketBuilder, RawSocket};
 use rustnmap_output::models::PortState;
 use rustnmap_output::models::{HostResult, HostStatus, PortResult, ScanResult, ScanStatistics};
+use rustnmap_scan::adaptive_delay::AdaptiveDelay;
+use rustnmap_scan::congestion::CongestionControl;
 use rustnmap_scan::connect_scan::TcpConnectScanner;
 use rustnmap_scan::ip_protocol_scan::IpProtocolScanner;
 use rustnmap_scan::scanner::PortScanner;
@@ -81,6 +83,64 @@ fn create_decoy_scheduler(
                 .expect("Failed to create DecoyScheduler")
         })
     })
+}
+
+/// Returns the initial congestion window size based on timing template.
+///
+/// Based on nmap's timing.cc:
+/// - T0 (Paranoid): 1 probe at a time
+/// - T1 (Sneaky): 3 probes
+/// - T2 (Polite): 5 probes
+/// - T3 (Normal): 10 probes
+/// - T4 (Aggressive): 50 probes
+/// - T5 (Insane): 100 probes
+///
+/// # Arguments
+///
+/// * `template` - Timing template (T0-T5)
+///
+/// # Returns
+///
+/// Initial congestion window size.
+#[must_use]
+const fn initial_cwnd(template: rustnmap_scan::scanner::TimingTemplate) -> u32 {
+    match template {
+        rustnmap_scan::scanner::TimingTemplate::Paranoid => 1,
+        rustnmap_scan::scanner::TimingTemplate::Sneaky => 3,
+        rustnmap_scan::scanner::TimingTemplate::Polite => 5,
+        rustnmap_scan::scanner::TimingTemplate::Normal => 10,
+        rustnmap_scan::scanner::TimingTemplate::Aggressive => 50,
+        rustnmap_scan::scanner::TimingTemplate::Insane => 100,
+    }
+}
+
+/// Returns the maximum congestion window size based on timing template.
+///
+/// Based on nmap's timing.cc:
+/// - T0 (Paranoid): 1 (never exceed)
+/// - T1 (Sneaky): 5
+/// - T2 (Polite): 10
+/// - T3 (Normal): 50
+/// - T4 (Aggressive): 100
+/// - T5 (Insane): 500
+///
+/// # Arguments
+///
+/// * `template` - Timing template (T0-T5)
+///
+/// # Returns
+///
+/// Maximum congestion window size.
+#[must_use]
+const fn max_cwnd(template: rustnmap_scan::scanner::TimingTemplate) -> u32 {
+    match template {
+        rustnmap_scan::scanner::TimingTemplate::Paranoid => 1,
+        rustnmap_scan::scanner::TimingTemplate::Sneaky => 5,
+        rustnmap_scan::scanner::TimingTemplate::Polite => 10,
+        rustnmap_scan::scanner::TimingTemplate::Normal => 50,
+        rustnmap_scan::scanner::TimingTemplate::Aggressive => 100,
+        rustnmap_scan::scanner::TimingTemplate::Insane => 500,
+    }
 }
 
 /// Attempts to get the MAC address for an IPv4 target via ARP request.
@@ -290,6 +350,10 @@ impl ScanPipeline {
 }
 
 /// Scan orchestrator that coordinates all scanning phases.
+#[allow(
+    dead_code,
+    reason = "Volatility components will be fully integrated in follow-up work"
+)]
 pub struct ScanOrchestrator {
     /// Scan session context.
     session: Arc<ScanSession>,
@@ -305,6 +369,16 @@ pub struct ScanOrchestrator {
     ///
     /// This implements nmap's `enforce_scan_delay()` from `timing.cc:172-206`.
     last_probe_send_time: Arc<Mutex<Option<Instant>>>,
+    /// Congestion control for managing scan rate.
+    ///
+    /// Implements TCP-like congestion control with slow start and congestion
+    /// avoidance phases to avoid overwhelming targets or network infrastructure.
+    congestion_control: Arc<Mutex<CongestionControl>>,
+    /// Adaptive scan delay for network volatility handling.
+    ///
+    /// Dynamically adjusts delay between probes based on packet loss and
+    /// network conditions, following nmap's timing algorithm.
+    adaptive_delay: Arc<Mutex<AdaptiveDelay>>,
 }
 
 impl fmt::Debug for ScanOrchestrator {
@@ -312,6 +386,8 @@ impl fmt::Debug for ScanOrchestrator {
         f.debug_struct("ScanOrchestrator")
             .field("pipeline", &self.pipeline)
             .field("scheduler", &self.scheduler)
+            .field("congestion_control", &"<congestion_control>")
+            .field("adaptive_delay", &"<adaptive_delay>")
             .finish_non_exhaustive()
     }
 }
@@ -372,6 +448,15 @@ use std::fmt;
 
 impl ScanOrchestrator {
     /// Creates a new scan orchestrator with the given session.
+    ///
+    /// # Arguments
+    ///
+    /// * `session` - Scan session containing configuration and dependencies
+    ///
+    /// # Returns
+    ///
+    /// A new `ScanOrchestrator` instance initialized with volatility handling
+    /// components (congestion control and adaptive delay).
     #[must_use]
     pub fn new(session: Arc<ScanSession>) -> Self {
         let pipeline = ScanPipeline::from_config(&session.config);
@@ -379,6 +464,16 @@ impl ScanOrchestrator {
         let state = Arc::new(RwLock::new(ScanState::new()));
         let current_phase = Arc::new(RwLock::new(ScanPhase::TargetParsing));
 
+        // Initialize volatility handling components
+        let timing_template = session.config.timing_template;
+        let init_cwnd = initial_cwnd(timing_template);
+        let max_cwnd_val = max_cwnd(timing_template);
+
+        let congestion_control =
+            Arc::new(Mutex::new(CongestionControl::new(init_cwnd, max_cwnd_val)));
+
+        let adaptive_delay = Arc::new(Mutex::new(AdaptiveDelay::new(timing_template)));
+
         Self {
             session,
             pipeline,
@@ -386,16 +481,38 @@ impl ScanOrchestrator {
             state,
             current_phase,
             last_probe_send_time: Arc::new(Mutex::new(Some(Instant::now()))),
+            congestion_control,
+            adaptive_delay,
         }
     }
 
     /// Creates a new orchestrator with a custom pipeline.
+    ///
+    /// # Arguments
+    ///
+    /// * `session` - Scan session containing configuration and dependencies
+    /// * `pipeline` - Custom scan pipeline configuration
+    ///
+    /// # Returns
+    ///
+    /// A new `ScanOrchestrator` instance with the specified pipeline and
+    /// initialized volatility handling components.
     #[must_use]
     pub fn with_pipeline(session: Arc<ScanSession>, pipeline: ScanPipeline) -> Self {
         let scheduler = TaskScheduler::new(session.config.max_parallel_hosts);
         let state = Arc::new(RwLock::new(ScanState::new()));
         let current_phase = Arc::new(RwLock::new(ScanPhase::TargetParsing));
 
+        // Initialize volatility handling components
+        let timing_template = session.config.timing_template;
+        let init_cwnd = initial_cwnd(timing_template);
+        let max_cwnd_val = max_cwnd(timing_template);
+
+        let congestion_control =
+            Arc::new(Mutex::new(CongestionControl::new(init_cwnd, max_cwnd_val)));
+
+        let adaptive_delay = Arc::new(Mutex::new(AdaptiveDelay::new(timing_template)));
+
         Self {
             session,
             pipeline,
@@ -403,24 +520,37 @@ impl ScanOrchestrator {
             state,
             current_phase,
             last_probe_send_time: Arc::new(Mutex::new(Some(Instant::now()))),
+            congestion_control,
+            adaptive_delay,
         }
     }
 
-    /// Enforces the `scan_delay` between probes.
+    /// Enforces the `scan_delay` between probes with adaptive adjustment.
     ///
-    /// This implements nmap's `enforce_scan_delay()` from `timing.cc:172-206`.
-    /// The scan delay is a minimum time that must elapse between sending probes,
-    /// independent of rate limiting.
+    /// This implements nmap's `enforce_scan_delay()` from `timing.cc:172-206`
+    /// with dynamic delay adjustment based on network conditions.
     ///
-    /// If the time elapsed since the last probe is less than `scan_delay`,
-    /// this method sleeps for the remaining time.
+    /// The scan delay is the maximum of:
+    /// - The timing template's configured delay (T0-T5)
+    /// - The adaptive delay (increased when high packet loss detected)
     ///
     /// # Behavior
     ///
     /// - First call: Returns immediately (no delay), like nmap's `init == -1` check
-    /// - Subsequent calls: Enforces `scan_delay` between probes
+    /// - Subsequent calls: Enforces the appropriate delay between probes
     async fn enforce_scan_delay(&self) {
-        let scan_delay = self.session.config.timing_template.scan_config().scan_delay;
+        // Get the base delay from timing template
+        let template_delay = self.session.config.timing_template.scan_config().scan_delay;
+
+        // Get the current adaptive delay (may be increased due to packet loss)
+        let adaptive_delay = {
+            let delay_guard = self.adaptive_delay.lock().await;
+            delay_guard.delay()
+        };
+
+        // Use the maximum of template delay and adaptive delay
+        let scan_delay = template_delay.max(adaptive_delay);
+
         if scan_delay == Duration::ZERO {
             return;
         }
@@ -445,6 +575,68 @@ impl ScanOrchestrator {
 
         // Update last probe send time to now
         *self.last_probe_send_time.lock().await = Some(Instant::now());
+    }
+
+    /// Records that a probe timed out for congestion control and adaptive delay.
+    ///
+    /// This should be called when a probe times out to:
+    /// - Reduce the congestion window (congestion control)
+    /// - Potentially increase the scan delay (adaptive delay)
+    #[allow(
+        dead_code,
+        reason = "Will be integrated into sequential scanning in follow-up work"
+    )]
+    async fn record_probe_timeout(&self) {
+        // Update congestion control
+        {
+            let mut cc = self.congestion_control.lock().await;
+            cc.on_packet_loss();
+        };
+
+        // Update adaptive delay (increase delay on timeout)
+        {
+            let mut delay = self.adaptive_delay.lock().await;
+            delay.on_high_drop_rate(0.5); // Assume 50% loss on timeout
+        };
+    }
+
+    /// Records a successful response for adaptive delay.
+    ///
+    /// This should be called when a probe receives a successful response to
+    /// potentially reduce the adaptive delay back toward the template default.
+    #[allow(
+        dead_code,
+        reason = "Will be integrated into sequential scanning in follow-up work"
+    )]
+    async fn record_successful_response(&self) {
+        let mut delay = self.adaptive_delay.lock().await;
+        delay.on_good_response();
+    }
+
+    /// Returns a reference to the congestion control component.
+    ///
+    /// This allows external access to the congestion control state for
+    /// monitoring and testing purposes.
+    ///
+    /// # Returns
+    ///
+    /// Arc-wrapped Mutex containing the congestion control instance.
+    #[must_use]
+    pub fn congestion_control(&self) -> Arc<Mutex<CongestionControl>> {
+        Arc::clone(&self.congestion_control)
+    }
+
+    /// Returns a reference to the adaptive delay component.
+    ///
+    /// This allows external access to the adaptive delay state for
+    /// monitoring and testing purposes.
+    ///
+    /// # Returns
+    ///
+    /// Arc-wrapped Mutex containing the adaptive delay instance.
+    #[must_use]
+    pub fn adaptive_delay(&self) -> Arc<Mutex<AdaptiveDelay>> {
+        Arc::clone(&self.adaptive_delay)
     }
 
     /// Runs the complete scan pipeline.

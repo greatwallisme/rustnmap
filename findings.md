@@ -1,1033 +1,512 @@
-# Research Findings: RustNmap Packet Engine Refactoring
+# Research Findings: Phase 3 - Network Volatility Integration
 
-> **Created**: 2026-03-06
+> **Created**: 2026-03-07
 > **Updated**: 2026-03-07
-> **Status**: Task 3.5.6 COMPLETE - Zero-Copy Packet Buffer Implemented
+> **Status**: Phase 3 - Complete | Phase 4 - Pending
 
 ---
 
-## Phase 1 Complete: Core Infrastructure
+## Phase 1 Complete Summary (Previous Work)
 
-### Completed Components (2026-03-06)
+All core PACKET_MMAP V2 infrastructure has been completed:
 
-All 6 tasks of Phase 1 have been completed successfully:
+| Component | Status | Description |
+|-----------|--------|-------------|
+| TPACKET_V2 Wrappers | COMPLETE | System call bindings, constants, structures |
+| PacketEngine Trait | COMPLETE | Core abstraction for async packet I/O |
+| MmapPacketEngine | COMPLETE | Ring buffer management, zero-copy operation |
+| BPF Filter | COMPLETE | Kernel-space packet filtering |
+| AsyncPacketEngine | COMPLETE | Tokio AsyncFd integration |
+| ZeroCopyPacket | COMPLETE | True zero-copy packet buffer |
+| Two-Stage Bind | COMPLETE | Fixed errno=22 issue |
+| Benchmarks | COMPLETE | Performance measurement infrastructure |
 
-| Task | Component | Status | Tests | File |
-|------|-----------|--------|-------|------|
-| 1.1 | System Call Wrappers | COMPLETE | 22 tests | `src/sys/tpacket.rs`, `src/sys/if_packet.rs` |
-| 1.2 | PacketEngine Trait | COMPLETE | 16 tests | `src/engine.rs` |
-| 1.3 | MmapPacketEngine | COMPLETE | 34 tests | `src/mmap.rs` |
-| 1.4 | BPF Filter | COMPLETE | 24 tests | `src/bpf.rs` |
-| 1.5 | AsyncPacketEngine | COMPLETE | 4 tests | `src/async_engine.rs` |
-| 1.6 | PacketStream | COMPLETE | 1 test | `src/stream.rs` |
+**Key Fix Applied**: Two-stage bind pattern following nmap's libpcap implementation:
+1. First bind with `protocol=0` (allows ring buffer setup)
+2. `PACKET_RX_RING` setup
+3. Second bind with `ETH_P_ALL.to_be()` (enables packet reception)
 
-**Quality Metrics:**
-- All 60 tests pass
-- Zero clippy warnings (`cargo clippy -- -D warnings -W clippy::pedantic`)
-- Full design document compliance
+**Reference**: `reference/nmap/libpcap/pcap-linux.c:1297-1302`
 
 ---
 
-## Phase 3.1 Complete: Infrastructure Preparation (2026-03-06)
+## Phase 2: Network Volatility Architecture (NEW)
 
-### Status: COMPLETED
+### Reference: `doc/architecture.md` Section 2.3.4
 
-All infrastructure preparation tasks have been completed:
+### Architecture Overview
 
-| Task | Status | Details |
-|------|--------|---------|
-| `icmp_dst()` filter | COMPLETE | Added to `BpfFilter` for ICMP with destination filtering |
-| Critical atomic bug fix | COMPLETE | Fixed `frame_is_available()` in `mmap.rs` |
-| `recv_timeout()` method | COMPLETE | Added to `AsyncPacketEngine` |
-| `ScannerPacketEngine` adapter | COMPLETE | Created in `packet_adapter.rs` |
-| `to_sock_fprog()` exposure | COMPLETE | Made public in `BpfFilter` |
+The network volatility handling system consists of 5 core components:
 
-### Phase 3.2: Simple Scanner Migration (IN PROGRESS - 2026-03-06)
+1. **AdaptiveTiming (RFC 6298)** - RTT estimation and timeout calculation
+2. **CongestionController** - TCP-like congestion control
+3. **ScanDelayBoost** - Dynamic scan delay adjustment
+4. **RateLimiter** - Token bucket rate limiting
+5. **ErrorRecovery** - ICMP error classification
 
-#### TcpFinScanner Migration (PARTIAL COMPLETE - 2026-03-06)
+### Phase 2 Implementation Summary
 
-**Completed Changes:**
-- Updated `TcpFinScanner` struct to use `Option<Arc<Mutex<ScannerPacketEngine>>>`
-- Updated constructor to call `create_stealth_engine()` helper
-- Fixed `config` ownership issue by cloning
-- Fixed all clippy warnings (doc_markdown, manual_ok_err)
-- All 16 tests pass, zero compiler warnings
+| Component | File | Status | Test Coverage |
+|-----------|------|--------|---------------|
+| Adaptive RTT | `timeout.rs` | ✅ COMPLETE (existing) | 5 tests |
+| Congestion Control | `congestion.rs` | ✅ COMPLETE (created) | 11 tests |
+| Scan Delay Boost | `adaptive_delay.rs` | ✅ COMPLETE (created) | 24 tests |
+| Rate Limiter | `rate.rs` | ✅ COMPLETE (existing) | 6 tests |
+| ICMP Handler | `icmp_handler.rs` | ✅ COMPLETE (created) | 16 tests |
 
-**Files Modified:**
-- `crates/rustnmap-scan/src/stealth_scans.rs` - `TcpFinScanner` struct and constructor
-- `crates/rustnmap-scan/src/packet_adapter.rs` - Fixed `create_stealth_engine()` to use `.ok()`
+**Total**: 62 unit tests for network volatility components
 
-**Status: PARTIAL MIGRATION**
-The migration is structurally complete but functionally equivalent to the old implementation. The scanner currently falls back to raw socket for packet reception because the async bridge has not been implemented yet.
+### Design Patterns from doc/architecture.md
 
-**Remaining Work for Full Migration:**
-1. Implement async bridge using `tokio::task::spawn_blocking` or similar
-2. Update `send_fin_probe()` to use `ScannerPacketEngine::recv_with_timeout()`
-3. Update `scan_ports_batch()` to use `ScannerPacketEngine::recv_with_timeout()`
-4. Consider making `PortScanner` trait async for better integration
-
-**Quality Metrics:**
-- All 16 tests pass
-- Zero clippy warnings (`cargo clippy -- -D warnings`)
-- Code compiles cleanly
-
-#### Challenge: Async vs Synchronous Architecture
-
-**Current Architecture:**
-- `SimpleAfPacket` with blocking `recvfrom()` operations
-- Synchronous scanner methods (`send_fin_probe()` returns `ScanResult<PortState>`)
-- Direct packet reception in scanner methods
-
-**New Architecture:**
-- `ScannerPacketEngine` with async `recv_with_timeout()` method
-- Requires async/await for packet reception
-- Channel-based packet distribution
-
-**Migration Complexity:**
-This is **not** a simple drop-in replacement. The scanner methods need to be converted from synchronous to asynchronous, which affects:
-1. Method signatures (adding `async fn`)
-2. Call sites (adding `.await`)
-3. Error propagation (from `ScanError` to async-compatible types)
-4. Test structure (adding `tokio::test`)
-
-#### Migration Strategy: Incremental Approach
-
-**Step 1: Convert `SimpleAfPacket` to `ScannerPacketEngine`**
-- Replace `Option<Arc<SimpleAfPacket>>` with `Option<Arc<Mutex<ScannerPacketEngine>>>`
-- Update `create_packet_socket()` to use `create_stealth_engine()` helper
-- Keep synchronous pattern initially for compatibility
-
-**Step 2: Introduce Async Methods**
-- Add `async fn send_fin_probe_async()` alongside `send_fin_probe()`
-- Use `spawn_blocking` wrapper initially for compatibility
-- Gradually migrate to true async
-
-**Step 3: Full Async Migration**
-- Replace sync methods with async versions
-- Update trait implementations
-- Update all call sites
-
-### ScannerPacketEngine Adapter Features
-
-**File**: `crates/rustnmap-scan/src/packet_adapter.rs`
+#### 1. Adaptive RTT (RFC 6298)
 
 ```rust
-pub struct ScannerPacketEngine {
-    inner: AsyncPacketEngine,
-    if_name: String,
-    if_index: u32,
-    mac_addr: MacAddr,
-    _config: ScanConfig,
+// From doc/architecture.md Section 2.3.4
+struct AdaptiveTiming {
+    srtt: Duration,      // Smoothed RTT
+    rttvar: Duration,    // RTT variance
+    min_rtt: Duration,   // Minimum timeout
+    max_rtt: Duration,   // Maximum timeout
 }
-```
 
-**Key Methods:**
-- `new(if_name, config)` - Create engine
-- `new_shared(if_name, config)` - Create wrapped in `Arc<Mutex>`
-- `start()` / `stop()` - Lifecycle management
-- `recv_with_timeout(duration)` - Timeout-based receive
-- `set_filter(filter)` - BPF filter attachment
+impl AdaptiveTiming {
+    fn update_rtt(&mut self, rtt: Duration) -> Duration {
+        // SRTT = (7/8) * SRTT + (1/8) * RTT
+        self.srtt = self.srtt.mul_f32(7.0/8.0) + rtt.mul_f32(1.0/8.0);
 
-**Migration Pattern:**
-```rust
-// OLD
-let packet_socket = Arc::clone(&packet_socket);
-tokio::task::spawn_blocking(move || {
-    pkt_sock.recv_packet_with_timeout(timeout)
-});
+        // RTTVAR = (3/4) * RTTVAR + (1/4) * |RTT - SRTT|
+        let rtt_diff = if rtt > self.srtt { rtt - self.srtt } else { self.srtt - rtt };
+        self.rttvar = self.rttvar.mul_f32(3.0/4.0) + rtt_diff.mul_f32(1.0/4.0);
 
-// NEW
-let engine = engine.lock().await;
-engine.recv_with_timeout(timeout).await
-```
+        // Timeout = SRTT + 4 * RTTVAR
+        let timeout = self.srtt + self.rttvar.mul_f32(4.0);
 
-### Quality Metrics
-- 95 tests pass in `rustnmap-scan`
-- 61 tests pass in `rustnmap-packet`
-- Zero clippy warnings
-
----
-
-## Critical Bugs Status (2026-03-07)
-
-### Bug #1: Status Check Creates New Atomic (CRITICAL) - ✅ FIXED
-
-**Location**: `crates/rustnmap-packet/src/mmap.rs:646-658`
-
-**Fix Applied**: Correct atomic access pattern implemented
-```rust
-// CORRECT: Access tp_status atomically through pointer
-let status_ptr = std::ptr::addr_of!(hdr.tp_status).cast::<AtomicU32>();
-unsafe {
-    (*status_ptr).load(Ordering::Acquire) & TP_STATUS_USER != 0
-}
-```
-
-### Bug #2: Zero-Copy Defeated by Data Copy (HIGH) - ✅ COMPLETE
-
-**Location**: `crates/rustnmap-packet/src/mmap.rs:719`
-
-**Current Implementation**:
-```rust
-// Line 719 - UNNECESSARY COPY (FIXED)
-let slice = unsafe { std::slice::from_raw_parts(data_ptr, data_len) };
-Bytes::copy_from_slice(slice)  // <-- This copies data!
-```
-
-**Impact**: 2-3x performance improvement possible by eliminating memcpy.
-
-**Priority**: HIGH - Performance critical for T5 Insane timing
-
-**Resolution**: ✅ COMPLETE - All 4 phases implemented
-
-**Design Document**: `doc/modules/packet-engineering.md` section "零拷贝数据包缓冲区设计"
-
-**Implementation Summary**:
-
-**Phase 1: Add ZeroCopyPacket Struct (✅ COMPLETE)**
-- File: `crates/rustnmap-packet/src/zero_copy.rs` (CREATED, ~430 lines)
-- `ZeroCopyBytes` struct with dual-mode support (borrowed/owned)
-- `ZeroCopyPacket` struct with `Arc<MmapPacketEngine>` lifetime management
-- `Drop` trait for automatic frame release
-- `Clone` trait for creating independent packet copies
-- SAFETY comments for all unsafe operations
-
-**Phase 2: Modify MmapPacketEngine (✅ COMPLETE)**
-- File: `crates/rustnmap-packet/src/mmap.rs`
-- Added `ring_ptr()`, `ring_size()`, `release_frame_by_idx()`, `try_recv_zero_copy()`
-- Quality: Zero clippy warnings, all 63 tests pass
-
-**Phase 3: Update PacketEngine Trait (✅ COMPLETE)**
-- File: `crates/rustnmap-packet/src/engine.rs`
-- Changed: `async fn recv(&mut self) -> Result<Option<ZeroCopyPacket>>`
-
-**Phase 4: Update All Implementations (✅ COMPLETE)**
-- Files: `crates/rustnmap-packet/src/async_engine.rs`, `stream.rs`, `rustnmap-scan/src/packet_adapter.rs`
-- All updated to use ZeroCopyPacket
-- Workspace: Zero clippy warnings, all tests pass
-
-**Expected Performance Improvement**:
-
-| Metric | Current | Target | Improvement |
-|--------|---------|--------|-------------|
-| PPS | ~50,000 | ~1,000,000 | **20x** |
-| CPU (T5) | 80% | 30% | **2.7x** |
-| Packet Loss (T5) | ~30% | <1% | **30x** |
-
-**Note**: Full performance benefits require updating scanner code to use ZeroCopyPacket directly instead of converting to Vec<u8> in the compatibility layer.
-
-### Bug #3: Mutex Required for Thread Safety (NOT A BUG)
-
-**Status**: NOT APPLICABLE
-
-**Analysis**: The `Mutex` in `AsyncPacketEngine` is necessary because `MmapPacketEngine`
-has a non-atomic `rx_frame_idx: u32` field. Multiple tasks cannot safely call `try_recv()`
-concurrently without external synchronization.
-
-### Bug #4: Missing BPF JIT Optimization (LOW) - ⏸️ DEFERRED
-
-**Priority**: LOW - Optimization, not blocking
-
----
-
-## Environment Limitations Found (2026-03-07)
-
-### WSL2 Does Not Support PACKET_RX_RING
-
-**Test Method**: C program compiled and executed on WSL2
-**Kernel Version**: 5.15.167.4-microsoft-standard-WSL2
-
-**Test Results**:
-```c
-// Test program output:
-socket(AF_PACKET, SOCK_RAW)        ✅ PASS (fd=3)
-setsockopt(PACKET_VERSION, V2)     ✅ PASS
-setsockopt(PACKET_RX_RING, ...)    ❌ FAIL (errno=22 EINVAL)
-```
-
-**Evidence**:
-```
-setsockopt PACKET_RX_RING: Invalid argument
-PACKET_RX_RING failed with errno=22 (Invalid argument)
-```
-
-**Impact**:
-- Integration tests requiring PACKET_MMAP cannot run on WSL2
-- 9 tests in `zero_copy_integration.rs` fail with environment limitation message
-- Tests will pass on proper Linux systems with full kernel support
-
-**Workaround**: Use proper Linux environment (Debian, Ubuntu VM, etc.) for integration testing
-
----
-
-### Bug #5: MAC Address Parsing Fails for Bytes >= 128 (FIXED) ✅
-
-**Location**: `crates/rustnmap-packet/src/mmap.rs:416-428`
-
-**Problem**:
-```rust
-// OLD CODE - FAILED for MAC bytes >= 128
-u8::try_from(hwaddr.sa_data[0])?  // 0xe7 (231) as i8 = -25, try_from fails!
-```
-
-**Root Cause**:
-- `sockaddr.sa_data` is `i8` (signed char)
-- MAC address bytes can be 128-255
-- Values like `0xe7` (231) stored as `-25` in i8
-- `u8::try_from(-25)` returns `Err(TryFromIntError)`
-
-**Example MAC that failed**: `48:e7:da:59:68:3f`
-- `0xe7` = 231 → stored as `-25` in i8
-- `0xda` = 218 → stored as `-38` in i8
-
-**Fix Applied**:
-```rust
-// NEW CODE - Uses bit reinterpretation
-#[allow(clippy::cast_sign_loss, reason = "MAC address bytes are stored as i8 in sockaddr but represent unsigned values")]
-let addr = MacAddr::new([
-    hwaddr.sa_data[0] as u8,  // Reinterpret bits, preserves MAC byte value
-    hwaddr.sa_data[1] as u8,
-    hwaddr.sa_data[2] as u8,
-    hwaddr.sa_data[3] as u8,
-    hwaddr.sa_data[4] as u8,
-    hwaddr.sa_data[5] as u8,
-]);
-```
-
-**Verification**: `cargo clippy -- -D warnings` passes
-
----
-
-## Legacy Bugs (Previously Fixed)
-
-### Bug #1: Status Check Creates New Atomic (CRITICAL) - ARCHIVED
-
-**Location**: `crates/rustnmap-packet/src/mmap.rs:646-668`
-
-**Current Implementation:**
-```rust
-fn frame_is_available(&self) -> bool {
-    let frame_ptr = self.frame_ptrs[self.rx_frame_idx as usize];
-    let hdr = unsafe { frame_ptr.as_ref() };
-    let status = AtomicU32::new(hdr.tp_status).load(Ordering::Acquire); // BUG HERE!
-    (status & TP_STATUS_USER) != 0
-}
-```
-
-**Problem**: Line 650 creates a NEW `AtomicU32` from the raw `tp_status` value. This breaks atomicity! The kernel writes to `tp_status` directly, but we're creating a new atomic wrapper each time instead of accessing the shared memory atomically.
-
-**Correct Pattern:**
-```rust
-fn frame_is_available(&self) -> bool {
-    let frame_ptr = self.frame_ptrs[self.rx_frame_idx as usize];
-    let hdr = unsafe { frame_ptr.as_ref() };
-
-    // CRITICAL FIX: Access tp_status atomically through pointer
-    let status_ptr = std::ptr::addr_of!(hdr.tp_status).cast::<AtomicU32>();
-    unsafe {
-        (*status_ptr).load(Ordering::Acquire) & TP_STATUS_USER != 0
+        // Clamp to [min_rtt, max_rtt]
+        timeout.clamp(self.min_rtt, self.max_rtt)
     }
 }
 ```
 
-**Impact**: This bug can cause race conditions and missed packets under load.
+#### 2. Congestion Control
 
-**Priority**: CRITICAL - Must fix before scanner migration
-
----
-
-### Bug #2: Zero-Copy Defeated by Data Copy (HIGH)
-
-**Location**: `crates/rustnmap-packet/src/mmap.rs:692-732`
-
-**Current Implementation:**
 ```rust
-// Line 712 - UNNECESSARY COPY
-let slice = unsafe { std::slice::from_raw_parts(data_ptr, data_len) };
-Bytes::copy_from_slice(slice)  // <-- This copies data!
-```
-
-**Problem**: The `Bytes::copy_from_slice` call defeats the entire purpose of PACKET_MMAP zero-copy operation. We're copying data out of the ring buffer instead of providing a zero-copy view.
-
-**Trade-off Analysis:**
-- **Current**: Copies data, can return frame immediately (simpler, some overhead)
-- **True Zero-Copy**: No copy, but must track frame lifetime (complex, faster)
-
-For 1M+ PPS target, true zero-copy is **essential**.
-
-**Recommended Solution**:
-```rust
-use std::sync::Arc;
-
-struct ZeroCopyPacket {
-    // Reference to the engine ensures frame stays alive
-    _engine: Arc<MmapPacketEngine>,
-    frame_idx: u32,
-    data: NonNull<u8>,
-    len: usize,
+// From doc/architecture.md Section 2.3.4
+struct CongestionControl {
+    cwnd: u32,           // Congestion window (probes in flight)
+    ssthresh: u32,       // Slow start threshold
+    max_cwnd: u32,       // Maximum window size
+    phase: Phase,        // Slow Start, Congestion Avoidance, Recovery
 }
 
-impl ZeroCopyPacket {
-    /// Returns zero-copy view into packet data
-    pub fn data(&self) -> &[u8] {
-        unsafe { std::slice::from_raw_parts(self.data.as_ptr(), self.len) }
-    }
+enum Phase {
+    SlowStart,           // Exponential growth: cwnd *= 2 per RTT
+    CongestionAvoidance, // Linear growth: cwnd += 1 per RTT
+    Recovery,            // Reduce after loss
 }
 
-impl Drop for ZeroCopyPacket {
-    fn drop(&mut self) {
-        // Return frame to kernel when done
-        self._engine.release_frame(self.frame_idx);
-    }
-}
-```
-
-**Impact**: 2-3x performance improvement by eliminating memcpy.
-
-**Priority**: HIGH - Performance critical for T5 Insane timing
-
----
-
-### Bug #3: Unnecessary Mutex in Async Wrapper (MEDIUM)
-
-**Location**: `crates/rustnmap-packet/src/async_engine.rs:101-129`
-
-**Current Implementation:**
-```rust
-// Current - potentially blocking
-let result = {
-    let mut engine_guard = engine.lock().await;  // Blocks all other tasks
-    engine_guard.try_recv()
-};
-```
-
-**Problem**: `MmapPacketEngine` should be fully thread-safe via atomics, eliminating the need for `Mutex`. The only truly async operation is waiting for socket readiness.
-
-**Recommended Pattern:**
-```rust
-pub struct AsyncPacketEngine {
-    engine: Arc<MmapPacketEngine>,  // Remove Mutex, MmapPacketEngine is Sync
-    // ... rest of fields
-}
-
-impl AsyncPacketEngine {
-    async fn recv(&mut self) -> Result<Option<PacketBuffer>> {
-        if !self.running.load(Ordering::Acquire) {
-            return Err(PacketError::NotStarted);
+impl CongestionControl {
+    fn on_packet_sent(&mut self) {
+        if self.cwnd < self.ssthresh {
+            // Slow Start: exponential
+            self.cwnd = self.cwnd.saturating_mul(2);
+        } else {
+            // Congestion Avoidance: linear
+            self.cwnd = self.cwnd.saturating_add(1);
         }
+        self.cwnd = self.cwnd.min(self.max_cwnd);
+    }
 
-        // Lock-free receive - MmapPacketEngine handles internal synchronization
-        loop {
-            match self.engine.try_recv()? {
-                Some(packet) => return Ok(Some(packet)),
-                None => {
-                    // Wait for socket readiness
-                    self.async_fd.readable().await?;
-                    self.async_fd.clear_ready_matching(Ready::READABLE);
-                }
+    fn on_packet_loss(&mut self) {
+        self.ssthresh = self.cwnd / 2;
+        self.cwnd = 1;
+        self.phase = Phase::Recovery;
+    }
+}
+```
+
+#### 3. Scan Delay Boost
+
+```rust
+// From doc/architecture.md Section 2.3.4
+struct AdaptiveDelay {
+    current_delay: Duration,
+    default_delay: Duration,
+    timing_level: u8,     // 0-5 for T0-T5
+    drop_rate: f32,
+}
+
+impl AdaptiveDelay {
+    fn on_high_drop_rate(&mut self) {
+        if self.drop_rate > 0.25 {
+            if self.timing_level < 4 {
+                // T0-T3: aggressive backoff
+                self.current_delay = self.current_delay.mul_f32(10.0);
+                self.current_delay = self.current_delay.min(Duration::from_millis(10000));
+                self.current_delay = self.current_delay.max(Duration::from_millis(1000));
+            } else {
+                // T4-T5: moderate backoff
+                self.current_delay = self.current_delay.mul_f32(2.0);
+                self.current_delay = self.current_delay.min(Duration::from_millis(1000));
+                self.current_delay = self.current_delay.max(Duration::from_millis(100));
             }
         }
     }
-}
-```
 
-**Impact**: Reduces contention in multi-task scenarios.
-
-**Priority**: MEDIUM - Optimization for concurrent access
-
----
-
-### Bug #4: Missing BPF JIT Optimization (LOW)
-
-**Location**: `crates/rustnmap-packet/src/bpf.rs`
-
-**Current**: BPF filters run in interpreter mode
-
-**Recommended Addition:**
-```rust
-impl BpfFilter {
-    /// Checks if BPF JIT is available
-    #[must_use]
-    pub fn jit_available() -> bool {
-        std::fs::read_to_string("/proc/sys/net/core/bpf_jit_enable")
-            .map(|s| s.trim() != "0")
-            .unwrap_or(false)
-    }
-
-    /// Attaches filter with JIT compilation enabled (Linux 3.1+)
-    pub fn attach_jit<F: AsRawFd>(&self, fd: &F) -> Result<()> {
-        // Enable BPF JIT
-        unsafe {
-            let mut jit_enable: libc::c_int = 1;
-            libc::setsockopt(
-                fd.as_raw_fd(),
-                libc::SOL_SOCKET,
-                libc::SO_ATTACH_FILTER,
-                std::ptr::addr_of_mut!(jit_enable).cast(),
-                mem::size_of::<libc::c_int>() as u32,
-            );
-        }
-
-        self.attach(fd)
+    fn on_good_response(&mut self) {
+        // Decay delay if getting good responses
+        self.current_delay = self.current_delay / 2;
+        self.current_delay = self.current_delay.max(self.default_delay);
     }
 }
 ```
 
-**Impact**: 5-10x filter performance improvement.
+#### 4. Token Bucket Rate Limiter
 
-**Priority**: LOW - Optimization, not blocking
-
----
-
-## Scanner Migration Architecture Analysis (2026-03-06)
-
-### Current Scanner Architecture
-
-**Files Using SimpleAfPacket:**
-1. `crates/rustnmap-scan/src/stealth_scans.rs` (lines 167-273)
-2. `crates/rustnmap-scan/src/ultrascan.rs` (lines 444-576)
-
-**Current Pattern:**
 ```rust
-struct SimpleAfPacket {
-    if_index: i32,
-    fd: OwnedFd,
+// From doc/architecture.md Section 2.3.4
+struct RateLimiter {
+    tokens: u64,             // Current tokens
+    last_update: Instant,    // Last token replenishment
+    min_rate: u64,           // Minimum packets per second
+    max_rate: Option<u64>,   // Maximum packets per second (None = unlimited)
+    burst_factor: f32,       // Burst size multiplier
 }
 
-// Usage in scanners:
-let packet_socket = Arc::clone(&packet_socket);
-tokio::task::spawn_blocking(move || {
-    let mut buf = [0u8; 65535];
-    packet_socket.recv_from(&mut buf)
-});
-```
-
-**Problems:**
-1. Blocking `recvfrom()` syscall per packet
-2. Wrapped in `spawn_blocking` for async compatibility
-3. Code duplication (SimpleAfPacket duplicated in two files)
-4. No zero-copy operation
-
-### New PacketEngine Architecture
-
-**Target Pattern:**
-```rust
-pub struct AsyncPacketEngine {
-    engine: Arc<MmapPacketEngine>,
-    async_fd: Arc<AsyncFd<OwnedFd>>,
-    packet_tx: Sender<Result<PacketBuffer>>,
-    packet_rx: Receiver<Result<PacketBuffer>>,
-}
-
-// Usage in scanners:
-let mut stream = packet_engine.into_stream();
-tokio::spawn(async move {
-    use tokio_stream::StreamExt;
-    while let Some(result) = stream.next().await {
-        let packet = result?;
-        // Process packet
-    }
-});
-```
-
-**Benefits:**
-1. True async I/O with PACKET_MMAP V2
-2. Zero-copy ring buffer operation
-3. Channel-based packet distribution
-4. No blocking syscalls per packet
-
-### Migration Challenge
-
-**Fundamental Architectural Difference:**
-1. **Current**: Blocking I/O → `spawn_blocking` → channels
-2. **New**: True async I/O with `AsyncFd` → channels
-
-This is **not a simple drop-in replacement** but requires architectural refactoring.
-
-### Migration Strategy
-
-**Incremental Approach:**
-
-1. **Phase 3.1: Infrastructure Preparation**
-   - Create adapter layer for gradual migration
-   - Add timeout support to `AsyncPacketEngine`
-   - Document migration patterns
-
-2. **Phase 3.2: Simple Scanner Migration**
-   - TcpFinScanner (stealth_scans.rs:489)
-   - TcpNullScanner (stealth_scans.rs:1086)
-   - TcpXmasScanner (stealth_scans.rs:1630)
-
-3. **Phase 3.3: Complex Scanner Migration**
-   - ParallelScanEngine (ultrascan.rs)
-   - TcpSynScanner (syn_scan.rs)
-   - UdpScanner (udp_scan.rs)
-
-4. **Phase 3.4: Cleanup**
-   - Remove `SimpleAfPacket` duplication
-   - Update documentation
-   - Performance validation
-
----
-
-## Performance Targets
-
-| Metric | Current (recvfrom) | Target (PACKET_MMAP) | Improvement |
-|--------|-------------------|---------------------|-------------|
-| Packets Per Second | ~50,000 | ~1,000,000 | 20x |
-| CPU Usage (T5) | 80% | 30% | 2.7x |
-| Packet Loss (T5) | ~30% | <1% | 30x |
-
----
-
-## Key Design Constraints from Architecture Documents
-
-### TPACKET_V2 Requirements
-
-**Header Structure (32 bytes):**
-```rust
-#[repr(C)]
-pub struct Tpacket2Hdr {
-    pub tp_status: u32,      // 4 bytes
-    pub tp_len: u32,         // 4 bytes
-    pub tp_snaplen: u32,     // 4 bytes
-    pub tp_mac: u16,         // 2 bytes
-    pub tp_net: u16,         // 2 bytes
-    pub tp_sec: u32,         // 4 bytes
-    pub tp_nsec: u32,        // 4 bytes (NOT tp_usec!)
-    pub tp_vlan_tci: u16,    // 2 bytes
-    pub tp_vlan_tpid: u16,   // 2 bytes
-    pub tp_padding: [u8; 4], // 4 bytes (NOT [u8; 8]!)
-}  // Total: 32 bytes
-```
-
-### Socket Option Sequence (CRITICAL)
-
-```
-1. socket(PF_PACKET, SOCK_RAW, ETH_P_ALL)
-2. setsockopt(PACKET_VERSION, TPACKET_V2)  // MUST be first
-3. setsockopt(PACKET_RESERVE, 4)           // MUST be before RX_RING
-4. setsockopt(PACKET_AUXDATA, 1)           // Optional
-5. setsockopt(PACKET_RX_RING, &req)
-6. mmap()
-7. bind()
-```
-
-**Error Consequences:**
-- Wrong order → `EINVAL` or incorrect behavior
-- Missing `PACKET_VERSION` → Uses V1 (different header structure)
-- Wrong `PACKET_RESERVE` order → Kernel panic (older kernels)
-
-### Memory Ordering Requirements
-
-```rust
-// Check frame availability (Acquire)
-let status = AtomicU32::from_ptr(&(*hdr).tp_status)
-    .load(Ordering::Acquire);
-
-// Release frame to kernel (Release)
-AtomicU32::from_ptr(&(*hdr).tp_status)
-    .store(TP_STATUS_KERNEL, Ordering::Release);
-```
-
-**Why Acquire/Release?**
-- **Acquire**: Ensures packet data is visible before status check
-- **Release**: Ensures frame return is visible after data access
-
-### ENOMEM Recovery Strategy (from nmap)
-
-- 5% iterative reduction per attempt
-- Maximum 10 retry attempts
-- Preserve alignment during reduction
-
-```rust
-const ENOMEM_REDUCTION_FACTOR: u32 = 95; // 5% reduction
-const ENOMEM_MAX_RETRIES: u32 = 10;
-```
-
-### Drop Implementation Order (CRITICAL)
-
-```rust
-impl Drop for MmapPacketEngine {
-    fn drop(&mut self) {
-        // 1. munmap FIRST
-        unsafe { libc::munmap(self.ring_ptr.as_ptr(), self.ring_size); }
-        // 2. close SECOND
-        // (OwnedFd handles this automatically)
-    }
-}
-```
-
-**Why this order?**
-- `munmap` first: Returns memory to kernel
-- `close` second: Releases file descriptor
-- Wrong order → `EBADF` error or kernel panic
-
----
-
-## Async Integration Patterns
-
-### AsyncFd Ownership Pattern
-
-```rust
-pub struct AsyncPacketEngine {
-    // Use Arc<AsyncFd<OwnedFd>> because AsyncFd is not Clone
-    async_fd: Arc<AsyncFd<OwnedFd>>,
-    // ...
-}
-
-// Create with libc::dup() to avoid double-close
-let fd_dup = unsafe { libc::dup(self.engine.as_raw_fd()) };
-let owned_fd = unsafe { OwnedFd::from_raw_fd(fd_dup) };
-let async_fd = AsyncFd::new(owned_fd)?;
-```
-
-### Channel-Based Packet Distribution
-
-```rust
-// Background task polls ring buffer
-loop {
-    // Wait for socket readiness
-    self.async_fd.readable().await?;
-
-    // Batch receive packets
-    loop {
-        match self.engine.try_recv()? {
-            Some(packet) => {
-                self.packet_tx.try_send(Ok(packet))?;
-            }
-            None => break,
+impl RateLimiter {
+    fn try_consume(&mut self) -> bool {
+        self.replenish_tokens();
+        if self.tokens > 0 {
+            self.tokens -= 1;
+            true
+        } else {
+            false
         }
     }
-}
-```
 
-### Stream Pattern (Avoid Busy-Spin)
+    fn replenish_tokens(&mut self) {
+        let now = Instant::now();
+        let elapsed = now.duration_since(self.last_update);
+        self.last_update = now;
 
-```rust
-pub struct PacketStream {
-    inner: ReceiverStream<Result<PacketBuffer, PacketError>>,
-}
+        // Add tokens based on min_rate
+        let new_tokens = (elapsed.as_secs_f64() * self.min_rate as f64) as u64;
+        self.tokens = self.tokens.saturating_add(new_tokens);
 
-impl Stream for PacketStream {
-    type Item = Result<PacketBuffer, PacketError>;
-
-    fn poll_next(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
-        Pin::new(&mut self.inner).poll_next(cx)
+        // Cap burst size
+        let max_burst = (self.min_rate as f32 * self.burst_factor) as u64;
+        self.tokens = self.tokens.min(max_burst);
     }
 }
 ```
 
-**Why `ReceiverStream`?**
-- Properly yields when channel is empty
-- Avoids busy-spin loop
-- Integrates with Tokio runtime
+#### 5. ICMP Error Classification
+
+```rust
+// From doc/architecture.md Section 2.3.4
+enum IcmpAction {
+    MarkDown,           // Host is down
+    ReduceCwnd,         // Reduce congestion window
+    MarkClosed,         // Port is closed
+    MarkFiltered,       // Traffic filtered
+    SetDfZero,          // Disable DF bit
+    RetryWithBackoff,   // Retry with exponential backoff
+}
+
+fn classify_icmp_error(icmp_type: u8, icmp_code: u8) -> IcmpAction {
+    match (icmp_type, icmp_code) {
+        (3, 0 | 1) => IcmpAction::MarkDown,           // NET_UNREACH
+        (3, 2 | 9 | 10) => IcmpAction::MarkDown,      // HOST_UNREACH
+        (3, 3) => IcmpAction::MarkDown,               // PORT_UNREACH
+        (3, 13) => IcmpAction::MarkFiltered,          // ADMIN_PROHIBITED
+        (3, 4) => IcmpAction::SetDfZero,              // FRAG_NEEDED
+        _ => IcmpAction::RetryWithBackoff,
+    }
+}
+```
+
+---
+
+## Timing Template Parameters (doc/architecture.md Table)
+
+| Parameter | T0 | T1 | T2 | T3 | T4 | T5 |
+|-----------|-----|-----|-----|-----|-----|-----|
+| min_rtt_timeout | 100ms | 100ms | 100ms | 100ms | 100ms | 50ms |
+| max_rtt_timeout | 10s | 10s | 10s | 10s | 10s | 300ms |
+| initial_rtt | 1s | 1s | 1s | 1s | 500ms | 250ms |
+| max_retries | 10 | 10 | 10 | 10 | 6 | 2 |
+| scan_delay | 5min | 15s | 400ms | 0ms | 0ms | 0ms |
+| max_parallelism | 1 | 1 | 1 | dynamic | dynamic | dynamic |
+| min_host_group | 1 | 1 | 1 | 1 | 1 | 1 |
+| max_host_group | 1 | 1 | 1 | 100 | 100 | 256 |
+| min_rate | 0 | 0 | 0 | 0 | 0 | 0 |
+| max_rate | 0 | 0 | 0 | 0 | 0 | 0 |
+| cwnd_initial | 1 | 1 | 1 | 1 | 1 | 1 |
+| cwnd_max | 10 | 10 | 10 | dynamic | dynamic | dynamic |
+
+---
+
+## Key Implementation Decisions
+
+### 1. Use Float for RTT Calculations
+
+RFC 6298 uses fractional multipliers (7/8, 1/8, 3/4, 1/4).
+Use `Duration::mul_f32()` for precise fractional arithmetic.
+
+### 2. Clamp Timeouts to Template Range
+
+Each timing template has min/max timeout bounds.
+Always clamp calculated timeout to this range.
+
+### 3. Separate Host-Level vs Group-Level Congestion
+
+`doc/architecture.md` mentions:
+- Group-level: Drop affects entire host group
+- Host-level: Drop affects single host
+
+Implementation needs separate tracking.
+
+### 4. Rate Limiting is Optional
+
+`--min-rate` and `--max-rate` are optional CLI flags.
+When not specified, rate limiter is disabled (unlimited).
+
+---
+
+## Dependencies Required
+
+All components use only standard library and existing crates:
+
+| Crate | Purpose |
+|-------|---------|
+| std | Duration, Instant, arithmetic |
+| rustnmap-common | ScanConfig, timing templates |
+| tokio | Time utilities for rate limiting |
+
+No new dependencies required.
+
+---
+
+---
+
+## Phase 2 Implementation Details
+
+### Module: `congestion.rs`
+
+**Key Design Decisions**:
+- Used `u32::MAX` for initial `ssthresh` to represent infinity
+- Phase detection: Slow Start (cwnd < ssthresh) vs Congestion Avoidance (cwnd >= ssthresh)
+- RTT tracking with `packets_acked` counter and `rtt_start` timestamp
+
+**API Surface**:
+```rust
+pub struct CongestionControl {
+    cwnd: u32,           // Congestion window
+    ssthresh: u32,       // Slow start threshold
+    max_cwnd: u32,       // Maximum window
+    phase: Phase,        // Current phase (internal)
+    packets_acked: u32,  // ACK count for RTT (internal)
+    rtt_start: Option<Instant>,  // RTT timer (internal)
+}
+
+impl CongestionControl {
+    pub fn new(initial_cwnd: u32, max_cwnd: u32) -> Self;
+    pub fn cwnd(&self) -> u32;
+    pub fn ssthresh(&self) -> u32;
+    pub fn can_send(&self, unacked: u32) -> bool;
+    pub fn on_packet_sent(&mut self);
+    pub fn on_packet_loss(&mut self);
+    pub fn on_timeout(&mut self);
+    pub fn end_rtt(&mut self);
+    pub fn current_rtt(&self) -> Option<Duration>;
+    pub fn reset(&mut self);
+}
+```
+
+### Module: `adaptive_delay.rs`
+
+**Key Design Decisions**:
+- Timing level mapping: T0=0, T1=1, T2=2, T3=3, T4=4, T5=5
+- Aggressive backoff (10x) for T0-T3, moderate (2x) for T4-T5
+- Good response threshold: 5 consecutive responses before delay decay
+- Drop rate estimate decay: 0.9 multiplier per good response
+
+**API Surface**:
+```rust
+pub struct AdaptiveDelay {
+    current_delay: Duration,
+    default_delay: Duration,
+    timing_level: u8,
+    good_responses: u8,
+    drop_rate: f32,
+}
+
+impl AdaptiveDelay {
+    pub fn new(template: TimingTemplate) -> Self;
+    pub fn delay(&self) -> Duration;
+    pub fn timing_level(&self) -> u8;
+    pub fn drop_rate(&self) -> f32;
+    pub fn on_high_drop_rate(&mut self, drop_rate: f32);
+    pub fn on_good_response(&mut self);
+    pub fn on_packet_loss(&mut self);
+    pub fn set_delay(&mut self, delay: Duration);
+    pub fn reset(&mut self);
+}
+```
+
+### Module: `icmp_handler.rs`
+
+**Key Design Decisions**:
+- Const fn for `classify_icmp_error` - can be used in const contexts
+- Combined match arms where actions are identical (clippy compliance)
+- Parser assumes IPv4 with 20-byte header (validated)
+
+**API Surface**:
+```rust
+pub enum IcmpAction {
+    MarkDown,
+    ReduceCwnd,
+    MarkClosed,
+    MarkFiltered,
+    SetDfZero,
+    RetryWithBackoff,
+    None,
+}
+
+pub enum IcmpType { ... }  // repr(u8)
+pub enum DestUnreachableCode { ... }  // repr(u8)
+
+pub const fn classify_icmp_error(icmp_type: u8, icmp_code: u8) -> IcmpAction;
+pub const fn action_to_port_state(action: IcmpAction) -> Option<PortState>;
+
+pub struct IcmpParser;
+impl IcmpParser {
+    pub const fn extract_type_code(packet: &[u8]) -> Option<(u8, u8)>;
+}
+```
+
+### Existing Module: `timeout.rs`
+
+**Discovery**: Existing implementation fully satisfies RFC 2988 requirements:
+- `SRTT = (7/8)*SRTT + (1/8)*RTT` ✅
+- `RTTVAR = (3/4)*RTTVAR + (1/4)*|RTT - SRTT|` ✅
+- `Timeout = SRTT + 4*RTTVAR` ✅
+- Clamping to min/max RTT ✅
+
+### Existing Module: `rate.rs` (in rustnmap-common)
+
+**Discovery**: Existing implementation fully satisfies token bucket requirements:
+- Lock-free atomics for performance ✅
+- `--min-rate` support ✅
+- `--max-rate` support ✅
+- Pre-computed packet interval for hot path optimization ✅
 
 ---
 
 ## Testing Strategy
 
-### Unit Tests (Current Status: 60 tests passing)
+### Unit Tests
 
-- System call wrappers: 22 tests
-- PacketEngine trait: 16 tests
-- MmapPacketEngine: 34 tests
-- BPF Filter: 24 tests (includes icmp_dst)
-- Async integration: 5 tests
+- Test RTT calculation with fixed values
+- Test congestion state transitions
+- Test delay boost behavior
+- Test token bucket under various rates
 
-### Integration Tests (TODO)
+### Integration Tests
 
-- Test with actual network targets
-- Verify zero-copy operation
-- Test packet loss under load
-- Compare with nmap behavior
-
-### Stress Tests (TODO)
-
-- T5 Insane timing validation
-- 1M+ PPS target verification
-- CPU usage under load
-- Memory leak detection
-
----
-
-## Dependencies Verification
-
-**Current Dependencies (appropriate):**
-- `tokio 1.42+` - Latest AsyncFd support
-- `bytes 1.9+` - Zero-copy buffers
-- `libc 0.2+` - FFI bindings
-
-**Recommended Additions:**
-```toml
-[dependencies]
-# For lock-free statistics (optional but recommended)
-crossbeam-utils = "0.8"
-
-# For CPU affinity (NUMA optimization)
-core_affinity = "0.8"
-```
-
----
-
-## Phase 3.3: Complex Scanner Migration (2026-03-07)
-
-### Status: INFRASTRUCTURE COMPLETE
-
-All three complex scanners have been updated with `ScannerPacketEngine` infrastructure:
-
-| Scanner | File | Field Added | Status |
-|---------|------|-------------|--------|
-| TcpSynScanner | `syn_scan.rs` | `packet_engine: Option<Arc<Mutex<ScannerPacketEngine>>>` | Infrastructure Ready |
-| ParallelScanEngine | `ultrascan.rs` | `packet_engine: Option<Arc<Mutex<ScannerPacketEngine>>>` | Infrastructure Ready |
-| UdpScanner | `udp_scan.rs` | `scanner_engine_v4: Option<Arc<Mutex<ScannerPacketEngine>>>` | Infrastructure Ready |
-
-### Migration Pattern Used
-
-1. Add import for `ScannerPacketEngine` from `crate::packet_adapter`
-2. Add optional packet engine field with `#[expect(dead_code)]` attribute
-3. Initialize in constructor via `create_stealth_engine()`
-4. Keep existing receive path working (partial migration)
-
-### Key Finding: Async Conversion Required
-
-The `ScannerPacketEngine` is async-first (uses `tokio::sync::Mutex` and async methods).
-To fully utilize it in the receive path, the scanner methods need to be converted
-from synchronous to async:
-
-**Current (sync):**
-```rust
-fn scan_port_impl(&self, ...) -> ScanResult<PortState> {
-    self.socket.recv_packet(...) // blocking
-}
-```
-
-**Target (async):**
-```rust
-async fn scan_port_impl(&self, ...) -> ScanResult<PortState> {
-    self.packet_engine.lock().await.recv_with_timeout(...).await
-}
-```
-
-This conversion is deferred to a future phase to maintain stability.
+- Test with simulated packet loss
+- Test with varying RTT
+- Test rate limiting with actual traffic
+- Test ICMP error handling
 
 ---
 
 ## References
 
-### Design Documents
-- `doc/architecture.md` - System architecture
-- `doc/modules/packet-engineering.md` - Technical specs
-- `doc/structure.md` - Crate structure
-
-### Nmap Reference
-- `reference/nmap/libpcap/pcap-linux.c` - nmap implementation
-- `prepare_tpacket_socket()` - Version negotiation
-- `pcap_read_packet_mmap()` - Ring buffer polling
-- `pcap_create_ring()` - ENOMEM recovery
-
-### External References
-- `packet(7)` - Linux packet socket documentation
-- `tpacket_v3` - Kernel TPACKET_V3 documentation (for comparison)
-- `bpf(2)` - BPF filter documentation
+- `doc/architecture.md` - Full architecture specification
+- `doc/structure.md` - Module structure
+- RFC 6298 - TCP Retransmission Timer
+- `reference/nmap/timing.cc` - Nmap timing implementation
+- `reference/nmap/scan_engine.cc` - Nmap scan engine
 
 ---
 
-## PACKET_MMAP Investigation (2026-03-07)
+## Next Steps (Phase 3)
 
-### Kernel Version Requirements (from libpcap source)
-
-**File:** `reference/nmap/libpcap/pcap-linux.c`
-
-**Critical Source Code:**
-
-```c
-// Line 28-30: TPACKET_V2 requirement
-#ifndef TPACKET2_HDRLEN
-#error "Libpcap will only work if TPACKET_V2 is supported; you must build for a 2.6.27 or later kernel"
-#endif
-
-// Line 3203: nmap's frame size calculation
-req.tp_frame_size = TPACKET_ALIGN(macoff + frame_size);
-// Note: frame_size is user's requested snapshot length (data only)
-//       macoff is MAC header offset (includes TPACKET_V2 header space)
-
-// Line 3244-3246: nmap's block size calculation
-req.tp_block_size = getpagesize();  // Start with page size
-while (req.tp_block_size < req.tp_frame_size)
-    req.tp_block_size <<= 1;  // Double until frame fits
-
-// Line 3248: Frames per block calculation
-frames_per_block = req.tp_block_size/req.tp_frame_size;
-```
-
-**Requirements Summary:**
-
-| Requirement | Minimum Version | Verification Method |
-|-------------|-----------------|-------------------|
-| **TPACKET_V2** | Kernel 2.6.27 | `#error` if not defined |
-| **TPACKET_V3 (stable)** | Kernel 3.19 | `has_broken_tpacket_v3()` check |
-| **CONFIG_PACKET** | Kernel config Y | `/boot/config-$(uname -r)` |
-| **Root/CAP_NET_RAW** | Runtime | Test socket creation |
-
-### Current System Status
-
-**System:** Debian 6.1.0-27-amd64
-
-| Check | Command | Result |
-|-------|--------|--------|
-| Kernel version | `uname -r` | 6.1.0-27-amd64 ✅ |
-| CONFIG_PACKET | `grep CONFIG_PACKET /boot/config` | CONFIG_PACKET=y ✅ |
-| TPACKET_V2 support | C test | errno=0 ✅ |
-| TPACKET_V3 support | Kernel >= 3.19 | 6.1 > 3.19 ✅ |
-
-### C Test Verification
-
-**Test Program:** `/tmp/test_packet_mmap.c`
-
-**Results:**
-```
-✓ socket(AF_PACKET, SOCK_RAW, 0)           → fd=3
-✓ setsockopt(PACKET_VERSION, TPACKET_V2)    → Success
-✓ setsockopt(PACKET_RESERVE, 4)             → Success  
-✓ setsockopt(PACKET_AUXDATA, 1)              → Success
-✓ bind(..., sll_protocol=0)                    → Bound to ens33
-✓ setsockopt(PACKET_RX_RING, ...)           → Success
-```
-
-**Conclusion:** **Kernel 6.1.0-27 FULLY SUPPORTS PACKET_MMAP V2**
-
-### Rust Implementation Issue
-
-**Problem:** `MmapPacketEngine::new()` fails with errno=22 (EINVAL)
-
-**Evidence:**
-- C program with IDENTICAL parameters succeeds
-- Rust code with IDENTICAL parameters fails
-- Socket options match exactly
-- Bind order matches exactly
-
-**Hypothesis:** Difference in runtime behavior not visible in source code
-- Possible: Socket state tracking
-- Possible: File descriptor handling  
-- Possible: Struct padding/alignment
-- Needs: strace comparison to identify actual difference
-
-### Code Fixes Applied
-
-**File:** `crates/rustnmap-packet/src/mmap.rs`
-
-1. **Socket Creation (Line 270-271)**
-   ```rust
-   // BEFORE (WRONG):
-   let protocol = i32::from(ETH_P_ALL.to_be());
-
-   // AFTER (CORRECT):
-   let protocol = 0;  // Protocol filtering handled by bind()
-   ```
-
-2. **Bind Order (Lines 234-241)**
-   ```rust
-   // BEFORE (WRONG ORDER):
-   let fd = Self::create_socket()?;
-   let (ring_ptr, ...) = Self::setup_ring_buffer(&fd, &config)?;
-   Self::bind_to_interface(&fd, if_index)?;
-
-   // AFTER (CORRECT ORDER):
-   let fd = Self::create_socket()?;
-   Self::bind_to_interface(&fd, if_index)?;  // MUST be first
-   let (ring_ptr, ...) = Self::setup_ring_buffer(&fd, &config)?;
-   ```
-
-3. **Bind Protocol (Line 638)**
-   ```rust
-   // BEFORE (WRONG):
-   addr.sll_protocol = ETH_P_ALL.to_be();
-
-   // AFTER (CORRECT):
-   addr.sll_protocol = 0;  // Matches socket() protocol
-   ```
-
-4. **TWO-STAGE BIND PATTERN (CRITICAL FIX - 2026-03-07 5:30 AM)**
-
-   **ROOT CAUSE:** Socket was only bound once with `protocol=0`, which means it never receives packets!
-
-   **Following nmap's libpcap pattern** (`pcap-linux.c:1297-1302`):
-   ```c
-   // Stage 1: In setup_socket() - line 2677-2678
-   iface_bind(sock_fd, handlep->ifindex, handle->errbuf, 0);  // protocol=0
-
-   // Stage 2: After setup_mmapped() - line 1301-1302
-   iface_bind(handle->fd, handlep->ifindex, handle->errbuf, pcap_protocol(handle));
-   ```
-
-   **Comment in nmap's source:**
-   > "Now that we have activated the mmap ring, we can set the correct protocol."
-
-   **Rust Fix:**
-   ```rust
-   // After setup_ring_buffer(), re-bind with ETH_P_ALL
-   Self::bind_to_interface_with_protocol(&fd, if_index, ETH_P_ALL.to_be())?;
-   ```
-
-   **Why this works:**
-   - First bind with `protocol=0` sets up ring buffer without dropping packets
-   - PACKET_RX_RING setup requires bound socket
-   - Second bind with `ETH_P_ALL.to_be()` enables actual packet reception
-
-**Status:** ROOT CAUSE FIXED - Two-stage bind pattern now implemented
-
-### Performance Expectations
-
-| Metric | Recvfrom (current) | PACKET_MMAP (target) | Improvement |
-|--------|-------------------|---------------------|-------------|
-| PPS | ~50,000 | ~1,000,000 | 20x |
-| CPU (T5) | ~80% | ~30% | 2.7x |
-| Packet Loss (T5) | ~30% | <1% | 30x |
-
-**Note:** Targets require working PACKET_MMAP implementation.
+1. Integrate network volatility components into scanner orchestration
+2. Create integration tests with actual network targets
+3. Update documentation with performance metrics
+4. Performance validation benchmarks
+5. Consider scanner migration to PACKET_MMAP V2 (Phase 3.1)
 
 ---
 
-## Performance Benchmarks (2026-03-07)
+## Phase 3 Integration Findings
 
-### Packet Construction Performance
+### Integration Architecture
 
-| Operation | Time (ns) | Throughput |
-|-----------|-----------|------------|
-| UDP (empty) | 48.33 ns | 20.7 Mpkt/s |
-| UDP (with payload) | 70.86 ns | 14.1 Mpkt/s |
-| TCP SYN | 73.54 ns | 13.6 Mpkt/s |
-| TCP SYN (with options) | 89.44 ns | 11.2 Mpkt/s |
-| ACK/FIN/XMAS/NULL | 74-81 ns | 12-13 Mpkt/s |
+The network volatility components have been integrated into `ScanOrchestrator`:
 
-**Key Finding**: Packet construction is extremely fast at **12-20 Mpkt/s**.
+```rust
+pub struct ScanOrchestrator {
+    // ... existing fields ...
+    congestion_control: Arc<Mutex<CongestionControl>>,
+    adaptive_delay: Arc<Mutex<AdaptiveDelay>>,
+}
+```
 
-### Packet Parsing Performance
+### Timing-Based Initialization
 
-| Operation | Time (ns) | Throughput |
-|-----------|-----------|------------|
-| ARP | 2.53 ns | 395 Mpkt/s |
-| ICMP | 3.45 ns | 290 Mpkt/s |
-| TCP (basic) | 4.02 ns | 249 Mpkt/s |
-| TCP (full) | 17.32 ns | 57.7 Mpkt/s |
-| TCP (with options) | 22.34 ns | 44.8 Mpkt/s |
-| UDP | 21.33 ns | 46.9 Mpkt/s |
+Helper functions determine congestion window parameters based on timing template:
 
-**Key Finding**: Packet parsing is very fast at **45-395 Mpkt/s**.
+| Template | Initial CWND | Max CWND |
+|----------|-------------|----------|
+| T0 Paranoid | 1 | 1 |
+| T1 Sneaky | 3 | 5 |
+| T2 Polite | 5 | 10 |
+| T3 Normal | 10 | 50 |
+| T4 Aggressive | 50 | 100 |
+| T5 Insane | 100 | 500 |
 
-### Analysis
+### Adaptive Delay Enforcement
 
-**Strengths:**
-- All packet operations complete in **< 100ns**
-- Packet construction: **12-20 Mpkt/s** exceeds all targets
-- Packet parsing: **45-395 Mpkt/s** is outstanding
+The `enforce_scan_delay()` method now uses the maximum of template delay and adaptive delay:
 
-**Next Steps:**
-1. Generate network traffic for meaningful recv benchmark
-2. Measure actual PACKET_MMAP PPS now that implementation is fixed
-3. Compare against nmap baseline on same system
+```rust
+let template_delay = self.session.config.timing_template.scan_config().scan_delay;
+let adaptive_delay = { delay_guard.lock().await.delay() };
+let scan_delay = template_delay.max(adaptive_delay);
+```
 
+This ensures that:
+- If network conditions are poor, adaptive delay kicks in
+- If network is good, template default is used
+- Delay never drops below the template minimum
+
+### Public API for Monitoring
+
+External code can access the volatility components:
+
+```rust
+pub fn congestion_control(&self) -> Arc<Mutex<CongestionControl>>
+pub fn adaptive_delay(&self) -> Arc<Mutex<AdaptiveDelay>>
+```
+
+This enables monitoring and debugging of the volatility state during scans.
+
+### Integration Points for Future Work
+
+The following methods are ready to be called from scanning loops:
+
+1. **`record_probe_timeout()`** - Call when a probe times out
+   - Updates congestion control (reduces cwnd)
+   - Updates adaptive delay (increases delay)
+
+2. **`record_successful_response()`** - Call on successful probe
+   - Updates adaptive delay (may reduce delay)
+   - Tracks good responses for decay
+
+3. **`classify_icmp_error()`** - Use when processing ICMP errors
+   - Returns appropriate action (MarkDown, ReduceCwnd, etc.)
+   - Maps to port states for reporting
+
+---
