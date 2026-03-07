@@ -12,14 +12,18 @@
 Continue refactoring strictly according to `doc/architecture.md` and `doc/structure.md` technical specifications.
 
 **Previous Work (Complete):**
-- ✅ PACKET_MMAP V2 implementation (TPACKET_V2, ring buffer, zero-copy)
-- ✅ Two-stage bind fix (errno=22 resolved)
-- ✅ Zero-copy packet buffer (ZeroCopyPacket)
-- ✅ ScannerPacketEngine adapter infrastructure
-- ✅ Performance benchmarks created
+- ✅ Phase 2: Network volatility handling (5 components fully aligned with design)
+- ✅ Phase 3: Integration into ScanOrchestrator completed
 
-**Current Focus (Phase 2):**
-According to `doc/architecture.md` Section 2.3.4, implement the complete network volatility handling architecture.
+**Gap Analysis Completed (2026-03-07):**
+- 📋 Comprehensive design vs implementation comparison added to `findings.md`
+- 🔴 CRITICAL: Packet Engine still uses recvfrom() instead of PACKET_MMAP V2
+- ✅ Network Volatility: All 5 components match design exactly (62 tests)
+- ⚠️ Scanner Architecture: PacketEngine trait exists but not used by scanners
+- 📊 See `findings.md` Section: "Design vs Implementation Gap Analysis"
+
+**Current Focus:**
+Address critical PACKET_MMAP V2 implementation gap (Phase 4)
 
 ---
 
@@ -252,26 +256,68 @@ According to `doc/architecture.md` Section 2.3.4, implement the complete network
 
 ## Phase 4: Scanner Migration to PACKET_MMAP (PENDING)
 
-### Task 4.1: Migrate Scanners to AsyncPacketEngine
+> **Gap Analysis Update**: See `findings.md` section "Design vs Implementation Gap Analysis" for comprehensive comparison.
+
+### Critical Finding from Gap Analysis
+
+**Design**: PACKET_MMAP V2 ring buffer with zero-copy
+**Reality**: Still using `recvfrom()` fallback (see `rustnmap-packet/src/lib.rs:764-765`)
+
+| Metric | Design Target | Current Actual | Gap |
+|--------|--------------|---------------|-----|
+| PPS | ~1,000,000 | ~50,000 | **20x slower** |
+| CPU (T5) | 30% | 80% | **2.7x higher** |
+| Packet Loss (T5) | <1% | ~30% | **30x worse** |
+
+### Task 4.1: Complete PACKET_MMAP V2 Implementation (P0 CRITICAL)
+
+**Root Cause**: Phase 1 marked "COMPLETE" but implementation uses fallback recvfrom()
+
+**Required Actions**:
+1. Implement true zero-copy in `MmapPacketEngine::try_recv()`
+   - Use `Bytes::from_raw_parts()` instead of `Bytes::copy_from_slice()`
+   - Implement frame lifecycle management with `Arc<MmapPacketEngine>`
+   - Add frame tracking bitmap to prevent reuse
+
+2. Fix memory ordering
+   - Use `Ordering::Acquire` for frame availability check
+   - Use `Ordering::Release` for frame release
+   - NEVER use `SeqCst` (5-10x performance cost)
+
+3. Validate Drop order
+   - MUST munmap BEFORE close fd (or EBADF error)
 
 **Files**:
-- `crates/rustnmap-scan/src/syn_scan.rs`
-- `crates/rustnmap-scan/src/stealth_scans.rs`
-- `crates/rustnmap-scan/src/ultrascan.rs`
-- `crates/rustnmap-scan/src/udp_scan.rs`
+- `crates/rustnmap-packet/src/mmap.rs`
+- `crates/rustnmap-packet/src/zero_copy.rs`
 
-**Requirements**:
-- Convert synchronous methods to async
-- Use `PacketEngine` trait for packet reception
-- Remove `SimpleAfPacket` remnants
-
-**Status**: INFRASTRUCTURE READY, AWAITING MIGRATION
+**Status**: 🔴 BLOCKS ALL PERFORMANCE FIXES
 
 ---
 
-### Task 4.2: Performance Validation
+### Task 4.2: Migrate Scanners to PacketEngine Trait
 
-**Goal**: Measure actual PPS with working PACKET_MMAP
+**Gap Finding**: Scanners use `SimpleAfPacket` or `RawSocket`, not `PacketEngine` trait
+
+**Files**:
+- `crates/rustnmap-scan/src/syn_scan.rs` (uses `RawSocket`)
+- `crates/rustnmap-scan/src/stealth_scans.rs` (uses `SimpleAfPacket`)
+- `crates/rustnmap-scan/src/ultrascan.rs` (uses `SimpleAfPacket`)
+- `crates/rustnmap-scan/src/udp_scan.rs` (uses `RawSocket`)
+
+**Requirements**:
+- Replace `SimpleAfPacket` with `AsyncPacketEngine`
+- Replace `RawSocket` with `PacketEngine` trait
+- Create `ScannerPacketEngine` adapter pattern for gradual migration
+- Maintain backward compatibility during migration
+
+**Status**: ⚠️ BLOCKED BY TASK 4.1
+
+---
+
+### Task 4.3: Performance Validation
+
+**Goal**: Verify 1M PPS target after PACKET_MMAP V2 completion
 
 **Command**:
 ```bash
@@ -286,7 +332,13 @@ TEST_INTERFACE=ens33 sudo cargo bench -p rustnmap-benchmarks -- recvfrom_pps
 | CPU (T5) | 80% | 30% | 2.7x |
 | Packet Loss (T5) | ~30% | <1% | 30x |
 
-**Status**: AWAITING PACKET_MMAP VALIDATION
+**Acceptance Criteria**:
+- [ ] PPS >= 500,000 (50% of target)
+- [ ] CPU (T5) <= 50%
+- [ ] Packet Loss (T5) <= 5%
+- [ ] Zero-copy verified (no memcpy in hot path)
+
+**Status**: ⏸️ BLOCKED BY TASK 4.1
 
 ---
 
@@ -303,7 +355,26 @@ TEST_INTERFACE=ens33 sudo cargo bench -p rustnmap-benchmarks -- recvfrom_pps
 
 ## Summary
 
-**Current Phase**: Phase 3 - Complete | Phase 4 - Pending
+**Current Phase**: Gap Analysis Complete | Phase 4 - Pending (Critical)
+
+**Gap Analysis Findings** (2026-03-07):
+- 📋 Comprehensive design vs implementation comparison completed
+- See `findings.md`: "Design vs Implementation Gap Analysis" section
+- 🔴 **CRITICAL**: Packet Engine uses recvfrom() instead of PACKET_MMAP V2
+  - Phase 1 "COMPLETE" status was incorrect - still using fallback
+  - Required: Complete zero-copy implementation (Task 4.1)
+- ✅ **Network Volatility**: All 5 components match design exactly
+- ⚠️ **Scanner Architecture**: PacketEngine trait not used by scanners
+- ✅ **Timing Templates**: T0-T5 implemented with acceptable deviation
+
+**Updated Phase 4 Tasks**:
+- Task 4.1: Complete PACKET_MMAP V2 (P0 CRITICAL - blocks performance)
+- Task 4.2: Migrate scanners to PacketEngine trait
+- Task 4.3: Performance validation (1M PPS target)
+
+**Blocking Issue**:
+Cannot achieve 1M PPS target until true PACKET_MMAP V2 with zero-copy is implemented.
+Current recvfrom() approach limits performance to ~50K PPS.
 
 **Phase 2 Completion**:
 - ✅ Task 2.1: Adaptive RTT (existing `timeout.rs` satisfies RFC 2988)
