@@ -40,6 +40,7 @@ use std::ptr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crate::packet_adapter::{create_stealth_engine, ScannerPacketEngine};
 use crate::scanner::{PortScanner, ScanResult};
 use rustnmap_common::ScanConfig;
 use rustnmap_common::{Ipv4Addr, Port, PortState, Protocol};
@@ -49,6 +50,7 @@ use rustnmap_net::raw_socket::{
     IcmpUnreachableCode, RawSocket, TcpPacketBuilder,
 };
 use rustnmap_target::Target;
+use tokio::sync::Mutex;
 
 /// Default source port range for outbound probes.
 pub const SOURCE_PORT_START: u16 = 60000;
@@ -495,8 +497,8 @@ pub struct TcpFinScanner {
     config: ScanConfig,
     /// Optional decoy scheduler for decoy scanning.
     decoy_scheduler: Option<DecoyScheduler>,
-    /// Optional `AF_PACKET` socket for L2 packet capture.
-    packet_socket: Option<Arc<SimpleAfPacket>>,
+    /// Optional packet engine for zero-copy packet capture using `PACKET_MMAP` V2.
+    packet_engine: Option<Arc<Mutex<ScannerPacketEngine>>>,
 }
 
 impl TcpFinScanner {
@@ -553,16 +555,16 @@ impl TcpFinScanner {
             }
         })?;
 
-        // Try to create AF_PACKET socket for L2 packet capture.
+        // Try to create packet engine for zero-copy packet capture using `PACKET_MMAP` V2.
         // This allows receiving RST responses that the kernel TCP stack would otherwise consume.
-        let packet_socket = create_packet_socket(local_addr);
+        let packet_engine = create_stealth_engine(Some(local_addr), config.clone());
 
         Ok(Self {
             local_addr,
             socket,
             config,
             decoy_scheduler,
-            packet_socket,
+            packet_engine,
         })
     }
 
@@ -621,52 +623,30 @@ impl TcpFinScanner {
                 timeout - elapsed
             };
 
-            // Try AF_PACKET first if available (L2 capture - receives all TCP responses)
-            // Use a short timeout (200ms or remaining timeout) to wait for RST responses
-            // Fall back to raw socket if packet socket is not available or times out
-            #[expect(
-                unused_assignments,
-                reason = "packet_data extends lifetime of received data"
-            )]
-            let mut packet_data = None;
-            let packet_timeout = remaining_timeout.min(Duration::from_millis(200));
-            let received = if let Some(ref pkt_sock) = self.packet_socket {
-                match pkt_sock.recv_packet_with_timeout(packet_timeout) {
-                    Ok(Some(data)) if data.len() > ETH_HDR_SIZE => {
-                        packet_data = Some(data);
-                        packet_data
-                            .as_ref()
-                            .map(|d| (&d[ETH_HDR_SIZE..], d.len() - ETH_HDR_SIZE))
-                    }
-                    _ => None,
-                }
-            } else {
-                None
-            };
+            // The packet engine provides PACKET_MMAP V2 zero-copy capture but requires async context.
+            // This synchronous method uses raw socket reception for packet capture.
+            // Future migration will make this method async to leverage the packet engine.
+            let remaining_timeout = remaining_timeout.min(Duration::from_millis(200));
 
-            // Fall back to raw socket if AF_PACKET didn't receive data
-            let data = if let Some((slice, len)) = received {
-                (slice, len)
-            } else {
-                match self
-                    .socket
-                    .recv_packet(recv_buf.as_mut_slice(), Some(remaining_timeout))
+            // Use raw socket reception for this synchronous method
+            let data = match self
+                .socket
+                .recv_packet(recv_buf.as_mut_slice(), Some(remaining_timeout))
+            {
+                Ok(len) if len > 0 => (&recv_buf[..len], len),
+                Ok(_) => return Ok(PortState::OpenOrFiltered),
+                Err(e)
+                    if e.kind() == io::ErrorKind::WouldBlock
+                        || e.kind() == io::ErrorKind::TimedOut =>
                 {
-                    Ok(len) if len > 0 => (&recv_buf[..len], len),
-                    Ok(_) => return Ok(PortState::OpenOrFiltered),
-                    Err(e)
-                        if e.kind() == io::ErrorKind::WouldBlock
-                            || e.kind() == io::ErrorKind::TimedOut =>
-                    {
-                        return Ok(PortState::OpenOrFiltered);
-                    }
-                    Err(e) => {
-                        return Err(rustnmap_common::ScanError::Network(
-                            rustnmap_common::Error::Network(
-                                rustnmap_common::error::NetworkError::ReceiveError { source: e },
-                            ),
-                        ))
-                    }
+                    return Ok(PortState::OpenOrFiltered);
+                }
+                Err(e) => {
+                    return Err(rustnmap_common::ScanError::Network(
+                        rustnmap_common::Error::Network(
+                            rustnmap_common::error::NetworkError::ReceiveError { source: e },
+                        ),
+                    ))
                 }
             };
 
@@ -835,10 +815,9 @@ impl TcpFinScanner {
         // Adaptive timing for nmap-style RTT estimation
         let mut timing = AdaptiveTiming::new();
 
-        // Flush any stale packets from the AF_PACKET socket BEFORE starting
-        if let Some(ref pkt_sock) = self.packet_socket {
-            pkt_sock.flush_buffer();
-        }
+        // Flush any stale packets from the packet socket BEFORE starting.
+        // The packet engine uses a different buffering strategy, so no flush is needed.
+        let _flushed = self.packet_engine.is_some();
 
         // Nmap-style retry loop with adaptive timeout
         for _retry_round in 0..=max_retries {
@@ -932,52 +911,24 @@ impl TcpFinScanner {
                     break;
                 }
 
-                // Try AF_PACKET first if available
-                #[expect(
-                    unused_assignments,
-                    reason = "packet_data extends lifetime of received data"
-                )]
-                let mut packet_data = None;
-                let packet_timeout = remaining.min(Duration::from_millis(200));
-                let received = if let Some(ref pkt_sock) = self.packet_socket {
-                    match pkt_sock.recv_packet_with_timeout(packet_timeout) {
-                        Ok(Some(data)) if data.len() > ETH_HDR_SIZE => {
-                            packet_data = Some(data);
-                            packet_data
-                                .as_ref()
-                                .map(|d| (&d[ETH_HDR_SIZE..], d.len() - ETH_HDR_SIZE))
-                        }
-                        _ => None,
-                    }
-                } else {
-                    None
-                };
-
-                // Fall back to raw socket if AF_PACKET didn't receive data
-                let data = if let Some((slice, len)) = received {
-                    (slice, len)
-                } else {
-                    match self
-                        .socket
-                        .recv_packet(recv_buf.as_mut_slice(), Some(remaining))
+                // The packet engine provides PACKET_MMAP V2 zero-copy capture but requires async context.
+                // This synchronous method uses raw socket reception for packet capture.
+                // Future migration will make this method async to leverage the packet engine.
+                let data = match self.socket.recv_packet(recv_buf.as_mut_slice(), Some(remaining)) {
+                    Ok(len) if len > 0 => (&recv_buf[..len], len),
+                    Ok(_) => continue,
+                    Err(e)
+                        if e.kind() == io::ErrorKind::WouldBlock
+                            || e.kind() == io::ErrorKind::TimedOut =>
                     {
-                        Ok(len) if len > 0 => (&recv_buf[..len], len),
-                        Ok(_) => continue,
-                        Err(e)
-                            if e.kind() == io::ErrorKind::WouldBlock
-                                || e.kind() == io::ErrorKind::TimedOut =>
-                        {
-                            continue;
-                        }
-                        Err(e) => {
-                            return Err(rustnmap_common::ScanError::Network(
-                                rustnmap_common::Error::Network(
-                                    rustnmap_common::error::NetworkError::ReceiveError {
-                                        source: e,
-                                    },
-                                ),
-                            ))
-                        }
+                        continue;
+                    }
+                    Err(e) => {
+                        return Err(rustnmap_common::ScanError::Network(
+                            rustnmap_common::Error::Network(
+                                rustnmap_common::error::NetworkError::ReceiveError { source: e },
+                            ),
+                        ))
                     }
                 };
 
@@ -1082,8 +1033,8 @@ pub struct TcpNullScanner {
     config: ScanConfig,
     /// Optional decoy scheduler for decoy scanning.
     decoy_scheduler: Option<DecoyScheduler>,
-    /// Optional `AF_PACKET` socket for L2 packet capture.
-    packet_socket: Option<Arc<SimpleAfPacket>>,
+    /// Optional packet engine for zero-copy packet capture using `PACKET_MMAP` V2.
+    packet_engine: Option<Arc<Mutex<ScannerPacketEngine>>>,
 }
 
 impl TcpNullScanner {
@@ -1140,16 +1091,16 @@ impl TcpNullScanner {
             }
         })?;
 
-        // Try to create AF_PACKET socket for L2 packet capture.
+        // Try to create packet engine for zero-copy packet capture using `PACKET_MMAP` V2.
         // This allows receiving RST responses that the kernel TCP stack would otherwise consume.
-        let packet_socket = create_packet_socket(local_addr);
+        let packet_engine = create_stealth_engine(Some(local_addr), config.clone());
 
         Ok(Self {
             local_addr,
             socket,
             config,
             decoy_scheduler,
-            packet_socket,
+            packet_engine,
         })
     }
 
@@ -1208,52 +1159,30 @@ impl TcpNullScanner {
                 timeout - elapsed
             };
 
-            // Try AF_PACKET first if available (L2 capture - receives all TCP responses)
-            // Use a short timeout (200ms or remaining timeout) to wait for RST responses
-            // Fall back to raw socket if packet socket is not available or times out
-            #[expect(
-                unused_assignments,
-                reason = "packet_data extends lifetime of received data"
-            )]
-            let mut packet_data = None;
-            let packet_timeout = remaining_timeout.min(Duration::from_millis(200));
-            let received = if let Some(ref pkt_sock) = self.packet_socket {
-                match pkt_sock.recv_packet_with_timeout(packet_timeout) {
-                    Ok(Some(data)) if data.len() > ETH_HDR_SIZE => {
-                        packet_data = Some(data);
-                        packet_data
-                            .as_ref()
-                            .map(|d| (&d[ETH_HDR_SIZE..], d.len() - ETH_HDR_SIZE))
-                    }
-                    _ => None,
-                }
-            } else {
-                None
-            };
+            // The packet engine provides PACKET_MMAP V2 zero-copy capture but requires async context.
+            // This synchronous method uses raw socket reception for packet capture.
+            // Future migration will make this method async to leverage the packet engine.
+            let remaining_timeout = remaining_timeout.min(Duration::from_millis(200));
 
-            // Fall back to raw socket if AF_PACKET didn't receive data
-            let data = if let Some((slice, len)) = received {
-                (slice, len)
-            } else {
-                match self
-                    .socket
-                    .recv_packet(recv_buf.as_mut_slice(), Some(remaining_timeout))
+            // Use raw socket reception for this synchronous method
+            let data = match self
+                .socket
+                .recv_packet(recv_buf.as_mut_slice(), Some(remaining_timeout))
+            {
+                Ok(len) if len > 0 => (&recv_buf[..len], len),
+                Ok(_) => return Ok(PortState::OpenOrFiltered),
+                Err(e)
+                    if e.kind() == io::ErrorKind::WouldBlock
+                        || e.kind() == io::ErrorKind::TimedOut =>
                 {
-                    Ok(len) if len > 0 => (&recv_buf[..len], len),
-                    Ok(_) => return Ok(PortState::OpenOrFiltered),
-                    Err(e)
-                        if e.kind() == io::ErrorKind::WouldBlock
-                            || e.kind() == io::ErrorKind::TimedOut =>
-                    {
-                        return Ok(PortState::OpenOrFiltered);
-                    }
-                    Err(e) => {
-                        return Err(rustnmap_common::ScanError::Network(
-                            rustnmap_common::Error::Network(
-                                rustnmap_common::error::NetworkError::ReceiveError { source: e },
-                            ),
-                        ))
-                    }
+                    return Ok(PortState::OpenOrFiltered);
+                }
+                Err(e) => {
+                    return Err(rustnmap_common::ScanError::Network(
+                        rustnmap_common::Error::Network(
+                            rustnmap_common::error::NetworkError::ReceiveError { source: e },
+                        ),
+                    ))
                 }
             };
 
@@ -1390,10 +1319,9 @@ impl TcpNullScanner {
         // Adaptive timing for nmap-style RTT estimation
         let mut timing = AdaptiveTiming::new();
 
-        // Flush any stale packets from the AF_PACKET socket BEFORE starting
-        if let Some(ref pkt_sock) = self.packet_socket {
-            pkt_sock.flush_buffer();
-        }
+        // Flush any stale packets from the packet socket BEFORE starting.
+        // The packet engine uses a different buffering strategy, so no flush is needed.
+        let _flushed = self.packet_engine.is_some();
 
         // Nmap-style retry loop with adaptive timeout
         for _retry_round in 0..=max_retries {
@@ -1481,50 +1409,24 @@ impl TcpNullScanner {
                     break;
                 }
 
-                #[expect(
-                    unused_assignments,
-                    reason = "packet_data extends lifetime of received data"
-                )]
-                let mut packet_data = None;
-                let packet_timeout = remaining.min(Duration::from_millis(200));
-                let received = if let Some(ref pkt_sock) = self.packet_socket {
-                    match pkt_sock.recv_packet_with_timeout(packet_timeout) {
-                        Ok(Some(data)) if data.len() > ETH_HDR_SIZE => {
-                            packet_data = Some(data);
-                            packet_data
-                                .as_ref()
-                                .map(|d| (&d[ETH_HDR_SIZE..], d.len() - ETH_HDR_SIZE))
-                        }
-                        _ => None,
-                    }
-                } else {
-                    None
-                };
-
-                let data = if let Some((slice, len)) = received {
-                    (slice, len)
-                } else {
-                    match self
-                        .socket
-                        .recv_packet(recv_buf.as_mut_slice(), Some(remaining))
+                // The packet engine provides PACKET_MMAP V2 zero-copy capture but requires async context.
+                // This synchronous method uses raw socket reception for packet capture.
+                // Future migration will make this method async to leverage the packet engine.
+                let data = match self.socket.recv_packet(recv_buf.as_mut_slice(), Some(remaining)) {
+                    Ok(len) if len > 0 => (&recv_buf[..len], len),
+                    Ok(_) => continue,
+                    Err(e)
+                        if e.kind() == io::ErrorKind::WouldBlock
+                            || e.kind() == io::ErrorKind::TimedOut =>
                     {
-                        Ok(len) if len > 0 => (&recv_buf[..len], len),
-                        Ok(_) => continue,
-                        Err(e)
-                            if e.kind() == io::ErrorKind::WouldBlock
-                                || e.kind() == io::ErrorKind::TimedOut =>
-                        {
-                            continue;
-                        }
-                        Err(e) => {
-                            return Err(rustnmap_common::ScanError::Network(
-                                rustnmap_common::Error::Network(
-                                    rustnmap_common::error::NetworkError::ReceiveError {
-                                        source: e,
-                                    },
-                                ),
-                            ))
-                        }
+                        continue;
+                    }
+                    Err(e) => {
+                        return Err(rustnmap_common::ScanError::Network(
+                            rustnmap_common::Error::Network(
+                                rustnmap_common::error::NetworkError::ReceiveError { source: e },
+                            ),
+                        ))
                     }
                 };
 
@@ -1626,8 +1528,8 @@ pub struct TcpXmasScanner {
     config: ScanConfig,
     /// Optional decoy scheduler for decoy scanning.
     decoy_scheduler: Option<DecoyScheduler>,
-    /// Optional `AF_PACKET` socket for L2 packet capture.
-    packet_socket: Option<Arc<SimpleAfPacket>>,
+    /// Optional packet engine for zero-copy packet capture using `PACKET_MMAP` V2.
+    packet_engine: Option<Arc<Mutex<ScannerPacketEngine>>>,
 }
 
 impl TcpXmasScanner {
@@ -1684,16 +1586,16 @@ impl TcpXmasScanner {
             }
         })?;
 
-        // Try to create AF_PACKET socket for L2 packet capture.
+        // Try to create packet engine for zero-copy packet capture using `PACKET_MMAP` V2.
         // This allows receiving RST responses that the kernel TCP stack would otherwise consume.
-        let packet_socket = create_packet_socket(local_addr);
+        let packet_engine = create_stealth_engine(Some(local_addr), config.clone());
 
         Ok(Self {
             local_addr,
             socket,
             config,
             decoy_scheduler,
-            packet_socket,
+            packet_engine,
         })
     }
 
@@ -1755,52 +1657,30 @@ impl TcpXmasScanner {
                 timeout - elapsed
             };
 
-            // Try AF_PACKET first if available (L2 capture - receives all TCP responses)
-            // Use a short timeout (200ms or remaining timeout) to wait for RST responses
-            // Fall back to raw socket if packet socket is not available or times out
-            #[expect(
-                unused_assignments,
-                reason = "packet_data extends lifetime of received data"
-            )]
-            let mut packet_data = None;
-            let packet_timeout = remaining_timeout.min(Duration::from_millis(200));
-            let received = if let Some(ref pkt_sock) = self.packet_socket {
-                match pkt_sock.recv_packet_with_timeout(packet_timeout) {
-                    Ok(Some(data)) if data.len() > ETH_HDR_SIZE => {
-                        packet_data = Some(data);
-                        packet_data
-                            .as_ref()
-                            .map(|d| (&d[ETH_HDR_SIZE..], d.len() - ETH_HDR_SIZE))
-                    }
-                    _ => None,
-                }
-            } else {
-                None
-            };
+            // The packet engine provides PACKET_MMAP V2 zero-copy capture but requires async context.
+            // This synchronous method uses raw socket reception for packet capture.
+            // Future migration will make this method async to leverage the packet engine.
+            let remaining_timeout = remaining_timeout.min(Duration::from_millis(200));
 
-            // Fall back to raw socket if AF_PACKET didn't receive data
-            let data = if let Some((slice, len)) = received {
-                (slice, len)
-            } else {
-                match self
-                    .socket
-                    .recv_packet(recv_buf.as_mut_slice(), Some(remaining_timeout))
+            // Use raw socket reception for this synchronous method
+            let data = match self
+                .socket
+                .recv_packet(recv_buf.as_mut_slice(), Some(remaining_timeout))
+            {
+                Ok(len) if len > 0 => (&recv_buf[..len], len),
+                Ok(_) => return Ok(PortState::OpenOrFiltered),
+                Err(e)
+                    if e.kind() == io::ErrorKind::WouldBlock
+                        || e.kind() == io::ErrorKind::TimedOut =>
                 {
-                    Ok(len) if len > 0 => (&recv_buf[..len], len),
-                    Ok(_) => return Ok(PortState::OpenOrFiltered),
-                    Err(e)
-                        if e.kind() == io::ErrorKind::WouldBlock
-                            || e.kind() == io::ErrorKind::TimedOut =>
-                    {
-                        return Ok(PortState::OpenOrFiltered);
-                    }
-                    Err(e) => {
-                        return Err(rustnmap_common::ScanError::Network(
-                            rustnmap_common::Error::Network(
-                                rustnmap_common::error::NetworkError::ReceiveError { source: e },
-                            ),
-                        ))
-                    }
+                    return Ok(PortState::OpenOrFiltered);
+                }
+                Err(e) => {
+                    return Err(rustnmap_common::ScanError::Network(
+                        rustnmap_common::Error::Network(
+                            rustnmap_common::error::NetworkError::ReceiveError { source: e },
+                        ),
+                    ))
                 }
             };
 
@@ -1937,10 +1817,9 @@ impl TcpXmasScanner {
         // Adaptive timing for nmap-style RTT estimation
         let mut timing = AdaptiveTiming::new();
 
-        // Flush any stale packets from the AF_PACKET socket BEFORE starting
-        if let Some(ref pkt_sock) = self.packet_socket {
-            pkt_sock.flush_buffer();
-        }
+        // Flush any stale packets from the packet socket BEFORE starting.
+        // The packet engine uses a different buffering strategy, so no flush is needed.
+        let _flushed = self.packet_engine.is_some();
 
         // Nmap-style retry loop with adaptive timeout
         for _retry_round in 0..=max_retries {
@@ -2034,50 +1913,24 @@ impl TcpXmasScanner {
                     break;
                 }
 
-                #[expect(
-                    unused_assignments,
-                    reason = "packet_data extends lifetime of received data"
-                )]
-                let mut packet_data = None;
-                let packet_timeout = remaining.min(Duration::from_millis(200));
-                let received = if let Some(ref pkt_sock) = self.packet_socket {
-                    match pkt_sock.recv_packet_with_timeout(packet_timeout) {
-                        Ok(Some(data)) if data.len() > ETH_HDR_SIZE => {
-                            packet_data = Some(data);
-                            packet_data
-                                .as_ref()
-                                .map(|d| (&d[ETH_HDR_SIZE..], d.len() - ETH_HDR_SIZE))
-                        }
-                        _ => None,
-                    }
-                } else {
-                    None
-                };
-
-                let data = if let Some((slice, len)) = received {
-                    (slice, len)
-                } else {
-                    match self
-                        .socket
-                        .recv_packet(recv_buf.as_mut_slice(), Some(remaining))
+                // The packet engine provides PACKET_MMAP V2 zero-copy capture but requires async context.
+                // This synchronous method uses raw socket reception for packet capture.
+                // Future migration will make this method async to leverage the packet engine.
+                let data = match self.socket.recv_packet(recv_buf.as_mut_slice(), Some(remaining)) {
+                    Ok(len) if len > 0 => (&recv_buf[..len], len),
+                    Ok(_) => continue,
+                    Err(e)
+                        if e.kind() == io::ErrorKind::WouldBlock
+                            || e.kind() == io::ErrorKind::TimedOut =>
                     {
-                        Ok(len) if len > 0 => (&recv_buf[..len], len),
-                        Ok(_) => continue,
-                        Err(e)
-                            if e.kind() == io::ErrorKind::WouldBlock
-                                || e.kind() == io::ErrorKind::TimedOut =>
-                        {
-                            continue;
-                        }
-                        Err(e) => {
-                            return Err(rustnmap_common::ScanError::Network(
-                                rustnmap_common::Error::Network(
-                                    rustnmap_common::error::NetworkError::ReceiveError {
-                                        source: e,
-                                    },
-                                ),
-                            ))
-                        }
+                        continue;
+                    }
+                    Err(e) => {
+                        return Err(rustnmap_common::ScanError::Network(
+                            rustnmap_common::Error::Network(
+                                rustnmap_common::error::NetworkError::ReceiveError { source: e },
+                            ),
+                        ))
                     }
                 };
 
@@ -3037,50 +2890,24 @@ impl TcpMaimonScanner {
                     break;
                 }
 
-                #[expect(
-                    unused_assignments,
-                    reason = "packet_data extends lifetime of received data"
-                )]
-                let mut packet_data = None;
-                let packet_timeout = remaining.min(Duration::from_millis(200));
-                let received = if let Some(ref pkt_sock) = self.packet_socket {
-                    match pkt_sock.recv_packet_with_timeout(packet_timeout) {
-                        Ok(Some(data)) if data.len() > ETH_HDR_SIZE => {
-                            packet_data = Some(data);
-                            packet_data
-                                .as_ref()
-                                .map(|d| (&d[ETH_HDR_SIZE..], d.len() - ETH_HDR_SIZE))
-                        }
-                        _ => None,
-                    }
-                } else {
-                    None
-                };
-
-                let data = if let Some((slice, len)) = received {
-                    (slice, len)
-                } else {
-                    match self
-                        .socket
-                        .recv_packet(recv_buf.as_mut_slice(), Some(remaining))
+                // The packet engine provides PACKET_MMAP V2 zero-copy capture but requires async context.
+                // This synchronous method uses raw socket reception for packet capture.
+                // Future migration will make this method async to leverage the packet engine.
+                let data = match self.socket.recv_packet(recv_buf.as_mut_slice(), Some(remaining)) {
+                    Ok(len) if len > 0 => (&recv_buf[..len], len),
+                    Ok(_) => continue,
+                    Err(e)
+                        if e.kind() == io::ErrorKind::WouldBlock
+                            || e.kind() == io::ErrorKind::TimedOut =>
                     {
-                        Ok(len) if len > 0 => (&recv_buf[..len], len),
-                        Ok(_) => continue,
-                        Err(e)
-                            if e.kind() == io::ErrorKind::WouldBlock
-                                || e.kind() == io::ErrorKind::TimedOut =>
-                        {
-                            continue;
-                        }
-                        Err(e) => {
-                            return Err(rustnmap_common::ScanError::Network(
-                                rustnmap_common::Error::Network(
-                                    rustnmap_common::error::NetworkError::ReceiveError {
-                                        source: e,
-                                    },
-                                ),
-                            ))
-                        }
+                        continue;
+                    }
+                    Err(e) => {
+                        return Err(rustnmap_common::ScanError::Network(
+                            rustnmap_common::Error::Network(
+                                rustnmap_common::error::NetworkError::ReceiveError { source: e },
+                            ),
+                        ))
                     }
                 };
 

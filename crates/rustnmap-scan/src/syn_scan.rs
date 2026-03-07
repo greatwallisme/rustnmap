@@ -8,7 +8,10 @@
 
 use std::io;
 use std::net::SocketAddr;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
+use crate::packet_adapter::{create_stealth_engine, ScannerPacketEngine};
 use crate::scanner::{PortScanner, ScanResult};
 use rustnmap_common::ScanConfig;
 use rustnmap_common::{Ipv4Addr, Port, PortState, Protocol};
@@ -34,6 +37,12 @@ pub struct TcpSynScanner {
     socket: RawSocket,
     /// Scanner configuration.
     config: ScanConfig,
+    /// Optional packet engine for zero-copy packet capture using `PACKET_MMAP` V2.
+    ///
+    /// This provides better performance through ring buffer operation.
+    /// Currently unused in receive path - migration in progress.
+    #[expect(dead_code, reason = "Packet engine migration in progress - will be used in receive path")]
+    packet_engine: Option<Arc<Mutex<ScannerPacketEngine>>>,
 }
 
 impl TcpSynScanner {
@@ -62,10 +71,15 @@ impl TcpSynScanner {
             }
         })?;
 
+        // Try to create packet engine for zero-copy capture using PACKET_MMAP V2.
+        // This provides better performance than raw socket reception.
+        let packet_engine = create_stealth_engine(Some(local_addr), config.clone());
+
         Ok(Self {
             local_addr,
             socket,
             config,
+            packet_engine,
         })
     }
 

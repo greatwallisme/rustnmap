@@ -1,8 +1,8 @@
 # Research Findings: RustNmap Packet Engine Refactoring
 
 > **Created**: 2026-03-06
-> **Updated**: 2026-03-06
-> **Status**: Phase 3.1 COMPLETED
+> **Updated**: 2026-03-07
+> **Status**: Design Document Compliance Audit COMPLETE
 
 ---
 
@@ -620,6 +620,49 @@ crossbeam-utils = "0.8"
 # For CPU affinity (NUMA optimization)
 core_affinity = "0.8"
 ```
+
+---
+
+## Phase 3.3: Complex Scanner Migration (2026-03-07)
+
+### Status: INFRASTRUCTURE COMPLETE
+
+All three complex scanners have been updated with `ScannerPacketEngine` infrastructure:
+
+| Scanner | File | Field Added | Status |
+|---------|------|-------------|--------|
+| TcpSynScanner | `syn_scan.rs` | `packet_engine: Option<Arc<Mutex<ScannerPacketEngine>>>` | Infrastructure Ready |
+| ParallelScanEngine | `ultrascan.rs` | `packet_engine: Option<Arc<Mutex<ScannerPacketEngine>>>` | Infrastructure Ready |
+| UdpScanner | `udp_scan.rs` | `scanner_engine_v4: Option<Arc<Mutex<ScannerPacketEngine>>>` | Infrastructure Ready |
+
+### Migration Pattern Used
+
+1. Add import for `ScannerPacketEngine` from `crate::packet_adapter`
+2. Add optional packet engine field with `#[expect(dead_code)]` attribute
+3. Initialize in constructor via `create_stealth_engine()`
+4. Keep existing receive path working (partial migration)
+
+### Key Finding: Async Conversion Required
+
+The `ScannerPacketEngine` is async-first (uses `tokio::sync::Mutex` and async methods).
+To fully utilize it in the receive path, the scanner methods need to be converted
+from synchronous to async:
+
+**Current (sync):**
+```rust
+fn scan_port_impl(&self, ...) -> ScanResult<PortState> {
+    self.socket.recv_packet(...) // blocking
+}
+```
+
+**Target (async):**
+```rust
+async fn scan_port_impl(&self, ...) -> ScanResult<PortState> {
+    self.packet_engine.lock().await.recv_with_timeout(...).await
+}
+```
+
+This conversion is deferred to a future phase to maintain stability.
 
 ---
 

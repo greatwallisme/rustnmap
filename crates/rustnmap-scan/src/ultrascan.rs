@@ -46,6 +46,7 @@ use std::sync::Arc as StdArc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crate::packet_adapter::{create_stealth_engine, ScannerPacketEngine};
 use rustnmap_common::{Port, PortState, RateLimiter, ScanConfig};
 use rustnmap_net::raw_socket::{parse_tcp_response, RawSocket, TcpPacketBuilder};
 use tokio::sync::{mpsc, oneshot, Mutex};
@@ -963,6 +964,15 @@ pub struct ParallelScanEngine {
     socket: StdArc<RawSocket>,
     /// `AF_PACKET` engine for receiving TCP responses (L2 capture).
     packet_socket: Option<Arc<SimpleAfPacket>>,
+    /// Optional packet engine for zero-copy packet capture using `PACKET_MMAP` V2.
+    ///
+    /// This is the modern replacement for `packet_socket`, providing better
+    /// performance through zero-copy ring buffer operation.
+    ///
+    /// Currently unused in receive path - migration in progress. The async packet
+    /// engine requires async context which is not yet integrated into the receive loop.
+    #[expect(dead_code, reason = "Packet engine migration in progress - will be used in receive path")]
+    packet_engine: Option<Arc<Mutex<ScannerPacketEngine>>>,
     /// Scanner configuration for timing parameters.
     config: ScanConfig,
     /// Congestion controller for adaptive timing.
@@ -1024,6 +1034,10 @@ impl ParallelScanEngine {
         // This is critical for receiving TCP RST responses that raw socket misses
         let packet_socket = Self::create_packet_socket(local_addr);
 
+        // Try to create ScannerPacketEngine for zero-copy packet capture using PACKET_MMAP V2.
+        // This provides better performance than SimpleAfPacket through ring buffer operation.
+        let packet_engine = create_stealth_engine(Some(local_addr), config.clone());
+
         let max_parallel = DEFAULT_MAX_PARALLELISM;
 
         // Create internal congestion controller for adaptive timing
@@ -1047,6 +1061,7 @@ impl ParallelScanEngine {
             local_addr,
             socket,
             packet_socket,
+            packet_engine,
             config,
             congestion,
             rate_limiter,

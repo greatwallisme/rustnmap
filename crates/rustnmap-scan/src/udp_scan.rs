@@ -11,8 +11,12 @@
 
 use std::io;
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::Duration;
 
+use tokio::sync::Mutex;
+
+use crate::packet_adapter::{create_stealth_engine, ScannerPacketEngine};
 use crate::scanner::{PortScanner, ScanResult};
 use rustnmap_common::ScanConfig;
 use rustnmap_common::{IpAddr, Ipv4Addr, Port, PortState, Protocol};
@@ -47,6 +51,11 @@ pub struct UdpScanner {
     socket_icmp_v4: RawSocket,
     /// `AF_PACKET` engine for capturing ICMP errors (optional).
     packet_engine_v4: Option<AfPacketEngine>,
+    /// Modern packet engine for zero-copy capture using `PACKET_MMAP` V2 (optional).
+    ///
+    /// This is the replacement for `packet_engine_v4`, providing better performance.
+    #[expect(dead_code, reason = "Packet engine migration in progress - will be used in receive path")]
+    scanner_engine_v4: Option<Arc<Mutex<ScannerPacketEngine>>>,
     /// Raw socket for IPv6 packet transmission (optional).
     socket_v6: Option<RawSocket>,
     /// Raw socket for `ICMPv6` error responses (optional).
@@ -96,12 +105,17 @@ impl UdpScanner {
         // This is optional - if it fails, we fall back to raw socket only
         let packet_engine_v4 = Self::create_packet_engine(local_addr);
 
+        // Try to create ScannerPacketEngine for zero-copy capture using PACKET_MMAP V2.
+        // This provides better performance than AfPacketEngine through ring buffer operation.
+        let scanner_engine_v4 = create_stealth_engine(Some(local_addr), config.clone());
+
         Ok(Self {
             local_addr_v4: local_addr,
             local_addr_v6: None,
             socket_v4,
             socket_icmp_v4,
             packet_engine_v4,
+            scanner_engine_v4,
             socket_v6: None,
             socket_icmp_v6: None,
             packet_engine_v6: None,
@@ -166,12 +180,16 @@ impl UdpScanner {
         // Try to create AF_PACKET engine for IPv6 (optional)
         let packet_engine_v6 = Self::create_packet_engine_v6();
 
+        // Try to create ScannerPacketEngine for zero-copy capture
+        let scanner_engine_v4 = create_stealth_engine(Some(local_addr_v4), config.clone());
+
         Ok(Self {
             local_addr_v4,
             local_addr_v6: Some(local_addr_v6),
             socket_v4,
             socket_icmp_v4,
             packet_engine_v4,
+            scanner_engine_v4,
             socket_v6: Some(socket_v6),
             socket_icmp_v6: Some(socket_icmp_v6),
             packet_engine_v6,
