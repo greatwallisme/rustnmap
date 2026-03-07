@@ -372,8 +372,14 @@ impl UdpScanner {
     /// # Errors
     ///
     /// Returns an error if packet transmission fails.
-    #[allow(clippy::too_many_lines, reason = "UDP scan requires complex response handling")]
-    #[allow(clippy::single_match_else, reason = "UDP scan requires complex response handling with multiple receive sources")]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "UDP scan requires complex response handling"
+    )]
+    #[allow(
+        clippy::single_match_else,
+        reason = "UDP scan requires complex response handling with multiple receive sources"
+    )]
     async fn scan_port_impl_async_v4(
         &self,
         dst_addr: Ipv4Addr,
@@ -756,7 +762,6 @@ impl UdpScanner {
         let offset = (std::process::id() % 1000) as u16;
         SOURCE_PORT_START + offset
     }
-
 }
 
 impl PortScanner for UdpScanner {
@@ -787,7 +792,9 @@ impl AsyncPortScanner for UdpScanner {
                 self.scan_port_impl(target, port, protocol)
             }
             _ => Err(rustnmap_common::ScanError::Network(
-                rustnmap_common::Error::Other(format!("Invalid protocol for UDP scan: {protocol:?}")),
+                rustnmap_common::Error::Other(format!(
+                    "Invalid protocol for UDP scan: {protocol:?}"
+                )),
             )),
         }
     }

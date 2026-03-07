@@ -193,10 +193,15 @@ fn test_udp_scan_ipv6_target() {
 
     let result = scanner.scan_port(&target, port, Protocol::Udp);
 
-    assert_eq!(
-        result.unwrap(),
-        PortState::Filtered,
-        "UDP scanner should return Filtered for IPv6 target (not yet supported)"
+    // IPv6 scanning is not supported yet, should return an error
+    assert!(
+        result.is_err(),
+        "UDP scanner should return error for IPv6 target (not yet supported)"
+    );
+    let err = result.unwrap_err();
+    assert!(
+        format!("{err}").contains("IPv6"),
+        "Error should mention IPv6 not supported: {err}"
     );
 }
 

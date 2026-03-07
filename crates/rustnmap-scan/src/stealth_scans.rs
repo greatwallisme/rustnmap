@@ -2076,9 +2076,7 @@ impl TcpAckScanner {
                     Err(e) => {
                         return Err(rustnmap_common::ScanError::Network(
                             rustnmap_common::Error::Network(
-                                rustnmap_common::error::NetworkError::ReceiveError {
-                                    source: e,
-                                },
+                                rustnmap_common::error::NetworkError::ReceiveError { source: e },
                             ),
                         ))
                     }
@@ -3012,9 +3010,7 @@ impl TcpWindowScanner {
                     Err(e) => {
                         return Err(rustnmap_common::ScanError::Network(
                             rustnmap_common::Error::Network(
-                                rustnmap_common::error::NetworkError::ReceiveError {
-                                    source: e,
-                                },
+                                rustnmap_common::error::NetworkError::ReceiveError { source: e },
                             ),
                         ))
                     }

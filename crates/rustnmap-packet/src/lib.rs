@@ -1,11 +1,11 @@
 //! Zero-copy packet engine using `PACKET_MMAP` V2 for `RustNmap`.
 //!
 //! This crate provides high-performance packet I/O using Linux `PACKET_MMAP`
-//! interface for zero-copy packet access.
+//! interface for zero-copy packet access, with a `recvfrom`-based fallback.
 //!
 //! # Architecture
 //!
-//! The engine uses Linux's `PACKET_MMAP` V2 interface for zero-copy packet
+//! The primary engine uses Linux's `PACKET_MMAP` V2 interface for zero-copy packet
 //! capture and transmission. This provides significant performance benefits
 //! over traditional socket-based approaches:
 //!
@@ -15,6 +15,15 @@
 //! - **BPF filtering**: Kernel-space filtering reduces overhead
 //!
 //! V2 is chosen over V3 for stability (V3 has bugs in kernels < 3.19).
+//!
+//! # Fallback Engine
+//!
+//! When `PACKET_MMAP` V2 is unavailable, `RecvfromPacketEngine` provides a
+//! fallback using the traditional `recvfrom()` system call. This engine:
+//!
+//! - Works on all systems without special requirements
+//! - Has higher CPU usage and lower throughput
+//! - Uses a simpler synchronous API
 //!
 //! # Requirements
 //!
@@ -65,6 +74,9 @@ mod async_engine;
 /// Packet stream implementation.
 mod stream;
 
+/// recvfrom-based fallback packet engine.
+mod recvfrom;
+
 /// BPF (Berkeley Packet Filter) utilities.
 pub mod bpf;
 
@@ -85,6 +97,8 @@ pub use crate::engine::{EngineStats, PacketBuffer, PacketEngine, RingConfig};
 pub use crate::error::{PacketError, Result};
 #[doc(inline)]
 pub use crate::mmap::MmapPacketEngine;
+#[doc(inline)]
+pub use crate::recvfrom::RecvfromPacketEngine;
 #[doc(inline)]
 pub use crate::stream::PacketStream;
 #[doc(inline)]

@@ -44,8 +44,8 @@ use std::time::{Duration, Instant};
 
 use crate::packet_adapter::{create_stealth_engine, ScannerPacketEngine};
 use rustnmap_common::{Port, PortState, RateLimiter, ScanConfig};
-use rustnmap_packet::BpfFilter;
 use rustnmap_net::raw_socket::{parse_tcp_response, RawSocket, TcpPacketBuilder};
+use rustnmap_packet::BpfFilter;
 use tokio::sync::{mpsc, oneshot, Mutex};
 use tokio::task::JoinHandle;
 use tokio::time::timeout as tokio_timeout;
@@ -588,7 +588,7 @@ impl ReceivedPacket {
 pub struct ParallelScanEngine {
     /// Local IP address for probes.
     local_addr: Ipv4Addr,
-/// Raw socket for packet transmission.
+    /// Raw socket for packet transmission.
     socket: StdArc<RawSocket>,
     /// Packet engine for zero-copy packet capture using `PACKET_MMAP` V2.
     packet_engine: Option<Arc<Mutex<ScannerPacketEngine>>>,
@@ -1017,7 +1017,12 @@ impl ParallelScanEngine {
                         }
 
                         // Lock the engine and receive with timeout
-                        match engine.lock().await.recv_with_timeout(Duration::from_millis(100)).await {
+                        match engine
+                            .lock()
+                            .await
+                            .recv_with_timeout(Duration::from_millis(100))
+                            .await
+                        {
                             Ok(Some(data)) => {
                                 // Skip Ethernet header (14 bytes) to get to IP header
                                 let ip_data = if data.len() > ETH_HDR_SIZE {
@@ -1050,7 +1055,9 @@ impl ParallelScanEngine {
                     let tx_clone = packet_tx.clone();
                     let result = tokio::task::spawn_blocking(move || {
                         let mut recv_buf = vec![0u8; 65535];
-                        match socket_clone.recv_packet(&mut recv_buf, Some(Duration::from_millis(50))) {
+                        match socket_clone
+                            .recv_packet(&mut recv_buf, Some(Duration::from_millis(50)))
+                        {
                             Ok(len) => Ok((len, recv_buf)),
                             Err(e) => Err(e),
                         }
@@ -1290,7 +1297,8 @@ impl ParallelScanEngine {
         let (ready_tx, ready_rx) = oneshot::channel();
 
         // Start ICMP receiver task with packet engine
-        let receiver_handle = self.start_icmp_receiver_task(scanner_engine, icmp_tx.clone(), ready_tx);
+        let receiver_handle =
+            self.start_icmp_receiver_task(scanner_engine, icmp_tx.clone(), ready_tx);
 
         // Wait for receiver to be ready (with timeout to prevent deadlock)
         if tokio::time::timeout(Duration::from_millis(200), ready_rx)

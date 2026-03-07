@@ -19,6 +19,7 @@ rustnmap-target = { path = "../rustnmap-target" }
 rustnmap-fingerprint = { path = "../rustnmap-fingerprint" }
 rustnmap-nse = { path = "../rustnmap-nse" }
 criterion = { workspace = true }
+tokio = { workspace = true }
 
 [[bench]]
 name = "scan_benchmarks"
@@ -34,4 +35,8 @@ harness = false
 
 [[bench]]
 name = "nse_benchmarks"
+harness = false
+
+[[bench]]
+name = "recvfrom_pps"
 harness = false

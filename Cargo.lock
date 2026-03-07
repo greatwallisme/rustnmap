@@ -2635,6 +2635,7 @@ dependencies = [
  "rustnmap-packet",
  "rustnmap-scan",
  "rustnmap-target",
+ "tokio",
 ]
 
 [[package]]

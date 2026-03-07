@@ -211,11 +211,21 @@ impl MmapPacketEngine {
         // Create socket with correct option sequence
         let fd = Self::create_socket()?;
 
+        // CRITICAL: Bind BEFORE setting up ring buffer
+        // PACKET_RX_RING requires the socket to be bound to an interface first.
+        // This ordering is required by the kernel and matches nmap's approach.
+        Self::bind_to_interface(&fd, if_index)?;
+
         // Setup ring buffer with ENOMEM recovery
+        // Must come after bind() to avoid errno=22 (EINVAL)
         let (ring_ptr, ring_size, frame_ptrs, frame_count) = Self::setup_ring_buffer(&fd, &config)?;
 
-        // Bind to interface
-        Self::bind_to_interface(&fd, if_index)?;
+        // CRITICAL: Re-bind with actual protocol AFTER ring buffer setup.
+        // Following nmap's libpcap pattern (pcap-linux.c:1297-1302):
+        // "Now that we have activated the mmap ring, we can set the correct protocol."
+        // First bind with protocol=0 allows ring buffer setup without dropping packets.
+        // Second bind with ETH_P_ALL enables actual packet reception.
+        Self::bind_to_interface_with_protocol(&fd, if_index, ETH_P_ALL.to_be())?;
 
         Ok(Self {
             fd,
@@ -238,8 +248,10 @@ impl MmapPacketEngine {
 
     /// Creates a raw packet socket.
     fn create_socket() -> Result<OwnedFd> {
-        // ETH_P_ALL in network byte order (big-endian)
-        let protocol = i32::from(ETH_P_ALL.to_be());
+        // For SOCK_RAW packet sockets, protocol must be 0 (all protocols).
+        // Protocol filtering is handled by bind(), not socket creation.
+        // See: packet(7) man page and nmap's libpcap/pcap-linux.c
+        let protocol = 0;
         // SAFETY: socket() creates a new file descriptor. We check for errors
         // and wrap the result in OwnedFd for automatic cleanup.
         let fd = unsafe { libc::socket(AF_PACKET, SOCK_RAW, protocol) };
@@ -579,15 +591,29 @@ impl MmapPacketEngine {
         Ok(frame_ptrs)
     }
 
-    /// Binds the socket to the specified interface.
+    /// Binds the socket to the specified interface with protocol=0.
+    ///
+    /// This initial bind with protocol=0 is required BEFORE setting up `PACKET_RX_RING`.
+    /// The socket must be re-bound with the actual protocol (`ETH_P_ALL`) after ring setup.
     fn bind_to_interface(fd: &OwnedFd, if_index: u32) -> Result<()> {
+        Self::bind_to_interface_with_protocol(fd, if_index, 0)
+    }
+
+    /// Binds the socket to the specified interface with the specified protocol.
+    ///
+    /// # Arguments
+    ///
+    /// * `fd` - Socket file descriptor
+    /// * `if_index` - Interface index
+    /// * `protocol` - Ethernet protocol in network byte order (e.g., `ETH_P_ALL.to_be()`)
+    fn bind_to_interface_with_protocol(fd: &OwnedFd, if_index: u32, protocol: u16) -> Result<()> {
         // SAFETY: mem::zeroed() is safe for sockaddr_ll which is POD
         let mut addr: libc::sockaddr_ll = unsafe { mem::zeroed() };
         addr.sll_family = u16::try_from(AF_PACKET).map_err(|e| PacketError::BindFailed {
             interface: format!("index {if_index}"),
             source: io::Error::new(io::ErrorKind::InvalidInput, e),
         })?;
-        addr.sll_protocol = ETH_P_ALL.to_be();
+        addr.sll_protocol = protocol;  // Use the specified protocol
         addr.sll_ifindex = i32::try_from(if_index).map_err(|e| PacketError::BindFailed {
             interface: format!("index {if_index}"),
             source: io::Error::new(io::ErrorKind::InvalidInput, e),
