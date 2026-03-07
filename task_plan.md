@@ -343,7 +343,7 @@ TEST_INTERFACE=ens33 sudo cargo bench -p rustnmap-benchmarks -- recvfrom_pps
 - `doc/architecture.md` - Update performance tables with actual results
 - `doc/structure.md` - Update crate descriptions
 
-**Status**: IN PROGRESS
+**Status**: COMPLETE
 
 ---
 
@@ -351,9 +351,17 @@ TEST_INTERFACE=ens33 sudo cargo bench -p rustnmap-benchmarks -- recvfrom_pps
 
 **Goal**: Verify 1M PPS target after PACKET_MMAP V2 completion
 
-**Command**:
+**Benchmark Suite Created**: `crates/rustnmap-benchmarks/benches/mmap_pps.rs`
+
+**Benchmark Functions**:
+1. `packet_reception` - Measures PPS using zero-copy ring buffers
+2. `zero_copy_reception` - Verifies zero-copy behavior (no memcpy)
+3. `ring_buffer_efficiency` - Tracks frame utilization and drop rates
+4. `ring_config_comparison` - Compares small/default/large ring configs
+
+**Run Command**:
 ```bash
-TEST_INTERFACE=ens33 sudo cargo bench -p rustnmap-benchmarks -- recvfrom_pps
+TEST_INTERFACE=ens33 sudo cargo bench -p rustnmap-benchmarks -- mmap_pps
 ```
 
 **Target Metrics**:
@@ -370,7 +378,7 @@ TEST_INTERFACE=ens33 sudo cargo bench -p rustnmap-benchmarks -- recvfrom_pps
 - [ ] Packet Loss (T5) <= 5%
 - [ ] Zero-copy verified (no memcpy in hot path)
 
-**Status**: PENDING
+**Status**: IN PROGRESS (Benchmark infrastructure complete, awaiting network test)
 
 ---
 
