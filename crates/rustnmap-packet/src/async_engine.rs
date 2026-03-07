@@ -381,11 +381,12 @@ impl PacketEngine for AsyncPacketEngine {
                     }
                     Err(e) => {
                         // AsyncFd error, send through channel
-                        let _ = packet_tx.send(Err(PacketError::SocketOption {
-                            option: "async_fd.readable".to_string(),
-                            source: e,
-                        }))
-                        .await;
+                        let _ = packet_tx
+                            .send(Err(PacketError::SocketOption {
+                                option: "async_fd.readable".to_string(),
+                                source: e,
+                            }))
+                            .await;
                         running.store(false, Ordering::Release);
                         return;
                     }

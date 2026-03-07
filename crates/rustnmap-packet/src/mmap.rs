@@ -654,9 +654,7 @@ impl MmapPacketEngine {
         let status_ptr = std::ptr::addr_of!(hdr.tp_status).cast::<AtomicU32>();
         // SAFETY: status_ptr points to the first field of Tpacket2Hdr,
         // which is a naturally aligned u32 in kernel-shared memory.
-        unsafe {
-            (*status_ptr).load(Ordering::Acquire) & TP_STATUS_USER != 0
-        }
+        unsafe { (*status_ptr).load(Ordering::Acquire) & TP_STATUS_USER != 0 }
     }
 
     /// Releases a frame back to the kernel.

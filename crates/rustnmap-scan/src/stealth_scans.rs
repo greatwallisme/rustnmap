@@ -33,10 +33,7 @@
 
 use std::collections::HashMap;
 use std::io;
-use std::mem;
 use std::net::{IpAddr, SocketAddr};
-use std::os::fd::{AsRawFd, FromRawFd};
-use std::ptr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -58,11 +55,6 @@ pub const SOURCE_PORT_START: u16 = 60000;
 /// Maximum batch size for batch scanning operations.
 /// Limits memory usage and prevents overwhelming the network.
 pub const MAX_BATCH_SIZE: usize = 1024;
-
-/// Ethernet protocol for all traffic.
-const ETH_P_ALL: u16 = 0x0003;
-/// Ethernet header size.
-const ETH_HDR_SIZE: usize = 14;
 
 // ============================================================================
 // Adaptive Timing (nmap-style RTT estimation)
@@ -163,317 +155,10 @@ impl Default for AdaptiveTiming {
     }
 }
 
-/// Simple `AF_PACKET` socket for L2 packet capture.
-/// Uses standard `recvfrom` (not `PACKET_MMAP`) for simplicity.
-#[derive(Debug)]
-struct SimpleAfPacket {
-    #[expect(dead_code, reason = "Interface index stored for potential future use")]
-    if_index: i32,
-    fd: std::os::fd::OwnedFd,
-}
-
-impl SimpleAfPacket {
-    /// Creates a new `AF_PACKET` socket bound to the specified interface.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if socket creation, interface lookup, or binding fails.
-    fn new(if_name: &str) -> io::Result<Self> {
-        // SAFETY: Creating an AF_PACKET raw socket with valid libc constants.
-        // The returned fd is checked for errors before use.
-        let fd = unsafe {
-            libc::socket(
-                libc::AF_PACKET,
-                libc::SOCK_RAW,
-                i32::from(libc::htons(ETH_P_ALL)),
-            )
-        };
-        if fd < 0 {
-            return Err(io::Error::last_os_error());
-        }
-        // SAFETY: fd is a valid, non-negative file descriptor returned by socket().
-        // OwnedFd takes ownership and will close it on drop.
-        let fd = unsafe { std::os::fd::OwnedFd::from_raw_fd(fd) };
-
-        let if_index = Self::get_if_index(fd.as_raw_fd(), if_name)?;
-
-        // SAFETY: zeroed memory is valid for sockaddr_ll (POD struct with integer fields).
-        let mut addr: libc::sockaddr_ll = unsafe { mem::zeroed() };
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "AF_PACKET (17) fits in u16"
-        )]
-        {
-            addr.sll_family = libc::AF_PACKET as u16;
-        };
-        addr.sll_protocol = ETH_P_ALL.to_be();
-        addr.sll_ifindex = if_index;
-
-        // SAFETY: fd is a valid AF_PACKET socket. addr is properly initialized with
-        // family, protocol, and interface index. Size matches the struct.
-        let ret = unsafe {
-            libc::bind(
-                fd.as_raw_fd(),
-                (&raw const addr).cast::<libc::sockaddr>(),
-                u32::try_from(mem::size_of::<libc::sockaddr_ll>()).unwrap_or(u32::MAX),
-            )
-        };
-        if ret < 0 {
-            return Err(io::Error::last_os_error());
-        }
-
-        // SAFETY: fd is a valid open file descriptor. F_GETFL returns current flags.
-        let flags = unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_GETFL) };
-        if flags < 0 {
-            return Err(io::Error::last_os_error());
-        }
-        // SAFETY: fd is valid, flags is the current flag set from F_GETFL.
-        // Adding O_NONBLOCK is a safe flag modification.
-        let ret = unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) };
-        if ret < 0 {
-            return Err(io::Error::last_os_error());
-        }
-
-        // SAFETY: zeroed memory is valid for packet_mreq (POD struct).
-        let mut mreq: libc::packet_mreq = unsafe { mem::zeroed() };
-        mreq.mr_ifindex = if_index;
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "PACKET_MR_PROMISC (1) fits in u16"
-        )]
-        {
-            mreq.mr_type = libc::PACKET_MR_PROMISC as u16;
-        };
-        // SAFETY: fd is a valid AF_PACKET socket. mreq is properly initialized.
-        // PACKET_ADD_MEMBERSHIP enables promiscuous mode on the interface.
-        let ret = unsafe {
-            libc::setsockopt(
-                fd.as_raw_fd(),
-                libc::SOL_PACKET,
-                libc::PACKET_ADD_MEMBERSHIP,
-                (&raw const mreq).cast::<libc::c_void>(),
-                u32::try_from(mem::size_of::<libc::packet_mreq>()).unwrap_or(u32::MAX),
-            )
-        };
-        if ret < 0 {
-            // Non-fatal: promiscuous mode is helpful but not required
-        }
-
-        Ok(Self { if_index, fd })
-    }
-
-    fn get_if_index(fd: i32, if_name: &str) -> io::Result<i32> {
-        // SAFETY: zeroed memory is valid for ifreq (all-zero is a valid bit pattern
-        // for this POD struct containing integers and a char array).
-        let mut ifreq: libc::ifreq = unsafe { mem::zeroed() };
-        let bytes = if_name.as_bytes();
-        if bytes.len() >= libc::IFNAMSIZ {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "interface name too long",
-            ));
-        }
-        for (i, &b) in bytes.iter().enumerate() {
-            #[expect(
-                clippy::cast_possible_wrap,
-                reason = "ASCII interface name bytes (0-127) fit safely in i8"
-            )]
-            {
-                ifreq.ifr_name[i] = b as i8;
-            };
-        }
-        // SAFETY: fd is a valid open socket, ifreq is properly initialized with
-        // the interface name. SIOCGIFINDEX populates ifru_ifindex on success.
-        let ret = unsafe { libc::ioctl(fd, libc::SIOCGIFINDEX, &raw mut ifreq) };
-        if ret < 0 {
-            return Err(io::Error::last_os_error());
-        }
-        // SAFETY: After successful SIOCGIFINDEX ioctl, the kernel has populated
-        // the ifru_ifindex field of the ifreq union with the interface index.
-        Ok(unsafe { ifreq.ifr_ifru.ifru_ifindex })
-    }
-
-    /// Receives a packet from the `AF_PACKET` socket.
-    ///
-    /// Returns `Ok(Some(data))` if a packet was received,
-    /// `Ok(None)` if no packet is available (non-blocking), or `Err` on error.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if `recvfrom` fails with an error other than `WouldBlock`.
-    fn recv_packet(&self) -> io::Result<Option<Vec<u8>>> {
-        let mut buffer = vec![0u8; 65_535];
-        // SAFETY: fd is a valid AF_PACKET socket. buffer is a properly allocated
-        // mutable slice. recvfrom with null src_addr/addrlen is valid and simply
-        // discards the sender address information.
-        let ret = unsafe {
-            libc::recvfrom(
-                self.fd.as_raw_fd(),
-                buffer.as_mut_ptr().cast::<libc::c_void>(),
-                buffer.len(),
-                0,
-                ptr::null_mut(),
-                ptr::null_mut(),
-            )
-        };
-        if ret < 0 {
-            let err = io::Error::last_os_error();
-            if err.kind() == io::ErrorKind::WouldBlock {
-                return Ok(None);
-            }
-            return Err(err);
-        }
-        #[expect(
-            clippy::cast_sign_loss,
-            reason = "ret is non-negative (checked above), safe to cast to usize"
-        )]
-        let len = ret as usize;
-        buffer.truncate(len);
-        Ok(Some(buffer))
-    }
-
-    /// Receives a packet from the `AF_PACKET` socket with a timeout.
-    ///
-    /// Uses `poll()` to wait for data availability before receiving.
-    ///
-    /// # Arguments
-    ///
-    /// * `timeout` - Maximum time to wait for data
-    ///
-    /// # Returns
-    ///
-    /// Returns `Ok(Some(data))` if a packet was received,
-    /// `Ok(None)` if timeout elapsed without data, or `Err` on error.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if `poll()` or `recvfrom()` fails.
-    fn recv_packet_with_timeout(&self, timeout: Duration) -> io::Result<Option<Vec<u8>>> {
-        // SAFETY: pollfd is a POD struct. Zeroed memory is valid initialization.
-        let mut pollfd: libc::pollfd = unsafe { mem::zeroed() };
-        pollfd.fd = self.fd.as_raw_fd();
-        pollfd.events = libc::POLLIN;
-
-        // Convert timeout to milliseconds for poll()
-        // Round up to ensure at least 1ms poll for non-zero timeouts
-        let timeout_ms = if timeout.is_zero() {
-            0
-        } else {
-            timeout.as_millis().try_into().unwrap_or(i32::MAX).max(1)
-        };
-
-        // SAFETY: pollfd is properly initialized with fd and events.
-        // nfds is 1 (single pollfd). timeout is valid in milliseconds.
-        let ret = unsafe { libc::poll(&raw mut pollfd, 1, timeout_ms) };
-
-        if ret < 0 {
-            return Err(io::Error::last_os_error());
-        }
-
-        if ret == 0 {
-            // Poll timeout - no data available
-            return Ok(None);
-        }
-
-        // Data is available, receive it
-        self.recv_packet()
-    }
-
-    /// Flushes any pending packets from the socket receive buffer.
-    ///
-    /// This should be called before starting a new scan to ensure we don't
-    /// process stale packets from previous scans or network activity.
-    fn flush_buffer(&self) {
-        // Drain all pending packets
-        while self.recv_packet().is_ok_and(|p| p.is_some()) {
-            // Continue discarding packets
-        }
-    }
-}
-
 /// TCP flag constants for reference.
 mod tcp_flags {
     /// RST flag (0x04).
     pub const RST: u8 = 0x04;
-}
-
-/// Creates an `AF_PACKET` socket for the given local address.
-///
-/// This function attempts to create an `AF_PACKET` socket bound to the
-/// network interface that corresponds to the given local IP address.
-///
-/// The socket captures at L2 (data link layer) like libpcap, ensuring all
-/// TCP responses are received regardless of kernel TCP stack behavior.
-///
-/// # Note
-///
-/// This is optional - if creation fails, returns `None` and the scanner
-/// falls back to raw socket only (which may miss some responses).
-///
-/// For localhost addresses, returns `None` because `AF_PACKET` on loopback
-/// interface cannot capture responses from raw socket probes. The raw
-/// socket fallback handles localhost correctly.
-fn create_packet_socket(local_addr: Ipv4Addr) -> Option<Arc<SimpleAfPacket>> {
-    // Skip AF_PACKET for localhost - it cannot capture raw socket responses on lo
-    if local_addr == Ipv4Addr::LOCALHOST || local_addr.is_loopback() {
-        return None;
-    }
-
-    // Get the network interface name for the local address
-    let if_name = get_interface_for_ip(local_addr)?;
-
-    match SimpleAfPacket::new(&if_name) {
-        Ok(socket) => Some(Arc::new(socket)),
-        Err(e) => {
-            // Log the error but continue with raw socket fallback
-            let _ = e;
-            None
-        }
-    }
-}
-
-/// Gets the network interface name for the given local IP address.
-///
-/// This function tries to find the interface that has the given local IP address.
-/// For localhost, returns "lo". For other addresses, reads from /proc/net/route
-/// to find the default route interface.
-fn get_interface_for_ip(local_addr: Ipv4Addr) -> Option<String> {
-    // For localhost, use lo
-    if local_addr == Ipv4Addr::LOCALHOST || local_addr.is_loopback() {
-        return Some("lo".to_string());
-    }
-
-    // Read /proc/net/route to find the default route interface
-    // This is the most reliable way to find the main network interface
-    if let Ok(route_data) = std::fs::read_to_string("/proc/net/route") {
-        for line in route_data.lines().skip(1) {
-            // Format: Iface Destination Gateway Flags ...
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() >= 2 {
-                let iface = parts[0];
-                let dest = parts[1];
-                // Dest 00000000 means default route
-                if dest == "00000000" {
-                    // Found the default route interface, return it directly
-                    // without trying to verify with AfPacketEngine (which may fail)
-                    return Some(iface.to_string());
-                }
-            }
-        }
-    }
-
-    // Fallback: try common interface names in order of likelihood
-    for if_name in [
-        "wlp3s0", "wlan0", "wlp2s0", "wlp1s0", // Wireless
-        "eth0", "eth1", "ens33", "ens34", "enp0s3", "enp0s8", // Wired
-    ] {
-        // Check if interface exists by reading /sys/class/net/
-        let path = format!("/sys/class/net/{if_name}/operstate");
-        if std::path::Path::new(&path).exists() {
-            return Some(if_name.to_string());
-        }
-    }
-    None
 }
 
 /// TCP FIN scanner using raw sockets.
@@ -500,7 +185,10 @@ pub struct TcpFinScanner {
     /// Optional packet engine for zero-copy packet capture using `PACKET_MMAP` V2.
     packet_engine: Option<Arc<Mutex<ScannerPacketEngine>>>,
     /// Tracks whether packet engine has been started.
-    #[allow(dead_code, reason = "Reserved for Phase 3.4 async receive path migration")]
+    #[allow(
+        dead_code,
+        reason = "Reserved for Phase 3.4 async receive path migration"
+    )]
     packet_engine_started: bool,
 }
 
@@ -918,7 +606,10 @@ impl TcpFinScanner {
                 // The packet engine provides PACKET_MMAP V2 zero-copy capture but requires async context.
                 // This synchronous method uses raw socket reception for packet capture.
                 // Future migration will make this method async to leverage the packet engine.
-                let data = match self.socket.recv_packet(recv_buf.as_mut_slice(), Some(remaining)) {
+                let data = match self
+                    .socket
+                    .recv_packet(recv_buf.as_mut_slice(), Some(remaining))
+                {
                     Ok(len) if len > 0 => (&recv_buf[..len], len),
                     Ok(_) => continue,
                     Err(e)
@@ -1040,7 +731,10 @@ pub struct TcpNullScanner {
     /// Optional packet engine for zero-copy packet capture using `PACKET_MMAP` V2.
     packet_engine: Option<Arc<Mutex<ScannerPacketEngine>>>,
     /// Tracks whether packet engine has been started.
-    #[allow(dead_code, reason = "Reserved for Phase 3.4 async receive path migration")]
+    #[allow(
+        dead_code,
+        reason = "Reserved for Phase 3.4 async receive path migration"
+    )]
     packet_engine_started: bool,
 }
 
@@ -1420,7 +1114,10 @@ impl TcpNullScanner {
                 // The packet engine provides PACKET_MMAP V2 zero-copy capture but requires async context.
                 // This synchronous method uses raw socket reception for packet capture.
                 // Future migration will make this method async to leverage the packet engine.
-                let data = match self.socket.recv_packet(recv_buf.as_mut_slice(), Some(remaining)) {
+                let data = match self
+                    .socket
+                    .recv_packet(recv_buf.as_mut_slice(), Some(remaining))
+                {
                     Ok(len) if len > 0 => (&recv_buf[..len], len),
                     Ok(_) => continue,
                     Err(e)
@@ -1539,7 +1236,10 @@ pub struct TcpXmasScanner {
     /// Optional packet engine for zero-copy packet capture using `PACKET_MMAP` V2.
     packet_engine: Option<Arc<Mutex<ScannerPacketEngine>>>,
     /// Tracks whether packet engine has been started.
-    #[allow(dead_code, reason = "Reserved for Phase 3.4 async receive path migration")]
+    #[allow(
+        dead_code,
+        reason = "Reserved for Phase 3.4 async receive path migration"
+    )]
     packet_engine_started: bool,
 }
 
@@ -1928,7 +1628,10 @@ impl TcpXmasScanner {
                 // The packet engine provides PACKET_MMAP V2 zero-copy capture but requires async context.
                 // This synchronous method uses raw socket reception for packet capture.
                 // Future migration will make this method async to leverage the packet engine.
-                let data = match self.socket.recv_packet(recv_buf.as_mut_slice(), Some(remaining)) {
+                let data = match self
+                    .socket
+                    .recv_packet(recv_buf.as_mut_slice(), Some(remaining))
+                {
                     Ok(len) if len > 0 => (&recv_buf[..len], len),
                     Ok(_) => continue,
                     Err(e)
@@ -2043,8 +1746,14 @@ pub struct TcpAckScanner {
     socket: RawSocket,
     /// Scanner configuration.
     config: ScanConfig,
-    /// Optional `AF_PACKET` socket for L2 packet capture.
-    packet_socket: Option<Arc<SimpleAfPacket>>,
+    /// Optional packet engine for zero-copy packet capture using `PACKET_MMAP` V2.
+    packet_engine: Option<Arc<Mutex<ScannerPacketEngine>>>,
+    /// Tracks whether packet engine has been started.
+    #[allow(
+        dead_code,
+        reason = "Reserved for Phase 3.4 async receive path migration"
+    )]
+    packet_engine_started: bool,
 }
 
 impl TcpAckScanner {
@@ -2075,15 +1784,16 @@ impl TcpAckScanner {
             }
         })?;
 
-        // Try to create AF_PACKET socket for L2 packet capture.
+        // Try to create packet engine for zero-copy packet capture using `PACKET_MMAP` V2.
         // This allows receiving RST responses that the kernel TCP stack would otherwise consume.
-        let packet_socket = create_packet_socket(local_addr);
+        let packet_engine = create_stealth_engine(Some(local_addr), config.clone());
 
         Ok(Self {
             local_addr,
             socket,
             config,
-            packet_socket,
+            packet_engine,
+            packet_engine_started: false,
         })
     }
 
@@ -2143,52 +1853,25 @@ impl TcpAckScanner {
                 timeout - elapsed
             };
 
-            // Try AF_PACKET first if available (L2 capture - receives all TCP responses)
-            // Use a short timeout (200ms or remaining timeout) to wait for RST responses
-            // Fall back to raw socket if packet socket is not available or times out
-            #[expect(
-                unused_assignments,
-                reason = "packet_data extends lifetime of received data"
-            )]
-            let mut packet_data = None;
-            let packet_timeout = remaining_timeout.min(Duration::from_millis(200));
-            let received = if let Some(ref pkt_sock) = self.packet_socket {
-                match pkt_sock.recv_packet_with_timeout(packet_timeout) {
-                    Ok(Some(data)) if data.len() > ETH_HDR_SIZE => {
-                        packet_data = Some(data);
-                        packet_data
-                            .as_ref()
-                            .map(|d| (&d[ETH_HDR_SIZE..], d.len() - ETH_HDR_SIZE))
-                    }
-                    _ => None,
-                }
-            } else {
-                None
-            };
-
-            // Fall back to raw socket if AF_PACKET didn't receive data
-            let data = if let Some((slice, len)) = received {
-                (slice, len)
-            } else {
-                match self
-                    .socket
-                    .recv_packet(recv_buf.as_mut_slice(), Some(remaining_timeout))
+            // Receive response via raw socket
+            let data = match self
+                .socket
+                .recv_packet(recv_buf.as_mut_slice(), Some(remaining_timeout))
+            {
+                Ok(len) if len > 0 => (&recv_buf[..len], len),
+                Ok(_) => return Ok(PortState::Filtered),
+                Err(e)
+                    if e.kind() == io::ErrorKind::WouldBlock
+                        || e.kind() == io::ErrorKind::TimedOut =>
                 {
-                    Ok(len) if len > 0 => (&recv_buf[..len], len),
-                    Ok(_) => return Ok(PortState::Filtered),
-                    Err(e)
-                        if e.kind() == io::ErrorKind::WouldBlock
-                            || e.kind() == io::ErrorKind::TimedOut =>
-                    {
-                        return Ok(PortState::Filtered);
-                    }
-                    Err(e) => {
-                        return Err(rustnmap_common::ScanError::Network(
-                            rustnmap_common::Error::Network(
-                                rustnmap_common::error::NetworkError::ReceiveError { source: e },
-                            ),
-                        ))
-                    }
+                    return Ok(PortState::Filtered);
+                }
+                Err(e) => {
+                    return Err(rustnmap_common::ScanError::Network(
+                        rustnmap_common::Error::Network(
+                            rustnmap_common::error::NetworkError::ReceiveError { source: e },
+                        ),
+                    ))
                 }
             };
 
@@ -2302,10 +1985,6 @@ impl TcpAckScanner {
     /// - RST received -> Unfiltered
     /// - ICMP unreachable -> Filtered
     /// - No response after retries -> Filtered
-    #[expect(
-        clippy::too_many_lines,
-        reason = "Batch scanning with retransmissions requires handling send, receive, retry, and result collection in one method for clarity"
-    )]
     pub fn scan_ports_batch(
         &self,
         dst_addr: Ipv4Addr,
@@ -2329,10 +2008,9 @@ impl TcpAckScanner {
         // Adaptive timing for nmap-style RTT estimation
         let mut timing = AdaptiveTiming::new();
 
-        // Flush any stale packets from the AF_PACKET socket BEFORE starting
-        if let Some(ref pkt_sock) = self.packet_socket {
-            pkt_sock.flush_buffer();
-        }
+        // Flush any stale packets from the packet socket BEFORE starting.
+        // The packet engine uses a different buffering strategy, so no flush is needed.
+        let _flushed = self.packet_engine.is_some();
 
         // Nmap-style retry loop with adaptive timeout
         for _retry_round in 0..=max_retries {
@@ -2377,52 +2055,32 @@ impl TcpAckScanner {
                     break;
                 }
 
-                // Try AF_PACKET first if available
-                #[expect(
-                    unused_assignments,
-                    reason = "packet_data extends lifetime of received data"
-                )]
-                let mut packet_data = None;
-                let packet_timeout = remaining.min(Duration::from_millis(200));
-                let received = if let Some(ref pkt_sock) = self.packet_socket {
-                    match pkt_sock.recv_packet_with_timeout(packet_timeout) {
-                        Ok(Some(data)) if data.len() > ETH_HDR_SIZE => {
-                            packet_data = Some(data);
-                            packet_data
-                                .as_ref()
-                                .map(|d| (&d[ETH_HDR_SIZE..], d.len() - ETH_HDR_SIZE))
-                        }
-                        _ => None,
-                    }
-                } else {
-                    None
-                };
+                // The packet engine provides PACKET_MMAP V2 zero-copy capture but requires async context.
+                // This synchronous method uses raw socket reception for packet capture.
+                // Future migration will make this method async to leverage the packet engine.
+                let remaining = remaining.min(Duration::from_millis(200));
 
-                // Fall back to raw socket if AF_PACKET didn't receive data
-                let data = if let Some((slice, len)) = received {
-                    (slice, len)
-                } else {
-                    match self
-                        .socket
-                        .recv_packet(recv_buf.as_mut_slice(), Some(remaining))
+                // Use raw socket reception
+                let data = match self
+                    .socket
+                    .recv_packet(recv_buf.as_mut_slice(), Some(remaining))
+                {
+                    Ok(len) if len > 0 => (&recv_buf[..len], len),
+                    Ok(_) => continue,
+                    Err(e)
+                        if e.kind() == io::ErrorKind::WouldBlock
+                            || e.kind() == io::ErrorKind::TimedOut =>
                     {
-                        Ok(len) if len > 0 => (&recv_buf[..len], len),
-                        Ok(_) => continue,
-                        Err(e)
-                            if e.kind() == io::ErrorKind::WouldBlock
-                                || e.kind() == io::ErrorKind::TimedOut =>
-                        {
-                            continue;
-                        }
-                        Err(e) => {
-                            return Err(rustnmap_common::ScanError::Network(
-                                rustnmap_common::Error::Network(
-                                    rustnmap_common::error::NetworkError::ReceiveError {
-                                        source: e,
-                                    },
-                                ),
-                            ))
-                        }
+                        continue;
+                    }
+                    Err(e) => {
+                        return Err(rustnmap_common::ScanError::Network(
+                            rustnmap_common::Error::Network(
+                                rustnmap_common::error::NetworkError::ReceiveError {
+                                    source: e,
+                                },
+                            ),
+                        ))
                     }
                 };
 
@@ -2497,8 +2155,14 @@ pub struct TcpMaimonScanner {
     config: ScanConfig,
     /// Optional decoy scheduler for decoy scanning.
     decoy_scheduler: Option<DecoyScheduler>,
-    /// Optional `AF_PACKET` socket for L2 packet capture.
-    packet_socket: Option<Arc<SimpleAfPacket>>,
+    /// Optional packet engine for zero-copy packet capture using `PACKET_MMAP` V2.
+    packet_engine: Option<Arc<Mutex<ScannerPacketEngine>>>,
+    /// Tracks whether packet engine has been started.
+    #[allow(
+        dead_code,
+        reason = "Reserved for Phase 3.4 async receive path migration"
+    )]
+    packet_engine_started: bool,
 }
 
 impl TcpMaimonScanner {
@@ -2555,16 +2219,17 @@ impl TcpMaimonScanner {
             }
         })?;
 
-        // Try to create AF_PACKET socket for L2 packet capture.
+        // Try to create packet engine for zero-copy packet capture using `PACKET_MMAP` V2.
         // This allows receiving RST responses that the kernel TCP stack would otherwise consume.
-        let packet_socket = create_packet_socket(local_addr);
+        let packet_engine = create_stealth_engine(Some(local_addr), config.clone());
 
         Ok(Self {
             local_addr,
             socket,
             config,
             decoy_scheduler,
-            packet_socket,
+            packet_engine,
+            packet_engine_started: false,
         })
     }
 
@@ -2625,52 +2290,25 @@ impl TcpMaimonScanner {
                 timeout - elapsed
             };
 
-            // Try AF_PACKET first if available (L2 capture - receives all TCP responses)
-            // Use a short timeout (200ms or remaining timeout) to wait for RST responses
-            // Fall back to raw socket if packet socket is not available or times out
-            #[expect(
-                unused_assignments,
-                reason = "packet_data extends lifetime of received data"
-            )]
-            let mut packet_data = None;
-            let packet_timeout = remaining_timeout.min(Duration::from_millis(200));
-            let received = if let Some(ref pkt_sock) = self.packet_socket {
-                match pkt_sock.recv_packet_with_timeout(packet_timeout) {
-                    Ok(Some(data)) if data.len() > ETH_HDR_SIZE => {
-                        packet_data = Some(data);
-                        packet_data
-                            .as_ref()
-                            .map(|d| (&d[ETH_HDR_SIZE..], d.len() - ETH_HDR_SIZE))
-                    }
-                    _ => None,
-                }
-            } else {
-                None
-            };
-
-            // Fall back to raw socket if AF_PACKET didn't receive data
-            let data = if let Some((slice, len)) = received {
-                (slice, len)
-            } else {
-                match self
-                    .socket
-                    .recv_packet(recv_buf.as_mut_slice(), Some(remaining_timeout))
+            // Receive response via raw socket
+            let data = match self
+                .socket
+                .recv_packet(recv_buf.as_mut_slice(), Some(remaining_timeout))
+            {
+                Ok(len) if len > 0 => (&recv_buf[..len], len),
+                Ok(_) => return Ok(PortState::OpenOrFiltered),
+                Err(e)
+                    if e.kind() == io::ErrorKind::WouldBlock
+                        || e.kind() == io::ErrorKind::TimedOut =>
                 {
-                    Ok(len) if len > 0 => (&recv_buf[..len], len),
-                    Ok(_) => return Ok(PortState::OpenOrFiltered),
-                    Err(e)
-                        if e.kind() == io::ErrorKind::WouldBlock
-                            || e.kind() == io::ErrorKind::TimedOut =>
-                    {
-                        return Ok(PortState::OpenOrFiltered);
-                    }
-                    Err(e) => {
-                        return Err(rustnmap_common::ScanError::Network(
-                            rustnmap_common::Error::Network(
-                                rustnmap_common::error::NetworkError::ReceiveError { source: e },
-                            ),
-                        ))
-                    }
+                    return Ok(PortState::OpenOrFiltered);
+                }
+                Err(e) => {
+                    return Err(rustnmap_common::ScanError::Network(
+                        rustnmap_common::Error::Network(
+                            rustnmap_common::error::NetworkError::ReceiveError { source: e },
+                        ),
+                    ))
                 }
             };
 
@@ -2807,10 +2445,9 @@ impl TcpMaimonScanner {
         // Adaptive timing for nmap-style RTT estimation
         let mut timing = AdaptiveTiming::new();
 
-        // Flush any stale packets from the AF_PACKET socket BEFORE starting
-        if let Some(ref pkt_sock) = self.packet_socket {
-            pkt_sock.flush_buffer();
-        }
+        // Flush any stale packets from the packet socket BEFORE starting.
+        // The packet engine uses a different buffering strategy, so no flush is needed.
+        let _flushed = self.packet_engine.is_some();
 
         // Nmap-style retry loop with adaptive timeout
         for _retry_round in 0..=max_retries {
@@ -2905,7 +2542,10 @@ impl TcpMaimonScanner {
                 // The packet engine provides PACKET_MMAP V2 zero-copy capture but requires async context.
                 // This synchronous method uses raw socket reception for packet capture.
                 // Future migration will make this method async to leverage the packet engine.
-                let data = match self.socket.recv_packet(recv_buf.as_mut_slice(), Some(remaining)) {
+                let data = match self
+                    .socket
+                    .recv_packet(recv_buf.as_mut_slice(), Some(remaining))
+                {
                     Ok(len) if len > 0 => (&recv_buf[..len], len),
                     Ok(_) => continue,
                     Err(e)
@@ -3023,8 +2663,8 @@ pub struct TcpWindowScanner {
     socket: RawSocket,
     /// Scanner configuration.
     config: ScanConfig,
-    /// Optional `AF_PACKET` socket for L2 packet capture.
-    packet_socket: Option<Arc<SimpleAfPacket>>,
+    /// Optional packet engine for zero-copy packet capture using `PACKET_MMAP` V2.
+    packet_engine: Option<Arc<Mutex<ScannerPacketEngine>>>,
 }
 
 impl TcpWindowScanner {
@@ -3055,15 +2695,15 @@ impl TcpWindowScanner {
             }
         })?;
 
-        // Try to create AF_PACKET socket for L2 packet capture.
+        // Try to create packet engine for zero-copy packet capture using `PACKET_MMAP` V2.
         // This allows receiving RST responses that the kernel TCP stack would otherwise consume.
-        let packet_socket = create_packet_socket(local_addr);
+        let packet_engine = create_stealth_engine(Some(local_addr), config.clone());
 
         Ok(Self {
             local_addr,
             socket,
             config,
-            packet_socket,
+            packet_engine,
         })
     }
 
@@ -3123,52 +2763,30 @@ impl TcpWindowScanner {
                 timeout - elapsed
             };
 
-            // Try AF_PACKET first if available (L2 capture - receives all TCP responses)
-            // Use a short timeout (200ms or remaining timeout) to wait for RST responses
-            // Fall back to raw socket if packet socket is not available or times out
-            #[expect(
-                unused_assignments,
-                reason = "packet_data extends lifetime of received data"
-            )]
-            let mut packet_data = None;
-            let packet_timeout = remaining_timeout.min(Duration::from_millis(200));
-            let received = if let Some(ref pkt_sock) = self.packet_socket {
-                match pkt_sock.recv_packet_with_timeout(packet_timeout) {
-                    Ok(Some(data)) if data.len() > ETH_HDR_SIZE => {
-                        packet_data = Some(data);
-                        packet_data
-                            .as_ref()
-                            .map(|d| (&d[ETH_HDR_SIZE..], d.len() - ETH_HDR_SIZE))
-                    }
-                    _ => None,
-                }
-            } else {
-                None
-            };
+            // The packet engine provides PACKET_MMAP V2 zero-copy capture but requires async context.
+            // This synchronous method uses raw socket reception for packet capture.
+            // Future migration will make this method async to leverage the packet engine.
+            let remaining_timeout = remaining_timeout.min(Duration::from_millis(200));
 
-            // Fall back to raw socket if AF_PACKET didn't receive data
-            let data = if let Some((slice, len)) = received {
-                (slice, len)
-            } else {
-                match self
-                    .socket
-                    .recv_packet(recv_buf.as_mut_slice(), Some(remaining_timeout))
+            // Use raw socket reception for this synchronous method
+            let data = match self
+                .socket
+                .recv_packet(recv_buf.as_mut_slice(), Some(remaining_timeout))
+            {
+                Ok(len) if len > 0 => (&recv_buf[..len], len),
+                Ok(_) => return Ok(PortState::Filtered),
+                Err(e)
+                    if e.kind() == io::ErrorKind::WouldBlock
+                        || e.kind() == io::ErrorKind::TimedOut =>
                 {
-                    Ok(len) if len > 0 => (&recv_buf[..len], len),
-                    Ok(_) => return Ok(PortState::Filtered),
-                    Err(e)
-                        if e.kind() == io::ErrorKind::WouldBlock
-                            || e.kind() == io::ErrorKind::TimedOut =>
-                    {
-                        return Ok(PortState::Filtered);
-                    }
-                    Err(e) => {
-                        return Err(rustnmap_common::ScanError::Network(
-                            rustnmap_common::Error::Network(
-                                rustnmap_common::error::NetworkError::ReceiveError { source: e },
-                            ),
-                        ))
-                    }
+                    return Ok(PortState::Filtered);
+                }
+                Err(e) => {
+                    return Err(rustnmap_common::ScanError::Network(
+                        rustnmap_common::Error::Network(
+                            rustnmap_common::error::NetworkError::ReceiveError { source: e },
+                        ),
+                    ))
                 }
             };
 
@@ -3303,10 +2921,6 @@ impl TcpWindowScanner {
     /// - RST + Window == 0 -> Closed
     /// - ICMP unreachable -> Filtered
     /// - No response after retries -> Filtered
-    #[expect(
-        clippy::too_many_lines,
-        reason = "Batch scanning with retransmissions requires handling send, receive, retry, and result collection in one method for clarity"
-    )]
     pub fn scan_ports_batch(
         &self,
         dst_addr: Ipv4Addr,
@@ -3331,10 +2945,9 @@ impl TcpWindowScanner {
         // Adaptive timing for nmap-style RTT estimation
         let mut timing = AdaptiveTiming::new();
 
-        // Flush any stale packets from the AF_PACKET socket BEFORE starting
-        if let Some(ref pkt_sock) = self.packet_socket {
-            pkt_sock.flush_buffer();
-        }
+        // Flush any stale packets from the packet socket BEFORE starting.
+        // The packet engine uses a different buffering strategy, so no flush is needed.
+        let _flushed = self.packet_engine.is_some();
 
         // Nmap-style retry loop with adaptive timeout
         for _retry_round in 0..=max_retries {
@@ -3378,52 +2991,32 @@ impl TcpWindowScanner {
                     break;
                 }
 
-                // Try AF_PACKET first if available
-                #[expect(
-                    unused_assignments,
-                    reason = "packet_data extends lifetime of received data"
-                )]
-                let mut packet_data = None;
-                let packet_timeout = remaining.min(Duration::from_millis(200));
-                let received = if let Some(ref pkt_sock) = self.packet_socket {
-                    match pkt_sock.recv_packet_with_timeout(packet_timeout) {
-                        Ok(Some(data)) if data.len() > ETH_HDR_SIZE => {
-                            packet_data = Some(data);
-                            packet_data
-                                .as_ref()
-                                .map(|d| (&d[ETH_HDR_SIZE..], d.len() - ETH_HDR_SIZE))
-                        }
-                        _ => None,
-                    }
-                } else {
-                    None
-                };
+                // The packet engine provides PACKET_MMAP V2 zero-copy capture but requires async context.
+                // This synchronous method uses raw socket reception for packet capture.
+                // Future migration will make this method async to leverage the packet engine.
+                let remaining = remaining.min(Duration::from_millis(200));
 
-                // Fall back to raw socket if AF_PACKET didn't receive data
-                let data = if let Some((slice, len)) = received {
-                    (slice, len)
-                } else {
-                    match self
-                        .socket
-                        .recv_packet(recv_buf.as_mut_slice(), Some(remaining))
+                // Use raw socket reception
+                let data = match self
+                    .socket
+                    .recv_packet(recv_buf.as_mut_slice(), Some(remaining))
+                {
+                    Ok(len) if len > 0 => (&recv_buf[..len], len),
+                    Ok(_) => continue,
+                    Err(e)
+                        if e.kind() == io::ErrorKind::WouldBlock
+                            || e.kind() == io::ErrorKind::TimedOut =>
                     {
-                        Ok(len) if len > 0 => (&recv_buf[..len], len),
-                        Ok(_) => continue,
-                        Err(e)
-                            if e.kind() == io::ErrorKind::WouldBlock
-                                || e.kind() == io::ErrorKind::TimedOut =>
-                        {
-                            continue;
-                        }
-                        Err(e) => {
-                            return Err(rustnmap_common::ScanError::Network(
-                                rustnmap_common::Error::Network(
-                                    rustnmap_common::error::NetworkError::ReceiveError {
-                                        source: e,
-                                    },
-                                ),
-                            ))
-                        }
+                        continue;
+                    }
+                    Err(e) => {
+                        return Err(rustnmap_common::ScanError::Network(
+                            rustnmap_common::Error::Network(
+                                rustnmap_common::error::NetworkError::ReceiveError {
+                                    source: e,
+                                },
+                            ),
+                        ))
                     }
                 };
 

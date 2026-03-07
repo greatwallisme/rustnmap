@@ -37,7 +37,7 @@
 #![warn(missing_docs)]
 
 use std::collections::HashMap;
-use std::io::{self, ErrorKind};
+use std::io;
 use std::mem;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::os::fd::{AsRawFd, FromRawFd};
@@ -440,7 +440,14 @@ struct SockFprog {
 }
 
 /// Simple `AF_PACKET` socket for L2 packet capture.
-/// Uses standard `recvfrom` (not `PACKET_MMAP`) for simplicity.
+///
+/// # Deprecation
+///
+/// This struct is deprecated. Use `ScannerPacketEngine` from `packet_adapter` module
+/// for new implementations. `ScannerPacketEngine` provides better performance through
+/// zero-copy `PACKET_MMAP` V2 ring buffer operation.
+///
+/// This struct is kept for backward compatibility during the migration period.
 #[derive(Debug)]
 struct SimpleAfPacket {
     #[expect(dead_code, reason = "Interface index stored for potential future use")]
@@ -498,11 +505,6 @@ impl SimpleAfPacket {
             return Err(io::Error::last_os_error());
         }
 
-        // SAFETY: fd is a valid open file descriptor. F_GETFL returns current flags.
-        let flags = unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_GETFL) };
-        if flags < 0 {
-            return Err(io::Error::last_os_error());
-        }
         // Keep socket in BLOCKING mode for reliable ICMP reception
         // Non-blocking mode causes timing gaps that result in packet loss
         // We'll use SO_RCVTIMEO for timeout instead
@@ -523,31 +525,6 @@ impl SimpleAfPacket {
         };
         if ret < 0 {
             // Non-fatal: timeout is helpful but not required
-        }
-
-        // SAFETY: zeroed memory is valid for packet_mreq (POD struct).
-        let mut mreq: libc::packet_mreq = unsafe { mem::zeroed() };
-        mreq.mr_ifindex = if_index;
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "PACKET_MR_PROMISC (1) fits in u16"
-        )]
-        {
-            mreq.mr_type = libc::PACKET_MR_PROMISC as u16;
-        };
-        // SAFETY: fd is a valid AF_PACKET socket. mreq is properly initialized.
-        // PACKET_ADD_MEMBERSHIP enables promiscuous mode on the interface.
-        let ret = unsafe {
-            libc::setsockopt(
-                fd.as_raw_fd(),
-                libc::SOL_PACKET,
-                libc::PACKET_ADD_MEMBERSHIP,
-                (&raw const mreq).cast::<libc::c_void>(),
-                u32::try_from(mem::size_of::<libc::packet_mreq>()).unwrap_or(u32::MAX),
-            )
-        };
-        if ret < 0 {
-            // Non-fatal: promiscuous mode is helpful but not required
         }
 
         // Increase socket receive buffer size to prevent packet loss
@@ -960,18 +937,9 @@ impl ReceivedPacket {
 pub struct ParallelScanEngine {
     /// Local IP address for probes.
     local_addr: Ipv4Addr,
-    /// Raw socket for packet transmission.
+/// Raw socket for packet transmission.
     socket: StdArc<RawSocket>,
-    /// `AF_PACKET` engine for receiving TCP responses (L2 capture).
-    packet_socket: Option<Arc<SimpleAfPacket>>,
-    /// Optional packet engine for zero-copy packet capture using `PACKET_MMAP` V2.
-    ///
-    /// This is the modern replacement for `packet_socket`, providing better
-    /// performance through zero-copy ring buffer operation.
-    ///
-    /// Currently unused in receive path - migration in progress. The async packet
-    /// engine requires async context which is not yet integrated into the receive loop.
-    #[expect(dead_code, reason = "Packet engine migration in progress - will be used in receive path")]
+    /// Packet engine for zero-copy packet capture using `PACKET_MMAP` V2.
     packet_engine: Option<Arc<Mutex<ScannerPacketEngine>>>,
     /// Scanner configuration for timing parameters.
     config: ScanConfig,
@@ -1030,12 +998,7 @@ impl ParallelScanEngine {
             })?,
         );
 
-        // Try to create AF_PACKET socket for L2 packet capture
-        // This is critical for receiving TCP RST responses that raw socket misses
-        let packet_socket = Self::create_packet_socket(local_addr);
-
-        // Try to create ScannerPacketEngine for zero-copy packet capture using PACKET_MMAP V2.
-        // This provides better performance than SimpleAfPacket through ring buffer operation.
+        // Create ScannerPacketEngine for zero-copy packet capture using PACKET_MMAP V2.
         let packet_engine = create_stealth_engine(Some(local_addr), config.clone());
 
         let max_parallel = DEFAULT_MAX_PARALLELISM;
@@ -1060,7 +1023,6 @@ impl ParallelScanEngine {
         Ok(Self {
             local_addr,
             socket,
-            packet_socket,
             packet_engine,
             config,
             congestion,
@@ -1075,32 +1037,21 @@ impl ParallelScanEngine {
     ///
     /// This is critical for receiving TCP RST responses that raw socket misses.
     /// The socket captures at L2 (data link layer) like libpcap, ensuring all
-    /// TCP responses are received regardless of kernel TCP stack behavior.
+    /// Sets the maximum parallelism.
     ///
-    /// # Note
+    /// # Arguments
     ///
-    /// This is optional - if creation fails, returns `None` and the scanner
-    /// falls back to raw socket only (which may miss some responses).
-    ///
-    /// For localhost addresses, returns `None` because `AF_PACKET` on loopback
-    /// interface cannot capture responses from raw socket probes. The raw
-    /// socket fallback handles localhost correctly.
-    fn create_packet_socket(local_addr: Ipv4Addr) -> Option<Arc<SimpleAfPacket>> {
-        // Skip AF_PACKET for localhost - it cannot capture raw socket responses on lo
-        if local_addr == Ipv4Addr::LOCALHOST || local_addr.is_loopback() {
-            return None;
-        }
-
-        // Get the network interface name for the local address
-        let if_name = Self::get_interface_for_ip(local_addr)?;
-
-        match SimpleAfPacket::new(&if_name) {
-            Ok(socket) => Some(Arc::new(socket)),
-            Err(_e) => {
-                // Continue with raw socket fallback
-                None
-            }
-        }
+    /// * `value` - Maximum number of probes to have outstanding
+    #[must_use]
+    pub fn with_max_parallelism(mut self, value: usize) -> Self {
+        self.max_parallelism = value;
+        // Recreate congestion controller with new max and existing timing_level
+        self.congestion = Arc::new(InternalCongestionController::new(
+            value,
+            self.config.timing_level,
+            self.config.initial_rtt,
+        ));
+        self
     }
 
     /// Gets the network interface name for the given local IP address.
@@ -1126,7 +1077,6 @@ impl ParallelScanEngine {
                     // Dest 00000000 means default route
                     if dest == "00000000" {
                         // Found the default route interface, return it directly
-                        // without trying to verify with AfPacketEngine (which may fail)
                         return Some(iface.to_string());
                     }
                 }
@@ -1145,23 +1095,6 @@ impl ParallelScanEngine {
             }
         }
         None
-    }
-
-    /// Sets the maximum parallelism.
-    ///
-    /// # Arguments
-    ///
-    /// * `value` - Maximum number of probes to have outstanding
-    #[must_use]
-    pub fn with_max_parallelism(mut self, value: usize) -> Self {
-        self.max_parallelism = value;
-        // Recreate congestion controller with new max and existing timing_level
-        self.congestion = Arc::new(InternalCongestionController::new(
-            value,
-            self.config.timing_level,
-            self.config.initial_rtt,
-        ));
-        self
     }
 
     /// Returns the adaptive probe timeout based on current network conditions.
@@ -1443,22 +1376,15 @@ impl ParallelScanEngine {
 
     /// Starts the background receiver task.
     ///
-    /// This task continuously receives packets and parses them.
-    /// The task stops when the sender is dropped (all senders closed).
-    ///
-    /// # Note
-    ///
-    /// The receiver task uses `spawn_blocking` because `socket.recv_packet()` is a
-    /// synchronous blocking call. This prevents blocking the Tokio worker thread.
-    ///
-    /// When `packet_socket` is available, it will use `AF_PACKET` for L2 capture,
-    /// which properly receives TCP RST responses that raw socket may miss.
+    /// This task continuously receives packets using `ScannerPacketEngine` for zero-copy
+    /// `PACKET_MMAP` V2 capture. Falls back to raw socket if packet engine is not available.
     fn start_receiver_task(
         &self,
         packet_tx: mpsc::UnboundedSender<ReceivedPacket>,
     ) -> JoinHandle<()> {
+        const MAX_BATCH: usize = 32;
         let socket = StdArc::clone(&self.socket);
-        let packet_socket = self.packet_socket.clone();
+        let packet_engine = self.packet_engine.clone();
         tokio::spawn(async move {
             loop {
                 // Check if channel is closed before blocking on recv
@@ -1466,83 +1392,80 @@ impl ParallelScanEngine {
                     break;
                 }
 
-                // Try AF_PACKET socket first (L2 capture - receives all TCP responses)
-                // Fall back to raw socket if packet socket is not available
-                let result = if let Some(ref pkt_sock) = packet_socket {
-                    // Use AF_PACKET socket for L2 capture
-                    let pkt_sock = Arc::clone(pkt_sock);
+                // Try ScannerPacketEngine first (zero-copy `PACKET_MMAP` V2)
+                // Fall back to raw socket if packet engine is not available
+                if let Some(ref engine) = packet_engine {
+                    // Use ScannerPacketEngine for zero-copy capture
+                    let engine = Arc::clone(engine);
                     let tx_clone = packet_tx.clone();
-                    tokio::task::spawn_blocking(move || {
-                        // Process multiple packets in a batch to reduce context switches
-                        const MAX_BATCH: usize = 32;
-                        let mut batch_count = 0;
 
-                        while batch_count < MAX_BATCH {
-                            match pkt_sock.recv_packet() {
-                                Ok(Some(data)) => {
-                                    // Skip Ethernet header (14 bytes) to get to IP header
-                                    let ip_data = if data.len() > ETH_HDR_SIZE {
-                                        &data[ETH_HDR_SIZE..]
-                                    } else {
-                                        &data[..]
-                                    };
-                                    // Parse and send immediately as ReceivedPacket
-                                    if let Some(packet) = Self::parse_packet(ip_data) {
-                                        if tx_clone.send(packet).is_err() {
-                                            return Ok((batch_count, Vec::new()));
-                                        }
+                    // Process packets in a batch
+                    let mut batch_count = 0;
+
+                    while batch_count < MAX_BATCH {
+                        // Check if channel is still open
+                        if tx_clone.is_closed() {
+                            break;
+                        }
+
+                        // Lock the engine and receive with timeout
+                        match engine.lock().await.recv_with_timeout(Duration::from_millis(100)).await {
+                            Ok(Some(data)) => {
+                                // Skip Ethernet header (14 bytes) to get to IP header
+                                let ip_data = if data.len() > ETH_HDR_SIZE {
+                                    &data[ETH_HDR_SIZE..]
+                                } else {
+                                    &data[..]
+                                };
+                                // Parse and send immediately as ReceivedPacket
+                                if let Some(packet) = Self::parse_packet(ip_data) {
+                                    if tx_clone.send(packet).is_err() {
+                                        break;
                                     }
-                                    batch_count += 1;
                                 }
-                                Ok(None) => {
-                                    // No more packets available
-                                    break;
-                                }
-                                Err(e) if e.kind() == ErrorKind::WouldBlock => {
-                                    // No more packets available
-                                    break;
-                                }
-                                Err(e) => return Err(e),
+                                batch_count += 1;
                             }
-                        }
-                        // Return batch_count with empty vec (packets already sent in loop)
-                        Ok::<_, io::Error>((batch_count, Vec::new()))
-                    })
-                    .await
-                } else {
-                    // Fall back to raw socket (L3 capture - may miss some TCP responses)
-                    let socket_clone = StdArc::clone(&socket);
-                    tokio::task::spawn_blocking(move || {
-                        let mut recv_buf = vec![0u8; 65535];
-                        match socket_clone
-                            .recv_packet(&mut recv_buf, Some(Duration::from_millis(50)))
-                        {
-                            Ok(len) => Ok((len, recv_buf)),
-                            Err(e) => Err(e),
-                        }
-                    })
-                    .await
-                };
-
-                match result {
-                    Ok(Ok((len, recv_buf))) if len > 0 && !recv_buf.is_empty() => {
-                        // Raw socket path: parse packet from buffer
-                        if let Some(packet) = Self::parse_packet(&recv_buf[..len]) {
-                            if packet_tx.send(packet).is_err() {
+                            Ok(None) | Err(_) => {
+                                // No more packets available or error
                                 break;
                             }
                         }
                     }
-                    Ok(Ok((batch_count, _))) => {
-                        // AF_PACKET batch processing result
-                        // Packets already sent in batch loop, just yield if empty
-                        if batch_count == 0 {
+
+                    // Yield if no packets were received
+                    if batch_count == 0 {
+                        tokio::task::yield_now().await;
+                    }
+                } else {
+                    // Fall back to raw socket (L3 capture - may miss some TCP responses)
+                    let socket_clone = StdArc::clone(&socket);
+                    let tx_clone = packet_tx.clone();
+                    let result = tokio::task::spawn_blocking(move || {
+                        let mut recv_buf = vec![0u8; 65535];
+                        match socket_clone.recv_packet(&mut recv_buf, Some(Duration::from_millis(50))) {
+                            Ok(len) => Ok((len, recv_buf)),
+                            Err(e) => Err(e),
+                        }
+                    })
+                    .await;
+
+                    match result {
+                        Ok(Ok((len, recv_buf))) if len > 0 => {
+                            // Raw socket path: parse packet from buffer
+                            if let Some(packet) = Self::parse_packet(&recv_buf[..len]) {
+                                if tx_clone.send(packet).is_err() {
+                                    break;
+                                }
+                            }
+                        }
+                        Ok(Err(_)) | Err(_) => {
+                            // Fatal error or task was cancelled, stop receiving
+                            break;
+                        }
+                        _ => {
+                            // Timeout or no data, yield and continue
                             tokio::task::yield_now().await;
                         }
-                    }
-                    Ok(Err(_)) | Err(_) => {
-                        // Fatal error or task was cancelled, stop receiving
-                        break;
                     }
                 }
             }

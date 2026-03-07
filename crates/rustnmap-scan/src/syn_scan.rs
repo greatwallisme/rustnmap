@@ -300,11 +300,7 @@ impl TcpSynScanner {
     ///
     /// `Ok(Some(len))` if a packet was received, `Ok(None)` on timeout,
     /// or an error if reception fails.
-    fn recv_packet(
-        &self,
-        buf: &mut [u8],
-        timeout: Duration,
-    ) -> io::Result<Option<usize>> {
+    fn recv_packet(&self, buf: &mut [u8], timeout: Duration) -> io::Result<Option<usize>> {
         // If packet engine is available, use it for zero-copy capture
         if let Some(ref engine_arc) = self.packet_engine {
             tokio::task::block_in_place(|| {

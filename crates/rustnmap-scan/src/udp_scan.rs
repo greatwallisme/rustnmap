@@ -54,7 +54,10 @@ pub struct UdpScanner {
     /// Modern packet engine for zero-copy capture using `PACKET_MMAP` V2 (optional).
     ///
     /// This is the replacement for `packet_engine_v4`, providing better performance.
-    #[expect(dead_code, reason = "Packet engine migration in progress - will be used in receive path")]
+    #[expect(
+        dead_code,
+        reason = "Packet engine migration in progress - will be used in receive path"
+    )]
     scanner_engine_v4: Option<Arc<Mutex<ScannerPacketEngine>>>,
     /// Raw socket for IPv6 packet transmission (optional).
     socket_v6: Option<RawSocket>,

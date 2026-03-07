@@ -81,6 +81,8 @@ pub mod bpf;
 // ============================================================================
 
 #[doc(inline)]
+pub use crate::async_engine::AsyncPacketEngine;
+#[doc(inline)]
 pub use crate::bpf::{BpfFilter, BpfInstruction};
 #[doc(inline)]
 pub use crate::engine::{EngineStats, PacketBuffer, PacketEngine, RingConfig};
@@ -88,8 +90,6 @@ pub use crate::engine::{EngineStats, PacketBuffer, PacketEngine, RingConfig};
 pub use crate::error::{PacketError, Result};
 #[doc(inline)]
 pub use crate::mmap::MmapPacketEngine;
-#[doc(inline)]
-pub use crate::async_engine::AsyncPacketEngine;
 #[doc(inline)]
 pub use crate::stream::PacketStream;
 

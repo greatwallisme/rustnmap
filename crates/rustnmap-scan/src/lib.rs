@@ -24,6 +24,7 @@ pub use connect_scan::TcpConnectScanner;
 pub use ftp_bounce_scan::FtpBounceScanner;
 pub use idle_scan::IdleScanner;
 pub use ip_protocol_scan::IpProtocolScanner;
+pub use packet_adapter::ScannerPacketEngine;
 pub use scanner::{PortScanner, ScanResult, TimingTemplate};
 pub use stealth_scans::{
     TcpAckScanner, TcpFinScanner, TcpMaimonScanner, TcpNullScanner, TcpWindowScanner,
@@ -33,7 +34,6 @@ pub use syn_scan::TcpSynScanner;
 pub use timeout::TimeoutTracker;
 pub use udp_scan::UdpScanner;
 pub use ultrascan::ParallelScanEngine;
-pub use packet_adapter::ScannerPacketEngine;
 
 // Re-export ScanConfig and ScanError from rustnmap_common
 pub use rustnmap_common::{ScanConfig, ScanError};
