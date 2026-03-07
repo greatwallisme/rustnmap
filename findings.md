@@ -1,8 +1,95 @@
-# Research Findings: Phase 4 - Implementation Verification Complete
+# Research Findings: CRITICAL BLOCKER - PACKET_MMAP V2 Non-Functional
 
 > **Created**: 2026-03-07
 > **Updated**: 2026-03-07
-> **Status**: Phase 1-4 Complete | Phase 5 - Pending (Performance Validation)
+> **Status**: **BLOCKED** - MmapPacketEngine cannot create RX ring (errno=22)
+
+---
+
+## CRITICAL ISSUE (2026-03-07)
+
+**MmapPacketEngine::new() FAILS with errno=22 (EINVAL) when calling setsockopt(PACKET_RX_RING)**
+
+### Summary
+
+Despite documentation claiming implementation is complete, **PACKET_MMAP V2 does not work**.
+
+The code compiles and all tests pass, but `MmapPacketEngine::new()` cannot create a functional packet engine.
+
+### Error
+
+```
+Engine creation failed: failed to setup RX ring: Invalid argument (os error 22)
+```
+
+### Fails At
+
+File: `crates/rustnmap-packet/src/mmap.rs`
+Function: `setup_ring_buffer()`
+Line: 478 (setsockopt call for PACKET_RX_RING)
+
+### What Works
+
+- Socket creation: ✅
+- Setting PACKET_VERSION to TPACKET_V2: ✅
+- Setting PACKET_RESERVE: ✅
+- First bind (protocol=0): ✅
+- Interface lookups: ✅
+
+### What Fails
+
+- **setsockopt(PACKET_RX_RING)**: ❌ errno=22 (EINVAL)
+
+### Configuration Tested (All Fail)
+
+| Config | block_size | block_nr | frame_size | Result |
+|--------|------------|----------|------------|--------|
+| Small | 4096 | 64 | 2048 | errno=22 |
+| Default | 65536 | 256 | 4096 | errno=22 |
+| Minimal | 4096 | 1 | 2048 | errno=22 |
+
+### Environment
+
+- Kernel: Linux 6.1.0-27-amd64 (6.1.115)
+- Interface: ens33 (UP, BROADCAST, MULTICAST)
+- User: root (full capabilities)
+
+### Impact
+
+- ❌ Cannot run PACKET_MMAP V2 benchmarks
+- ❌ Cannot validate zero-copy performance
+- ❌ Cannot verify 1M PPS target
+- ❌ **Phase 5 is BLOCKED**
+
+### Root Cause
+
+**UNKNOWN** - Investigation required.
+
+Possible directions (unconfirmed):
+- Missing socket option
+- Incorrect parameter validation
+- Kernel-specific requirement
+- Struct alignment issue
+
+### Next Steps Required
+
+1. Use `strace` to compare with nmap
+2. Check `dmesg` for kernel messages
+3. Test TPACKET_V3 as alternative
+4. Verify with simpler test case
+
+---
+
+## Previous Claims (INCORRECT)
+
+Documentation stated:
+> "All core PACKET_MMAP V2 infrastructure has been completed"
+
+**This is FALSE**. The code exists but doesn't work.
+
+---
+
+## Phase 1 Complete Summary (Previous Work)
 
 ---
 

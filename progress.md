@@ -1,274 +1,202 @@
-# Progress Log: Phase 5 - Documentation & Performance Validation
+# Progress Log: Phase 5 - Performance Validation (BLOCKED)
 
 > **Created**: 2026-03-07
 > **Updated**: 2026-03-07
-> **Status**: Phase 1-4 Complete | Phase 5 - In Progress
+> **Status**: **BLOCKED** - MmapPacketEngine cannot create RX ring (errno=22)
 
 ---
 
-## Session: 2026-03-07 (Phase 5 Benchmarks)
+## CURRENT STATUS: CRITICAL BLOCKER
 
-### Summary
+**MmapPacketEngine::new() fails with `errno=22 (EINVAL)` when setting up PACKET_RX_RING**
 
-**PACKET_MMAP V2 benchmark suite committed.**
-
-Added comprehensive benchmark suite for measuring MmapPacketEngine throughput:
-- `packet_reception`: Measures PPS using zero-copy ring buffers
-- `zero_copy_reception`: Verifies zero-copy behavior
-- `ring_buffer_efficiency`: Tracks frame utilization and drop rates
-- `ring_config_comparison`: Compares small/default/large ring configs
-
-### Tasks Completed
-
-| Task | Description | Status |
-|------|-------------|--------|
-| 5.1 | Documentation updates | COMPLETE |
-| 5.2 | Performance validation | IN PROGRESS |
-| 5.3 | Integration testing | DEFERRED |
-
-### Commit
+### Error Details
 
 ```
-c2237ea feat(bench): Add PACKET_MMAP V2 PPS performance benchmarks
+Engine creation failed: failed to setup RX ring: Invalid argument (os error 22)
+```
+
+### What Fails
+
+The `setsockopt(fd, SOL_PACKET, PACKET_RX_RING, ...)` call returns -1 with errno=22 (EINVAL).
+
+### Test Results
+
+All three configuration sizes fail:
+- Small config (block_size=4096, block_nr=64) - FAILED
+- Default config (block_size=65536, block_nr=256) - FAILED
+- Minimal config (block_size=4096, block_nr=1) - FAILED
+
+### Environment
+
+```
+Kernel: 6.1.0-27-amd64 (Linux 6.1.115)
+Interface: ens33 (UP, BROADCAST, MULTICAST)
+User: root (uid=0, full capabilities)
 ```
 
 ---
 
-## Session: 2026-03-07 (Phase 5 Documentation)
-
-### Summary
-
-**Phase 5 documentation updates initiated.**
-
-Documentation changes:
-- Updated `doc/modules/packet-engineering.md` with implementation status section
-- Added implementation details for two-stage bind pattern
-- Added zero-copy implementation details
-- Added scanner migration status
-
-### Tasks Completed
-
-| Task | Description | Status |
-|------|-------------|--------|
-| 5.1 | Documentation updates | IN PROGRESS |
-| 5.2 | Performance validation | PENDING |
-| 5.3 | Integration testing | DEFERRED |
-
----
-
-## Session: 2026-03-07 (Phase 4 Verification)
-
-### Summary
-
-**Verification of Phase 4 completion and gap analysis correction.**
-
-After comprehensive code review, the gap analysis was found to be based on outdated information. The actual implementation state is:
+## What IS Working
 
 | Component | Status | Evidence |
 |-----------|--------|----------|
-| PACKET_MMAP V2 | ✅ COMPLETE | `mmap.rs` implements TPACKET_V2 ring buffer |
-| Zero-Copy | ✅ COMPLETE | `ZeroCopyBytes::borrowed()` in try_recv_zero_copy() |
-| Scanner Migration | ✅ COMPLETE | All scanners use `ScannerPacketEngine` |
-| Network Volatility | ✅ COMPLETE | 5 components, 62 tests |
+| Socket creation | ✅ Works | `socket(AF_PACKET, SOCK_RAW, 0)` succeeds |
+| PACKET_VERSION set | ✅ Works | `setsockopt(fd, PACKET_VERSION, TPACKET_V2)` succeeds |
+| PACKET_RESERVE set | ✅ Works | `setsockopt(fd, PACKET_RESERVE, 4)` succeeds |
+| PACKET_AUXDATA set | ✅ Works | `setsockopt(fd, PACKET_AUXDATA, 1)` succeeds |
+| First bind (protocol=0) | ✅ Works | `bind()` with protocol=0 succeeds |
+| Interface index lookup | ✅ Works | `ioctl(SIOCGIFINDEX)` succeeds |
+| MAC address lookup | ✅ Works | `ioctl(SIOCGIFHWADDR)` succeeds |
 
-### Quality Verification (2026-03-07)
+### What FAILS
 
-```bash
-# All tests passing
-cargo test --workspace --lib
-# 865+ tests passed
-
-# Zero clippy warnings
-cargo clippy --workspace --lib -- -D warnings
-# Finished with no warnings
-
-# Code formatted
-cargo fmt --all -- --check
-# No issues
-```
-
-### Key Findings
-
-1. **PACKET_MMAP V2 is fully implemented** in `crates/rustnmap-packet/src/mmap.rs`:
-   - Two-stage bind pattern (following nmap's libpcap)
-   - True zero-copy via `ZeroCopyBytes::borrowed()`
-   - Frame lifecycle with `Arc<MmapPacketEngine>` reference
-   - Acquire/Release memory ordering (no SeqCst)
-   - Correct Drop order (munmap before close)
-   - VLAN tag reconstruction
-
-2. **All scanners migrated** to `ScannerPacketEngine`:
-   - `syn_scan.rs` - Line 46
-   - `stealth_scans.rs` - Line 186
-   - `ultrascan.rs` - Line 594
-   - `udp_scan.rs` - Line 56
-
-3. **recvfrom.rs is a fallback**, not the primary implementation:
-   - Used only when PACKET_MMAP is unavailable
-   - Benchmarks compare both implementations
-
-### Documentation Updates Required
-
-- [ ] Update `doc/modules/packet-engineering.md` with implementation details
-- [ ] Add performance benchmark results
-- [ ] Document the ScannerPacketEngine adapter pattern
+| Operation | Status | Error |
+|-----------|--------|-------|
+| `setsockopt(PACKET_RX_RING)` | ❌ **FAILS** | errno=22 (EINVAL) |
 
 ---
 
-## Session: 2026-03-07 (Earlier)
+## Code Location
 
-### Summary
+File: `crates/rustnmap-packet/src/mmap.rs`
+Function: `setup_ring_buffer()` at line 453
+Failed call: lines 478-488
 
-Continuing refactoring according to `doc/architecture.md` and `doc/structure.md`.
-
-**Phase 1 Complete**: All PACKET_MMAP V2 infrastructure implemented
-**Phase 2 Complete**: Network volatility handling implementation
-
----
-
-## Phase 1 Review (Complete)
-
-### Completed Work
-
-| Task | Component | Date | Status |
-|------|-----------|------|--------|
-| 1.1 | TPACKET_V2 wrappers | 2026-03-06 | ✅ COMPLETE |
-| 1.2 | PacketEngine trait | 2026-03-06 | ✅ COMPLETE |
-| 1.3 | MmapPacketEngine | 2026-03-06 | ✅ COMPLETE |
-| 1.4 | BPF Filter | 2026-03-06 | ✅ COMPLETE |
-| 1.5 | AsyncPacketEngine | 2026-03-06 | ✅ COMPLETE |
-| 1.6 | ZeroCopyPacket | 2026-03-06 | ✅ COMPLETE |
-| 1.7 | Two-stage bind fix | 2026-03-07 | ✅ COMPLETE |
-| 1.8 | Benchmarks | 2026-03-07 | ✅ COMPLETE |
-
-### Key Fixes Applied
-
-**errno=22 Fix (Two-Stage Bind)**:
-- File: `crates/rustnmap-packet/src/mmap.rs`
-- Problem: Socket bound only once with `protocol=0`
-- Solution: Bind twice (protocol=0, then ETH_P_ALL)
-- Reference: `reference/nmap/libpcap/pcap-linux.c:1297-1302`
-
----
-
-## Phase 2: Network Volatility (Complete)
-
-### Implementation Summary
-
-According to `doc/architecture.md` Section 2.3.4:
-
-| Task | Component | File | Status |
-|------|-----------|------|--------|
-| 2.1 | Adaptive RTT (RFC 2988) | `timeout.rs` | ✅ COMPLETE (existing) |
-| 2.2 | Congestion Control | `congestion.rs` | ✅ COMPLETE (created) |
-| 2.3 | Scan Delay Boost | `adaptive_delay.rs` | ✅ COMPLETE (created) |
-| 2.4 | Rate Limiter | `rate.rs` | ✅ COMPLETE (existing) |
-| 2.5 | ICMP Handler | `icmp_handler.rs` | ✅ COMPLETE (created) |
-
-### Quality Verification
-
-```bash
-# All tests passing
-cargo test -p rustnmap-scan --lib
-# 132 passed
-
-# Zero clippy warnings
-cargo clippy -p rustnmap-scan --lib -- -D warnings
-# Finished
-
-# Code formatted
-cargo fmt --check -p rustnmap-scan
-# code is formatted
-```
-
-### Files Created/Modified
-
-**Created**:
-- `crates/rustnmap-scan/src/congestion.rs` (401 lines, 11 tests)
-- `crates/rustnmap-scan/src/adaptive_delay.rs` (427 lines, 24 tests)
-- `crates/rustnmap-scan/src/icmp_handler.rs` (396 lines, 16 tests)
-
-**Modified**:
-- `crates/rustnmap-scan/src/lib.rs` (added module declarations and re-exports)
-
-**Verified Existing**:
-- `crates/rustnmap-scan/src/timeout.rs` (RFC 2988 compliant)
-- `crates/rustnmap-common/src/rate.rs` (Token bucket implementation)
-
----
-
-## Implementation Plan
-
-### Task 2.1: Adaptive RTT (RFC 6298)
-
-**File**: `crates/rustnmap-scan/src/timing.rs`
-
-**Requirements**:
-- `SRTT = (7/8) * SRTT + (1/8) * RTT`
-- `RTTVAR = (3/4) * RTTVAR + (1/4) * |RTT - SRTT|`
-- `Timeout = SRTT + 4 * RTTVAR`
-- `Timeout = clamp(Timeout, min_rtt, max_rtt)`
-
-**Tests**:
-- Test with fixed RTT values
-- Test timeout clamping
-- Test initial RTO calculation
-
----
-
-## Quality Checks
-
-### Before Commit
-```bash
-cargo test --workspace
-cargo clippy --workspace -- -D warnings
-cargo fmt --all -- --check
-```
-
-### Zero Tolerance Policy
-- Zero errors
-- Zero warnings
-- All tests pass
-
----
-
-## Blockers
-
-None - Phase 3 complete.
-
----
-
-## Phase 3: Scanner Integration (Complete)
-
-### Task 3.1: Scanner Orchestration Integration
-
-**Files Modified**:
-- `crates/rustnmap-core/src/orchestrator.rs` - Added volatility components
-- `crates/rustnmap-scan/src/lib.rs` - Re-exported ICMP handler
-
-**Key Changes**:
-- `ScanOrchestrator` now manages `CongestionControl` and `AdaptiveDelay`
-- Timing-based cwnd initialization (T0: 1, T1: 3, T2: 5, T3: 10, T4: 50, T5: 100)
-- Adaptive delay enforcement (max of template and adaptive)
-- Public accessors: `congestion_control()`, `adaptive_delay()`
-- Helper methods: `record_probe_timeout()`, `record_successful_response()`
-
-### Quality Verification
-```bash
-cargo fmt --all -- --check       # ✅ Formatted
-cargo check --workspace          # ✅ Compiles
-cargo clippy --workspace -- -D warnings  # ✅ Zero warnings
-cargo test --workspace --lib     # ✅ 865 tests passed
+```rust
+// This call returns -1 with errno=22
+let result = unsafe {
+    libc::setsockopt(
+        fd.as_raw_fd(),
+        libc::SOL_PACKET,
+        PACKET_RX_RING,
+        std::ptr::from_ref::<TpacketReq>(&req).cast::<c_void>(),
+        u32::try_from(mem::size_of::<TpacketReq>()).map_err(|e| {
+            PacketError::RingBufferSetup(io::Error::new(io::ErrorKind::InvalidInput, e))
+        })?,
+    )
+};
 ```
 
 ---
 
-## Next Session
+## Known Facts (NO SPECULATION)
 
-Phase 4: Integration Testing & Documentation
-- Create integration tests with actual network targets
-- Update documentation with implementation details
-- Consider scanner migration to PACKET_MMAP V2
-- Performance validation benchmarks
+1. **Two-stage bind pattern is implemented** (lines 217, 228):
+   - First bind: `bind_to_interface(&fd, if_index)` with protocol=0
+   - Then PACKET_RX_RING setup
+   - Second bind: `bind_to_interface_with_protocol(&fd, if_index, ETH_P_ALL.to_be())`
+
+2. **The call order matches nmap's libpcap**:
+   ```c
+   // pcap-linux.c sequence:
+   1. socket()
+   2. setsockopt(PACKET_VERSION)
+   3. bind() with protocol=0
+   4. setsockopt(PACKET_RX_RING)  <-- FAILS HERE
+   5. bind() with ETH_P_ALL
+   ```
+
+3. **TpacketReq structure layout** matches kernel definition:
+   ```rust
+   pub struct TpacketReq {
+       pub tp_block_size: u32,
+       pub tp_block_nr: u32,
+       pub tp_frame_size: u32,
+       pub tp_frame_nr: u32,
+   }
+   ```
+
+4. **Kernel headers confirm** the struct is correct:
+   ```c
+   // /usr/include/linux/if_packet.h
+   struct tpacket_req {
+       unsigned int tp_block_size;
+       unsigned int tp_block_nr;
+       unsigned int tp_frame_size;
+       unsigned int tp_frame_nr;
+   };
+   ```
 
 ---
+
+## What We DON'T Know (Root Cause UNKNOWN)
+
+- **Why** PACKET_RX_RING fails with errno=22
+- **Which** parameter the kernel rejects
+- **If** it's a kernel version issue (6.1 should support TPACKET_V2)
+- **If** there's a missing socket option
+- **If** the struct alignment is wrong
+
+---
+
+## Attempted Debugging
+
+| Attempt | Action | Result |
+|---------|--------|--------|
+| 1 | Vary block size (4096 to 65536) | All fail with errno=22 |
+| 2 | Vary block_nr (1 to 256) | All fail with errno=22 |
+| 3 | Check kernel version | 6.1.115 (should support V2) |
+| 4 | Verify TpacketReq layout | Matches kernel headers |
+
+---
+
+## Impact
+
+- ❌ Cannot run PACKET_MMAP V2 benchmarks
+- ❌ Cannot validate zero-copy performance
+- ❌ Cannot verify 1M PPS target
+- ❌ Phase 5.2 (Performance Validation) is BLOCKED
+
+---
+
+## What IS Complete
+
+| Phase | Task | Status |
+|-------|------|--------|
+| 1 | PACKET_MMAP V2 infrastructure | Code exists, doesn't work |
+| 2 | Network volatility components | ✅ Complete (62 tests) |
+| 3 | Scanner integration | ✅ Complete |
+| 4 | Documentation updates | ✅ Complete |
+| 5.1 | Benchmark code written | ✅ Complete (compiles) |
+| 5.2 | **Performance validation** | ❌ **BLOCKED** |
+
+---
+
+## Next Steps (NEED INVESTIGATION)
+
+1. **Use strace** to see exact parameters passed to kernel
+2. **Compare with nmap** running strace on both
+3. **Check dmesg** for kernel error messages
+4. **Try TPACKET_V3** to see if V2 is the issue
+5. **Test with raw socket** without PACKET_MMAP
+
+---
+
+## Git Status
+
+```
+M crates/rustnmap-benchmarks/benches/mmap_pps.rs
+?? crates/rustnmap-packet/examples/
+```
+
+No commits pending - changes are unstaged.
+
+---
+
+## Session History
+
+This session attempted to:
+1. Run PACKET_MMAP V2 benchmarks
+2. Debug why MmapPacketEngine creation fails
+3. Identify root cause of errno=22
+
+**Result**: Root cause NOT identified. Need deeper investigation.
+
+---
+
+## Previous Session (2026-03-07)
+
+Committed benchmark file: `c2237ea feat(bench): Add PACKET_MMAP V2 PPS performance benchmarks`
+
+Documentation was updated claiming implementation was complete. **This was incorrect** - the code compiles but doesn't work.

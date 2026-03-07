@@ -2,28 +2,59 @@
 
 > **Created**: 2026-03-07
 > **Updated**: 2026-03-07
-> **Status**: Phase 1 - Complete | Phase 2 - Complete | Phase 3 - Complete | Phase 4 - Complete
-> **Priority**: P0
+> **Status**: **BLOCKED** - PACKET_MMAP V2 Non-Functional
 
 ---
 
-## Executive Summary
+## EXECUTIVE SUMMARY - CRITICAL BLOCKER
 
-Continue refactoring strictly according to `doc/architecture.md` and `doc/structure.md` technical specifications.
+**MmapPacketEngine FAILS with errno=22 (EINVAL) when setting up PACKET_RX_RING**
 
-**Previous Work (Complete):**
-- ✅ Phase 2: Network volatility handling (5 components fully aligned with design)
-- ✅ Phase 3: Integration into ScanOrchestrator completed
+### Current State
 
-**Gap Analysis Completed (2026-03-07):**
-- 📋 Comprehensive design vs implementation comparison added to `findings.md`
-- 🔴 CRITICAL: Packet Engine still uses recvfrom() instead of PACKET_MMAP V2
-- ✅ Network Volatility: All 5 components match design exactly (62 tests)
-- ⚠️ Scanner Architecture: PacketEngine trait exists but not used by scanners
-- 📊 See `findings.md` Section: "Design vs Implementation Gap Analysis"
+| Component | Claimed Status | Actual Status |
+|-----------|---------------|---------------|
+| PACKET_MMAP V2 Code | ✅ Complete | ✅ Code exists |
+| PACKET_MMAP V2 Works | ✅ Complete | ❌ **FAILS at runtime** |
+| Network Volatility | ✅ Complete | ✅ Working (62 tests) |
+| Scanner Integration | ✅ Complete | ✅ Complete |
+| Benchmarks | ✅ Complete | ❌ Cannot run |
 
-**Current Focus:**
-Address critical PACKET_MMAP V2 implementation gap (Phase 4)
+### The Problem
+
+`MmapPacketEngine::new()` compiles but **fails at runtime**:
+```
+Engine creation failed: failed to setup RX ring: Invalid argument (os error 22)
+```
+
+The `setsockopt(PACKET_RX_RING, ...)` call returns -1 with errno=22.
+
+### What We Know
+
+**Works:**
+- Socket creation
+- Setting PACKET_VERSION to TPACKET_V2
+- Setting PACKET_RESERVE
+- First bind (protocol=0)
+- Interface lookups
+
+**Fails:**
+- `setsockopt(PACKET_RX_RING)` - errno=22 (EINVAL)
+
+### What We Don't Know
+
+**ROOT CAUSE UNKNOWN**
+
+### Impact
+
+- ❌ PACKET_MMAP V2 is **non-functional**
+- ❌ Cannot validate zero-copy performance
+- ❌ Cannot verify 1M PPS target
+- ❌ Phase 5 is **blocked**
+
+---
+
+## Previous Work (Before Blocker Discovered)
 
 ---
 
@@ -332,53 +363,82 @@ TEST_INTERFACE=ens33 sudo cargo bench -p rustnmap-benchmarks -- recvfrom_pps
 
 ---
 
-## Phase 5: Testing & Documentation (IN PROGRESS)
+## Phase 5: Testing & Documentation (BLOCKED)
 
 > **Started**: 2026-03-07
+> **Status**: **CRITICAL BLOCKER** - MmapPacketEngine non-functional
+
+---
+
+## CRITICAL BLOCKER (2026-03-07)
+
+**MmapPacketEngine::new() FAILS with errno=22 (EINVAL)**
+
+### Error
+```
+failed to setup RX ring: Invalid argument (os error 22)
+```
+
+### Location
+- File: `crates/rustnmap-packet/src/mmap.rs`
+- Function: `setup_ring_buffer()` at line 453
+- Call: `setsockopt(fd, SOL_PACKET, PACKET_RX_RING, ...)` returns -1
+
+### What Works
+- Socket creation: ✅
+- PACKET_VERSION set to TPACKET_V2: ✅
+- PACKET_RESERVE set: ✅
+- First bind (protocol=0): ✅
+- Interface lookups: ✅
+
+### What Fails
+- **setsockopt(PACKET_RX_RING)**: ❌ errno=22
+
+### Root Cause
+**UNKNOWN** - Requires investigation
+
+### Impact
+- ❌ Cannot create MmapPacketEngine
+- ❌ Cannot run PACKET_MMAP V2 benchmarks
+- ❌ Cannot validate zero-copy performance
+- ❌ Cannot verify 1M PPS target
+
+---
 
 ### Task 5.1: Documentation Updates
 
-**Files to Update**:
-- `doc/modules/packet-engineering.md` - Add implementation status section
-- `doc/architecture.md` - Update performance tables with actual results
-- `doc/structure.md` - Update crate descriptions
+**Status**: COMPLETE (but claims were incorrect)
 
-**Status**: COMPLETE
+**Files Updated**:
+- `doc/modules/packet-engineering.md` - Added implementation status
+- `findings.md` - Updated with blocker information
+- `progress.md` - Updated with current status
+
+**NOTE**: Previous documentation claimed implementation was complete. **This was incorrect.**
 
 ---
 
 ### Task 5.2: Performance Validation
 
-**Goal**: Verify 1M PPS target after PACKET_MMAP V2 completion
+**Status**: **BLOCKED**
 
-**Benchmark Suite Created**: `crates/rustnmap-benchmarks/benches/mmap_pps.rs`
+**Reason**: MmapPacketEngine cannot be created due to PACKET_RX_RING failure
 
-**Benchmark Functions**:
-1. `packet_reception` - Measures PPS using zero-copy ring buffers
-2. `zero_copy_reception` - Verifies zero-copy behavior (no memcpy)
-3. `ring_buffer_efficiency` - Tracks frame utilization and drop rates
-4. `ring_config_comparison` - Compares small/default/large ring configs
+**Benchmark Suite**: Created (`mmap_pps.rs`) but cannot run
 
-**Run Command**:
-```bash
-TEST_INTERFACE=ens33 sudo cargo bench -p rustnmap-benchmarks -- mmap_pps
-```
-
-**Target Metrics**:
-
-| Metric | Current (recvfrom) | Target (PACKET_MMAP) | Improvement |
-|--------|-------------------|---------------------|-------------|
-| PPS | ~50,000 | ~1,000,000 | 20x |
-| CPU (T5) | 80% | 30% | 2.7x |
-| Packet Loss (T5) | ~30% | <1% | 30x |
-
-**Acceptance Criteria**:
+**Cannot Verify**:
 - [ ] PPS >= 500,000 (50% of target)
 - [ ] CPU (T5) <= 50%
 - [ ] Packet Loss (T5) <= 5%
-- [ ] Zero-copy verified (no memcpy in hot path)
+- [ ] Zero-copy verified
 
-**Status**: IN PROGRESS (Benchmark infrastructure complete, awaiting network test)
+---
+
+### Task 5.3: Integration Testing
+
+**Status**: **BLOCKED**
+
+**Reason**: Cannot test with non-functional MmapPacketEngine
 
 ---
 
