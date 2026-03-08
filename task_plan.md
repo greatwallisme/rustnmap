@@ -1,56 +1,54 @@
 # Task Plan: Refactoring According to doc/ Technical Methods
 
 > **Created**: 2026-03-07
-> **Updated**: 2026-03-07
-> **Status**: **BLOCKED** - PACKET_MMAP V2 Non-Functional
+> **Updated**: 2026-03-07 6:50 PM PST
+> **Status**: **ACTIVE** - Phase 5 In Progress
 
 ---
 
-## EXECUTIVE SUMMARY - CRITICAL BLOCKER
+## EXECUTIVE SUMMARY
 
-**MmapPacketEngine FAILS with errno=22 (EINVAL) when setting up PACKET_RX_RING**
+**PACKET_MMAP V2 implementation is now functional** (2026-03-07)
 
-### Current State
+Two critical bugs were identified and fixed:
+1. **TPACKET_V2 constant bug**: Value was 2 (TPACKET_V3) instead of 1
+2. **SIGSEGV bug**: munmap in Drop freed memory shared via Arc
 
-| Component | Claimed Status | Actual Status |
-|-----------|---------------|---------------|
-| PACKET_MMAP V2 Code | ✅ Complete | ✅ Code exists |
-| PACKET_MMAP V2 Works | ✅ Complete | ❌ **FAILS at runtime** |
-| Network Volatility | ✅ Complete | ✅ Working (62 tests) |
-| Scanner Integration | ✅ Complete | ✅ Complete |
-| Benchmarks | ✅ Complete | ❌ Cannot run |
+### Current State (2026-03-07 6:50 PM PST)
 
-### The Problem
+| Component | Status | Notes |
+|-----------|--------|-------|
+| PACKET_MMAP V2 Code | ✅ Complete | Fully implemented |
+| PACKET_MMAP V2 Works | ✅ **Functional** | Fixed: TPACKET_V2 constant + SIGSEGV |
+| Network Volatility | ✅ Complete | 62 tests passing |
+| Scanner Integration | ✅ Complete | All scanners migrated |
+| Benchmarks | ✅ Running | mmap_pps benchmark successful |
 
-`MmapPacketEngine::new()` compiles but **fails at runtime**:
-```
-Engine creation failed: failed to setup RX ring: Invalid argument (os error 22)
-```
+### Bugs Fixed (2026-03-07)
 
-The `setsockopt(PACKET_RX_RING, ...)` call returns -1 with errno=22.
+**Bug #1: errno=22 (EINVAL)**
+- **Root Cause**: TPACKET_V2 constant = 2 (actually TPACKET_V3)
+- **Fix**: Changed to 1 (correct kernel value)
+- **File**: `crates/rustnmap-packet/src/sys/if_packet.rs:42`
 
-### What We Know
+**Bug #2: SIGSEGV on multi-packet**
+- **Root Cause**: munmap in Drop freed Arc-shared memory
+- **Fix**: Removed munmap from Drop impl
+- **File**: `crates/rustnmap-packet/src/mmap.rs:1030-1042`
 
-**Works:**
-- Socket creation
-- Setting PACKET_VERSION to TPACKET_V2
-- Setting PACKET_RESERVE
-- First bind (protocol=0)
-- Interface lookups
+### Verification Results
 
-**Fails:**
-- `setsockopt(PACKET_RX_RING)` - errno=22 (EINVAL)
-
-### What We Don't Know
-
-**ROOT CAUSE UNKNOWN**
+- ✅ test_recv: Successfully receives 5 packets without crash
+- ✅ test_mmap: All configurations (small/default/minimal) succeed
+- ✅ mmap_pps: Benchmark runs without SIGSEGV
+- ✅ Code quality: Zero clippy warnings
 
 ### Impact
 
-- ❌ PACKET_MMAP V2 is **non-functional**
-- ❌ Cannot validate zero-copy performance
-- ❌ Cannot verify 1M PPS target
-- ❌ Phase 5 is **blocked**
+- ✅ PACKET_MMAP V2 is **functional**
+- ✅ Can validate zero-copy performance
+- ✅ Can verify 1M PPS target
+- ✅ Phase 5 is **in progress**
 
 ---
 
@@ -363,45 +361,62 @@ TEST_INTERFACE=ens33 sudo cargo bench -p rustnmap-benchmarks -- recvfrom_pps
 
 ---
 
-## Phase 5: Testing & Documentation (BLOCKED)
+## Phase 5: Testing & Documentation (IN PROGRESS)
 
 > **Started**: 2026-03-07
-> **Status**: **CRITICAL BLOCKER** - MmapPacketEngine non-functional
+> **Status**: **ACTIVE** - PACKET_MMAP V2 functional, performance testing in progress
+> **Updated**: 2026-03-07 6:50 PM PST
 
 ---
 
-## CRITICAL BLOCKER (2026-03-07)
+## Bug Fixes Applied (2026-03-07)
 
-**MmapPacketEngine::new() FAILS with errno=22 (EINVAL)**
+### Fix #1: TPACKET_V2 Constant ✅
 
-### Error
+**Issue**: errno=22 when calling setsockopt(PACKET_RX_RING)
+
+**Root Cause**: TPACKET_V2 constant had value 2 (TPACKET_V3) instead of 1
+
+**Verification**:
+```bash
+# Test from /usr/include/linux/if_packet.h:
+#define TPACKET_V1 0
+#define TPACKET_V2 1  // <-- Correct value
+#define TPACKET_V3 2
 ```
-failed to setup RX ring: Invalid argument (os error 22)
+
+**Files Changed**:
+- `crates/rustnmap-packet/src/sys/if_packet.rs` - Fixed constant value
+- `crates/rustnmap-packet/examples/debug_libc.rs` - Updated example
+
+**Result**: All ring buffer configurations now succeed
+
+---
+
+### Fix #2: SIGSEGV on Multi-Packet Reception ✅
+
+**Issue**: Crash on second recv() call after first packet
+
+**Root Cause**:
+```
+ZeroCopyPacket holds Arc<MmapPacketEngine>
+  ↓
+Packet dropped → Arc count → 0
+  ↓
+MmapPacketEngine::drop() calls munmap()
+  ↓
+Original engine's next recv() accesses freed memory
+  ↓
+SIGSEGV
 ```
 
-### Location
-- File: `crates/rustnmap-packet/src/mmap.rs`
-- Function: `setup_ring_buffer()` at line 453
-- Call: `setsockopt(fd, SOL_PACKET, PACKET_RX_RING, ...)` returns -1
+**Solution**: Removed munmap from Drop impl - Arc'd engines share mmap region
 
-### What Works
-- Socket creation: ✅
-- PACKET_VERSION set to TPACKET_V2: ✅
-- PACKET_RESERVE set: ✅
-- First bind (protocol=0): ✅
-- Interface lookups: ✅
+**Files Changed**:
+- `crates/rustnmap-packet/src/mmap.rs` - Removed Drop impl, added bounds checking
+- `crates/rustnmap-packet/src/zero_copy.rs` - Cleaned up debug output
 
-### What Fails
-- **setsockopt(PACKET_RX_RING)**: ❌ errno=22
-
-### Root Cause
-**UNKNOWN** - Requires investigation
-
-### Impact
-- ❌ Cannot create MmapPacketEngine
-- ❌ Cannot run PACKET_MMAP V2 benchmarks
-- ❌ Cannot validate zero-copy performance
-- ❌ Cannot verify 1M PPS target
+**Result**: Successfully receives multiple packets without crash
 
 ---
 
@@ -420,25 +435,36 @@ failed to setup RX ring: Invalid argument (os error 22)
 
 ### Task 5.2: Performance Validation
 
-**Status**: **BLOCKED**
+**Status**: 🔄 **IN PROGRESS**
 
-**Reason**: MmapPacketEngine cannot be created due to PACKET_RX_RING failure
+**Reason**: MmapPacketEngine now functional, ready for performance testing
 
-**Benchmark Suite**: Created (`mmap_pps.rs`) but cannot run
+**Benchmark Suite**: ✅ Created and runnable (`mmap_pps.rs`)
 
-**Cannot Verify**:
-- [ ] PPS >= 500,000 (50% of target)
+**Verification Targets**:
+- [ ] PPS >= 500,000 (50% of 1M target)
 - [ ] CPU (T5) <= 50%
 - [ ] Packet Loss (T5) <= 5%
-- [ ] Zero-copy verified
+- [ ] Zero-copy verified (no memcpy in hot path)
+
+**Next Steps**:
+1. Generate network traffic (ping -f, traffic generator, or background traffic)
+2. Run: `TEST_INTERFACE=ens33 cargo bench -p rustnmap-benchmarks -- mmap_pps`
+3. Compare with recvfrom baseline: `TEST_INTERFACE=ens33 cargo bench -p rustnmap-benchmarks -- recvfrom_pps`
+4. Verify 20x PPS improvement
 
 ---
 
 ### Task 5.3: Integration Testing
 
-**Status**: **BLOCKED**
+**Status**: ⏸️ **PENDING** - Dependent on Task 5.2 completion
 
-**Reason**: Cannot test with non-functional MmapPacketEngine
+**Reason**: Awaiting performance validation before integration testing
+
+**Requirements**:
+- Test all 12 scan types against live targets
+- Verify network volatility handling under real conditions
+- Compare results with nmap output
 
 ---
 
@@ -457,15 +483,23 @@ failed to setup RX ring: Invalid argument (os error 22)
 
 ## Summary
 
-**Current Phase**: Phase 1-4 Complete | Phase 5 - Pending (Performance Validation)
+**Current Phase**: Phase 1-4 Complete | Phase 5 - In Progress (Performance Validation)
 
-**Implementation Verification** (2026-03-07):
+**Recent Achievements** (2026-03-07):
+- ✅ **Fixed TPACKET_V2 constant bug** - Changed from 2 to 1
+- ✅ **Fixed SIGSEGV bug** - Removed munmap from Arc-shared Drop
+- ✅ **Verified multi-packet reception** - test_recv passes with 5 packets
+- ✅ **Benchmarks runnable** - mmap_pps executes without crashes
+- ✅ **Code quality** - Zero clippy warnings
+
+**Implementation Verification**:
 - 📋 Code review confirms all phases 1-4 are fully implemented
-- ✅ **PACKET_MMAP V2**: Fully implemented with zero-copy
-  - `mmap.rs`: TPACKET_V2 ring buffer with `try_recv_zero_copy()`
-  - `ZeroCopyBytes::borrowed()` for true zero-copy
+- ✅ **PACKET_MMAP V2**: Functional after bug fixes
+  - `mmap.rs`: TPACKET_V2 ring buffer with working recv()
+  - `ZeroCopyBytes::borrowed()` for zero-copy
   - Two-stage bind pattern (following nmap's libpcap)
   - Acquire/Release memory ordering
+  - Bounds checking for safety
 - ✅ **Scanner Migration**: All scanners use `ScannerPacketEngine`
   - `syn_scan.rs`, `stealth_scans.rs`, `ultrascan.rs`, `udp_scan.rs`
 - ✅ **Network Volatility**: All 5 components match design exactly
@@ -477,10 +511,10 @@ failed to setup RX ring: Invalid argument (os error 22)
 - ✅ Phase 3: Scanner Orchestration Integration
 - ✅ Phase 4: Scanner Migration to PacketEngine
 
-**Phase 5 Pending**:
-- Task 5.1: Performance validation benchmarks (1M PPS target)
-- Task 5.2: Documentation updates
-- Task 5.3: Integration testing with live network targets
+**Phase 5 In Progress**:
+- 🔄 Task 5.1: Performance validation benchmarks (awaiting traffic)
+- ⏸️ Task 5.2: Documentation updates
+- ⏸️ Task 5.3: Integration testing with live network targets
 
 **Quality Metrics**:
 - All 865+ tests passing
@@ -488,10 +522,19 @@ failed to setup RX ring: Invalid argument (os error 22)
 - Code formatted with rustfmt
 - Workspace compiles cleanly
 
+**Latest Commit**: `42daeeb` - fix(packet): Fix PACKET_MMAP V2 implementation - TPACKET_V2 constant and SIGSEGV
+
 ---
 
 ## Errors Encountered
 
 | Error | Attempt | Resolution |
 |-------|---------|------------|
-| *(Pending implementation)* | - | - |
+| errno=22 (EINVAL) on PACKET_RX_RING | 1-5 | Fixed TPACKET_V2 constant (2→1) |
+| SIGSEGV on second recv() call | 1 | Removed munmap from Drop impl |
+| useless_ptr_null_checks warning | 1 | Removed impossible NonNull check |
+| empty_drop warning | 1 | Removed empty Drop impl |
+| uninlined_format_args warning | 1 | Changed to inline format string |
+
+**Total bugs fixed**: 5
+**Total attempts**: 7 (including verification steps)
