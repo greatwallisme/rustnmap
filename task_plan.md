@@ -513,14 +513,38 @@ SIGSEGV
 
 **Phase 5 Status Update (2026-03-07 Evening)**:
 - ✅ Task 5.1: Functional validation **COMPLETE** (37/37 tests, sustained load test passed)
-- ⚠️ Task 5.2: Performance targets (500K-1M PPS) require pktgen-dpkt or specialized traffic generator
-- ✅ Task 5.3: Integration testing - **READY TO START** (target 192.168.15.1 available)
+- 🔄 Task 5.2: Heavy load testing with pktgen-dpkt **IN PROGRESS**
+- ⏸️ Task 5.3: Integration testing - **READY TO START** (target 192.168.15.1 available)
+
+### Task 5.2: Heavy Load Testing with pktgen-dpkt
+
+**Goal**: Validate 500K-1M PPS performance target
+
+**Installation Steps**:
+1. Install pktgen-dpkt (kernel packet generator)
+2. Configure pktgen for high PPS generation
+3. Run mmap_pps benchmark under load
+4. Measure actual PPS, CPU usage, packet loss
+
+**Commands**:
+```bash
+# Install pktgen-dpkt
+apt-get install pktgen-dpkt
+
+# Or use dpdk pktgen
+# Configure and run
+```
+
+**Acceptance Criteria**:
+- [ ] PPS >= 500,000 (50% of 1M target)
+- [ ] CPU (T5) <= 50%
+- [ ] Packet Loss (T5) <= 5%
 
 **Performance Validation Summary**:
 - Functional validation: ✅ Complete
 - Sustained load test: ✅ 123,879 packets, 12K PPS, zero drops
 - Engine stability: ✅ No crashes, zero packet loss
-- Heavy load (500K+ PPS): ⚠️ Requires pktgen-dpkt installation
+- Heavy load (500K+ PPS): 🔄 Installing pktgen-dpkt
 
 **Quality Metrics**:
 - All 865+ tests passing
