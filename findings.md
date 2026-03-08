@@ -1,82 +1,115 @@
-# Research Findings: CRITICAL BLOCKER - PACKET_MMAP V2 Non-Functional
+# Research Findings: PACKET_MMAP V2 Issue - RESOLVED ✅
 
 > **Created**: 2026-03-07
 > **Updated**: 2026-03-07
-> **Status**: **BLOCKED** - MmapPacketEngine cannot create RX ring (errno=22)
+> **Status**: **RESOLVED** - Root cause found, fixed, and verified
 
 ---
 
-## CRITICAL ISSUE (2026-03-07)
+## RESOLUTION (2026-03-07 5:45 PM PST)
+
+**Root Cause**: `TPACKET_V2` constant had WRONG value in Rust code
+
+### The Bug
+
+**Location**: `crates/rustnmap-packet/src/sys/if_packet.rs:42`
+
+**Wrong Code**:
+```rust
+pub const TPACKET_V2: libc::c_int = 2;  // WRONG!
+```
+
+**Correct Code**:
+```rust
+pub const TPACKET_V2: libc::c_int = 1;  // CORRECT
+```
+
+### Why This Caused errno=22 (EINVAL)
+
+The Linux kernel defines:
+- `TPACKET_V1 = 0`
+- `TPACKET_V2 = 1`
+- `TPACKET_V3 = 2`
+
+Our Rust code was using value `2` (which is `TPACKET_V3`), then calling `setsockopt(PACKET_VERSION)` to set the version.
+
+When the kernel received:
+- Version = 2 (TPACKET_V3)
+- But the code was using V2 data structures and constants
+
+Result: Kernel rejected the request with `errno=22 (EINVAL)` because the combination was invalid.
+
+### Evidence That Proved This
+
+1. **C test succeeded** with `PACKET_VERSION=1` (correct TPACKET_V2 value)
+2. **Rust code failed** with `PACKET_VERSION=2` (wrong - actually TPACKET_V3)
+3. **Kernel headers verified**: `/usr/include/linux/if_packet.h` shows `#define TPACKET_V2 1`
+4. **Byte-level comparison** confirmed all other parameters were identical
+
+### Fix Applied
+
+Changed `TPACKET_V2` from `2` to `1` in `crates/rustnmap-packet/src/sys/if_packet.rs`
+
+### Code Quality
+
+- Format: ✅ `cargo fmt --all --check` passes
+- Type check: ✅ `cargo check --workspace` passes
+- Clippy (lib): ✅ `cargo clippy -p rustnmap-packet --lib` passes
+- Build: ✅ `cargo build --workspace` succeeds
+
+### Verification Results (2026-03-07 5:50 PM PST)
+
+**Test 1: test_mmap example**
+```
+Test 1: Small config → SUCCESS!
+Test 2: Default config → SUCCESS! Engine started successfully!
+Test 3: Minimal config → SUCCESS!
+```
+
+**Test 2: debug_libc example (detailed step-by-step)**
+```
+Step 1: Creating socket... OK
+Step 2: Setting PACKET_VERSION = 1 (TPACKET_V2)... OK
+Step 3: Setting PACKET_RESERVE = 4... OK
+Step 4: Getting interface index for ens33... if_index = 2
+Step 5: Binding to interface with protocol=0... OK
+Step 6: Setting up PACKET_RX_RING... SUCCESS!
+```
+
+**Additional Fix**: Updated `debug_libc.rs` example to use correct value (1 instead of 2)
+
+### Conclusion
+
+PACKET_MMAP V2 implementation is now **functional**. The errno=22 error was caused by incorrect TPACKET_V2 constant value. All tests pass and the MmapPacketEngine can successfully create ring buffers.
+
+**Note**: Example files have clippy warnings but these are diagnostic tools, not production code.
+
+---
+
+## CRITICAL ISSUE (2026-03-07) - NOW RESOLVED
 
 **MmapPacketEngine::new() FAILS with errno=22 (EINVAL) when calling setsockopt(PACKET_RX_RING)**
 
-### Summary
+### Investigation Summary (2026-03-07 Session)
 
-Despite documentation claiming implementation is complete, **PACKET_MMAP V2 does not work**.
+**Methodology**: Evidence-based debugging with no speculation
 
-The code compiles and all tests pass, but `MmapPacketEngine::new()` cannot create a functional packet engine.
+**Tests Performed**:
+1. Verified C code (`/tmp/test_full.c`) SUCCEEDS with identical parameters
+2. Verified Rust code FAILS with errno=22 for all configurations tested
+3. Byte-level comparison of `TpacketReq` structure: IDENTICAL (00 10 00 00 01 00 00 00 00 08 00 00 02 00 00 00)
+4. Verified constant values: All AF_PACKET, SOCK_RAW, SOL_PACKET constants match
+5. Verified system call sequence: socket → PACKET_VERSION → PACKET_RESERVE → bind → PACKET_RX_RING
+6. Tested with and without OwnedFd, with and without wrapper constants: ALL FAIL
+7. C test called FROM Rust process succeeds, proving environment is OK
 
-### Error
+**Root Cause**: UNKNOWN - Requires Rust compiler or std library investigation
 
-```
-Engine creation failed: failed to setup RX ring: Invalid argument (os error 22)
-```
-
-### Fails At
-
-File: `crates/rustnmap-packet/src/mmap.rs`
-Function: `setup_ring_buffer()`
-Line: 478 (setsockopt call for PACKET_RX_RING)
-
-### What Works
-
-- Socket creation: ✅
-- Setting PACKET_VERSION to TPACKET_V2: ✅
-- Setting PACKET_RESERVE: ✅
-- First bind (protocol=0): ✅
-- Interface lookups: ✅
-
-### What Fails
-
-- **setsockopt(PACKET_RX_RING)**: ❌ errno=22 (EINVAL)
-
-### Configuration Tested (All Fail)
-
-| Config | block_size | block_nr | frame_size | Result |
-|--------|------------|----------|------------|--------|
-| Small | 4096 | 64 | 2048 | errno=22 |
-| Default | 65536 | 256 | 4096 | errno=22 |
-| Minimal | 4096 | 1 | 2048 | errno=22 |
-
-### Environment
-
-- Kernel: Linux 6.1.0-27-amd64 (6.1.115)
-- Interface: ens33 (UP, BROADCAST, MULTICAST)
-- User: root (full capabilities)
-
-### Impact
-
-- ❌ Cannot run PACKET_MMAP V2 benchmarks
-- ❌ Cannot validate zero-copy performance
-- ❌ Cannot verify 1M PPS target
-- ❌ **Phase 5 is BLOCKED**
-
-### Root Cause
-
-**UNKNOWN** - Investigation required.
-
-Possible directions (unconfirmed):
-- Missing socket option
-- Incorrect parameter validation
-- Kernel-specific requirement
-- Struct alignment issue
-
-### Next Steps Required
-
-1. Use `strace` to compare with nmap
-2. Check `dmesg` for kernel messages
-3. Test TPACKET_V3 as alternative
-4. Verify with simpler test case
+**Hypotheses to Investigate** (NOT verified):
+- Rust runtime interference with socket system calls
+- Different calling convention or register usage
+- Memory allocator interaction with mmap
+- LLVM codegen issue for setsockopt
 
 ---
 

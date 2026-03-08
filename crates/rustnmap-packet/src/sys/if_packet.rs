@@ -39,7 +39,8 @@ pub const PACKET_RESERVE: libc::c_int = 12;
 pub const PACKET_AUXDATA: libc::c_int = 8;
 
 /// `TPACKET` version 2 constant.
-pub const TPACKET_V2: libc::c_int = 2;
+/// Value from kernel headers: `TPACKET_V1=0`, `TPACKET_V2=1`, `TPACKET_V3=2`
+pub const TPACKET_V2: libc::c_int = 1;
 
 /// Frame status constants (from `if_packet.h`)
 /// Frame is owned by kernel.

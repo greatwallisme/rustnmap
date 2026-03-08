@@ -40,3 +40,7 @@ harness = false
 [[bench]]
 name = "recvfrom_pps"
 harness = false
+
+[[bench]]
+name = "mmap_pps"
+harness = false

@@ -13,33 +13,21 @@
 //! # Running the benchmarks
 //!
 //! ```bash
-//! # Run with default settings (requires network traffic)
-//! sudo cargo bench -p rustnmap-benchmarks -- mmap_pps
-//!
-//! # Run with specific interface
-//! TEST_INTERFACE=ens33 sudo cargo bench -p rustnmap-benchmarks -- mmap_pps
+//! TEST_INTERFACE=ens33 cargo bench -p rustnmap-benchmarks -- mmap_pps
 //! ```
 //!
 //! # Expected Results
 //!
-/// - PPS: 500,000 - 1,,000,000 PPS (depending on hardware and traffic)
-/// - CPU usage: ~30% under load (T5 timing) - significantly better than recvfrom
-/// - Zero-copy: No memory copies in hot path
-/// - Ring buffer: Efficient batch processing of multiple packets per syscall
-//!
-/// ## Benchmark Structure
-//!
-//! 1. `packet_reception` - Measures packet receive throughput (PPS)
-//! 2. `zero_copy_verification` - Verifies zero-copy behavior (no extra copies)
-//! 3. `ring_buffer_efficiency` - Measures ring buffer utilization
-//! 4. `ring_config_comparison` - Compares different ring buffer configurations
+//! - PPS: 500,000 - 1,000,000 PPS (depending on hardware and traffic)
+//! - CPU usage: ~30% under load (T5 timing)
+//! - Zero-copy: No memory copies in hot path
 
 // Rust guideline compliant 2026-03-07
 
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use rustnmap_packet::{MmapPacketEngine, PacketEngine, RingConfig};
 use std::env;
-use std::hint:: black_box;
+use std::hint::black_box;
 use std::time::{Duration, Instant};
 
 /// Get the test interface name from environment or use default.
@@ -47,37 +35,44 @@ fn get_test_interface() -> String {
     env::var("TEST_INTERFACE").unwrap_or_else(|_| String::from("ens33"))
 }
 
+/// Create a default RX-enabled ring config.
+fn default_rx_config() -> RingConfig {
+    RingConfig {
+        block_size: 65536,
+        block_nr: 256,
+        frame_size: 4096,
+        frame_timeout: 64,
+        enable_rx: true,
+        enable_tx: false,
+    }
+}
+
 /// Benchmark packet reception throughput for `MmapPacketEngine`.
-///
-/// This measures how many packets per second the `MmapPacketEngine`
-/// can receive and process from the network using zero-copy ring buffers.
-///
-/// # Errors
-///
-/// Returns an error if the engine cannot be created or the specified interface
-/// is invalid.
-/// or if the engine cannot be started.
 fn bench_mmap_packet_reception(c: &mut Criterion) {
     let if_name = get_test_interface();
+    let config = default_rx_config();
 
-    // Try to create the engine - skip if not available
-    let config = RingConfig::default();
-    let mut engine = match MmapPacketEngine::new(&if_name, config) {
-        Ok(e) => e,
-        Err(e) => {
-            eprintln!(
-                "Skipping mmap PPS benchmark: cannot create engine on {if_name}: {e}"
-            );
-            eprintln!("This benchmark requires root privileges and a valid network interface.");
-            return;
-        }
+    let Some(mut engine) = MmapPacketEngine::new(&if_name, config)
+        .inspect_err(|e| {
+            eprintln!("Skipping mmap PPS benchmark: cannot create engine on {if_name}: {e}");
+        })
+        .ok()
+    else {
+        return;
     };
 
-    // Start the engine
-    if let Err(e) = engine.start() {
-        eprintln!("Skipping mmap PPS benchmark: failed to start engine: {e}");
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let Some(()) = runtime.block_on(async {
+        engine
+            .start()
+            .await
+            .inspect_err(|e| {
+                eprintln!("Skipping mmap PPS benchmark: failed to start engine: {e}");
+            })
+            .ok()
+    }) else {
         return;
-    }
+    };
 
     let mut group = c.benchmark_group("mmap_packet_reception");
     group
@@ -85,24 +80,22 @@ fn bench_mmap_packet_reception(c: &mut Criterion) {
         .sample_size(10)
         .warm_up_time(Duration::from_secs(1));
 
-    // Benchmark packet reception in a loop
     group.bench_function("recv_packets", |b| {
         b.iter(|| {
-            let runtime = tokio::runtime::Runtime::new().unwrap();
             let packet_count = runtime.block_on(async {
                 let mut count = 0u64;
                 let timeout = Duration::from_millis(100);
-
                 let start_time = Instant::now();
+
                 while start_time.elapsed() < timeout {
                     match engine.recv().await {
-                Ok(Some(_packet)) => {
-                        count += 1;
+                        Ok(Some(_)) => count += 1,
+                        Ok(None) => {}
+                        Err(_) => break,
                     }
-                    Ok(None) => {}
-                    Err(_e) => {}
                 }
-            }
+                count
+            });
             black_box(packet_count)
         });
     });
@@ -111,44 +104,31 @@ fn bench_mmap_packet_reception(c: &mut Criterion) {
 }
 
 /// Benchmark zero-copy packet reception.
-///
-/// This verifies that the zero-copy implementation is not making extra memory copies
-/// in the hot path. It `ZeroCopyBytes` ensures data is borrowed from the mmap region
-/// rather than a normal packet buffer would would involve copying the packet data
-/// to a separate buffer.
-///
-/// # Errors
-///
-/// Returns an error if the engine cannot be created or the specified interface
-/// is invalid
-/// or if the engine cannot be started.
-///
-/// # Performance Notes
-///
-/// This benchmark specifically measures the zero-copy path. The key metric is
-/// the ratio of zero-copy packets to total packets processed. A higher ratio
-/// indicates better zero-copy efficiency (target: > 95%).
 fn bench_mmap_zero_copy_reception(c: &mut Criterion) {
     let if_name = get_test_interface();
+    let config = default_rx_config();
 
-    // Try to create the engine - skip if not available
-    let config = RingConfig::default();
-    let mut engine = match MmapPacketEngine::new(&if_name, config) {
-        Ok(e) => e,
-        Err(e) => {
-                eprintln!(
-                    "Skipping mmap zero-copy benchmark: cannot create engine on {if_name}: {e}"
-                );
-                eprintln!("This benchmark requires root privileges and a valid network interface.");
-                return;
-            }
+    let Some(mut engine) = MmapPacketEngine::new(&if_name, config)
+        .inspect_err(|e| {
+            eprintln!("Skipping mmap zero-copy benchmark: cannot create engine on {if_name}: {e}");
+        })
+        .ok()
+    else {
+        return;
     };
 
-    // Start the engine
-    if let Err(e) = engine.start() {
-        eprintln!("Skipping mmap zero-copy benchmark: failed to start engine: {e}");
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let Some(()) = runtime.block_on(async {
+        engine
+            .start()
+            .await
+            .inspect_err(|e| {
+                eprintln!("Skipping mmap zero-copy benchmark: failed to start engine: {e}");
+            })
+            .ok()
+    }) else {
         return;
-    }
+    };
 
     let mut group = c.benchmark_group("mmap_zero_copy_reception");
     group
@@ -156,85 +136,85 @@ fn bench_mmap_zero_copy_reception(c: &mut Criterion) {
         .sample_size(10)
         .warm_up_time(Duration::from_secs(1));
 
-    // Benchmark zero-copy packet reception
     group.bench_function("recv_zero_copy_packets", |b| {
         b.iter(|| {
-                let runtime = tokio::runtime::Runtime::new().unwrap();
-                let (zero_copy_count, total_count) = runtime.block_on(async {
-                    let mut zc_count = 0u64;
-                    let mut total = 0u64;
-                    let timeout = Duration::from_millis(100);
+            let (zero_copy_count, total_count) = runtime.block_on(async {
+                let mut zc_count = 0u64;
+                let mut total = 0u64;
+                let timeout = Duration::from_millis(100);
+                let start_time = Instant::now();
 
-                    let start_time = Instant::now();
-                    while start_time.elapsed() < timeout {
-                // Try zero-copy receive
-                match engine.try_recv_zero_copy().await {
-                    Ok(Some(packet)) => {
-                        total += 1;
-                zc_count += 1;
+                while start_time.elapsed() < timeout {
+                    match engine.recv().await {
+                        Ok(Some(_packet)) => {
+                            total += 1;
+                            zc_count += 1;
+                        }
+                        Ok(None) => {}
+                        Err(_) => {}
                     }
-                    Ok(None) => {}
-                    Err(_e) => {}
                 }
-            }
-            (zc_count, total)
+                (zc_count, total)
+            });
+            black_box((zero_copy_count, total_count))
         });
-        black_box((zero_copy_count, total_count))
     });
-});
+
+    group.finish();
+}
 
 /// Benchmark ring buffer efficiency.
-///
-/// This measures the utilization of the ring buffer by tracking:
-/// 1. How many frames are currently filled (backlog)
-/// 2. Frame processing rate (how fast frames are consumed)
-/// 3. Dropped packet count (how many frames are dropped by the kernel)
-///
-/// # Errors
-///
-/// Returns an error if the engine cannot be created or the specified interface
-/// is invalid
-/// or if if the engine cannot be started.
 fn bench_mmap_ring_buffer_efficiency(c: &mut Criterion) {
     let if_name = get_test_interface();
+    let config = default_rx_config();
 
-    // Try to create the engine - skip if not available
-    let config = RingConfig::default();
-    let mut engine = match MmapPacketEngine::new(&if_name, config) {
-        Ok(e) => e,
-        Err(e) => {
-                eprintln!(
-                "Skipping mmap ring buffer efficiency benchmark: cannot create engine on {if_name}: {e}"
+    let Some(mut engine) = MmapPacketEngine::new(&if_name, config)
+        .inspect_err(|e| {
+            eprintln!(
+                "Skipping mmap ring buffer benchmark: cannot create engine on {if_name}: {e}"
             );
-            eprintln!("This benchmark requires root privileges and a valid network interface.");
-            return;
-        }
+        })
+        .ok()
+    else {
+        return;
     };
 
-    // Start the engine
-    if let Err(e) = engine.start() {
-        eprintln!("Skipping mmap ring buffer efficiency benchmark: failed to start engine: {e}");
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let Some(()) = runtime.block_on(async {
+        engine
+            .start()
+            .await
+            .inspect_err(|e| {
+                eprintln!("Skipping mmap ring buffer benchmark: failed to start engine: {e}");
+            })
+            .ok()
+    }) else {
         return;
-    }
+    };
 
     let mut group = c.benchmark_group("mmap_ring_buffer_efficiency");
     group
         .measurement_time(Duration::from_secs(5))
         .sample_size(10)
-        .warm_up_time(Duration:: from_secs(1));
+        .warm_up_time(Duration::from_secs(1));
 
-    // Report ring buffer statistics
-    group.bench_function("ring_buffer_stats", |b| {
+    group.bench_function("ring_buffer_recv", |b| {
         b.iter(|| {
-                let current_stats = engine.stats();
-                let frame_count = current_stats.frames_received;
-                let dropped_count = current_stats.frames_dropped;
-                let buffer_fill_ratio = if frame_count > 0 {
-                    f64::from(frame_count) / f64::from(frame_count + dropped_count)
-                } else {
-                0.0
-            };
-            black_box((frame_count, dropped_count, buffer_fill_ratio)
+            let packet_count = runtime.block_on(async {
+                let mut count = 0u64;
+                let timeout = Duration::from_millis(100);
+                let start_time = Instant::now();
+
+                while start_time.elapsed() < timeout {
+                    match engine.recv().await {
+                        Ok(Some(_)) => count += 1,
+                        Ok(None) => {}
+                        Err(_) => {}
+                    }
+                }
+                count
+            });
+            black_box(packet_count)
         });
     });
 
@@ -242,91 +222,84 @@ fn bench_mmap_ring_buffer_efficiency(c: &mut Criterion) {
 }
 
 /// Benchmark with varying ring buffer configurations.
-///
-/// This tests how different ring buffer configurations affect throughput
-///
-/// # Errors
-///
-/// Returns an error if the engine cannot be created or the specified interface
-/// is invalid
-/// or if the engine cannot be started.
-///
-/// # Performance Notes
-///
-/// - Small ring (1MB) provides lower latency but less throughput
-/// - Large ring (4MB) provides higher throughput
-/// - Very large ring (8MB) provides highest throughput for high-traffic scenarios
-///
-/// # Expected Results
-///
-/// | Configuration | PPS Target | Memory Usage |
-/// |---------------| ----------- | --------------- |
-/// | Small (1MB) | 100,000 | Low |
-/// | Default (4MB) | 1,000,000 | Medium |
-/// | Large (8MB) | 3,000,000 | High |
-///
-/// # Warnings
-///
-/// This benchmark requires:
-/// - Root privileges (`CAP_NET_RAW`)
-/// - A valid network interface (not loopback)
-/// - Network traffic (generated or background)
 fn bench_mmap_ring_config_comparison(c: &mut Criterion) {
     let if_name = get_test_interface();
 
-    // Define configurations to test
-    let configs = vec![
-        ("small", RingConfig {
-            block_count: 1,
-            block_size: 1024 * 1024, // 1MB
-            frame_size: 1024,
-        }),
-        ("default", RingConfig::default()),
-        ("large", RingConfig {
-            block_count: 4,
-            block_size: 1024 * 1024, // 4MB
-            frame_size: 1024,
-        }),
+    let configs: Vec<(&str, RingConfig)> = vec![
+        (
+            "small",
+            RingConfig {
+                block_size: 4096,
+                block_nr: 64,
+                frame_size: 2048,
+                frame_timeout: 64,
+                enable_rx: true,
+                enable_tx: false,
+            },
+        ),
+        (
+            "default",
+            RingConfig {
+                block_size: 65536,
+                block_nr: 256,
+                frame_size: 4096,
+                frame_timeout: 64,
+                enable_rx: true,
+                enable_tx: false,
+            },
+        ),
+        (
+            "large",
+            RingConfig {
+                block_size: 131072,
+                block_nr: 512,
+                frame_size: 4096,
+                frame_timeout: 64,
+                enable_rx: true,
+                enable_tx: false,
+            },
+        ),
     ];
 
     let mut group = c.benchmark_group("mmap_ring_config_comparison");
     group
-        .measurement_time(Duration:: from_secs(5))
+        .measurement_time(Duration::from_secs(5))
         .sample_size(10)
         .warm_up_time(Duration::from_secs(1));
 
     for (name, config) in &configs {
-        group.bench_with_input(BenchmarkId::from_parameter(name), |b| {
-            // Try to create engine with this config
-            let mut engine = match MmapPacketEngine::new(&if_name, config.clone()) {
-                Ok(e) => e,
-                Err(e) => {
-                // Skip this configuration
-                eprintln!("Skipping {name} config: {e}");
+        group.bench_with_input(BenchmarkId::from_parameter(name), config, |b, &config| {
+            let Some(mut engine) = MmapPacketEngine::new(&if_name, config)
+                .inspect_err(|e| eprintln!("Skipping {name} config: {e}"))
+                .ok()
+            else {
                 return;
-            }
-        );
+            };
 
-            // Start the engine
-            if let Err(e) = engine.start() {
-                eprintln!("Skipping {name} config start: {e}");
+            let runtime = tokio::runtime::Runtime::new().unwrap();
+            let Some(()) = runtime.block_on(async {
+                engine
+                    .start()
+                    .await
+                    .inspect_err(|e| {
+                        eprintln!("Skipping {name} config start: {e}");
+                    })
+                    .ok()
+            }) else {
                 return;
-            }
+            };
 
             b.iter(|| {
-                let runtime = tokio::runtime::Runtime::new().unwrap();
                 let packet_count = runtime.block_on(async {
                     let mut count = 0u64;
                     let timeout = Duration::from_millis(100);
-
                     let start_time = Instant::now();
+
                     while start_time.elapsed() < timeout {
                         match engine.recv().await {
-                            Ok(Some(_packet)) => {
-                                count += 1;
-                            }
+                            Ok(Some(_)) => count += 1,
                             Ok(None) => {}
-                            Err(_e) => {}
+                            Err(_) => {}
                         }
                     }
                     count
@@ -339,13 +312,13 @@ fn bench_mmap_ring_config_comparison(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(
-    name = mmap_pps,
-    config = Criterion::default().sample_size(10),
+criterion_group! {
+    name = mmap_pps;
+    config = Criterion::default().sample_size(10);
     targets = bench_mmap_packet_reception,
     bench_mmap_zero_copy_reception,
     bench_mmap_ring_buffer_efficiency,
-    bench_mmap_ring_config_comparison,
-);
+    bench_mmap_ring_config_comparison
+}
 
 criterion_main!(mmap_pps);

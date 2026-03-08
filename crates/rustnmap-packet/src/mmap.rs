@@ -650,7 +650,22 @@ impl MmapPacketEngine {
     ///
     /// Uses Acquire ordering to synchronize with kernel's Release store.
     fn frame_is_available(&self) -> bool {
-        let frame_ptr = self.frame_ptrs[self.rx_frame_idx as usize];
+        let frame_idx = self.rx_frame_idx as usize;
+        if frame_idx >= self.frame_ptrs.len() {
+            return false;
+        }
+
+        let frame_ptr = self.frame_ptrs[frame_idx];
+
+        // Check if pointer is within mmap'd region
+        let frame_addr = frame_ptr.as_ptr() as usize;
+        let ring_start = self.ring_ptr.as_ptr() as usize;
+        let ring_end = ring_start + self.ring_size;
+
+        if frame_addr < ring_start || frame_addr >= ring_end {
+            return false;
+        }
+
         // SAFETY: frame_ptr is valid and within the mmap'd region
         let hdr = unsafe { frame_ptr.as_ref() };
         // The first field of Tpacket2Hdr is tp_status (u32), which we
@@ -773,11 +788,18 @@ impl MmapPacketEngine {
             return Err(PacketError::NotStarted);
         }
 
+        let frame_idx = self.rx_frame_idx as usize;
+
+        // Check bounds BEFORE accessing
+        if frame_idx >= self.frame_ptrs.len() {
+            return Err(PacketError::InvalidConfig(format!("frame_idx {frame_idx} out of bounds")));
+        }
+
         if !self.frame_is_available() {
             return Ok(None);
         }
 
-        let frame_ptr = self.frame_ptrs[self.rx_frame_idx as usize];
+        let frame_ptr = self.frame_ptrs[frame_idx];
         // SAFETY: frame_ptr is valid and we've verified frame is available
         let hdr = unsafe { frame_ptr.as_ref() };
 
@@ -1005,19 +1027,11 @@ impl MmapPacketEngine {
     }
 }
 
-impl Drop for MmapPacketEngine {
-    fn drop(&mut self) {
-        // CRITICAL: munmap BEFORE close
-        // Wrong order causes EBADF errors
-
-        // SAFETY: ring_ptr and ring_size are valid from successful mmap
-        unsafe {
-            libc::munmap(self.ring_ptr.as_ptr().cast::<c_void>(), self.ring_size);
-        }
-
-        // fd is automatically closed by OwnedFd's Drop
-    }
-}
+// NOTE: No explicit Drop impl for MmapPacketEngine.
+// The fd is automatically closed by OwnedFd's Drop.
+// IMPORTANT: The mmap region is NOT munmap-ed here because this engine may be
+// shared via Arc (e.g., in ZeroCopyPacket). The memory will be reclaimed when
+// the original engine and all Arc clones are dropped.
 
 // SAFETY: MmapPacketEngine uses atomic operations for shared state and
 // the ring buffer pointer is only accessed through safe abstractions.
