@@ -307,6 +307,75 @@ impl ScannerPacketEngine {
 ///
 /// # Returns
 ///
+/// Finds the loopback interface name on the system.
+///
+/// This function enumerates all network interfaces and returns the name
+/// of the first interface with a loopback address (127.x.x.x).
+///
+/// # Returns
+///
+/// `Some(interface_name)` if a loopback interface is found, `None` otherwise.
+fn find_loopback_interface() -> Option<String> {
+    use std::ffi::CStr;
+    use std::net::Ipv4Addr as StdIpv4Addr;
+
+    // SAFETY: getifaddrs() and freeifaddrs() are libc functions for interface enumeration.
+    // The function properly handles the returned pointers and uses CStr for safe string conversion.
+    // Pointer validity is checked before dereferencing.
+    //
+    // The cast from sockaddr to sockaddr_in is safe because:
+    // 1. We verify sa_family is AF_INET before casting
+    // 2. When AF_INET, the structure is always sockaddr_in with sin_port and sin_addr
+    // 3. This is the standard pattern documented in POSIX getifaddrs(3)
+    #[expect(clippy::cast_ptr_alignment, reason = "sockaddr is sockaddr_in when AF_INET")]
+    unsafe {
+        let mut ifaddrs: *mut libc::ifaddrs = std::ptr::null_mut();
+
+        if libc::getifaddrs(&raw mut ifaddrs) != 0 || ifaddrs.is_null() {
+            return None;
+        }
+
+        let mut current = ifaddrs;
+
+        while !current.is_null() {
+            let ifa = &*current;
+
+            if !ifa.ifa_name.is_null() && !ifa.ifa_addr.is_null() {
+                let if_name = CStr::from_ptr(ifa.ifa_name).to_string_lossy().into_owned();
+
+                // Check address family (AF_INET = 2)
+                if i32::from((*ifa.ifa_addr).sa_family) == libc::AF_INET {
+                    let addr = &*(ifa.ifa_addr as *const libc::sockaddr_in);
+                    let ip_bytes = addr.sin_addr.s_addr.to_ne_bytes();
+                    let ip = StdIpv4Addr::new(ip_bytes[0], ip_bytes[1], ip_bytes[2], ip_bytes[3]);
+
+                    // Check if this is a loopback address (127.x.x.x)
+                    if ip.is_loopback() {
+                        libc::freeifaddrs(ifaddrs);
+                        return Some(if_name);
+                    }
+                }
+            }
+
+            current = ifa.ifa_next;
+        }
+        libc::freeifaddrs(ifaddrs);
+        None
+    }
+}
+
+/// Creates a stealth scan packet engine with zero-copy packet capture.
+///
+/// This function creates a `PACKET_MMAP` V2 packet engine optimized for
+/// stealth scans (FIN, NULL, XMAS, MAIMON, ACK, Window).
+///
+/// # Arguments
+///
+/// * `local_addr` - Local IP address to use as source
+/// * `config` - Scanner configuration
+///
+/// # Returns
+///
 /// Returns `Some(engine)` if successful, or `None` if creation fails.
 ///
 /// # Example
@@ -314,12 +383,12 @@ impl ScannerPacketEngine {
 /// ```rust,ignore
 /// use std::sync::Arc;
 /// use tokio::sync::Mutex;
-/// use rustnmap_scan::packet_adapter::create_stealth_engine;
-/// use rustnmap_common::ScanConfig;
+/// use rustnmap_scan::packet_adapter::create_stealth_engine_with_target;
+/// use rustnmap_common::{ScanConfig, Ipv4Addr};
 ///
 /// # fn example() -> Option<Arc<Mutex<ScannerPacketEngine>>> {
 /// let config = ScanConfig::default();
-/// create_stealth_engine(config.local_addr?, config)
+/// create_stealth_engine_with_target(None, None, config)
 /// # }
 /// ```
 #[must_use]
@@ -327,34 +396,104 @@ pub fn create_stealth_engine(
     local_addr: Option<Ipv4Addr>,
     config: ScanConfig,
 ) -> Option<Arc<Mutex<ScannerPacketEngine>>> {
-    // Get interface name from local address
-    let if_name = detect_interface_from_addr(local_addr);
+    create_stealth_engine_with_target(local_addr, None, config)
+}
+
+/// Creates a stealth scan packet engine with target awareness.
+///
+/// This function is similar to `create_stealth_engine()` but includes
+/// target address information for proper interface selection. When scanning
+/// localhost targets, the packet engine must be bound to the loopback (`lo`)
+/// interface to receive responses.
+///
+/// # Arguments
+///
+/// * `local_addr` - Local IP address to use as source
+/// * `target_addr` - Optional target IP address (used to detect localhost scanning)
+/// * `config` - Scanner configuration
+///
+/// # Returns
+///
+/// A `ScannerPacketEngine` wrapped in Arc<Mutex<>>, or `None` if creation fails.
+///
+/// # Example
+///
+/// ```rust
+/// # use rustnmap_scan::packet_adapter::create_stealth_engine_with_target;
+/// # use rustnmap_common::{ScanConfig, Ipv4Addr};
+/// # use std::sync::Arc;
+/// # use tokio::sync::Mutex;
+/// # fn example() -> Option<Arc<Mutex<ScannerPacketEngine>>> {
+/// let config = ScanConfig::default();
+/// let localhost_target = Ipv4Addr::new(127, 0, 0, 1);
+/// create_stealth_engine_with_target(None, Some(localhost_target), config)
+/// # }
+/// ```
+#[must_use]
+pub fn create_stealth_engine_with_target(
+    local_addr: Option<Ipv4Addr>,
+    target_addr: Option<Ipv4Addr>,
+    config: ScanConfig,
+) -> Option<Arc<Mutex<ScannerPacketEngine>>> {
+    // Get interface name, considering both source and target addresses
+    let if_name = detect_interface_from_addr(local_addr, target_addr);
 
     // Create the engine
     ScannerPacketEngine::new_shared(&if_name, config).ok()
 }
 
-/// Detects the network interface name from a local IP address.
+/// Detects the network interface name for scanning.
 ///
-/// This function enumerates all network interfaces and finds the one
-/// whose address matches the given local IP address.
+/// This function enumerates all network interfaces and selects the appropriate
+/// interface based on the source and target addresses. When scanning localhost
+/// targets (127.x.x.x), the loopback interface (`lo`) is explicitly preferred
+/// to ensure packet responses can be captured.
 ///
 /// # Arguments
 ///
-/// * `local_addr` - Local IP address to look up
+/// * `local_addr` - Local IP address to use as source (for interface matching)
+/// * `target_addr` - Optional target IP address (for localhost detection)
 ///
 /// # Returns
 ///
-/// Returns the interface name if found, or the first non-loopback interface as default.
+/// Returns the interface name if found, or an appropriate default interface.
 ///
 /// # Implementation Note
 ///
 /// This implementation uses `getifaddrs()` to enumerate interfaces and match
 /// by address, following nmap's pattern in `libnetutil/netutil.cc:ipaddr2devname()`.
+///
+/// For localhost targets (127.x.x.x), the loopback interface (`lo`) is
+/// explicitly preferred because:
+/// 1. Packets to 127.0.0.1 are routed via the `lo` interface by the kernel
+/// 2. `PACKET_MMAP` sockets must bind to the same interface to capture responses
+/// 3. Binding to a non-loopback interface would miss loopback responses
 #[must_use]
-pub fn detect_interface_from_addr(local_addr: Option<Ipv4Addr>) -> String {
+pub fn detect_interface_from_addr(local_addr: Option<Ipv4Addr>, target_addr: Option<Ipv4Addr>) -> String {
+    detect_interface_from_addr_impl(local_addr, target_addr)
+}
+
+/// Internal implementation of interface detection.
+///
+/// This function performs the actual interface enumeration and selection logic.
+fn detect_interface_from_addr_impl(local_addr: Option<Ipv4Addr>, target_addr: Option<Ipv4Addr>) -> String {
     use std::ffi::CStr;
     use std::net::Ipv4Addr as StdIpv4Addr;
+
+    // Check if target is localhost (127.x.x.x)
+    // For localhost scanning, we must use the loopback interface
+    // because kernel routes 127.0.0.1 via 'lo', and `PACKET_MMAP`
+    // must be bound to 'lo' to capture loopback responses.
+    if let Some(target) = target_addr {
+        let target_bytes = target.octets();
+        // Check if address is in 127.0.0.0/8 (loopback range)
+        if target_bytes[0] == 127 {
+            // Target is localhost - explicitly use loopback interface
+            if let Some(lo_name) = find_loopback_interface() {
+                return lo_name;
+            }
+        }
+    }
 
     // SAFETY: getifaddrs() and freeifaddrs() are libc functions for interface enumeration.
     // The function properly handles the returned pointers and uses CStr for safe string conversion.

@@ -681,7 +681,9 @@ fn parse_date_flexible(date_str: &str) -> Option<chrono::DateTime<chrono::Utc>> 
 
 /// Parse targets from a string list
 fn parse_targets_from_list(target_list: &[String]) -> TargetGroup {
-    let parser = TargetParser::new();
+    // Try to use DNS resolver, fall back to no DNS if it fails
+    let parser = TargetParser::with_dns()
+        .unwrap_or_else(|_| TargetParser::new());
     let mut all_targets = Vec::new();
 
     for target_spec in target_list {
@@ -994,12 +996,15 @@ async fn run_normal_scan(args: &Args) -> Result<()> {
 }
 
 /// Parses target specifications from command-line arguments.
-fn parse_targets(args: &Args) -> Result<TargetGroup> {
-    let parser = TargetParser::new();
+async fn parse_targets_async(args: &Args) -> Result<TargetGroup> {
+    // Use with_dns() to enable hostname resolution (e.g., scanme.nmap.org)
+    let parser = TargetParser::with_dns().map_err(|e| {
+        rustnmap_common::Error::Other(format!("Failed to create DNS resolver: {e}"))
+    })?;
     let mut all_targets = Vec::new();
 
     for target_spec in &args.targets {
-        match parser.parse(target_spec) {
+        match parser.parse_async(target_spec).await {
             Ok(group) => {
                 for target in group.targets {
                     if !all_targets.iter().any(|t: &Target| t.ip == target.ip) {
@@ -1015,10 +1020,8 @@ fn parse_targets(args: &Args) -> Result<TargetGroup> {
 
     // Handle input file if specified
     if let Some(input_file) = &args.input_file {
-        let content = tokio::task::block_in_place(|| {
-            std::fs::read_to_string(input_file).map_err(|e| {
-                rustnmap_common::Error::Other(format!("Failed to read input file: {e}"))
-            })
+        let content = tokio::fs::read_to_string(input_file).await.map_err(|e| {
+            rustnmap_common::Error::Other(format!("Failed to read input file: {e}"))
         })?;
 
         for line in content.lines() {
@@ -1026,7 +1029,7 @@ fn parse_targets(args: &Args) -> Result<TargetGroup> {
             if line.is_empty() || line.starts_with('#') {
                 continue;
             }
-            match parser.parse(line) {
+            match parser.parse_async(line).await {
                 Ok(group) => {
                     for target in group.targets {
                         if !all_targets.iter().any(|t: &Target| t.ip == target.ip) {
@@ -1042,6 +1045,21 @@ fn parse_targets(args: &Args) -> Result<TargetGroup> {
     }
 
     Ok(TargetGroup::new(all_targets))
+}
+
+/// Parses target specifications from command-line arguments (synchronous wrapper).
+fn parse_targets(args: &Args) -> Result<TargetGroup> {
+    // Use tokio runtime to run async parsing
+    tokio::task::block_in_place(|| {
+        let rt = tokio::runtime::Handle::try_current()
+            .or_else(|_| tokio::runtime::Handle::try_current())
+            .unwrap_or_else(|_| {
+                // Create new runtime if none exists (shouldn't happen in normal flow)
+                std::panic::panic_any("Tokio runtime not found")
+            });
+
+        rt.block_on(parse_targets_async(args))
+    })
 }
 
 /// Builds scan configuration from command-line arguments.

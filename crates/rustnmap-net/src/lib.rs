@@ -234,6 +234,76 @@ pub mod raw_socket {
             Ok(())
         }
 
+        /// Binds the raw socket to a specific source IP address.
+        ///
+        /// This is critical for localhost scanning: when targeting 127.0.0.1,
+        /// the socket must be bound to a loopback address so that responses
+        /// are routed via the loopback interface and can be captured.
+        ///
+        /// Without binding, the kernel selects the source address based on
+        /// the routing table, which typically results in the primary interface
+        /// address being used even for loopback targets.
+        ///
+        /// # Arguments
+        ///
+        /// * `src_addr` - The source IP address to bind to
+        ///
+        /// # Errors
+        ///
+        /// Returns an error if:
+        /// - The address is already in use
+        /// - The address is not available on this host
+        /// - Permission denied
+        ///
+        /// # Example
+        ///
+        /// ```rust,no_run
+        /// use rustnmap_net::raw_socket::RawSocket;
+        /// use std::net::Ipv4Addr;
+        ///
+        /// // Create a raw socket for localhost scanning
+        /// let socket = RawSocket::with_protocol(6).unwrap();
+        /// socket.bind(Ipv4Addr::new(127, 0, 0, 1)).unwrap();
+        /// ```
+        pub fn bind(&self, src_addr: Ipv4Addr) -> io::Result<()> {
+            let addr_bytes = src_addr.octets();
+
+            // Create sockaddr_in structure for binding
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "AF_INET (2) always fits in sa_family_t (u16)"
+            )]
+            let sin_family = libc::AF_INET as libc::sa_family_t;
+            let sockaddr = libc::sockaddr_in {
+                sin_family,
+                sin_port: 0, // Let kernel choose port
+                sin_addr: libc::in_addr {
+                    s_addr: u32::from_ne_bytes([addr_bytes[3], addr_bytes[2], addr_bytes[1], addr_bytes[0]]),
+                },
+                sin_zero: [0; 8],
+            };
+
+            // SAFETY: bind() with valid fd and valid sockaddr pointer
+            // The size_of::<sockaddr_in>() is 16 bytes, which always fits in socklen_t (u32)
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "size_of::<sockaddr_in>() is 16, always fits in socklen_t"
+            )]
+            let ret = unsafe {
+                libc::bind(
+                    self.fd.as_raw_fd(),
+                    (&raw const sockaddr).cast::<libc::sockaddr>(),
+                    std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t,
+                )
+            };
+
+            if ret < 0 {
+                return Err(io::Error::last_os_error());
+            }
+
+            Ok(())
+        }
+
         /// Receives a raw packet.
         ///
         /// # Arguments

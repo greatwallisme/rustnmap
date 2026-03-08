@@ -85,86 +85,97 @@ pub struct Args {
     // ============================================
     // Scan Types
     // ============================================
-    /// TCP SYN scan (default with root)
+    /// TCP SYN scan (default with root). Also -sS (nmap style).
     #[arg(
         long,
         help_heading = "Scan Types",
         conflicts_with_all = ["scan_connect", "scan_udp", "scan_fin",
-                             "scan_null", "scan_xmas", "scan_maimon"]
+                             "scan_null", "scan_xmas", "scan_maimon", "scan_ack", "scan_window"]
     )]
     pub scan_syn: bool,
 
-    /// TCP Connect scan (default without root)
+    /// TCP Connect scan (default without root). Also -sT (nmap style).
     #[arg(
         long,
         help_heading = "Scan Types",
         conflicts_with_all = ["scan_syn", "scan_udp", "scan_fin",
-                             "scan_null", "scan_xmas", "scan_maimon"]
+                             "scan_null", "scan_xmas", "scan_maimon", "scan_ack", "scan_window"]
     )]
     pub scan_connect: bool,
 
-    /// UDP scan
+    /// UDP scan. Also -sU (nmap style).
     #[arg(
         long,
         help_heading = "Scan Types",
         conflicts_with_all = ["scan_syn", "scan_connect", "scan_fin",
-                             "scan_null", "scan_xmas", "scan_maimon"]
+                             "scan_null", "scan_xmas", "scan_maimon", "scan_ack", "scan_window"]
     )]
     pub scan_udp: bool,
 
-    /// TCP FIN scan
+    /// TCP FIN scan. Also -sF (nmap style).
     #[arg(
         long,
         help_heading = "Scan Types",
         conflicts_with_all = ["scan_syn", "scan_connect", "scan_udp",
-                             "scan_null", "scan_xmas", "scan_maimon"]
+                             "scan_null", "scan_xmas", "scan_maimon", "scan_ack", "scan_window"]
     )]
     pub scan_fin: bool,
 
-    /// TCP NULL scan
+    /// TCP NULL scan. Also -sN (nmap style).
     #[arg(
         long,
         help_heading = "Scan Types",
         conflicts_with_all = ["scan_syn", "scan_connect", "scan_udp",
-                             "scan_fin", "scan_xmas", "scan_maimon"]
+                             "scan_fin", "scan_xmas", "scan_maimon", "scan_ack", "scan_window"]
     )]
     pub scan_null: bool,
 
-    /// TCP XMAS scan
+    /// TCP XMAS scan. Also -sX (nmap style).
     #[arg(
         long,
         help_heading = "Scan Types",
         conflicts_with_all = ["scan_syn", "scan_connect", "scan_udp",
-                             "scan_fin", "scan_null", "scan_maimon"]
+                             "scan_fin", "scan_null", "scan_maimon", "scan_ack", "scan_window"]
     )]
     pub scan_xmas: bool,
 
-    /// TCP MAIMON scan
+    /// TCP MAIMON scan. Also -sM (nmap style).
     #[arg(
         long,
         help_heading = "Scan Types",
         conflicts_with_all = ["scan_syn", "scan_connect", "scan_udp",
-                             "scan_fin", "scan_null", "scan_xmas"]
+                             "scan_fin", "scan_null", "scan_xmas", "scan_ack", "scan_window"]
     )]
     pub scan_maimon: bool,
 
-    /// TCP ACK scan
+    /// TCP ACK scan. Also -sA (nmap style).
     #[arg(
         long,
         help_heading = "Scan Types",
         conflicts_with_all = ["scan_syn", "scan_connect", "scan_udp",
-                             "scan_fin", "scan_null", "scan_xmas", "scan_maimon"]
+                             "scan_fin", "scan_null", "scan_xmas", "scan_maimon", "scan_window"]
     )]
     pub scan_ack: bool,
 
-    /// TCP Window scan
+    /// TCP Window scan. Also -sW (nmap style).
     #[arg(
         long,
         help_heading = "Scan Types",
         conflicts_with_all = ["scan_syn", "scan_connect", "scan_udp",
-                             "scan_fin", "scan_null", "scan_xmas", "scan_maimon"]
+                             "scan_fin", "scan_null", "scan_xmas", "scan_maimon", "scan_ack"]
     )]
     pub scan_window: bool,
+
+    /// Scan type (nmap style: -sS, -sT, -sU, -sF, -sN, -sX, -sM, -sA, -sW)
+    #[arg(
+        short = 's',
+        long,
+        value_name = "TYPE",
+        help_heading = "Scan Types",
+        conflicts_with_all = ["scan_syn", "scan_connect", "scan_udp",
+                             "scan_fin", "scan_null", "scan_xmas", "scan_maimon", "scan_ack", "scan_window"]
+    )]
+    pub scan_type: Option<String>,
 
     // ============================================
     // Port Specification
@@ -717,7 +728,24 @@ impl Args {
 
     /// Returns the scan type based on provided flags.
     #[must_use]
-    pub const fn scan_type(&self) -> ScanType {
+    pub fn scan_type(&self) -> ScanType {
+        // Handle -s TYPE option (nmap style)
+        if let Some(ref scan_type_str) = self.scan_type {
+            return match scan_type_str.to_uppercase().as_str() {
+                "S" => ScanType::Syn,
+                "T" => ScanType::Connect,
+                "U" => ScanType::Udp,
+                "F" => ScanType::Fin,
+                "N" => ScanType::Null,
+                "X" => ScanType::Xmas,
+                "M" => ScanType::Maimon,
+                "A" => ScanType::Ack,
+                "W" => ScanType::Window,
+                _ => ScanType::Syn,
+            };
+        }
+
+        // Handle long options (--scan-syn, --scan-connect, etc.)
         if self.scan_udp {
             ScanType::Udp
         } else if self.scan_fin {

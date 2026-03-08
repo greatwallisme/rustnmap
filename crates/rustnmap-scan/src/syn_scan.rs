@@ -13,7 +13,7 @@ use std::time::Duration;
 use tokio::runtime::Handle;
 use tokio::sync::Mutex;
 
-use crate::packet_adapter::{create_stealth_engine, ScannerPacketEngine};
+use crate::packet_adapter::{create_stealth_engine, create_stealth_engine_with_target, ScannerPacketEngine};
 use crate::scanner::{PortScanner, ScanResult};
 use rustnmap_common::ScanConfig;
 use rustnmap_common::{Ipv4Addr, Port, PortState, Protocol};
@@ -35,8 +35,13 @@ pub const SOURCE_PORT_START: u16 = 60000;
 pub struct TcpSynScanner {
     /// Local IP address for probes.
     local_addr: Ipv4Addr,
-    /// Raw socket for packet transmission.
+    /// Raw socket for packet transmission to remote targets.
     socket: RawSocket,
+    /// Raw socket for localhost packet transmission (bound to 127.0.0.1).
+    ///
+    /// This socket is created when `local_addr` is not already a loopback address.
+    /// It is used for scanning 127.x.x.x targets to ensure responses route via lo.
+    localhost_socket: Option<RawSocket>,
     /// Scanner configuration.
     config: ScanConfig,
     /// Optional packet engine for zero-copy packet capture using `PACKET_MMAP` V2.
@@ -44,8 +49,15 @@ pub struct TcpSynScanner {
     /// This provides better performance through ring buffer operation.
     /// When available, used for packet reception instead of raw socket.
     packet_engine: Option<Arc<Mutex<ScannerPacketEngine>>>,
-    /// Tracks whether packet engine has been started.
-    packet_engine_started: bool,
+    /// Optional localhost-specific packet engine for scanning 127.0.0.1.
+    ///
+    /// Localhost scanning requires binding to the `lo` interface because
+    /// the kernel routes loopback traffic via `lo`. This engine is created
+    /// on-demand when a localhost target is detected.
+    ///
+    /// Wrapped in Mutex for interior mutability, allowing lazy creation
+    /// during scanning (since `PortScanner` trait uses &self, not &mut self).
+    localhost_engine: std::sync::Mutex<Option<Arc<Mutex<ScannerPacketEngine>>>>,
 }
 
 impl TcpSynScanner {
@@ -74,18 +86,76 @@ impl TcpSynScanner {
             }
         })?;
 
+        // Create localhost socket if local_addr is not already loopback.
+        // This socket is bound to 127.0.0.1 for scanning localhost targets.
+        let localhost_socket = if local_addr.is_loopback() {
+            // Already loopback, use the main socket
+            None
+        } else {
+            // Create a dedicated socket for localhost scanning
+            let lo_socket = RawSocket::with_protocol(6).map_err(|e| {
+                rustnmap_common::ScanError::PermissionDenied {
+                    operation: format!("create localhost raw socket: {e}"),
+                }
+            })?;
+
+            // Bind to loopback address so responses route via lo interface
+            lo_socket.bind(Ipv4Addr::LOCALHOST).map_err(|e| {
+                rustnmap_common::ScanError::Network(rustnmap_common::Error::Network(
+                    rustnmap_common::error::NetworkError::BindFailed {
+                        interface: "lo".to_string(),
+                        source: e,
+                    },
+                ))
+            })?;
+
+            Some(lo_socket)
+        };
+
         // Try to create packet engine for zero-copy capture using PACKET_MMAP V2.
         // This provides better performance than raw socket reception.
         let packet_engine = create_stealth_engine(Some(local_addr), config.clone());
-        eprintln!("[DEBUG] Packet engine created: {}", packet_engine.is_some());
 
         Ok(Self {
             local_addr,
             socket,
+            localhost_socket,
             config,
             packet_engine,
-            packet_engine_started: false,
+            localhost_engine: std::sync::Mutex::new(None),
         })
+    }
+
+    /// Gets the appropriate packet engine for the target address.
+    ///
+    /// For localhost targets (127.x.x.x), returns a localhost-specific engine
+    /// bound to the `lo` interface. For remote targets, returns the default
+    /// packet engine.
+    ///
+    /// The localhost engine is created on-demand to avoid unnecessary overhead.
+    fn get_packet_engine_for_target(&self, target_addr: Ipv4Addr) -> Option<Arc<Mutex<ScannerPacketEngine>>> {
+        let target_bytes = target_addr.octets();
+
+        // Check if target is localhost (127.x.x.x)
+        if target_bytes[0] == 127 {
+            // Localhost target - use or create localhost-specific engine
+            let mut engine_guard = self.localhost_engine.lock().unwrap();
+
+            if engine_guard.is_none() {
+                // Create localhost engine bound to loopback interface
+                let localhost_engine = create_stealth_engine_with_target(
+                    Some(self.local_addr),
+                    Some(target_addr),
+                    self.config.clone(),
+                );
+                *engine_guard = localhost_engine;
+            }
+
+            engine_guard.clone()
+        } else {
+            // Remote target - use default packet engine
+            self.packet_engine.clone()
+        }
     }
 
     /// Scans a single port on a target.
@@ -147,8 +217,23 @@ impl TcpSynScanner {
         // Generate and store sequence number for this probe
         let seq = Self::generate_sequence_number();
 
+        // For localhost scanning (127.x.x.x), we need special handling:
+        // 1. Use 127.0.0.1 as source address in the packet
+        // 2. Use the localhost_socket which is bound to 127.0.0.1
+        // 3. Use localhost-specific packet engine for receiving
+        let is_localhost_scan = dst_addr.is_loopback();
+
+        let (src_addr, socket) = if is_localhost_scan {
+            // Use localhost source address and localhost socket
+            let sock = self.localhost_socket.as_ref().unwrap_or(&self.socket);
+            (Ipv4Addr::LOCALHOST, sock)
+        } else {
+            // Use configured local address and main socket
+            (self.local_addr, &self.socket)
+        };
+
         // Build TCP SYN packet
-        let packet = TcpPacketBuilder::new(self.local_addr, dst_addr, src_port, dst_port)
+        let packet = TcpPacketBuilder::new(src_addr, dst_addr, src_port, dst_port)
             .seq(seq)
             .syn()
             .window(65535)
@@ -157,8 +242,8 @@ impl TcpSynScanner {
         // Create destination socket address
         let dst_sockaddr = SocketAddr::new(std::net::IpAddr::V4(dst_addr), dst_port);
 
-        // Send the packet
-        self.socket
+        // Send the packet using the appropriate socket
+        socket
             .send_packet(&packet, &dst_sockaddr)
             .map_err(|e| {
                 rustnmap_common::ScanError::Network(rustnmap_common::Error::Network(
@@ -173,6 +258,9 @@ impl TcpSynScanner {
         let start_time = std::time::Instant::now();
         let mut recv_buf = vec![0u8; 65535];
         let mut received_any_from_target = false;
+
+        // Get the appropriate packet engine for this target
+        let target_engine = self.get_packet_engine_for_target(dst_addr);
 
         loop {
             // Calculate remaining timeout
@@ -196,8 +284,8 @@ impl TcpSynScanner {
             }
             let remaining_timeout = total_timeout.saturating_sub(elapsed);
 
-            // Use packet engine for receive if available
-            match self.recv_packet(recv_buf.as_mut_slice(), remaining_timeout) {
+            // Use target-specific packet engine for receive if available
+            match self.recv_packet_with_engine(recv_buf.as_mut_slice(), remaining_timeout, target_engine.as_ref()) {
                 Ok(Some(len)) if len > 0 => {
                     // Parse the response
                     if let Some((flags, _seq, ack, resp_src_port, _dst_port, src_ip)) =
@@ -287,24 +375,24 @@ impl TcpSynScanner {
         now_lower.wrapping_add(pid)
     }
 
-    /// Receives a packet using the packet engine if available, otherwise falls back to raw socket.
+    /// Receives a packet using the specified packet engine.
     ///
-    /// This method uses `block_in_place` to wrap async `ScannerPacketEngine` calls
-    /// while maintaining synchronous API compatibility with the `PortScanner` trait.
+    /// This allows using different packet engines for different targets
+    /// (e.g., localhost vs remote targets).
     ///
     /// # Arguments
     ///
-    /// * `buf` - Buffer to receive packet data into
+    /// * `buf` - Buffer to receive packet data
     /// * `timeout` - Maximum time to wait for a packet
-    ///
-    /// # Returns
-    ///
-    /// `Ok(Some(len))` if a packet was received, `Ok(None)` on timeout,
-    /// or an error if reception fails.
-    fn recv_packet(&self, buf: &mut [u8], timeout: Duration) -> io::Result<Option<usize>> {
-        // If packet engine is available, use it for zero-copy capture
-        if let Some(ref engine_arc) = self.packet_engine {
-            eprintln!("[DEBUG] Using PACKET_MMAP socket");
+    /// * `engine` - Optional packet engine to use (if None, falls back to raw socket)
+    fn recv_packet_with_engine(
+        &self,
+        buf: &mut [u8],
+        timeout: Duration,
+        engine: Option<&Arc<Mutex<ScannerPacketEngine>>>,
+    ) -> io::Result<Option<usize>> {
+        // If packet engine is provided, use it for zero-copy capture
+        if let Some(engine_arc) = engine {
             tokio::task::block_in_place(|| {
                 Handle::current().block_on(async {
                     let mut engine = engine_arc.lock().await;
@@ -312,26 +400,24 @@ impl TcpSynScanner {
                     // Start engine if not yet started.
                     // If already started, the engine will return AlreadyStarted error,
                     // which we ignore because the engine is ready for use.
-                    if !self.packet_engine_started {
-                        let _ = engine.start().await.map_err(|e| {
+                    let _ = engine.start().await.map_err(|e| {
+                        if matches!(e, rustnmap_packet::PacketError::AlreadyStarted) {
+                            // Already started - this is fine
+                            io::Error::other("Already started")
+                        } else {
                             io::Error::other(format!("Failed to start packet engine: {e}"))
-                        });
-                    }
+                        }
+                    });
 
                     // Receive with timeout
                     match engine.recv_with_timeout(timeout).await {
                         Ok(Some(data)) => {
-                            eprintln!("[DEBUG] PACKET_MMAP received {} bytes", data.len());
                             let len = data.len().min(buf.len());
                             buf[..len].copy_from_slice(&data[..len]);
                             Ok(Some(len))
                         }
-                        Ok(None) => {
-                            eprintln!("[DEBUG] PACKET_MMAP timeout");
-                            Ok(None)
-                        } // Timeout
+                        Ok(None) => Ok(None), // Timeout
                         Err(e) => {
-                            eprintln!("[DEBUG] PACKET_MMAP error: {e}");
                             Err(io::Error::other(format!("Packet engine error: {e}")))
                         }
                     }

@@ -1760,7 +1760,7 @@ impl TcpAckScanner {
     /// Receives a packet using either the packet engine or raw socket.
     ///
     /// This helper method provides a unified interface for packet reception,
-    /// preferring the PACKET_MMAP engine when available for zero-copy capture.
+    /// preferring the `PACKET_MMAP` engine when available for zero-copy capture.
     ///
     /// # Arguments
     ///
@@ -1774,7 +1774,6 @@ impl TcpAckScanner {
     fn recv_packet(&self, buf: &mut [u8], timeout: Duration) -> io::Result<Option<usize>> {
         // If packet engine is available, use it for zero-copy capture
         if let Some(ref engine_arc) = self.packet_engine {
-            eprintln!("[ACK_SCAN] Using PACKET_MMAP engine");
             tokio::task::block_in_place(|| {
                 tokio::runtime::Handle::current().block_on(async {
                     let mut engine = engine_arc.lock().await;
@@ -1783,28 +1782,23 @@ impl TcpAckScanner {
                     // If already started, the engine will return AlreadyStarted error,
                     // which we ignore because the engine is ready for use.
                     if !self.packet_engine_started.load(std::sync::atomic::Ordering::Relaxed) {
-                        eprintln!("[ACK_SCAN] Starting packet engine...");
                         let _ = engine.start().await.map_err(|e| {
                             io::Error::other(format!("Failed to start packet engine: {e}"))
                         });
                         self.packet_engine_started.store(true, std::sync::atomic::Ordering::Relaxed);
-                        eprintln!("[ACK_SCAN] Packet engine started");
                     }
 
                     // Receive with timeout
                     match engine.recv_with_timeout(timeout).await {
                         Ok(Some(data)) => {
-                            eprintln!("[ACK_SCAN] PACKET_MMAP received {} bytes", data.len());
                             let len = data.len().min(buf.len());
                             buf[..len].copy_from_slice(&data[..len]);
                             Ok(Some(len))
                         }
                         Ok(None) => {
-                            eprintln!("[ACK_SCAN] PACKET_MMAP timeout");
                             Ok(None)
                         } // Timeout
                         Err(e) => {
-                            eprintln!("[ACK_SCAN] PACKET_MMAP error: {e}");
                             Err(io::Error::other(format!("Packet engine error: {e}")))
                         }
                     }
@@ -1813,7 +1807,6 @@ impl TcpAckScanner {
         } else {
             // Fall back to raw socket reception
             // Convert io::Result<usize> to io::Result<Option<usize>>
-            eprintln!("[ACK_SCAN] Using raw socket (no packet engine)");
             self.socket.recv_packet(buf, Some(timeout)).map(Some)
         }
     }
@@ -1930,10 +1923,9 @@ impl TcpAckScanner {
                     };
                     (packet_data, len)
                 },
-                Ok(Some(_)) | Ok(None) => return Ok(PortState::Filtered),
+                Ok(Some(_) | None) => return Ok(PortState::Filtered),
                 Err(e)
-                    if e.kind() == io::ErrorKind::WouldBlock
-                        || e.kind() == io::ErrorKind::TimedOut =>
+                    if matches!(e.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) =>
                 {
                     return Ok(PortState::Filtered);
                 }
@@ -2145,10 +2137,9 @@ impl TcpAckScanner {
                         };
                         (packet_data, len)
                     },
-                    Ok(Some(_)) | Ok(None) => continue,
+                    Ok(Some(_) | None) => continue,
                     Err(e)
-                        if e.kind() == io::ErrorKind::WouldBlock
-                            || e.kind() == io::ErrorKind::TimedOut =>
+                        if matches!(e.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) =>
                     {
                         continue;
                     }
@@ -2165,16 +2156,13 @@ impl TcpAckScanner {
                 if let Some((flags, _seq, _ack, resp_src_port, _resp_dst_port, src_ip)) =
                     parse_tcp_response(data.0)
                 {
-                    eprintln!("[ACK_SCAN] TCP response: src_ip={}, src_port={}, flags={}", src_ip, resp_src_port, flags);
                     if src_ip == dst_addr && pending_ports.remove(&resp_src_port) {
                         // Update RTT estimate for adaptive timing
                         timing.update_rtt(round_start.elapsed());
                         // For ACK scan, RST means unfiltered
                         let state = if (flags & tcp_flags::RST) != 0 {
-                            eprintln!("[ACK_SCAN] Port {} is UNFILTERED (RST received)", resp_src_port);
                             PortState::Unfiltered
                         } else {
-                            eprintln!("[ACK_SCAN] Port {} is FILTERED (no RST, flags={})", resp_src_port, flags);
                             PortState::Filtered
                         };
                         results.insert(resp_src_port, state);
@@ -2753,7 +2741,7 @@ impl TcpWindowScanner {
     /// Receives a packet using either the packet engine or raw socket.
     ///
     /// This helper method provides a unified interface for packet reception,
-    /// preferring the PACKET_MMAP engine when available for zero-copy capture.
+    /// preferring the `PACKET_MMAP` engine when available for zero-copy capture.
     ///
     /// # Arguments
     ///
@@ -2767,7 +2755,6 @@ impl TcpWindowScanner {
     fn recv_packet(&self, buf: &mut [u8], timeout: Duration) -> io::Result<Option<usize>> {
         // If packet engine is available, use it for zero-copy capture
         if let Some(ref engine_arc) = self.packet_engine {
-            eprintln!("[ACK_SCAN] Using PACKET_MMAP engine");
             tokio::task::block_in_place(|| {
                 tokio::runtime::Handle::current().block_on(async {
                     let mut engine = engine_arc.lock().await;
@@ -2776,28 +2763,23 @@ impl TcpWindowScanner {
                     // If already started, the engine will return AlreadyStarted error,
                     // which we ignore because the engine is ready for use.
                     if !self.packet_engine_started.load(std::sync::atomic::Ordering::Relaxed) {
-                        eprintln!("[ACK_SCAN] Starting packet engine...");
                         let _ = engine.start().await.map_err(|e| {
                             io::Error::other(format!("Failed to start packet engine: {e}"))
                         });
                         self.packet_engine_started.store(true, std::sync::atomic::Ordering::Relaxed);
-                        eprintln!("[ACK_SCAN] Packet engine started");
                     }
 
                     // Receive with timeout
                     match engine.recv_with_timeout(timeout).await {
                         Ok(Some(data)) => {
-                            eprintln!("[ACK_SCAN] PACKET_MMAP received {} bytes", data.len());
                             let len = data.len().min(buf.len());
                             buf[..len].copy_from_slice(&data[..len]);
                             Ok(Some(len))
                         }
                         Ok(None) => {
-                            eprintln!("[ACK_SCAN] PACKET_MMAP timeout");
                             Ok(None)
                         } // Timeout
                         Err(e) => {
-                            eprintln!("[ACK_SCAN] PACKET_MMAP error: {e}");
                             Err(io::Error::other(format!("Packet engine error: {e}")))
                         }
                     }
@@ -2806,7 +2788,6 @@ impl TcpWindowScanner {
         } else {
             // Fall back to raw socket reception
             // Convert io::Result<usize> to io::Result<Option<usize>>
-            eprintln!("[ACK_SCAN] Using raw socket (no packet engine)");
             self.socket.recv_packet(buf, Some(timeout)).map(Some)
         }
     }
@@ -2923,10 +2904,9 @@ impl TcpWindowScanner {
                     };
                     (packet_data, len)
                 },
-                Ok(Some(_)) | Ok(None) => return Ok(PortState::Filtered),
+                Ok(Some(_) | None) => return Ok(PortState::Filtered),
                 Err(e)
-                    if e.kind() == io::ErrorKind::WouldBlock
-                        || e.kind() == io::ErrorKind::TimedOut =>
+                    if matches!(e.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) =>
                 {
                     return Ok(PortState::Filtered);
                 }
@@ -3070,6 +3050,7 @@ impl TcpWindowScanner {
     /// - RST + Window == 0 -> Closed
     /// - ICMP unreachable -> Filtered
     /// - No response after retries -> Filtered
+    #[expect(clippy::too_many_lines, reason = "Batch scan logic is inherently complex")]
     pub fn scan_ports_batch(
         &self,
         dst_addr: Ipv4Addr,
@@ -3159,10 +3140,9 @@ impl TcpWindowScanner {
                         };
                         (packet_data, len)
                     },
-                    Ok(Some(_)) | Ok(None) => continue,
+                    Ok(Some(_) | None) => continue,
                     Err(e)
-                        if e.kind() == io::ErrorKind::WouldBlock
-                            || e.kind() == io::ErrorKind::TimedOut =>
+                        if matches!(e.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) =>
                     {
                         continue;
                     }

@@ -1027,6 +1027,210 @@ mod tests {
         // 测试扫描逻辑...
     }
 }
+
+---
+
+## 2.5 Localhost 扫描限制与设计决策
+
+> **状态**: 已知架构限制 | **优先级**: P0
+> **分析日期**: 2026-03-08 | **相关文档**: `doc/modules/localhost-scanning.md`
+
+### 2.5.1 问题描述
+
+当扫描 `127.0.0.1` (localhost) 时，SYN 扫描无法正确识别端口状态，所有端口显示为 `filtered`。
+
+**测试结果对比**:
+```bash
+$ nmap -sS -p 22 127.0.0.1
+PORT   STATE SERVICE
+22/tcp open   ssh          # ✅ 正确
+
+$ rustnmap --scan-syn -p 22 127.0.0.1
+PORT     STATE SERVICE
+22/tcp  filtered ssh       # ❌ 错误
+```
+
+### 2.5.2 根本原因
+
+#### 核心问题：响应路由不对称
+
+```
+发送路径:
+  RustNmap (192.168.15.237) → SYN → 127.0.0.1:22
+  ↓
+响应路径:
+  127.0.0.1:22 → SYN-ACK → 192.168.15.237 (外部 IP)
+  ↓
+路由决策:
+  到 192.168.15.237 的响应通过 ens33 接口路由
+  RustNmap 的 PACKET_MMAP 绑定到 lo 接口 → 永远看不到响应
+```
+
+**tcpdump 证据**:
+```
+192.168.15.237 > 127.0.0.1.22: Flags [S]     # 我们的 SYN
+127.0.0.1.22 > 192.168.15.237: Flags [S.]   # SYN-ACK (注意目的地)
+```
+
+#### 技术细节
+
+| 组件 | 当前行为 | 问题 |
+|------|---------|------|
+| `RawSocket` | 绑定到系统默认地址 | 源地址被内核设置为 192.168.15.237 |
+| PACKET_MMAP | 绑定到 lo 接口 | 只能看到 lo 上的流量 |
+| 路由表 | 127.0.0.1 → lo | 192.168.15.237 → ens33 |
+| 响应目的地 | 192.168.15.237 | 不在 lo 接口上 |
+
+### 2.5.3 设计决策
+
+#### 决策：为 Localhost 创建专用的 RawSocket
+
+**方案**: 修改 `TcpSynScanner` 架构，为 localhost 目标创建专用的 `RawSocket`，绑定到 `127.0.0.1`。
+
+**理由**:
+1. **功能完整性**: SYN 扫描应该对所有地址类型有效
+2. **符合 nmap 标准**: nmap 在 Linux 上支持 localhost SYN 扫描
+3. **技术正确性**: 正确的解决方案是修复根本原因
+
+**架构影响**:
+
+```rust
+pub struct TcpSynScanner {
+    // 主扫描 socket (用于远程目标)
+    socket: RawSocket,
+
+    // Localhost 专用 socket (绑定到 127.0.0.1)
+    localhost_socket: Option<RawSocket>,
+
+    // 配置
+    local_addr: Ipv4Addr,
+    config: ScanConfig,
+}
+
+impl TcpSynScanner {
+    fn send_syn_probe(&self, dst_addr: Ipv4Addr, dst_port: Port) -> ScanResult<PortState> {
+        // 根据目标地址选择正确的 socket
+        let socket = if dst_addr.is_loopback() {
+            self.localhost_socket.as_ref().unwrap_or(&self.socket)
+        } else {
+            &self.socket
+        };
+
+        // 使用选定的 socket 发送数据包
+        socket.send_packet(&packet, &dst_sockaddr)?;
+        // ...
+    }
+}
+```
+
+### 2.5.4 实施计划
+
+#### Phase 1: 扩展 RawSocket API
+
+**文件**: `crates/rustnmap-net/src/lib.rs`
+
+添加 `bind()` 方法：
+
+```rust
+impl RawSocket {
+    /// 绑定 raw socket 到特定源地址
+    ///
+    /// # Arguments
+    /// * `src_addr` - 可选的源地址
+    ///
+    /// # Errors
+    /// 返回错误如果:
+    /// - Socket 已经绑定
+    /// - 无效地址
+    /// - 权限拒绝
+    pub fn bind(&self, src_addr: Option<Ipv4Addr>) -> io::Result<()> {
+        // 实现 bind() 逻辑
+    }
+}
+```
+
+#### Phase 2: 修改 TcpSynScanner
+
+**文件**: `crates/rustnmap-scan/src/syn_scan.rs`
+
+1. 添加 `localhost_socket` 字段
+2. 构造函数中创建并绑定 localhost socket
+3. `send_syn_probe()` 中根据目标选择 socket
+
+#### Phase 3: 验证测试
+
+| 测试用例 | 预期结果 |
+|---------|---------|
+| 单端口 localhost | 端口状态正确 |
+| 多端口 localhost | 混合状态正确 |
+| 混合目标 (localhost + 远程) | 两者都正确 |
+| 与 nmap 对比 | 结果一致 |
+
+### 2.5.5 技术约束
+
+#### PACKET_MMAP 限制
+
+| 场景 | PACKET_MMAP | 原因 |
+|------|------------|------|
+| 远程 IP 扫描 | ✅ 正常 | 路由对称 |
+| Localhost 扫描 | ❌ 受限 | 响应路由到外部接口 |
+
+#### 参考实现
+
+**nmap 源码**: `reference/nmap/libnetutil/netutil.cc:1916-1946`
+```c
+int islocalhost(const struct sockaddr_storage *ss) {
+    // 检查 127.x.x.x
+    if ((sin->sin_addr.s_addr & htonl(0xFF000000)) == htonl(0x7F000000))
+        return 1;
+
+    // 检查本地接口地址
+    if (ipaddr2devname(dev, ss) != -1)
+        return 1;
+
+    return 0;
+}
+```
+
+**nmap Windows 处理**: `reference/nmap/scan_engine.cc:2735-2739`
+```c
+#ifdef WIN32
+  if (!o.have_pcap && scantype != CONNECT_SCAN &&
+      Targets[0]->ifType() == devt_loopback) {
+    // Windows 不支持对 localhost 的原始扫描，跳过
+    return;
+  }
+#endif
+```
+
+### 2.5.6 替代方案 (降级)
+
+如果实施复杂度过高，可以考虑降级方案：
+
+**方案**: 检测 localhost 目标时，自动切换到 Connect 扫描
+
+**位置**: `crates/rustnmap-core/src/orchestrator.rs`
+
+```rust
+// 扫描器选择逻辑
+if targets.iter().any(|t| t.is_loopback()) && scantype == ScanType::Syn {
+    log_warning("SYN scan on localhost not fully supported, using Connect scan");
+    return TcpConnectScanner::new(config)?;
+}
+```
+
+**缺点**: 失去 SYN 扫描的隐蔽性优势
+
+---
+
+## 2.6 架构更新历史
+
+| 日期 | 变更内容 | 影响 |
+|------|---------|------|
+| 2026-03-08 | 添加 localhost 扫描限制章节 | 新增已知限制文档 |
+| 2026-03-07 | 完成 PACKET_MMAP V2 实现 | Phase 5 完成 |
+| 2026-03-07 | 修复 T5 多端口扫描拥塞控制 | 准确率 94.9% |
+| 2026-02-17 | 初始架构设计 | 1.0 基线 |
 ```
 
 ---
