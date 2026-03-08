@@ -189,7 +189,7 @@ pub struct TcpFinScanner {
         dead_code,
         reason = "Reserved for Phase 3.4 async receive path migration"
     )]
-    packet_engine_started: bool,
+    packet_engine_started: std::sync::atomic::AtomicBool,
 }
 
 impl TcpFinScanner {
@@ -256,7 +256,7 @@ impl TcpFinScanner {
             config,
             decoy_scheduler,
             packet_engine,
-            packet_engine_started: false,
+            packet_engine_started: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
@@ -735,7 +735,7 @@ pub struct TcpNullScanner {
         dead_code,
         reason = "Reserved for Phase 3.4 async receive path migration"
     )]
-    packet_engine_started: bool,
+    packet_engine_started: std::sync::atomic::AtomicBool,
 }
 
 impl TcpNullScanner {
@@ -802,7 +802,7 @@ impl TcpNullScanner {
             config,
             decoy_scheduler,
             packet_engine,
-            packet_engine_started: false,
+            packet_engine_started: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
@@ -1240,7 +1240,7 @@ pub struct TcpXmasScanner {
         dead_code,
         reason = "Reserved for Phase 3.4 async receive path migration"
     )]
-    packet_engine_started: bool,
+    packet_engine_started: std::sync::atomic::AtomicBool,
 }
 
 impl TcpXmasScanner {
@@ -1307,7 +1307,7 @@ impl TcpXmasScanner {
             config,
             decoy_scheduler,
             packet_engine,
-            packet_engine_started: false,
+            packet_engine_started: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
@@ -1753,10 +1753,71 @@ pub struct TcpAckScanner {
         dead_code,
         reason = "Reserved for Phase 3.4 async receive path migration"
     )]
-    packet_engine_started: bool,
+    packet_engine_started: std::sync::atomic::AtomicBool,
 }
 
 impl TcpAckScanner {
+    /// Receives a packet using either the packet engine or raw socket.
+    ///
+    /// This helper method provides a unified interface for packet reception,
+    /// preferring the PACKET_MMAP engine when available for zero-copy capture.
+    ///
+    /// # Arguments
+    ///
+    /// * `buf` - Buffer to receive packet data into
+    /// * `timeout` - Maximum time to wait for a packet
+    ///
+    /// # Returns
+    ///
+    /// `Ok(Some(len))` if a packet was received, `Ok(None)` on timeout,
+    /// or an error if reception fails.
+    fn recv_packet(&self, buf: &mut [u8], timeout: Duration) -> io::Result<Option<usize>> {
+        // If packet engine is available, use it for zero-copy capture
+        if let Some(ref engine_arc) = self.packet_engine {
+            eprintln!("[ACK_SCAN] Using PACKET_MMAP engine");
+            tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(async {
+                    let mut engine = engine_arc.lock().await;
+
+                    // Start engine if not yet started.
+                    // If already started, the engine will return AlreadyStarted error,
+                    // which we ignore because the engine is ready for use.
+                    if !self.packet_engine_started.load(std::sync::atomic::Ordering::Relaxed) {
+                        eprintln!("[ACK_SCAN] Starting packet engine...");
+                        let _ = engine.start().await.map_err(|e| {
+                            io::Error::other(format!("Failed to start packet engine: {e}"))
+                        });
+                        self.packet_engine_started.store(true, std::sync::atomic::Ordering::Relaxed);
+                        eprintln!("[ACK_SCAN] Packet engine started");
+                    }
+
+                    // Receive with timeout
+                    match engine.recv_with_timeout(timeout).await {
+                        Ok(Some(data)) => {
+                            eprintln!("[ACK_SCAN] PACKET_MMAP received {} bytes", data.len());
+                            let len = data.len().min(buf.len());
+                            buf[..len].copy_from_slice(&data[..len]);
+                            Ok(Some(len))
+                        }
+                        Ok(None) => {
+                            eprintln!("[ACK_SCAN] PACKET_MMAP timeout");
+                            Ok(None)
+                        } // Timeout
+                        Err(e) => {
+                            eprintln!("[ACK_SCAN] PACKET_MMAP error: {e}");
+                            Err(io::Error::other(format!("Packet engine error: {e}")))
+                        }
+                    }
+                })
+            })
+        } else {
+            // Fall back to raw socket reception
+            // Convert io::Result<usize> to io::Result<Option<usize>>
+            eprintln!("[ACK_SCAN] Using raw socket (no packet engine)");
+            self.socket.recv_packet(buf, Some(timeout)).map(Some)
+        }
+    }
+
     /// Creates a new TCP ACK scanner.
     ///
     /// # Arguments
@@ -1793,7 +1854,7 @@ impl TcpAckScanner {
             socket,
             config,
             packet_engine,
-            packet_engine_started: false,
+            packet_engine_started: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
@@ -1853,13 +1914,23 @@ impl TcpAckScanner {
                 timeout - elapsed
             };
 
-            // Receive response via raw socket
-            let data = match self
-                .socket
-                .recv_packet(recv_buf.as_mut_slice(), Some(remaining_timeout))
-            {
-                Ok(len) if len > 0 => (&recv_buf[..len], len),
-                Ok(_) => return Ok(PortState::Filtered),
+            // Receive response via packet engine (PACKET_MMAP) or raw socket
+            let data = match self.recv_packet(recv_buf.as_mut_slice(), remaining_timeout) {
+                Ok(Some(len)) if len > 0 => {
+                    // PACKET_MMAP captures at Ethernet layer, need to skip 14-byte Ethernet header
+                    // Raw socket captures at IP layer, no skip needed
+                    let packet_data = if self.packet_engine.is_some() {
+                        if len > 14 {
+                            &recv_buf[14..len]
+                        } else {
+                            &recv_buf[..len]
+                        }
+                    } else {
+                        &recv_buf[..len]
+                    };
+                    (packet_data, len)
+                },
+                Ok(Some(_)) | Ok(None) => return Ok(PortState::Filtered),
                 Err(e)
                     if e.kind() == io::ErrorKind::WouldBlock
                         || e.kind() == io::ErrorKind::TimedOut =>
@@ -2055,18 +2126,26 @@ impl TcpAckScanner {
                     break;
                 }
 
-                // The packet engine provides PACKET_MMAP V2 zero-copy capture but requires async context.
-                // This synchronous method uses raw socket reception for packet capture.
-                // Future migration will make this method async to leverage the packet engine.
+                // Use packet engine (PACKET_MMAP) or raw socket reception
                 let remaining = remaining.min(Duration::from_millis(200));
 
-                // Use raw socket reception
-                let data = match self
-                    .socket
-                    .recv_packet(recv_buf.as_mut_slice(), Some(remaining))
-                {
-                    Ok(len) if len > 0 => (&recv_buf[..len], len),
-                    Ok(_) => continue,
+                // Receive response via packet engine or raw socket
+                let data = match self.recv_packet(recv_buf.as_mut_slice(), remaining) {
+                    Ok(Some(len)) if len > 0 => {
+                        // PACKET_MMAP captures at Ethernet layer, need to skip 14-byte Ethernet header
+                        // Raw socket captures at IP layer, no skip needed
+                        let packet_data = if self.packet_engine.is_some() {
+                            if len > 14 {
+                                &recv_buf[14..len]
+                            } else {
+                                &recv_buf[..len]
+                            }
+                        } else {
+                            &recv_buf[..len]
+                        };
+                        (packet_data, len)
+                    },
+                    Ok(Some(_)) | Ok(None) => continue,
                     Err(e)
                         if e.kind() == io::ErrorKind::WouldBlock
                             || e.kind() == io::ErrorKind::TimedOut =>
@@ -2086,13 +2165,16 @@ impl TcpAckScanner {
                 if let Some((flags, _seq, _ack, resp_src_port, _resp_dst_port, src_ip)) =
                     parse_tcp_response(data.0)
                 {
+                    eprintln!("[ACK_SCAN] TCP response: src_ip={}, src_port={}, flags={}", src_ip, resp_src_port, flags);
                     if src_ip == dst_addr && pending_ports.remove(&resp_src_port) {
                         // Update RTT estimate for adaptive timing
                         timing.update_rtt(round_start.elapsed());
                         // For ACK scan, RST means unfiltered
                         let state = if (flags & tcp_flags::RST) != 0 {
+                            eprintln!("[ACK_SCAN] Port {} is UNFILTERED (RST received)", resp_src_port);
                             PortState::Unfiltered
                         } else {
+                            eprintln!("[ACK_SCAN] Port {} is FILTERED (no RST, flags={})", resp_src_port, flags);
                             PortState::Filtered
                         };
                         results.insert(resp_src_port, state);
@@ -2160,7 +2242,7 @@ pub struct TcpMaimonScanner {
         dead_code,
         reason = "Reserved for Phase 3.4 async receive path migration"
     )]
-    packet_engine_started: bool,
+    packet_engine_started: std::sync::atomic::AtomicBool,
 }
 
 impl TcpMaimonScanner {
@@ -2227,7 +2309,7 @@ impl TcpMaimonScanner {
             config,
             decoy_scheduler,
             packet_engine,
-            packet_engine_started: false,
+            packet_engine_started: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
@@ -2663,9 +2745,72 @@ pub struct TcpWindowScanner {
     config: ScanConfig,
     /// Optional packet engine for zero-copy packet capture using `PACKET_MMAP` V2.
     packet_engine: Option<Arc<Mutex<ScannerPacketEngine>>>,
+    /// Tracks whether packet engine has been started.
+    packet_engine_started: std::sync::atomic::AtomicBool,
 }
 
 impl TcpWindowScanner {
+    /// Receives a packet using either the packet engine or raw socket.
+    ///
+    /// This helper method provides a unified interface for packet reception,
+    /// preferring the PACKET_MMAP engine when available for zero-copy capture.
+    ///
+    /// # Arguments
+    ///
+    /// * `buf` - Buffer to receive packet data into
+    /// * `timeout` - Maximum time to wait for a packet
+    ///
+    /// # Returns
+    ///
+    /// `Ok(Some(len))` if a packet was received, `Ok(None)` on timeout,
+    /// or an error if reception fails.
+    fn recv_packet(&self, buf: &mut [u8], timeout: Duration) -> io::Result<Option<usize>> {
+        // If packet engine is available, use it for zero-copy capture
+        if let Some(ref engine_arc) = self.packet_engine {
+            eprintln!("[ACK_SCAN] Using PACKET_MMAP engine");
+            tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(async {
+                    let mut engine = engine_arc.lock().await;
+
+                    // Start engine if not yet started.
+                    // If already started, the engine will return AlreadyStarted error,
+                    // which we ignore because the engine is ready for use.
+                    if !self.packet_engine_started.load(std::sync::atomic::Ordering::Relaxed) {
+                        eprintln!("[ACK_SCAN] Starting packet engine...");
+                        let _ = engine.start().await.map_err(|e| {
+                            io::Error::other(format!("Failed to start packet engine: {e}"))
+                        });
+                        self.packet_engine_started.store(true, std::sync::atomic::Ordering::Relaxed);
+                        eprintln!("[ACK_SCAN] Packet engine started");
+                    }
+
+                    // Receive with timeout
+                    match engine.recv_with_timeout(timeout).await {
+                        Ok(Some(data)) => {
+                            eprintln!("[ACK_SCAN] PACKET_MMAP received {} bytes", data.len());
+                            let len = data.len().min(buf.len());
+                            buf[..len].copy_from_slice(&data[..len]);
+                            Ok(Some(len))
+                        }
+                        Ok(None) => {
+                            eprintln!("[ACK_SCAN] PACKET_MMAP timeout");
+                            Ok(None)
+                        } // Timeout
+                        Err(e) => {
+                            eprintln!("[ACK_SCAN] PACKET_MMAP error: {e}");
+                            Err(io::Error::other(format!("Packet engine error: {e}")))
+                        }
+                    }
+                })
+            })
+        } else {
+            // Fall back to raw socket reception
+            // Convert io::Result<usize> to io::Result<Option<usize>>
+            eprintln!("[ACK_SCAN] Using raw socket (no packet engine)");
+            self.socket.recv_packet(buf, Some(timeout)).map(Some)
+        }
+    }
+
     /// Creates a new TCP Window scanner.
     ///
     /// # Arguments
@@ -2702,6 +2847,7 @@ impl TcpWindowScanner {
             socket,
             config,
             packet_engine,
+            packet_engine_started: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
@@ -2761,18 +2907,23 @@ impl TcpWindowScanner {
                 timeout - elapsed
             };
 
-            // The packet engine provides PACKET_MMAP V2 zero-copy capture but requires async context.
-            // This synchronous method uses raw socket reception for packet capture.
-            // Future migration will make this method async to leverage the packet engine.
-            let remaining_timeout = remaining_timeout.min(Duration::from_millis(200));
-
-            // Use raw socket reception for this synchronous method
-            let data = match self
-                .socket
-                .recv_packet(recv_buf.as_mut_slice(), Some(remaining_timeout))
-            {
-                Ok(len) if len > 0 => (&recv_buf[..len], len),
-                Ok(_) => return Ok(PortState::Filtered),
+            // Receive response via packet engine (PACKET_MMAP) or raw socket
+            let data = match self.recv_packet(recv_buf.as_mut_slice(), remaining_timeout) {
+                Ok(Some(len)) if len > 0 => {
+                    // PACKET_MMAP captures at Ethernet layer, need to skip 14-byte Ethernet header
+                    // Raw socket captures at IP layer, no skip needed
+                    let packet_data = if self.packet_engine.is_some() {
+                        if len > 14 {
+                            &recv_buf[14..len]
+                        } else {
+                            &recv_buf[..len]
+                        }
+                    } else {
+                        &recv_buf[..len]
+                    };
+                    (packet_data, len)
+                },
+                Ok(Some(_)) | Ok(None) => return Ok(PortState::Filtered),
                 Err(e)
                     if e.kind() == io::ErrorKind::WouldBlock
                         || e.kind() == io::ErrorKind::TimedOut =>
@@ -2989,18 +3140,26 @@ impl TcpWindowScanner {
                     break;
                 }
 
-                // The packet engine provides PACKET_MMAP V2 zero-copy capture but requires async context.
-                // This synchronous method uses raw socket reception for packet capture.
-                // Future migration will make this method async to leverage the packet engine.
+                // Use packet engine (PACKET_MMAP) or raw socket reception
                 let remaining = remaining.min(Duration::from_millis(200));
 
-                // Use raw socket reception
-                let data = match self
-                    .socket
-                    .recv_packet(recv_buf.as_mut_slice(), Some(remaining))
-                {
-                    Ok(len) if len > 0 => (&recv_buf[..len], len),
-                    Ok(_) => continue,
+                // Receive response via packet engine or raw socket
+                let data = match self.recv_packet(recv_buf.as_mut_slice(), remaining) {
+                    Ok(Some(len)) if len > 0 => {
+                        // PACKET_MMAP captures at Ethernet layer, need to skip 14-byte Ethernet header
+                        // Raw socket captures at IP layer, no skip needed
+                        let packet_data = if self.packet_engine.is_some() {
+                            if len > 14 {
+                                &recv_buf[14..len]
+                            } else {
+                                &recv_buf[..len]
+                            }
+                        } else {
+                            &recv_buf[..len]
+                        };
+                        (packet_data, len)
+                    },
+                    Ok(Some(_)) | Ok(None) => continue,
                     Err(e)
                         if e.kind() == io::ErrorKind::WouldBlock
                             || e.kind() == io::ErrorKind::TimedOut =>

@@ -68,6 +68,11 @@ struct InternalCongestionStats {
     /// This is used for the first probe before any RTT measurement.
     /// See nmap timing.cc:82: `to->timeout = o.initialRttTimeout() * 1000;`
     initial_rtt: Duration,
+    /// Maximum RTT timeout from config.
+    ///
+    /// This is the maximum allowed timeout for any probe.
+    /// See nmap timing.cc:84: `to->timeout = MIN(o.maxRttTimeout() * 1000, to->timeout);`
+    max_rtt: Duration,
     /// Smoothed RTT in microseconds.
     srtt_micros: std::sync::atomic::AtomicU64,
     /// RTT variance in microseconds.
@@ -94,7 +99,7 @@ struct InternalCongestionStats {
 }
 
 impl InternalCongestionStats {
-    /// Creates new congestion statistics with the given initial RTT.
+    /// Creates new congestion statistics with the given initial and max RTT.
     ///
     /// Uses nmap T3 (Normal) defaults for RTTVAR:
     /// - Initial SRTT: 1000ms (`INITIAL_RTT_TIMEOUT`)
@@ -107,12 +112,13 @@ impl InternalCongestionStats {
         clippy::cast_possible_truncation,
         reason = "RTT values are bounded to reasonable network latencies (< 30s)"
     )]
-    fn new(initial_rtt: Duration) -> Self {
+    fn new(initial_rtt: Duration, max_rtt: Duration) -> Self {
         let srtt_micros = initial_rtt.as_micros() as u64;
         // Nmap: rttvar = box(5000, 2000000, srtt) = clamp(srtt, 5ms, 2000ms)
         let rttvar_micros = srtt_micros.clamp(5_000, 2_000_000);
         Self {
             initial_rtt,
+            max_rtt,
             srtt_micros: std::sync::atomic::AtomicU64::new(srtt_micros),
             rttvar_micros: std::sync::atomic::AtomicU64::new(rttvar_micros),
             // Track if this is the first RTT measurement (nmap uses -1 sentinel)
@@ -170,25 +176,32 @@ impl InternalCongestionStats {
 
     /// Returns the recommended timeout: SRTT + 4*RTTVAR.
     ///
-    /// The result is clamped to nmap's bounds: `MIN_RTT_TIMEOUT` (100ms) to
-    /// `MAX_RTT_TIMEOUT` (10000ms).
+    /// The result is clamped to:
+    /// - Lower bound: `MIN_RTT_TIMEOUT` (100ms) from nmap
+    /// - Upper bound: `max_rtt` from timing template config
     ///
     /// For the first probe (before any RTT measurement), returns `initial_rtt` directly.
     /// This matches nmap's behavior: `to->timeout = o.initialRttTimeout() * 1000;`
     /// (see timing.cc:82).
+    ///
+    /// The upper bound uses `max_rtt` from config instead of hardcoded value,
+    /// allowing T5 (Insane) to properly use 300ms max timeout.
     fn recommended_timeout(&self) -> Duration {
         use std::sync::atomic::Ordering;
         // Check if this is the first measurement
         if self.first_measurement.load(Ordering::Relaxed) {
             // First probe: use initial_rtt directly (nmap timing.cc:82)
-            self.initial_rtt
+            // Also clamp to max_rtt to ensure initial timeout doesn't exceed max
+            self.initial_rtt.min(self.max_rtt)
         } else {
             // Subsequent probes: use SRTT + 4*RTTVAR
             let srtt = self.srtt_micros.load(Ordering::Relaxed);
             let rttvar = self.rttvar_micros.load(Ordering::Relaxed);
             let timeout_micros = srtt.saturating_add(4 * rttvar);
-            // Clamp to nmap's MIN_RTT_TIMEOUT (100ms) and MAX_RTT_TIMEOUT (10000ms)
-            let clamped = timeout_micros.clamp(100_000, 10_000_000);
+            // Clamp to nmap's MIN_RTT_TIMEOUT (100ms) and config's max_rtt
+            #[expect(clippy::cast_possible_truncation, reason = "max_rtt is in milliseconds, fits in u64")]
+            let max_micros = self.max_rtt.as_micros() as u64;
+            let clamped = timeout_micros.clamp(100_000, max_micros);
             Duration::from_micros(clamped)
         }
     }
@@ -269,7 +282,6 @@ pub struct InternalCongestionController {
     ssthresh: std::sync::atomic::AtomicUsize,
     /// ACK counter for congestion avoidance (increment once per cwnd ACKs).
     ca_ack_counter: std::sync::atomic::AtomicUsize,
-    min_cwnd: usize,
     max_cwnd: usize,
     /// Congestion avoidance increment (`ca_incr`).
     /// From nmap `timing.cc:276-279`:
@@ -288,7 +300,7 @@ impl InternalCongestionController {
     /// From nmap `timing.cc:276-279`:
     /// - `timing_level` < 4: `ca_incr` = 1
     /// - `timing_level` >= 4: `ca_incr` = 2
-    fn new(max_cwnd: usize, timing_level: u8, initial_rtt: Duration) -> Self {
+    fn new(max_cwnd: usize, timing_level: u8, initial_rtt: Duration, max_rtt: Duration) -> Self {
         // Nmap timing.cc:272 - group_initial_cwnd = box(low_cwnd, max_cwnd, 10)
         // low_cwnd=1, max_cwnd=300, box() returns 10 since 1 < 10 < 300
         const GROUP_INITIAL_CWND: usize = 10;
@@ -301,11 +313,10 @@ impl InternalCongestionController {
         let ca_incr = if timing_level < 4 { 1 } else { 2 };
 
         Self {
-            stats: std::sync::Arc::new(InternalCongestionStats::new(initial_rtt)),
+            stats: std::sync::Arc::new(InternalCongestionStats::new(initial_rtt, max_rtt)),
             cwnd: std::sync::atomic::AtomicUsize::new(GROUP_INITIAL_CWND),
             ssthresh: std::sync::atomic::AtomicUsize::new(INITIAL_SSTHRESH),
             ca_ack_counter: std::sync::atomic::AtomicUsize::new(0),
-            min_cwnd: 1,
             max_cwnd,
             ca_incr,
         }
@@ -393,12 +404,25 @@ impl InternalCongestionController {
     }
 
     /// Called when packet loss is detected.
+    ///
+    /// This implements nmap's congestion control response to packet loss from
+    /// `timing.cc:244-255`. When a drop is detected:
+    /// - `cwnd` is reset to `low_cwnd` (1)
+    /// - `ssthresh` is set to `max(in_flight / 2, 2)`
+    ///
+    /// This is much more aggressive than TCP Reno's cwnd/2 approach because
+    /// scanning probes are not TCP connections - we want to immediately stop
+    /// flooding the network when loss occurs.
     fn on_packet_lost(&self) {
         use std::sync::atomic::Ordering;
 
         let current_cwnd = self.cwnd.load(Ordering::Relaxed);
-        let new_ssthresh = (current_cwnd / 2).max(self.min_cwnd);
-        let new_cwnd = new_ssthresh;
+        // Nmap timing.cc:253 - ssthresh = max(in_flight / host_drop_ssthresh_divisor, 2)
+        // where host_drop_ssthresh_divisor = 2 and in_flight ≈ current_cwnd
+        let new_ssthresh = (current_cwnd / 2).max(2);
+        // Nmap timing.cc:252 - cwnd = low_cwnd (which is 1)
+        // This is critical: on packet loss, immediately drop to minimal window
+        let new_cwnd = 1;
 
         self.ssthresh.store(new_ssthresh, Ordering::Relaxed);
         self.cwnd.store(new_cwnd, Ordering::Relaxed);
@@ -660,6 +684,7 @@ impl ParallelScanEngine {
             max_parallel,
             config.timing_level,
             config.initial_rtt,
+            config.max_rtt,
         ));
 
         // Create rate limiter for min/max rate enforcement
@@ -701,6 +726,7 @@ impl ParallelScanEngine {
             value,
             self.config.timing_level,
             self.config.initial_rtt,
+            self.config.max_rtt,
         ));
         self
     }
@@ -956,9 +982,11 @@ impl ParallelScanEngine {
             }
 
             // Re-send retry probes
+            // Note: Retry probes are NOT limited by cwnd because they already timed out
+            // and need to be retried to reach max_retries. This matches nmap's behavior.
+            // Only max_parallelism limits retry probes to prevent resource exhaustion.
             for probe in retry_probes.drain(..) {
-                let current_cwnd = self.congestion.cwnd();
-                if outstanding.len() < current_cwnd && outstanding.len() < self.max_parallelism {
+                if outstanding.len() < self.max_parallelism {
                     // Check rate limiter before resending
                     if let Some(wait_time) = self.rate_limiter.check_rate() {
                         tokio::time::sleep(wait_time).await;
@@ -1007,6 +1035,9 @@ impl ParallelScanEngine {
                     let engine = Arc::clone(engine);
                     let tx_clone = packet_tx.clone();
 
+                    // Start the packet engine - ignore AlreadyStarted error
+                    let _ = engine.lock().await.start().await;
+
                     // Process packets in a batch
                     let mut batch_count = 0;
 
@@ -1024,22 +1055,20 @@ impl ParallelScanEngine {
                             .await
                         {
                             Ok(Some(data)) => {
-                                // Skip Ethernet header (14 bytes) to get to IP header
-                                let ip_data = if data.len() > ETH_HDR_SIZE {
-                                    &data[ETH_HDR_SIZE..]
-                                } else {
-                                    &data[..]
-                                };
-                                // Parse and send immediately as ReceivedPacket
-                                if let Some(packet) = Self::parse_packet(ip_data) {
+                                // Parse packet (handles Ethernet header internally)
+                                if let Some(packet) = Self::parse_packet(&data) {
                                     if tx_clone.send(packet).is_err() {
                                         break;
                                     }
                                 }
                                 batch_count += 1;
                             }
-                            Ok(None) | Err(_) => {
-                                // No more packets available or error
+                            Ok(None) => {
+                                // Timeout, continue
+                                break;
+                            }
+                            Err(_) => {
+                                // Error, break and let outer loop handle it
                                 break;
                             }
                         }
@@ -1091,7 +1120,14 @@ impl ParallelScanEngine {
     ///
     /// Returns `None` if the packet cannot be parsed as a TCP packet.
     fn parse_packet(data: &[u8]) -> Option<ReceivedPacket> {
-        if let Some((flags, seq, ack, src_port, _dst_port, src_ip)) = parse_tcp_response(data) {
+        // Skip Ethernet header (14 bytes) to get to IP header
+        let ip_data = if data.len() > ETH_HDR_SIZE {
+            &data[ETH_HDR_SIZE..]
+        } else {
+            return None;
+        };
+
+        if let Some((flags, seq, ack, src_port, _dst_port, src_ip)) = parse_tcp_response(ip_data) {
             Some(ReceivedPacket::new(src_ip, src_port, flags, seq, ack))
         } else {
             None

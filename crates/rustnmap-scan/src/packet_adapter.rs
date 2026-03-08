@@ -336,8 +336,8 @@ pub fn create_stealth_engine(
 
 /// Detects the network interface name from a local IP address.
 ///
-/// This function attempts to determine which network interface is associated
-/// with the given local IP address.
+/// This function enumerates all network interfaces and finds the one
+/// whose address matches the given local IP address.
 ///
 /// # Arguments
 ///
@@ -345,20 +345,90 @@ pub fn create_stealth_engine(
 ///
 /// # Returns
 ///
-/// Returns the interface name if found, or "eth0" as default.
+/// Returns the interface name if found, or the first non-loopback interface as default.
 ///
 /// # Implementation Note
 ///
-/// Returns "eth0" as the default interface when no specific interface is detected
-/// or when `local_addr` is `None`. Future versions may implement proper interface
-/// detection using system routing tables or socket binding queries.
+/// This implementation uses `getifaddrs()` to enumerate interfaces and match
+/// by address, following nmap's pattern in `libnetutil/netutil.cc:ipaddr2devname()`.
 #[must_use]
 pub fn detect_interface_from_addr(local_addr: Option<Ipv4Addr>) -> String {
-    // Return default interface when no specific interface is detected
-    // or when local_addr is None. Future versions may implement proper interface
-    // detection using system routing tables or socket binding queries.
-    let _ = local_addr;
-    "eth0".to_string()
+    use std::ffi::CStr;
+    use std::net::Ipv4Addr as StdIpv4Addr;
+
+    // SAFETY: getifaddrs() and freeifaddrs() are libc functions for interface enumeration.
+    // The function properly handles the returned pointers and uses CStr for safe string conversion.
+    // Pointer validity is checked before dereferencing.
+    //
+    // The cast from sockaddr to sockaddr_in is safe because:
+    // 1. We verify sa_family is AF_INET before casting
+    // 2. When AF_INET, the structure is always sockaddr_in with sin_port and sin_addr
+    // 3. This is the standard pattern documented in POSIX getifaddrs(3)
+    #[expect(
+        clippy::cast_ptr_alignment,
+        reason = "sockaddr is sockaddr_in when AF_INET"
+    )]
+    unsafe {
+        let mut ifaddrs: *mut libc::ifaddrs = std::ptr::null_mut();
+
+        // getifaddrs() returns 0 on success, -1 on failure
+        if libc::getifaddrs(&raw mut ifaddrs) != 0 || ifaddrs.is_null() {
+            // Fallback to "eth0" if getifaddrs fails
+            return "eth0".to_string();
+        }
+
+        let mut current = ifaddrs;
+        let mut first_non_loopback: Option<String> = None;
+
+        while !current.is_null() {
+            let ifa = &*current;
+
+            // Convert interface name to String
+            let if_name = if ifa.ifa_name.is_null() {
+                current = ifa.ifa_next;
+                continue;
+            } else {
+                CStr::from_ptr(ifa.ifa_name).to_string_lossy().into_owned()
+            };
+
+            // Check address family (AF_INET = 2)
+            // Use i32::from for lossless cast from u16 to i32 comparison
+            if !ifa.ifa_addr.is_null() && i32::from((*ifa.ifa_addr).sa_family) == libc::AF_INET {
+                // Cast to sockaddr_in for IPv4 address extraction
+                // SAFETY: Verified sa_family is AF_INET above, so this is sockaddr_in
+                let addr = &*(ifa.ifa_addr as *const libc::sockaddr_in);
+                let ip_bytes = addr.sin_addr.s_addr.to_ne_bytes();
+                let ip = StdIpv4Addr::new(ip_bytes[0], ip_bytes[1], ip_bytes[2], ip_bytes[3]);
+
+                // Store first non-loopback interface as fallback
+                if first_non_loopback.is_none() && !ip.is_loopback() {
+                    first_non_loopback = Some(if_name.clone());
+                }
+
+                // Check if this interface matches our local_addr
+                if let Some(local) = local_addr {
+                    let local_bytes = local.octets();
+                    if ip_bytes[0] == local_bytes[0]
+                        && ip_bytes[1] == local_bytes[1]
+                        && ip_bytes[2] == local_bytes[2]
+                        && ip_bytes[3] == local_bytes[3]
+                    {
+                        // Found matching interface
+                        libc::freeifaddrs(ifaddrs);
+                        return if_name;
+                    }
+                }
+            }
+
+            current = ifa.ifa_next;
+        }
+
+        // Free the ifaddrs structure
+        libc::freeifaddrs(ifaddrs);
+
+        // Return first non-loopback interface as fallback, or "eth0" as last resort
+        first_non_loopback.unwrap_or_else(|| "eth0".to_string())
+    }
 }
 
 #[cfg(test)]

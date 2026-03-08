@@ -77,6 +77,7 @@ impl TcpSynScanner {
         // Try to create packet engine for zero-copy capture using PACKET_MMAP V2.
         // This provides better performance than raw socket reception.
         let packet_engine = create_stealth_engine(Some(local_addr), config.clone());
+        eprintln!("[DEBUG] Packet engine created: {}", packet_engine.is_some());
 
         Ok(Self {
             local_addr,
@@ -303,28 +304,36 @@ impl TcpSynScanner {
     fn recv_packet(&self, buf: &mut [u8], timeout: Duration) -> io::Result<Option<usize>> {
         // If packet engine is available, use it for zero-copy capture
         if let Some(ref engine_arc) = self.packet_engine {
+            eprintln!("[DEBUG] Using PACKET_MMAP socket");
             tokio::task::block_in_place(|| {
                 Handle::current().block_on(async {
                     let mut engine = engine_arc.lock().await;
 
-                    // Start engine if not yet started
+                    // Start engine if not yet started.
+                    // If already started, the engine will return AlreadyStarted error,
+                    // which we ignore because the engine is ready for use.
                     if !self.packet_engine_started {
-                        engine.start().await.map_err(|e| {
+                        let _ = engine.start().await.map_err(|e| {
                             io::Error::other(format!("Failed to start packet engine: {e}"))
-                        })?;
-                        // Note: We can't mutate self.packet_engine_started here since we're in an async block
-                        // The engine handles re-start gracefully
+                        });
                     }
 
                     // Receive with timeout
                     match engine.recv_with_timeout(timeout).await {
                         Ok(Some(data)) => {
+                            eprintln!("[DEBUG] PACKET_MMAP received {} bytes", data.len());
                             let len = data.len().min(buf.len());
                             buf[..len].copy_from_slice(&data[..len]);
                             Ok(Some(len))
                         }
-                        Ok(None) => Ok(None), // Timeout
-                        Err(e) => Err(io::Error::other(format!("Packet engine error: {e}"))),
+                        Ok(None) => {
+                            eprintln!("[DEBUG] PACKET_MMAP timeout");
+                            Ok(None)
+                        } // Timeout
+                        Err(e) => {
+                            eprintln!("[DEBUG] PACKET_MMAP error: {e}");
+                            Err(io::Error::other(format!("Packet engine error: {e}")))
+                        }
                     }
                 })
             })

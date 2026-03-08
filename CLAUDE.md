@@ -5,7 +5,7 @@
 ---
 
 ## Develop and Test
-- `nmap` and `/target/release/rustnmap` have been added in `/etc/sudoers`, so they can be executed with sudo without password
+-  Develop enviroment is a debian system with root previledge, any commond can be executed without `sudo` or password.
 
 ## CRITICAL RULES (Never Violate)
 1. **Design Compliance** - All development must strictly follow the designs in the doc/ design documents. No alternative implementations are allowed. If a design is found to be unimplementable, user confirmation is required before modifying the technical approach.

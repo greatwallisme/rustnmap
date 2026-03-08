@@ -11,7 +11,7 @@ async fn main() {
     let config = RingConfig {
         block_size: 4096,
         block_nr: 1,
-        frame_size: 4096,  // Larger frame size
+        frame_size: 4096, // Larger frame size
         frame_timeout: 64,
         enable_rx: true,
         enable_tx: false,
@@ -45,7 +45,11 @@ async fn main() {
         // Note: We can't access private fields directly, so we'll infer from behavior
         match engine.recv().await {
             Ok(Some(packet)) => {
-                println!("Received packet {}: {} bytes", packet_count + 1, packet.len());
+                println!(
+                    "Received packet {}: {} bytes",
+                    packet_count + 1,
+                    packet.len()
+                );
                 packet_count += 1;
                 // Continue to next recv() call immediately
                 if packet_count >= 5 {
@@ -71,5 +75,8 @@ async fn main() {
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
 
-    println!("Test completed successfully! Total packets: {}", packet_count);
+    println!(
+        "Test completed successfully! Total packets: {}",
+        packet_count
+    );
 }

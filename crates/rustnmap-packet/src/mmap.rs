@@ -76,8 +76,8 @@ use crate::engine::{EngineStats, PacketBuffer, PacketEngine, Result, RingConfig}
 use crate::error::PacketError;
 use crate::sys::{
     Tpacket2Hdr, TpacketReq, AF_PACKET, ETH_P_ALL, PACKET_AUXDATA, PACKET_RESERVE, PACKET_RX_RING,
-    PACKET_VERSION, SOCK_RAW, TPACKET2_HDRLEN, TPACKET_ALIGNMENT, TPACKET_V2, TP_STATUS_KERNEL,
-    TP_STATUS_USER, TP_STATUS_VLAN_VALID, VLAN_TAG_LEN,
+    PACKET_VERSION, SOCK_RAW, TPACKET_ALIGNMENT, TPACKET_V2, TP_STATUS_KERNEL, TP_STATUS_USER,
+    TP_STATUS_VLAN_VALID, VLAN_TAG_LEN,
 };
 use crate::zero_copy::ZeroCopyPacket;
 use async_trait::async_trait;
@@ -792,7 +792,9 @@ impl MmapPacketEngine {
 
         // Check bounds BEFORE accessing
         if frame_idx >= self.frame_ptrs.len() {
-            return Err(PacketError::InvalidConfig(format!("frame_idx {frame_idx} out of bounds")));
+            return Err(PacketError::InvalidConfig(format!(
+                "frame_idx {frame_idx} out of bounds"
+            )));
         }
 
         if !self.frame_is_available() {
@@ -804,7 +806,9 @@ impl MmapPacketEngine {
         let hdr = unsafe { frame_ptr.as_ref() };
 
         // Get packet data
-        let data_offset = TPACKET2_HDRLEN + hdr.tp_mac as usize;
+        // tp_mac is the offset from frame start to Ethernet header (per kernel documentation)
+        // nmap uses: bp = frame + tp_mac (see libpcap/pcap-linux.c:4010)
+        let data_offset = hdr.tp_mac as usize;
         let data_len = hdr.tp_snaplen as usize;
         let original_len = hdr.tp_len as usize;
 
@@ -923,7 +927,9 @@ impl MmapPacketEngine {
         let hdr = unsafe { frame_ptr.as_ref() };
 
         // Get packet data
-        let data_offset = TPACKET2_HDRLEN + hdr.tp_mac as usize;
+        // tp_mac is the offset from frame start to Ethernet header (per kernel documentation)
+        // nmap uses: bp = frame + tp_mac (see libpcap/pcap-linux.c:4010)
+        let data_offset = hdr.tp_mac as usize;
         let data_len = hdr.tp_snaplen as usize;
 
         // Check for VLAN tag
