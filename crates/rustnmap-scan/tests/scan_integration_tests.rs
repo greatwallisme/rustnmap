@@ -37,8 +37,8 @@ fn test_config() -> ScanConfig {
 /// Test TCP SYN scan against localhost.
 /// Note: This test requires root privileges to create raw sockets.
 /// Note: This test may be flaky due to network conditions and firewall rules.
-#[test]
-fn test_syn_scan() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_syn_scan() {
     let target = get_test_target();
     let config = test_config();
     let local_addr = Ipv4Addr::UNSPECIFIED;
@@ -77,8 +77,8 @@ fn test_syn_scan() {
 
 /// Test TCP Connect scan against localhost.
 /// This test does not require root privileges.
-#[test]
-fn test_connect_scan() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_connect_scan() {
     let target = get_test_target();
     let config = test_config();
 
@@ -101,8 +101,8 @@ fn test_connect_scan() {
 }
 
 /// Test UDP scan against localhost.
-#[test]
-fn test_udp_scan() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_udp_scan() {
     let target = get_test_target();
     let config = test_config();
     let local_addr = Ipv4Addr::UNSPECIFIED;
@@ -131,8 +131,8 @@ fn test_udp_scan() {
 }
 
 /// Test TCP FIN scan.
-#[test]
-fn test_fin_scan() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_fin_scan() {
     let target = get_test_target();
     let config = test_config();
     let local_addr = Ipv4Addr::UNSPECIFIED;
@@ -160,8 +160,8 @@ fn test_fin_scan() {
 }
 
 /// Test TCP NULL scan.
-#[test]
-fn test_null_scan() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_null_scan() {
     let target = get_test_target();
     let config = test_config();
     let local_addr = Ipv4Addr::UNSPECIFIED;
@@ -189,8 +189,8 @@ fn test_null_scan() {
 }
 
 /// Test TCP XMAS scan.
-#[test]
-fn test_xmas_scan() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_xmas_scan() {
     let target = get_test_target();
     let config = test_config();
     let local_addr = Ipv4Addr::UNSPECIFIED;
@@ -218,8 +218,8 @@ fn test_xmas_scan() {
 }
 
 /// Test TCP ACK scan for firewall detection.
-#[test]
-fn test_ack_scan() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_ack_scan() {
     let target = get_test_target();
     let config = test_config();
     let local_addr = Ipv4Addr::UNSPECIFIED;
@@ -247,8 +247,8 @@ fn test_ack_scan() {
 }
 
 /// Test TCP Maimon scan.
-#[test]
-fn test_maimon_scan() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_maimon_scan() {
     let target = get_test_target();
     let config = test_config();
     let local_addr = Ipv4Addr::UNSPECIFIED;
@@ -276,8 +276,8 @@ fn test_maimon_scan() {
 }
 
 /// Test TCP Window scan.
-#[test]
-fn test_window_scan() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_window_scan() {
     let target = get_test_target();
     let config = test_config();
     let local_addr = Ipv4Addr::UNSPECIFIED;
@@ -305,8 +305,8 @@ fn test_window_scan() {
 }
 
 /// Test IP Protocol scan.
-#[test]
-fn test_ip_protocol_scan() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_ip_protocol_scan() {
     let target = get_test_target();
     let config = test_config();
     let local_addr = Ipv4Addr::UNSPECIFIED;
@@ -335,16 +335,16 @@ fn test_ip_protocol_scan() {
 }
 
 /// Test TCP Connect scanner does not require root.
-#[test]
-fn test_connect_scanner_requires_no_root() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_connect_scanner_requires_no_root() {
     let config = test_config();
     let scanner = rustnmap_scan::connect_scan::TcpConnectScanner::new(None, config);
     assert!(!scanner.requires_root());
 }
 
 /// Test SYN scanner reports it requires root.
-#[test]
-fn test_syn_scanner_reports_requires_root() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_syn_scanner_reports_requires_root() {
     let config = test_config();
 
     if let Ok(scanner) = rustnmap_scan::syn_scan::TcpSynScanner::new(Ipv4Addr::UNSPECIFIED, config)
@@ -359,8 +359,8 @@ fn test_syn_scanner_reports_requires_root() {
 }
 
 /// Test scan timeout behavior.
-#[test]
-fn test_scan_timeout() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_scan_timeout() {
     let target = get_test_target();
     let config = ScanConfig {
         min_rtt: Duration::from_millis(50),
@@ -388,10 +388,11 @@ fn test_scan_timeout() {
 
 /// Test all stealth scanners can be created (requires root).
 /// If not root, prints a message and returns gracefully.
-#[test]
-fn test_stealth_scanners_creation() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_stealth_scanners_creation() {
     let config = test_config();
-    let local_addr = Ipv4Addr::UNSPECIFIED;
+    // Use loopback address to avoid creating additional localhost socket in SYN scanner
+    let local_addr = Ipv4Addr::new(127, 0, 0, 1);
 
     // Try to create each scanner
     let syn_result = rustnmap_scan::syn_scan::TcpSynScanner::new(local_addr, config.clone());
@@ -431,8 +432,8 @@ fn test_stealth_scanners_creation() {
 }
 
 /// Test scanning multiple ports.
-#[test]
-fn test_scan_multiple_ports() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_scan_multiple_ports() {
     let target = get_test_target();
     let config = test_config();
 
@@ -455,8 +456,8 @@ fn test_scan_multiple_ports() {
 }
 
 /// Test scanner error handling for invalid configurations.
-#[test]
-fn test_scanner_error_handling() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_scanner_error_handling() {
     // Test with a configuration that has very short timeouts
     let config = ScanConfig {
         min_rtt: Duration::from_millis(1),

@@ -13,7 +13,9 @@ use std::time::Duration;
 use tokio::runtime::Handle;
 use tokio::sync::Mutex;
 
-use crate::packet_adapter::{create_stealth_engine, create_stealth_engine_with_target, ScannerPacketEngine};
+use crate::packet_adapter::{
+    create_stealth_engine, create_stealth_engine_with_target, ScannerPacketEngine,
+};
 use crate::scanner::{PortScanner, ScanResult};
 use rustnmap_common::ScanConfig;
 use rustnmap_common::{Ipv4Addr, Port, PortState, Protocol};
@@ -133,7 +135,10 @@ impl TcpSynScanner {
     /// packet engine.
     ///
     /// The localhost engine is created on-demand to avoid unnecessary overhead.
-    fn get_packet_engine_for_target(&self, target_addr: Ipv4Addr) -> Option<Arc<Mutex<ScannerPacketEngine>>> {
+    fn get_packet_engine_for_target(
+        &self,
+        target_addr: Ipv4Addr,
+    ) -> Option<Arc<Mutex<ScannerPacketEngine>>> {
         let target_bytes = target_addr.octets();
 
         // Check if target is localhost (127.x.x.x)
@@ -243,13 +248,11 @@ impl TcpSynScanner {
         let dst_sockaddr = SocketAddr::new(std::net::IpAddr::V4(dst_addr), dst_port);
 
         // Send the packet using the appropriate socket
-        socket
-            .send_packet(&packet, &dst_sockaddr)
-            .map_err(|e| {
-                rustnmap_common::ScanError::Network(rustnmap_common::Error::Network(
-                    rustnmap_common::error::NetworkError::SendError { source: e },
-                ))
-            })?;
+        socket.send_packet(&packet, &dst_sockaddr).map_err(|e| {
+            rustnmap_common::ScanError::Network(rustnmap_common::Error::Network(
+                rustnmap_common::error::NetworkError::SendError { source: e },
+            ))
+        })?;
 
         // Wait for response with timeout and retry logic
         let max_retries = 3;
@@ -285,7 +288,11 @@ impl TcpSynScanner {
             let remaining_timeout = total_timeout.saturating_sub(elapsed);
 
             // Use target-specific packet engine for receive if available
-            match self.recv_packet_with_engine(recv_buf.as_mut_slice(), remaining_timeout, target_engine.as_ref()) {
+            match self.recv_packet_with_engine(
+                recv_buf.as_mut_slice(),
+                remaining_timeout,
+                target_engine.as_ref(),
+            ) {
                 Ok(Some(len)) if len > 0 => {
                     // Parse the response
                     if let Some((flags, _seq, ack, resp_src_port, _dst_port, src_ip)) =
@@ -417,9 +424,7 @@ impl TcpSynScanner {
                             Ok(Some(len))
                         }
                         Ok(None) => Ok(None), // Timeout
-                        Err(e) => {
-                            Err(io::Error::other(format!("Packet engine error: {e}")))
-                        }
+                        Err(e) => Err(io::Error::other(format!("Packet engine error: {e}"))),
                     }
                 })
             })
@@ -457,8 +462,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_requires_root() {
+    #[tokio::test]
+    async fn test_requires_root() {
         let local_addr = Ipv4Addr::LOCALHOST;
         let config = ScanConfig::default();
 

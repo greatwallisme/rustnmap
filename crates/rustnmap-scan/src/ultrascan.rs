@@ -199,7 +199,10 @@ impl InternalCongestionStats {
             let rttvar = self.rttvar_micros.load(Ordering::Relaxed);
             let timeout_micros = srtt.saturating_add(4 * rttvar);
             // Clamp to nmap's MIN_RTT_TIMEOUT (100ms) and config's max_rtt
-            #[expect(clippy::cast_possible_truncation, reason = "max_rtt is in milliseconds, fits in u64")]
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "max_rtt is in milliseconds, fits in u64"
+            )]
             let max_micros = self.max_rtt.as_micros() as u64;
             let clamped = timeout_micros.clamp(100_000, max_micros);
             Duration::from_micros(clamped)
@@ -1817,8 +1820,8 @@ impl ParallelScanEngine {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_engine_creation() {
+    #[tokio::test]
+    async fn test_engine_creation() {
         let local_addr = Ipv4Addr::new(192, 168, 1, 100);
         let config = ScanConfig::default();
         let result = ParallelScanEngine::new(local_addr, config);
@@ -1832,8 +1835,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_parallelism_configuration() {
+    #[tokio::test]
+    async fn test_parallelism_configuration() {
         let local_addr = Ipv4Addr::LOCALHOST;
         let config = ScanConfig::default();
 
@@ -1844,8 +1847,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_adaptive_timeout() {
+    #[tokio::test]
+    async fn test_adaptive_timeout() {
         let local_addr = Ipv4Addr::LOCALHOST;
         let config = ScanConfig::default();
 

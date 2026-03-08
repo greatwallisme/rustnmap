@@ -1781,11 +1781,15 @@ impl TcpAckScanner {
                     // Start engine if not yet started.
                     // If already started, the engine will return AlreadyStarted error,
                     // which we ignore because the engine is ready for use.
-                    if !self.packet_engine_started.load(std::sync::atomic::Ordering::Relaxed) {
+                    if !self
+                        .packet_engine_started
+                        .load(std::sync::atomic::Ordering::Relaxed)
+                    {
                         let _ = engine.start().await.map_err(|e| {
                             io::Error::other(format!("Failed to start packet engine: {e}"))
                         });
-                        self.packet_engine_started.store(true, std::sync::atomic::Ordering::Relaxed);
+                        self.packet_engine_started
+                            .store(true, std::sync::atomic::Ordering::Relaxed);
                     }
 
                     // Receive with timeout
@@ -1795,12 +1799,8 @@ impl TcpAckScanner {
                             buf[..len].copy_from_slice(&data[..len]);
                             Ok(Some(len))
                         }
-                        Ok(None) => {
-                            Ok(None)
-                        } // Timeout
-                        Err(e) => {
-                            Err(io::Error::other(format!("Packet engine error: {e}")))
-                        }
+                        Ok(None) => Ok(None), // Timeout
+                        Err(e) => Err(io::Error::other(format!("Packet engine error: {e}"))),
                     }
                 })
             })
@@ -1922,10 +1922,13 @@ impl TcpAckScanner {
                         &recv_buf[..len]
                     };
                     (packet_data, len)
-                },
+                }
                 Ok(Some(_) | None) => return Ok(PortState::Filtered),
                 Err(e)
-                    if matches!(e.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) =>
+                    if matches!(
+                        e.kind(),
+                        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                    ) =>
                 {
                     return Ok(PortState::Filtered);
                 }
@@ -2136,10 +2139,13 @@ impl TcpAckScanner {
                             &recv_buf[..len]
                         };
                         (packet_data, len)
-                    },
+                    }
                     Ok(Some(_) | None) => continue,
                     Err(e)
-                        if matches!(e.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) =>
+                        if matches!(
+                            e.kind(),
+                            io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                        ) =>
                     {
                         continue;
                     }
@@ -2762,11 +2768,15 @@ impl TcpWindowScanner {
                     // Start engine if not yet started.
                     // If already started, the engine will return AlreadyStarted error,
                     // which we ignore because the engine is ready for use.
-                    if !self.packet_engine_started.load(std::sync::atomic::Ordering::Relaxed) {
+                    if !self
+                        .packet_engine_started
+                        .load(std::sync::atomic::Ordering::Relaxed)
+                    {
                         let _ = engine.start().await.map_err(|e| {
                             io::Error::other(format!("Failed to start packet engine: {e}"))
                         });
-                        self.packet_engine_started.store(true, std::sync::atomic::Ordering::Relaxed);
+                        self.packet_engine_started
+                            .store(true, std::sync::atomic::Ordering::Relaxed);
                     }
 
                     // Receive with timeout
@@ -2776,12 +2786,8 @@ impl TcpWindowScanner {
                             buf[..len].copy_from_slice(&data[..len]);
                             Ok(Some(len))
                         }
-                        Ok(None) => {
-                            Ok(None)
-                        } // Timeout
-                        Err(e) => {
-                            Err(io::Error::other(format!("Packet engine error: {e}")))
-                        }
+                        Ok(None) => Ok(None), // Timeout
+                        Err(e) => Err(io::Error::other(format!("Packet engine error: {e}"))),
                     }
                 })
             })
@@ -2903,10 +2909,13 @@ impl TcpWindowScanner {
                         &recv_buf[..len]
                     };
                     (packet_data, len)
-                },
+                }
                 Ok(Some(_) | None) => return Ok(PortState::Filtered),
                 Err(e)
-                    if matches!(e.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) =>
+                    if matches!(
+                        e.kind(),
+                        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                    ) =>
                 {
                     return Ok(PortState::Filtered);
                 }
@@ -3050,7 +3059,10 @@ impl TcpWindowScanner {
     /// - RST + Window == 0 -> Closed
     /// - ICMP unreachable -> Filtered
     /// - No response after retries -> Filtered
-    #[expect(clippy::too_many_lines, reason = "Batch scan logic is inherently complex")]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "Batch scan logic is inherently complex"
+    )]
     pub fn scan_ports_batch(
         &self,
         dst_addr: Ipv4Addr,
@@ -3139,10 +3151,13 @@ impl TcpWindowScanner {
                             &recv_buf[..len]
                         };
                         (packet_data, len)
-                    },
+                    }
                     Ok(Some(_) | None) => continue,
                     Err(e)
-                        if matches!(e.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) =>
+                        if matches!(
+                            e.kind(),
+                            io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                        ) =>
                     {
                         continue;
                     }
@@ -3216,8 +3231,8 @@ impl PortScanner for TcpWindowScanner {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_fin_scanner_creation() {
+    #[tokio::test]
+    async fn test_fin_scanner_creation() {
         let local_addr = Ipv4Addr::new(192, 168, 1, 100);
         let config = ScanConfig::default();
         let result = TcpFinScanner::new(local_addr, config);
@@ -3227,8 +3242,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_fin_scanner_requires_root() {
+    #[tokio::test]
+    async fn test_fin_scanner_requires_root() {
         let local_addr = Ipv4Addr::LOCALHOST;
         let config = ScanConfig::default();
 
@@ -3239,8 +3254,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_null_scanner_creation() {
+    #[tokio::test]
+    async fn test_null_scanner_creation() {
         let local_addr = Ipv4Addr::new(192, 168, 1, 100);
         let config = ScanConfig::default();
         let result = TcpNullScanner::new(local_addr, config);
@@ -3250,8 +3265,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_null_scanner_requires_root() {
+    #[tokio::test]
+    async fn test_null_scanner_requires_root() {
         let local_addr = Ipv4Addr::LOCALHOST;
         let config = ScanConfig::default();
 
@@ -3262,8 +3277,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_xmas_scanner_creation() {
+    #[tokio::test]
+    async fn test_xmas_scanner_creation() {
         let local_addr = Ipv4Addr::new(192, 168, 1, 100);
         let config = ScanConfig::default();
         let result = TcpXmasScanner::new(local_addr, config);
@@ -3273,8 +3288,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_xmas_scanner_requires_root() {
+    #[tokio::test]
+    async fn test_xmas_scanner_requires_root() {
         let local_addr = Ipv4Addr::LOCALHOST;
         let config = ScanConfig::default();
 
@@ -3285,8 +3300,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_ack_scanner_creation() {
+    #[tokio::test]
+    async fn test_ack_scanner_creation() {
         let local_addr = Ipv4Addr::new(192, 168, 1, 100);
         let config = ScanConfig::default();
         let result = TcpAckScanner::new(local_addr, config);
@@ -3296,8 +3311,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_ack_scanner_requires_root() {
+    #[tokio::test]
+    async fn test_ack_scanner_requires_root() {
         let local_addr = Ipv4Addr::LOCALHOST;
         let config = ScanConfig::default();
 
@@ -3308,8 +3323,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_maimon_scanner_creation() {
+    #[tokio::test]
+    async fn test_maimon_scanner_creation() {
         let local_addr = Ipv4Addr::new(192, 168, 1, 100);
         let config = ScanConfig::default();
         let result = TcpMaimonScanner::new(local_addr, config);
@@ -3319,8 +3334,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_maimon_scanner_requires_root() {
+    #[tokio::test]
+    async fn test_maimon_scanner_requires_root() {
         let local_addr = Ipv4Addr::LOCALHOST;
         let config = ScanConfig::default();
 
@@ -3418,8 +3433,8 @@ mod tests {
         assert_eq!(tcp_flags::RST, 0x04);
     }
 
-    #[test]
-    fn test_window_scanner_creation() {
+    #[tokio::test]
+    async fn test_window_scanner_creation() {
         let local_addr = Ipv4Addr::new(192, 168, 1, 100);
         let config = ScanConfig::default();
         let result = TcpWindowScanner::new(local_addr, config);
@@ -3429,8 +3444,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_window_scanner_requires_root() {
+    #[tokio::test]
+    async fn test_window_scanner_requires_root() {
         let local_addr = Ipv4Addr::LOCALHOST;
         let config = ScanConfig::default();
 

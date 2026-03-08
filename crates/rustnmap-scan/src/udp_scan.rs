@@ -808,8 +808,8 @@ impl AsyncPortScanner for UdpScanner {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_scanner_creation() {
+    #[tokio::test]
+    async fn test_scanner_creation() {
         let local_addr = Ipv4Addr::new(192, 168, 1, 100);
         let config = ScanConfig::default();
         let result = UdpScanner::new(local_addr, config);
@@ -820,8 +820,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_requires_root() {
+    #[tokio::test]
+    async fn test_requires_root() {
         let local_addr = Ipv4Addr::LOCALHOST;
         let config = ScanConfig::default();
 

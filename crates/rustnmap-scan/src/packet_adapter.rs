@@ -327,7 +327,10 @@ fn find_loopback_interface() -> Option<String> {
     // 1. We verify sa_family is AF_INET before casting
     // 2. When AF_INET, the structure is always sockaddr_in with sin_port and sin_addr
     // 3. This is the standard pattern documented in POSIX getifaddrs(3)
-    #[expect(clippy::cast_ptr_alignment, reason = "sockaddr is sockaddr_in when AF_INET")]
+    #[expect(
+        clippy::cast_ptr_alignment,
+        reason = "sockaddr is sockaddr_in when AF_INET"
+    )]
     unsafe {
         let mut ifaddrs: *mut libc::ifaddrs = std::ptr::null_mut();
 
@@ -419,7 +422,7 @@ pub fn create_stealth_engine(
 /// # Example
 ///
 /// ```rust
-/// # use rustnmap_scan::packet_adapter::create_stealth_engine_with_target;
+/// # use rustnmap_scan::packet_adapter::{create_stealth_engine_with_target, ScannerPacketEngine};
 /// # use rustnmap_common::{ScanConfig, Ipv4Addr};
 /// # use std::sync::Arc;
 /// # use tokio::sync::Mutex;
@@ -469,14 +472,20 @@ pub fn create_stealth_engine_with_target(
 /// 2. `PACKET_MMAP` sockets must bind to the same interface to capture responses
 /// 3. Binding to a non-loopback interface would miss loopback responses
 #[must_use]
-pub fn detect_interface_from_addr(local_addr: Option<Ipv4Addr>, target_addr: Option<Ipv4Addr>) -> String {
+pub fn detect_interface_from_addr(
+    local_addr: Option<Ipv4Addr>,
+    target_addr: Option<Ipv4Addr>,
+) -> String {
     detect_interface_from_addr_impl(local_addr, target_addr)
 }
 
 /// Internal implementation of interface detection.
 ///
 /// This function performs the actual interface enumeration and selection logic.
-fn detect_interface_from_addr_impl(local_addr: Option<Ipv4Addr>, target_addr: Option<Ipv4Addr>) -> String {
+fn detect_interface_from_addr_impl(
+    local_addr: Option<Ipv4Addr>,
+    target_addr: Option<Ipv4Addr>,
+) -> String {
     use std::ffi::CStr;
     use std::net::Ipv4Addr as StdIpv4Addr;
 
