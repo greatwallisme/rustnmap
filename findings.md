@@ -1,10 +1,57 @@
-# Research Findings: PACKET_MMAP V2 Issues - ALL RESOLVED ✅
+# Research Findings
 
 > **Created**: 2026-03-07
-> **Updated**: 2026-03-08 05:25 AM PST
-> **Status**: **ALL ISSUES RESOLVED** - Single root cause fixed + T5 multi-port fix
+> **Updated**: 2026-03-08 07:35 AM PST
+> **Status**: Localhost scanning + nmap-style CLI complete
 
 ---
+
+## LOCALHOST SCANNING (2026-03-08) ✅ RESOLVED
+
+### Problem
+
+SYN scan against 127.0.0.1 showed all ports as `filtered` instead of correct states.
+
+**Symptom**:
+```
+nmap -sS -p 22 127.0.0.1
+→ 22/tcp open  ssh  ✅
+
+rustnmap -sS -p 22 127.0.0.1
+→ 22/tcp filtered ssh  ❌
+```
+
+### Root Cause
+
+Raw socket not bound to loopback address, causing kernel to use external IP as source:
+1. SYN probe sent: `192.168.15.237 → 127.0.0.1` (wrong source)
+2. Response routed to: `127.0.0.1 → 192.168.15.237` (via external interface)
+3. PACKET_MMAP on `lo` never sees the response
+
+### Solution
+
+Created dedicated loopback socket bound to 127.0.0.1:
+- Added `RawSocket::bind()` method
+- Added `localhost_socket` field to `TcpSynScanner`
+- Implemented loopback interface detection
+
+### Test Results
+
+```
+$ rustnmap -sS -p 22,80,443 127.0.0.1
+PORT     STATE SERVICE
+22/tcp  open    ssh
+80/tcp  closed  http
+443/tcp closed  https
+```
+
+**Documentation**: `doc/modules/localhost-scanning.md`
+
+---
+
+## PACKET_MMAP V2 ISSUES (2026-03-07) ✅ RESOLVED
+
+> **Previous Status**: ALL ISSUES RESOLVED - Single root cause fixed + T5 multi-port fix
 
 ## RESOLUTION (2026-03-07 5:45 PM PST)
 

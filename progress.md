@@ -1,8 +1,50 @@
-# Progress Log: Phase 7 - Bug Fixes Complete ✅
+# Progress Log: Phase 7+ - Bug Fixes & Features Complete ✅
 
 > **Created**: 2026-03-07
-> **Updated**: 2026-03-08 05:30 AM PST
-> **Status**: **T5 Multi-Port Fix Complete** - Localhost issue identified
+> **Updated**: 2026-03-08 07:35 AM PST
+> **Status**: **Localhost Scanning + Nmap-Style CLI Complete**
+
+---
+
+## LATEST COMPLETIONS (2026-03-08)
+
+### 1. Localhost Scanning Support ✅
+
+**Problem**: SYN scan against 127.0.0.1 showed all ports as `filtered` instead of correct states.
+
+**Root Cause**: Raw socket not bound to loopback address, causing kernel to use external IP as source.
+
+**Solution**:
+- Added `RawSocket::bind()` method for source address binding
+- Created dedicated `localhost_socket` in `TcpSynScanner`
+- Implemented loopback interface detection
+
+**Test Results**:
+```
+$ rustnmap -sS -p 22,80,443 127.0.0.1
+PORT     STATE SERVICE
+22/tcp  open    ssh
+80/tcp  closed  http
+443/tcp closed  https
+```
+
+**Files Modified**:
+- `crates/rustnmap-net/src/lib.rs` - Added bind() method
+- `crates/rustnmap-scan/src/syn_scan.rs` - Localhost socket support
+- `crates/rustnmap-scan/src/packet_adapter.rs` - Loopback detection
+- `doc/modules/localhost-scanning.md` - Technical documentation
+
+### 2. Nmap-Style CLI Options ✅
+
+**Added**: `-sS`, `-sT`, `-sU`, `-sF`, `-sN`, `-sX`, `-sM`, `-sA`, `-sW`
+
+**Implementation**: clap `short = 's'` with value parser (clap parses `-sS` as `-s` with value `S`)
+
+### 3. DNS Resolution Fix ✅
+
+**Problem**: Hostname parsing failed with "requires DNS resolution" error.
+
+**Solution**: Changed from `parse()` to `parse_async()` for hostname support.
 
 ---
 
