@@ -45,5 +45,8 @@ tokio-test = "0.4"
 libc = "0.2"
 dotenvy = { workspace = true }
 
+[features]
+diagnostic = []
+
 [lints]
 workspace = true

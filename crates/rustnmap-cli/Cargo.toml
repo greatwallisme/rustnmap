@@ -49,3 +49,9 @@ shellexpand = "3.1"
 [[bin]]
 name = "rustnmap"
 path = "src/main.rs"
+
+[features]
+diagnostic = []
+
+[lints]
+workspace = true

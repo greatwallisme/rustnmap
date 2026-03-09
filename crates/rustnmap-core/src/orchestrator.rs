@@ -648,11 +648,20 @@ impl ScanOrchestrator {
     pub async fn run(&self) -> Result<ScanResult> {
         info!("Starting scan orchestration");
 
+        #[cfg(feature = "diagnostic")]
+        let run_start = std::time::Instant::now();
+
         let start_time = std::time::Instant::now();
         let mut host_results: Vec<HostResult> = Vec::new();
 
+        #[cfg(feature = "diagnostic")]
+        let before_phases = std::time::Instant::now();
+
         // Execute each phase in order
         for phase in self.pipeline.phases().to_vec() {
+            #[cfg(feature = "diagnostic")]
+            let phase_start = std::time::Instant::now();
+
             *self.current_phase.write().await = phase;
             debug!(phase = %phase, "Executing scan phase");
 
@@ -667,11 +676,27 @@ impl ScanOrchestrator {
                     }
                 }
                 ScanPhase::PortScanning => {
+                    #[cfg(feature = "diagnostic")]
+                    let before_port_scan = std::time::Instant::now();
+
                     if self.session.config.two_phase_scan {
                         // Two-phase scanning: fast discovery + deep scan
                         host_results = self.run_two_phase_port_scanning().await?;
                     } else {
                         host_results = self.run_port_scanning().await?;
+                    }
+
+                    #[cfg(feature = "diagnostic")]
+                    {
+                        use std::io::Write;
+                        if let Ok(mut file) = std::fs::OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open("/tmp/rustnmap_diagnostic.txt")
+                        {
+                            let _ = writeln!(file, "\n=== PortScanning Phase ===");
+                            let _ = writeln!(file, "run_port_scanning() call: {:?}", before_port_scan.elapsed());
+                        }
                     }
                 }
                 ScanPhase::ServiceDetection => {
@@ -699,13 +724,51 @@ impl ScanOrchestrator {
                     debug!("Result aggregation phase completed");
                 }
             }
+
+            #[cfg(feature = "diagnostic")]
+            {
+                use std::io::Write;
+                if let Ok(mut file) = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open("/tmp/rustnmap_diagnostic.txt")
+                {
+                    let _ = writeln!(file, "Phase {:?}: {:?}", phase, phase_start.elapsed());
+                }
+            }
         }
+
+        #[cfg(feature = "diagnostic")]
+        let after_phases = std::time::Instant::now();
 
         let elapsed = start_time.elapsed();
         info!(?elapsed, "Scan orchestration completed");
 
+        #[cfg(feature = "diagnostic")]
+        let before_build = std::time::Instant::now();
+
         // Build final scan result
         let scan_result = self.build_scan_result(host_results, elapsed)?;
+
+        #[cfg(feature = "diagnostic")]
+        let after_build = std::time::Instant::now();
+
+        #[cfg(feature = "diagnostic")]
+        {
+            use std::io::Write;
+            if let Ok(mut file) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open("/tmp/rustnmap_diagnostic.txt")
+            {
+                let _ = writeln!(file, "\n=== Orchestrator.run() Timing ===");
+                let _ = writeln!(file, "Total run(): {:?}", run_start.elapsed());
+                let _ = writeln!(file, "Phases execution: {:?}", after_phases.duration_since(before_phases));
+                let _ = writeln!(file, "build_scan_result(): {:?}", after_build.duration_since(before_build));
+                let _ = writeln!(file, "Other overhead: {:?}",
+                    run_start.elapsed() - after_phases.duration_since(before_phases) - after_build.duration_since(before_build));
+            }
+        }
 
         Ok(scan_result)
     }
@@ -908,6 +971,9 @@ impl ScanOrchestrator {
                     };
 
                     async move {
+                        #[cfg(feature = "diagnostic")]
+                        let orchestrator_start = std::time::Instant::now();
+
                         let target_ip = match target.ip {
                             IpAddr::V4(addr) => addr,
                             IpAddr::V6(_) => {
@@ -916,6 +982,9 @@ impl ScanOrchestrator {
                                 return None;
                             }
                         };
+
+                        #[cfg(feature = "diagnostic")]
+                        let before_scan = std::time::Instant::now();
 
                         // Run parallel scan for this target (TCP SYN or UDP)
                         let scan_results = if primary_scan_type == ScanType::Udp {
@@ -935,6 +1004,9 @@ impl ScanOrchestrator {
                                 }
                             }
                         };
+
+                        #[cfg(feature = "diagnostic")]
+                        let after_scan = std::time::Instant::now();
 
                         // Determine protocol for results
                         let (protocol, service_protocol) = if primary_scan_type == ScanType::Udp {
@@ -983,6 +1055,9 @@ impl ScanOrchestrator {
                         }
 
                         // Get MAC address via ARP (only for IPv4 targets)
+                        #[cfg(feature = "diagnostic")]
+                        let before_mac = std::time::Instant::now();
+
                         let mac = if let Some(target_ipv4) = target_ip_for_mac {
                             get_mac_address_via_arp(target_ipv4, local_addr, mac_timeout).map(
                                 |mac_addr| {
@@ -1003,6 +1078,26 @@ impl ScanOrchestrator {
                         } else {
                             None
                         };
+
+                        #[cfg(feature = "diagnostic")]
+                        let after_mac = std::time::Instant::now();
+
+                        #[cfg(feature = "diagnostic")]
+                        {
+                            use std::io::Write;
+                            if let Ok(mut file) = std::fs::OpenOptions::new()
+                                .create(true)
+                                .append(true)
+                                .open("/tmp/rustnmap_diagnostic.txt")
+                            {
+                                let _ = writeln!(file, "\n=== Orchestrator Timing ===");
+                                let _ = writeln!(file, "Total orchestrator: {:?}", orchestrator_start.elapsed());
+                                let _ = writeln!(file, "Scan call: {:?}", after_scan.duration_since(before_scan));
+                                let _ = writeln!(file, "MAC lookup: {:?}", after_mac.duration_since(before_mac));
+                                let _ = writeln!(file, "Other overhead: {:?}",
+                                    orchestrator_start.elapsed() - after_scan.duration_since(before_scan) - after_mac.duration_since(before_mac));
+                            }
+                        }
 
                         // Determine status reason based on scan type
                         let status_reason = if primary_scan_type == ScanType::Udp {

@@ -778,8 +778,18 @@ fn build_scan_config_from_profile(
 
 /// Normal scan flow (original `run_scan` logic)
 async fn run_normal_scan(args: &Args) -> Result<()> {
+    #[cfg(feature = "diagnostic")]
+    let cli_start = std::time::Instant::now();
+
     // Parse targets
+    #[cfg(feature = "diagnostic")]
+    let before_parse = std::time::Instant::now();
+
     let targets = parse_targets(args)?;
+
+    #[cfg(feature = "diagnostic")]
+    let after_parse = std::time::Instant::now();
+
     if targets.is_empty() {
         error!("No valid targets specified");
         return Err(rustnmap_common::Error::Other(
@@ -798,7 +808,22 @@ async fn run_normal_scan(args: &Args) -> Result<()> {
     );
 
     // Build scan configuration from arguments
+    #[cfg(feature = "diagnostic")]
+    let before_config = std::time::Instant::now();
+
     let config = build_scan_config(args)?;
+
+    #[cfg(feature = "diagnostic")]
+    let after_config = std::time::Instant::now();
+
+    // Auto-disable host discovery for single host targets (matching nmap behavior)
+    // When scanning a single IP address (not a network range), host discovery is unnecessary
+    let mut config = config;
+    if !args.disable_ping && targets.targets.len() == 1 {
+        config.host_discovery = false;
+        debug!("Auto-disabled host discovery for single host target");
+    }
+
     info!("Scan type: {:?}", config.scan_types);
     info!("Timing template: {:?}", config.timing_template);
 
@@ -980,16 +1005,42 @@ async fn run_normal_scan(args: &Args) -> Result<()> {
     let orchestrator = ScanOrchestrator::new(session);
 
     info!("Starting scan...");
+
+    #[cfg(feature = "diagnostic")]
+    let before_orch = std::time::Instant::now();
+
     let scan_result = orchestrator
         .run()
         .await
         .map_err(|e| rustnmap_common::Error::Other(format!("Scan failed: {e}")))?;
+
+    #[cfg(feature = "diagnostic")]
+    let after_orch = std::time::Instant::now();
 
     // Build command line string for output
     let command_line = build_command_line_string(args);
 
     // Output results
     output_results(args, &scan_result, &command_line)?;
+
+    #[cfg(feature = "diagnostic")]
+    {
+        use std::io::Write;
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("/tmp/rustnmap_diagnostic.txt")
+        {
+            let _ = writeln!(file, "\n=== CLI Timing ===");
+            let _ = writeln!(file, "Total CLI: {:?}", cli_start.elapsed());
+            let _ = writeln!(file, "Parse targets: {:?}", after_parse.duration_since(before_parse));
+            let _ = writeln!(file, "Build config: {:?}", after_config.duration_since(before_config));
+            let _ = writeln!(file, "Orchestrator.run(): {:?}", after_orch.duration_since(before_orch));
+            let _ = writeln!(file, "Other CLI overhead: {:?}",
+                cli_start.elapsed() - after_parse.duration_since(before_parse)
+                - after_config.duration_since(before_config) - after_orch.duration_since(before_orch));
+        }
+    }
 
     info!("Scan completed successfully");
     Ok(())
