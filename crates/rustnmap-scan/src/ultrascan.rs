@@ -184,7 +184,7 @@ impl InternalCongestionStats {
     /// This matches nmap's behavior: `to->timeout = o.initialRttTimeout() * 1000;`
     /// (see timing.cc:82).
     ///
-    /// The upper bound uses `max_rtt` from config instead of hardcoded value,
+    /// The upper bound uses `max_rtt` from config instead of a fixed constant,
     /// allowing T5 (Insane) to properly use 300ms max timeout.
     fn recommended_timeout(&self) -> Duration {
         use std::sync::atomic::Ordering;
@@ -848,8 +848,21 @@ impl ParallelScanEngine {
         // See scan_engine.cc:326-327
         let mut probes_sent_this_batch: usize = 0;
 
+        #[cfg(feature = "diagnostic")]
+        let mut total_send_time = Duration::ZERO;
+        #[cfg(feature = "diagnostic")]
+        let mut total_wait_time = Duration::ZERO;
+        #[cfg(feature = "diagnostic")]
+        let mut loop_iterations = 0;
+        #[cfg(feature = "diagnostic")]
+        let mut packets_received = 0;
+
         // Main scan loop
         while ports_iter.peek().is_some() || !outstanding.is_empty() {
+            #[cfg(feature = "diagnostic")]
+            {
+                loop_iterations += 1;
+            }
             // Check for scan timeout
             if start_time.elapsed() > self.scan_timeout {
                 // Time out remaining outstanding probes
@@ -861,6 +874,9 @@ impl ParallelScanEngine {
 
             // Get adaptive parallelism from congestion controller
             let current_cwnd = self.congestion.cwnd();
+
+            #[cfg(feature = "diagnostic")]
+            let send_start = Instant::now();
 
             // Send more probes if we haven't reached congestion window
             // AND we haven't reached the batch limit (nmap: 50 probes per batch)
@@ -893,6 +909,11 @@ impl ParallelScanEngine {
                 } else {
                     break;
                 }
+            }
+
+            #[cfg(feature = "diagnostic")]
+            {
+                total_send_time += send_start.elapsed();
             }
 
             // Wait for packets and drain all available responses (nmap waitForResponses pattern)
@@ -928,9 +949,16 @@ impl ParallelScanEngine {
             };
             let mut wait_duration = initial_wait;
 
+            #[cfg(feature = "diagnostic")]
+            let wait_start = Instant::now();
+
             loop {
                 match tokio_timeout(wait_duration, packet_rx.recv()).await {
                     Ok(Some(packet)) => {
+                        #[cfg(feature = "diagnostic")]
+                        {
+                            packets_received += 1;
+                        }
                         // Match the packet to an outstanding probe
                         let probe_key = (packet.src_ip, packet.src_port);
                         if let Some(probe) = outstanding.remove(&probe_key) {
@@ -975,6 +1003,11 @@ impl ParallelScanEngine {
                 }
             }
 
+            #[cfg(feature = "diagnostic")]
+            {
+                total_wait_time += wait_start.elapsed();
+            }
+
             // Check for probe timeouts and handle retries
             self.check_timeouts(&mut outstanding, &mut retry_probes, &mut results);
 
@@ -1009,6 +1042,24 @@ impl ParallelScanEngine {
         // Wait for receiver task to complete with timeout
         // Use a short timeout since the receiver should exit quickly when channel is closed
         let _ = tokio::time::timeout(Duration::from_millis(200), receiver_handle).await;
+
+        #[cfg(feature = "diagnostic")]
+        {
+            use std::io::Write;
+            let total_time = start_time.elapsed();
+            if let Ok(mut file) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open("/tmp/rustnmap_diagnostic.txt")
+            {
+                let _ = writeln!(file, "\n=== TCP SYN Scan Timing ===");
+                let _ = writeln!(file, "Total: {:?}", total_time);
+                let _ = writeln!(file, "Send: {:?} ({:.1}%)", total_send_time, (total_send_time.as_secs_f64() / total_time.as_secs_f64()) * 100.0);
+                let _ = writeln!(file, "Wait: {:?} ({:.1}%)", total_wait_time, (total_wait_time.as_secs_f64() / total_time.as_secs_f64()) * 100.0);
+                let _ = writeln!(file, "Iterations: {}", loop_iterations);
+                let _ = writeln!(file, "Packets: {}", packets_received);
+            }
+        }
 
         Ok(results)
     }

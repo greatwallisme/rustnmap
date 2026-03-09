@@ -1,8 +1,8 @@
-# Progress Log: Performance Optimization - Faster Than Nmap
+# Progress Log: TCP Scan Performance Investigation
 
-> **Created**: 2026-03-08
-> **Updated**: 2026-03-09 00:40 AM PST
-> **Status**: Phase P2 - Critical Performance Fixes COMPLETE
+> **Created**: 2026-03-09
+> **Updated**: 2026-03-09 10:42
+> **Status**: Phase 1 - Diagnostic Instrumentation (IN PROGRESS)
 
 ---
 
@@ -12,98 +12,180 @@
 
 ---
 
-## Performance Results
+## Current Session (2026-03-09 10:42)
 
-### Before Optimization
-| Test | rustnmap | nmap | Status |
-|------|----------|------|--------|
-| UDP Scan | 3190ms | 765ms | 4.17x SLOWER |
-| Fast Scan | 8029ms | 2401ms | 3.34x SLOWER |
-| Top Ports | 6659ms | 2585ms | 2.58x SLOWER |
-| SYN Scan | 999ms | 825ms | 1.21x SLOWER |
-| Connect Scan | 629ms | 722ms | 1.15x FASTER |
+### Diagnostic Instrumentation Added
 
-### After Optimization
-| Test | rustnmap | nmap | Status |
-|------|----------|------|--------|
-| UDP Scan | ~800-1000ms | ~700-4000ms | COMPETITIVE |
-| Connect Scan | 640ms | 667ms | **1.04x FASTER** |
-| SYN Scan | ~900ms | ~700ms | COMPETITIVE |
-| Stealth Scans | ~4500ms | ~4200ms | 0.92x (close) |
+Added timing measurements to `ultrascan.rs` to identify bottleneck:
+- Measures time spent sending probes
+- Measures time spent waiting for responses
+- Counts loop iterations and packets received
+- Gated behind `diagnostic` feature flag
+- Writes results to `/tmp/rustnmap_diagnostic.txt`
+
+**Files Modified**:
+- `crates/rustnmap-scan/src/ultrascan.rs` - Added timing instrumentation
+- `crates/rustnmap-scan/Cargo.toml` - Added `diagnostic` feature
+
+**Status**: Code compiles successfully, ready to test
 
 ---
 
-## Fixes Applied (2026-03-09)
+## Current Performance (Measured Data)
 
-### Fix 1: Remove 50ms UDP Inter-Probe Sleep
-**File**: `ultrascan.rs:1406-1411`
+### Test Configuration
+- Target: 45.33.32.156 (scanme.nmap.org)
+- Ports: 22, 80, 113, 443, 8080 (5 ports)
+- Timing: T4 (Aggressive)
+- Scan type: TCP SYN
 
-**Root Cause**: Misunderstanding of nmap's boostScanDelay()
-- nmap's 50ms delay is only applied when packet loss is detected
-- rustnmap was sleeping 50ms after EVERY probe
+### Test Results (2026-03-09)
 
-**Fix**: Removed the fixed sleep. The `enforce_scan_delay()` already handles timing correctly using `config.scan_delay` (0ms for T4/T5).
+| Test Run | nmap | rustnmap | rustnmap/nmap ratio |
+|----------|------|---------|-------------------|
+| Test 1 | 725ms | 1270ms | 1.75x slower |
+| Test 2 | 734ms | 1234ms | 1.68x slower |
+| Test 3 | 712ms | 1304ms | 1.83x slower |
+| **Average** | **724ms** | **1269ms** | **1.75x slower** |
 
-**Impact**: UDP scan from 3190ms → ~1000ms
+### Accuracy Verification
+Both tools detect the same ports:
+- 22/tcp: open
+- 80/tcp: open
+- 113/tcp: closed
+- 443/tcp: closed
+- 8080/tcp: closed
 
-### Fix 2: Remove 2000ms Fixed Final Wait
-**File**: `ultrascan.rs:1507-1535`
-
-**Root Cause**: Fixed 2-second wait at end of UDP scan
-- nmap uses timing-based waits, not fixed delays
-- The main loop already handles waiting for responses
-
-**Fix**: Changed to timing-based wait using `probe_timeout` from congestion control
-
-**Impact**: Further reduced UDP scan time
-
-### Fix 3: Optimize Poll Intervals
-**File**: `ultrascan.rs:1436-1451`
-
-**Root Cause**: Fixed 50ms poll intervals caused multiple wait cycles
-- ICMP responses arrive in 20-100ms
-- Multiple 50ms waits add overhead
-
-**Fix**: Changed to 10ms poll intervals for aggressive timing
-
-**Impact**: More responsive scanning
+### Localhost Test (127.0.0.1, same 5 ports)
+| nmap | rustnmap | Ratio |
+|------|---------|-------|
+| 112ms | 398ms | 3.55x slower |
 
 ---
 
-## Test Results
+## Known Facts
 
-### UDP Scan Timing Analysis
-```
-Test 1: nmap=717ms, rustnmap=1972ms
-Test 2: nmap=2452ms, rustnmap=1978ms -> FASTER
-Test 3: nmap=4138ms, rustnmap=1820ms -> FASTER
-Test 4: nmap=4132ms, rustnmap=1838ms -> FASTER
-Test 5: nmap=4063ms, rustnmap=1976ms -> FASTER
+### 1. Code Path Discovery
+TcpSyn scan uses `ParallelScanEngine::scan_ports()` (not batch mode)
+- Orchestrator calls `run_port_scanning_parallel()` for SYN scans
+- Batch mode changes to `TcpSynScanner` are not used
+
+### 2. Timing Parameters (T4/Aggressive)
+From `crates/rustnmap-common/src/scan.rs`:
+- `initial_rtt`: 500ms
+- `max_rtt`: 1250ms
+- `scan_delay`: 0ms
+- `max_retries`: 6
+
+### 3. Current Wait Logic (ultrascan.rs:919-928)
+```rust
+let initial_wait = if has_more_ports {
+    Duration::from_millis(10)
+} else if !outstanding.is_empty() {
+    earliest_timeout.min(Duration::from_millis(100))  // 100ms cap
+} else {
+    Duration::from_millis(10)
+};
 ```
 
-Network variability is high, but rustnmap is competitive and often faster.
-
-### Connect Scan (Most Reliable)
+### 4. Receiver Task Timeout (ultrascan.rs:1059)
+```rust
+recv_with_timeout(Duration::from_millis(100))
 ```
-nmap: 667ms
-rustnmap: 640ms (1.04x FASTER)
+
+### 5. Test Session Log (2026-03-09 02:30)
+
+**Attempt 1**: Removed 100ms wait cap
+- Modified: `earliest_timeout.min(Duration::from_millis(100))` → `earliest_timeout`
+- Result: No performance change (still ~1.75x slower)
+- Conclusion: 100ms cap is not the bottleneck
+
+**Attempt 2**: Started to change receiver timeout 100ms → 10ms
+- **STOPPED by user**: "你确定你不是在瞎JB改吗"
+- Realization: Making changes without root cause analysis
+
+**Reverted all changes** to establish baseline
+
+---
+
+## Nmap Reference (Observed Behavior)
+
+From `reference/nmap/scan_engine.cc`:
+
+### Main Loop Structure
+```c
+while (!USI.incompleteHostsEmpty()) {
+    doAnyPings(&USI);
+    doAnyOutstandingRetransmits(&USI);
+    doAnyRetryStackRetransmits(&USI);
+    doAnyNewProbes(&USI);
+    printAnyStats(&USI);
+    waitForResponses(&USI);  // Critical: processes ALL responses
+    processData(&USI);
+}
+```
+
+### waitForResponses Pattern
+```c
+do {
+    gotone = false;
+    USI->sendOK(&stime);  // Calculate wait time
+    gotone = get_pcap_result(USI, &stime);  // Wait for packets
+} while (gotone && USI->gstats->num_probes_active > 0);
+```
+
+Loop continues while:
+- Packets are arriving (`gotone == true`)
+- AND there are active probes
+
+### get_pcap_result Timeout
+```c
+to_usec = TIMEVAL_SUBTRACT(*stime, USI->now);
+if (to_usec < 2000) to_usec = 2000;  // Minimum 2ms
+ip_tmp = readip_pcap(..., to_usec, ...);
 ```
 
 ---
 
-## Remaining Issues
+## Current Investigation Status
 
-1. **Multi-target scans slower** (0.33-0.49x)
-   - Need to investigate sequential vs parallel host processing
+**Phase 1: Root Cause Investigation** (IN PROGRESS)
 
-2. **Large port ranges slower**
-   - May need batch size optimization
+Questions to answer:
+1. Where exactly is the 560ms difference spent?
+2. What does nmap do differently in the receive loop?
+3. Is the bottleneck in async overhead or algorithmic difference?
+
+**NOT DONE YET**:
+- No timing instrumentation added
+- No comparison of packet receive patterns
+- No analysis of nmap's sendOK() return values
 
 ---
 
-## Key Learnings
+## Next Steps (Systematic Approach)
 
-1. **Always reference nmap source code** - Don't assume behavior, verify
-2. **Use timing-based waits, not fixed delays** - nmap uses adaptive timing
-3. **Test with multiple runs** - Network variability is high
-4. **Systematic debugging** - Find root cause before fixing
+1. **Add timing instrumentation** to measure:
+   - Time spent in main loop iterations
+   - Time spent waiting for responses
+   - Time spent processing packets
+
+2. **Compare nmap's behavior**:
+   - What is stime value from sendOK()?
+   - How many packets arrive per waitForResponses() call?
+   - What is the actual packet receive pattern?
+
+3. **Identify bottleneck** BEFORE making changes
+   - Is it async overhead?
+   - Is it wait time calculation?
+   - Is it something else entirely?
+
+---
+
+## Error Log
+
+| Error | Action | Resolution |
+|-------|--------|------------|
+| Compilation error in stealth_scans.rs | Made syntax changes | Reverted all changes |
+| Performance didn't improve after fix | Tried another fix immediately | Stopped by user, reverted |
+| Making changes without root cause | Continuing to modify code | Reverted, need proper analysis |

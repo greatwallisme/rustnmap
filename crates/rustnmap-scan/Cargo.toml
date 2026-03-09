@@ -12,6 +12,9 @@ description = "Port scanning implementations for RustNmap"
 keywords = ["network", "scanning", "port", "security"]
 categories = ["network-programming"]
 
+[features]
+diagnostic = []
+
 [dependencies]
 rustnmap-common = { path = "../rustnmap-common" }
 rustnmap-net = { path = "../rustnmap-net" }
