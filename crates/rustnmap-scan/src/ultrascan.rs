@@ -1348,10 +1348,8 @@ impl ParallelScanEngine {
             // The receiver might still work, just took too long to signal ready
         }
 
-        // Small delay to ensure receiver is truly ready
-        // PACKET_MMAP V2 ring buffer doesn't need this delay like recvfrom did
-        // But we keep it for consistency with the previous implementation
-        tokio::time::sleep(Duration::from_millis(10)).await;
+        // REMOVED: The 10ms delay was unnecessary for PACKET_MMAP V2.
+        // The receiver is already signaled ready via the channel above.
 
         // Outstanding UDP probes: (target, port) -> probe info
         let mut outstanding: HashMap<(Ipv4Addr, Port), UdpOutstandingProbe> = HashMap::new();
@@ -1397,17 +1395,20 @@ impl ParallelScanEngine {
                 if let Some(port) = ports_iter.next() {
                     // Enforce scan_delay before sending each probe
                     // This implements nmap's enforce_scan_delay() from timing.cc:172-206
+                    // Note: For T4/T5, scan_delay is 0ms by default
+                    // AdaptiveDelay will dynamically increase delay if packet loss is detected
                     self.enforce_scan_delay().await;
                     self.send_udp_probe(target, port, &mut outstanding)?;
                     self.congestion.on_packet_sent();
                     self.rate_limiter.record_sent();
                     probes_sent_this_batch += 1;
 
-                    // UDP scans need inter-probe delay to avoid ICMP rate limiting
-                    // Nmap uses 50ms delay for UDP scans (see timing.cc)
-                    // The 2000ms final wait ensures we capture late ICMP responses
-                    // NOTE: This is a UDP-specific delay, independent of scan_delay
-                    tokio::time::sleep(Duration::from_millis(50)).await;
+                    // REMOVED: Fixed 50ms sleep was incorrect nmap interpretation
+                    // Nmap's 50ms is for boostScanDelay() which is only called when
+                    // packet loss is detected (see timing.cc:1900-1906), NOT after
+                    // every probe. The enforce_scan_delay() above correctly handles
+                    // timing using config.scan_delay (0ms for T4/T5) and
+                    // AdaptiveDelay for dynamic adjustment on packet loss.
                 } else {
                     break;
                 }
@@ -1417,7 +1418,9 @@ impl ParallelScanEngine {
             let has_more_ports = ports_iter.peek().is_some();
             let probe_timeout = self.congestion.recommended_timeout();
 
-            let earliest_timeout = outstanding
+            // Calculate earliest timeout for debugging/monitoring purposes
+            // This represents when the first outstanding probe will timeout
+            let _earliest_timeout = outstanding
                 .values()
                 .map(|p| {
                     let elapsed = p.sent_time.elapsed();
@@ -1430,16 +1433,17 @@ impl ParallelScanEngine {
                 .min()
                 .unwrap_or(Duration::from_millis(100));
 
+            // Timing-aware wait: use very short initial wait, then let drain loop handle it
+            // ICMP responses typically arrive in 20-100ms, but polling with short intervals
+            // is more efficient than long waits
             let initial_wait = if has_more_ports {
-                // Give ICMP responses time to arrive before sending more probes
-                // Use short wait to send more probes quickly
-                Duration::from_millis(50)
-            } else if !outstanding.is_empty() {
-                // All probes sent, wait for earliest timeout (no artificial limit)
-                // This allows proper timeout behavior instead of artificially extending scan time
-                earliest_timeout
-            } else {
+                // Sending more probes - use short wait to stay responsive
                 Duration::from_millis(10)
+            } else if !outstanding.is_empty() {
+                // All probes sent - use short poll, drain loop will extend as needed
+                Duration::from_millis(10)
+            } else {
+                Duration::ZERO
             };
             let mut wait_duration = initial_wait;
 
@@ -1501,26 +1505,30 @@ impl ParallelScanEngine {
         }
 
         // Final wait for any remaining ICMP responses
-        // This is critical for UDP scans where ICMP responses can be delayed
-        // With 50ms inter-probe delay, 2000ms ensures 100% reliability
-        let final_wait = Duration::from_millis(2000);
-        let final_start = Instant::now();
-        while final_start.elapsed() < final_wait {
-            match tokio_timeout(Duration::from_millis(100), icmp_rx.recv()).await {
-                Ok(Some(icmp_resp)) => {
-                    // Match ICMP response to outstanding probe
-                    let probe_key = (icmp_resp.orig_dst_ip, icmp_resp.orig_dst_port);
-                    if let Some(probe) = outstanding.remove(&probe_key) {
-                        results.insert(probe.port, icmp_resp.port_state());
+        // nmap approach: use timing-based wait, not fixed 2000ms
+        // For T4/T5: use probe_timeout (typically 100-300ms)
+        // For T0-T3: use probe_timeout (can be longer)
+        // Only wait if there are outstanding probes that might still receive responses
+        if !outstanding.is_empty() {
+            let probe_timeout = self.congestion.recommended_timeout();
+            let final_wait = probe_timeout;
+            let final_start = Instant::now();
+            while final_start.elapsed() < final_wait {
+                match tokio_timeout(Duration::from_millis(10), icmp_rx.recv()).await {
+                    Ok(Some(icmp_resp)) => {
+                        // Match ICMP response to outstanding probe
+                        let probe_key = (icmp_resp.orig_dst_ip, icmp_resp.orig_dst_port);
+                        if let Some(probe) = outstanding.remove(&probe_key) {
+                            results.insert(probe.port, icmp_resp.port_state());
+                        }
                     }
-                }
-                Ok(None) => {
-                    // Channel closed - stop waiting
-                    break;
-                }
-                Err(_) => {
-                    // Timeout - continue waiting until final_wait is reached
-                    // The while condition will check if we've waited long enough
+                    Ok(None) => {
+                        // Channel closed - stop waiting
+                        break;
+                    }
+                    Err(_) => {
+                        // Timeout - continue waiting until final_wait is reached
+                    }
                 }
             }
         }
