@@ -564,7 +564,16 @@ async fn handle_profile_scan(args: &Args, profile_path: &std::path::Path) -> Res
             rustnmap_common::Error::Other(format!("Failed to create packet engine: {e}"))
         })?);
     let output_sink: Arc<dyn OutputSink> = Arc::new(DefaultOutputSink::new());
-    let nse_registry = Arc::new(NseRegistry::new());
+
+    // Load NSE scripts from default directory
+    let scripts_dir = std::path::PathBuf::from(datadir.as_ref()).join("scripts");
+    let mut nse_registry = NseRegistry::new();
+    if scripts_dir.exists() {
+        if let Err(e) = nse_registry.load_from_directory(&scripts_dir) {
+            warn!("Failed to load NSE scripts from {}: {}", scripts_dir.display(), e);
+        }
+    }
+    let nse_registry = Arc::new(nse_registry);
 
     let session = ScanSession::with_dependencies(
         config,
@@ -987,7 +996,16 @@ async fn run_normal_scan(args: &Args) -> Result<()> {
             rustnmap_common::Error::Other(format!("Failed to create packet engine: {e}"))
         })?);
     let output_sink: Arc<dyn OutputSink> = Arc::new(DefaultOutputSink::new());
-    let nse_registry = Arc::new(NseRegistry::new());
+
+    // Load NSE scripts from default directory
+    let scripts_dir = std::path::PathBuf::from(datadir.as_ref()).join("scripts");
+    let mut nse_registry = NseRegistry::new();
+    if scripts_dir.exists() {
+        if let Err(e) = nse_registry.load_from_directory(&scripts_dir) {
+            warn!("Failed to load NSE scripts from {}: {}", scripts_dir.display(), e);
+        }
+    }
+    let nse_registry = Arc::new(nse_registry);
 
     let session = ScanSession::with_dependencies(
         config,
