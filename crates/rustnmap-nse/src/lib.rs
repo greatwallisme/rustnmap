@@ -73,6 +73,7 @@ pub mod engine;
 pub mod error;
 pub mod libs;
 pub mod lua;
+pub mod process_executor;
 pub mod registry;
 pub mod script;
 

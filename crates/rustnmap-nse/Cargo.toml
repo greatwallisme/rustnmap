@@ -42,9 +42,20 @@ bytes = { workspace = true }
 regex = { workspace = true }
 rand = "0.8"
 
+# Process-based execution dependencies
+wait-timeout = "0.2"
+which = { version = "7.0", default-features = false }
+
+# System calls (for runner binary)
+libc = { workspace = true }
+
 [dev-dependencies]
 proptest = { workspace = true }
 mockall = { workspace = true }
+
+[[bin]]
+name = "rustnmap-nse-runner"
+path = "src/bin/runner.rs"
 
 [lints]
 workspace = true

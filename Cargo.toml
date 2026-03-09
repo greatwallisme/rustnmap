@@ -96,6 +96,9 @@ criterion = { version = "0.8.2", features = ["html_reports"] }
 mockall = "0.14.0"
 dotenvy = "0.15"
 
+# System calls (for runner binary)
+libc = "0.2"
+
 # Lint configuration
 [workspace.lints.rust]
 ambiguous_negative_literals = "warn"

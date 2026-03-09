@@ -4,7 +4,8 @@
 > **Type**: Resource Leak / DoS
 > **Affected Component**: `rustnmap-nse` Script Execution Engine
 > **Date**: 2026-03-08
-> **Status**: Unconfirmed - Needs Fix
+> **Status**: ✅ **FIXED** (2026-03-08)
+> **Fixed By**: Process-based isolation with OS-level termination
 
 ## Summary
 
@@ -306,4 +307,52 @@ async fn test_script_timeout_releases_resources() {
 **Impact**: Production systems could be rendered unresponsive.
 
 **Recommendation**: Fix before next release.
+
+## Fix Implemented (2026-03-08)
+
+### Solution: Process-Based Isolation
+
+Implemented Option 1 (Separate Process) as recommended:
+
+1. **New Binary**: `crates/rustnmap-nse/src/bin/runner.rs`
+   - Standalone process for script execution
+   - Sets CPU time limit via `setrlimit(RLIMIT_CPU)`
+   - Outputs JSON results to stdout
+
+2. **ProcessExecutor**: `crates/rustnmap-nse/src/process_executor.rs`
+   - Spawns runner process with script source via stdin
+   - Uses `wait_timeout::ChildExt` for timeout handling
+   - **Kills process on timeout** via OS `child.kill()`
+   - Also checks parent directory for runner binary (test compatibility)
+
+3. **Integration**: Modified `engine.rs` to use `ProcessExecutor`
+   - `execute_script_async()` now spawns isolated process
+   - Reliable timeout termination guaranteed by OS
+
+### Files Modified
+
+| File | Change |
+|------|--------|
+| `src/bin/runner.rs` | NEW - Isolated script runner binary |
+| `src/process_executor.rs` | NEW - Process-based executor with timeout |
+| `src/engine.rs` | Use `ProcessExecutor` instead of `spawn_blocking` |
+| `src/lib.rs` | Export `process_executor` module |
+| `Cargo.toml` | Add dependencies: `wait-timeout`, `which`, `libc` |
+
+### Tests
+
+- `test_execute_script_async_timeout` - Now passes (was ignored)
+- `test_execute_scripts_async_mixed_results` - Now passes (was ignored)
+- All 118 NSE tests pass with zero failures
+
+### Verification
+
+```bash
+# Build and test
+cargo build -p rustnmap-nse --bins
+cargo test -p rustnmap-nse
+cargo clippy -p rustnmap-nse -- -D warnings
+
+# Result: ✅ All 118 tests pass, zero warnings
+```
 

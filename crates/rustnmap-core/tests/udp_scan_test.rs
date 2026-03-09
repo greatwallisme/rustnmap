@@ -39,8 +39,8 @@ fn udp_scan_config() -> ScanConfig {
 /// Tests UDP scanner creation.
 ///
 /// This test requires `root/CAP_NET_RAW` privileges.
-#[test]
-fn test_udp_scanner_creation() {
+#[tokio::test]
+async fn test_udp_scanner_creation() {
     // Skip if no privileges
     if !has_raw_socket_privileges().expect("Failed to check privileges") {
         eprintln!("Skipping test: no raw socket privileges");
@@ -61,8 +61,8 @@ fn test_udp_scanner_creation() {
 }
 
 /// Tests UDP scanner requires root.
-#[test]
-fn test_udp_scanner_requires_root_without_privileges() {
+#[tokio::test]
+async fn test_udp_scanner_requires_root_without_privileges() {
     // Skip if we have privileges (test the failure case)
     if has_raw_socket_privileges().unwrap_or(false) {
         eprintln!("Skipping test: has raw socket privileges");
@@ -83,8 +83,8 @@ fn test_udp_scanner_requires_root_without_privileges() {
 ///
 /// This test requires `root/CAP_NET_RAW` privileges.
 /// Note: UDP scanning is inherently ambiguous - no response means Open|Filtered.
-#[test]
-fn test_udp_scan_port() {
+#[tokio::test]
+async fn test_udp_scan_port() {
     // Skip if no privileges
     if !has_raw_socket_privileges().expect("Failed to check privileges") {
         eprintln!("Skipping test: no raw socket privileges");
@@ -135,8 +135,8 @@ fn test_udp_scan_port() {
 /// Tests UDP scan with wrong protocol returns Filtered.
 ///
 /// This test requires `root/CAP_NET_RAW` privileges.
-#[test]
-fn test_udp_scan_wrong_protocol() {
+#[tokio::test]
+async fn test_udp_scan_wrong_protocol() {
     // Skip if no privileges
     if !has_raw_socket_privileges().expect("Failed to check privileges") {
         eprintln!("Skipping test: no raw socket privileges");
@@ -169,8 +169,8 @@ fn test_udp_scan_wrong_protocol() {
 /// Tests UDP scan with IPv6 target returns Filtered.
 ///
 /// This test requires `root/CAP_NET_RAW` privileges.
-#[test]
-fn test_udp_scan_ipv6_target() {
+#[tokio::test]
+async fn test_udp_scan_ipv6_target() {
     // Skip if no privileges
     if !has_raw_socket_privileges().expect("Failed to check privileges") {
         eprintln!("Skipping test: no raw socket privileges");
@@ -221,8 +221,8 @@ fn test_udp_scan_source_port_range() {
 /// Benchmarks UDP scan performance.
 ///
 /// This test requires `root/CAP_NET_RAW` privileges.
-#[test]
-fn test_udp_scan_performance() {
+#[tokio::test]
+async fn test_udp_scan_performance() {
     // Skip if no privileges
     if !has_raw_socket_privileges().expect("Failed to check privileges") {
         eprintln!("Skipping test: no raw socket privileges");

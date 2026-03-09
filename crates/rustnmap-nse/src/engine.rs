@@ -412,6 +412,10 @@ impl ScriptEngine {
 
     /// Execute a single script asynchronously with concurrency control and timeout.
     ///
+    /// Uses process-based isolation to ensure reliable timeout handling.
+    /// Scripts that exceed the timeout are reliably terminated via OS-level
+    /// process killing, preventing resource leaks from infinite loops.
+    ///
     /// # Arguments
     ///
     /// * `script` - Script to execute
@@ -423,14 +427,12 @@ impl ScriptEngine {
     ///
     /// # Errors
     ///
-    /// Returns an error if script execution fails or times out.
+    /// Returns an error if the runner process cannot be spawned.
     pub async fn execute_script_async(
         &self,
         script: &NseScript,
         target_ip: std::net::IpAddr,
     ) -> Result<ScriptResult> {
-        let start = std::time::Instant::now();
-
         // Acquire semaphore permit for concurrency control
         let _permit = self.scheduler.semaphore.acquire().await.map_err(|e| {
             crate::error::Error::ExecutionError {
@@ -439,78 +441,27 @@ impl ScriptEngine {
             }
         })?;
 
-        // Execute script with timeout
-        let timeout = self.scheduler.config.default_timeout;
-        let script_id = script.id.clone();
+        // Use process-based executor for reliable timeout handling
+        let executor = crate::process_executor::ProcessExecutor::with_timeout(
+            self.scheduler.config.default_timeout,
+        )?;
+
+        // Execute in spawn_blocking to avoid blocking async runtime
         let script_source = script.source.clone();
-        let has_action = script.has_action();
+        let script_id = script.id.clone();
+        let timeout = self.scheduler.config.default_timeout;
 
-        // Run Lua execution in spawn_blocking to allow timeout cancellation
-        let blocking_task = tokio::task::spawn_blocking(move || {
-            let mut lua = NseLua::new_default()?;
-
-            // Load the script
-            lua.load_script(&script_source, &script_id)?;
-
-            // Create full Nmap host table with all properties
-            let host_table = ScriptEngine::create_host_table(&mut lua, target_ip)?;
-            lua.set_global("host", mlua::Value::Table(host_table))?;
-
-            // Execute action function if exists
-            let output = if has_action {
-                let func = lua.load_function("return action(host)", "action_wrapper")?;
-                let result: mlua::MultiValue = lua.call_function(&func, ())?;
-
-                let output_parts: Vec<String> = result
-                    .iter()
-                    .filter_map(|v| match v {
-                        mlua::Value::String(s) => s.to_str().ok().map(|s| s.to_string()),
-                        mlua::Value::Integer(n) => Some(n.to_string()),
-                        mlua::Value::Number(n) => Some(n.to_string()),
-                        mlua::Value::Boolean(b) => Some(b.to_string()),
-                        _ => None,
-                    })
-                    .collect();
-
-                ScriptOutput::Plain(output_parts.join(" "))
-            } else {
-                ScriptOutput::Empty
-            };
-
-            Result::<ScriptOutput>::Ok(output)
-        });
-
-        let result = tokio::time::timeout(timeout, blocking_task).await;
+        let result = tokio::task::spawn_blocking(move || {
+            executor.execute(&script_source, &script_id, target_ip, timeout)
+        })
+        .await;
 
         match result {
-            // Timeout not hit - task completed
-            Ok(Ok(Ok(output))) => Ok(ScriptResult {
+            Ok(Ok(script_result)) => Ok(script_result),
+            Ok(Err(e)) => Err(e),
+            Err(join_error) => Err(crate::error::Error::ExecutionError {
                 script_id: script.id.clone(),
-                target_ip,
-                port: None,
-                protocol: None,
-                status: ExecutionStatus::Success,
-                output,
-                duration: start.elapsed(),
-                debug_log: vec![],
-            }),
-            // Timeout not hit - task returned error
-            Ok(Ok(Err(e))) => Err(e),
-            // Timeout not hit - task panicked
-            Ok(Err(_)) => Err(crate::error::Error::ExecutionError {
-                script_id: script.id.clone(),
-                message: "Script task panicked".to_string(),
-            }),
-            // Timeout hit
-            Err(_) => Ok(ScriptResult {
-                script_id: script.id.clone(),
-                target_ip,
-                port: None,
-                protocol: None,
-                status: ExecutionStatus::Timeout,
-                output: ScriptOutput::Empty,
-                duration: timeout,
-                debug_log: vec!["Script execution timed out".to_string()],
+                message: format!("Process executor task failed: {join_error}"),
             }),
         }
     }
@@ -1034,7 +985,6 @@ end
     }
 
     #[tokio::test]
-    #[ignore = "Requires process-level cancellation for infinite loops - see issue #123"]
     async fn test_execute_script_async_timeout() {
         let mut db = ScriptDatabase::new();
 
@@ -1190,7 +1140,6 @@ end
     }
 
     #[tokio::test]
-    #[ignore = "Requires process-level cancellation for infinite loops - see issue #123"]
     async fn test_execute_scripts_async_mixed_results() {
         let mut db = ScriptDatabase::new();
 
