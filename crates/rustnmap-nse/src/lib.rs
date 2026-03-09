@@ -88,10 +88,11 @@ pub use script::{NseScript, ScriptCategory, ScriptOutput};
 /// Scripts can declare a minimum required NSE version using `@nse_version`.
 pub const NSE_VERSION: &str = "1.0.0";
 
-/// Default timeout for script execution.
+/// Default timeout for script execution (10 minutes).
 ///
+/// This matches nmap's default script timeout.
 /// Scripts that exceed this timeout will be terminated.
-pub const DEFAULT_SCRIPT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+pub const DEFAULT_SCRIPT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
 
 /// Maximum memory allocation per Lua state (10MB).
 ///
@@ -127,10 +128,10 @@ mod tests {
 
     #[test]
     fn test_default_timeout_reasonable() {
-        // Default timeout should be at least 10 seconds
+        // Default timeout should be 10 minutes (nmap default)
         assert!(
-            DEFAULT_SCRIPT_TIMEOUT.as_secs() >= 10,
-            "Default script timeout should be reasonable"
+            DEFAULT_SCRIPT_TIMEOUT.as_secs() >= 600,
+            "Default script timeout should be 10 minutes (nmap default)"
         );
     }
 
