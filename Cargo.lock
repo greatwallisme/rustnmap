@@ -2787,6 +2787,7 @@ dependencies = [
  "chrono",
  "proptest",
  "quick-xml",
+ "rustnmap-fingerprint",
  "serde",
  "serde_json",
  "thiserror 2.0.18",

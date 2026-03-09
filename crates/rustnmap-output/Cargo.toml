@@ -20,6 +20,9 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
+# Internal dependencies
+rustnmap-fingerprint = { path = "../rustnmap-fingerprint" }
+
 # Additional dependencies
 chrono = { version = "0.4", features = ["serde", "clock"] }
 quick-xml = { version = "0.39.0", features = ["serialize"] }

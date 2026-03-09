@@ -1,8 +1,130 @@
 # Research Findings
 
 > **Created**: 2026-03-07
-> **Updated**: 2026-03-08 19:30 PM PST
-> **Status**: All comparison test issues resolved ✅
+> **Updated**: 2026-03-09 14:09
+> **Status**: Database integration research completed
+
+---
+
+## DATABASE INTEGRATION RESEARCH (2026-03-09)
+
+### Problem Statement
+
+RustNmap loads three databases but immediately discards them:
+- ServiceDatabase (port → service name, e.g., 80 → "http")
+- ProtocolDatabase (protocol number → name, e.g., 6 → "tcp")
+- RpcDatabase (RPC number → service name, e.g., 100003 → "nfs")
+
+**Current behavior in cli.rs:**
+```rust
+match ServiceDatabase::load_from_file(&path).await {
+    Ok(_db) => {  // ← Immediately discarded!
+        info!("Services database loaded successfully");
+        // Note: Service database is available but not yet used in output
+    }
+}
+```
+
+This occurs in 6 places (3 databases × 2 functions).
+
+### Nmap Reference Implementation
+
+**How nmap uses databases:**
+
+From `reference/nmap/services.cc`:
+```c
+// Global storage
+static ServiceMap service_table;
+
+// Initialization
+static int nmap_services_init() {
+    // Parse nmap-services file
+    // Store in service_table map
+}
+
+// Lookup function
+const struct nservent *nmap_getservbyport(u16 port, u16 proto) {
+    // Query service_table
+    return service_entry;
+}
+
+// Usage in output
+printf("%d/%s open %s\n", port, proto_str, service->s_name);
+```
+
+**Key insight:** Databases are loaded once at startup, stored globally, and queried during output.
+
+### RustNmap Current Implementation
+
+All three databases are fully implemented in `crates/rustnmap-fingerprint/src/database/`:
+
+1. **ServiceDatabase** (`services.rs`)
+   - API: `lookup(port: u16, protocol: &str) -> Option<&str>`
+   - Example: `db.lookup(80, "tcp")` → `Some("http")`
+   - Parses nmap-services format: `ssh 22/tcp 0.182286 # Secure Shell`
+
+2. **ProtocolDatabase** (`protocols.rs`)
+   - API: `lookup(number: u8) -> Option<&str>`
+   - Example: `db.lookup(6)` → `Some("tcp")`
+   - Parses nmap-protocols format: `tcp 6 # Transmission Control`
+
+3. **RpcDatabase** (`rpc.rs`)
+   - API: `lookup(number: u32) -> Option<&str>`
+   - Example: `db.lookup(100003)` → `Some("nfs")`
+   - Parses nmap-rpc format: `nfs 100003 nfsprog nfsd # nfs`
+
+### Design Solution
+
+**Architecture:**
+```
+CLI Layer (cli.rs)
+    ↓ Load databases
+DatabaseContext (new structure)
+    ├─ services: Option<Arc<ServiceDatabase>>
+    ├─ protocols: Option<Arc<ProtocolDatabase>>
+    └─ rpc: Option<Arc<RpcDatabase>>
+    ↓ Pass to output
+Output Layer (formatters)
+    └─ Use lookup methods
+```
+
+**Implementation phases:**
+1. Create DatabaseContext structure
+2. Store databases in cli.rs (remove `_db` discards)
+3. Pass DatabaseContext to output functions
+4. Use lookups in output to show friendly names
+
+### Expected Output Improvement
+
+**Before:**
+```
+PORT     STATE
+80/tcp   open
+443/tcp  open
+```
+
+**After:**
+```
+PORT     STATE SERVICE
+80/tcp   open  http
+443/tcp  open  https
+```
+
+### Documentation Created
+
+- `doc/database-integration.md` - Complete technical design with:
+  - Architecture diagrams
+  - Phase-by-phase implementation plan
+  - Code examples for each phase
+  - Testing strategy
+  - Performance considerations
+
+### Next Steps
+
+1. Implement DatabaseContext structure
+2. Modify cli.rs to store loaded databases
+3. Update output function signatures
+4. Integrate database lookups into output formatting
 
 ---
 

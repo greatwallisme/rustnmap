@@ -19,7 +19,7 @@
 //! `RustNmap` components into a unified command-line interface.
 
 use std::sync::Arc;
-
+use std::{fs::File, io::Write};
 use rustnmap_common::Result;
 use rustnmap_core::session::ScanType as CoreScanType;
 use rustnmap_core::session::{
@@ -28,12 +28,12 @@ use rustnmap_core::session::{
 };
 use rustnmap_core::{ScanConfig, ScanOrchestrator, ScanSession};
 use rustnmap_output::formatter::OutputFormatter;
+use rustnmap_output::{DatabaseContext, NdjsonFormatter, MarkdownFormatter, JsonFormatter};
 use rustnmap_output::models::{HostResult, PortResult, PortState, Protocol, ScanResult, ScanType};
 use rustnmap_scan::scanner::TimingTemplate;
 use rustnmap_target::{Target, TargetGroup, TargetParser};
-use std::io::Write;
+use rustnmap_scan_management::{ScanFilter, ScanHistory, ScanProfile};
 use tracing::{debug, error, info, warn};
-
 use crate::args::Args;
 
 /// Runs the main `RustNmap` scan workflow.
@@ -92,10 +92,7 @@ pub async fn run_scan(args: Args) -> Result<()> {
 
 /// Handle --history command
 async fn handle_history_command(args: &Args) -> Result<()> {
-    use rustnmap_scan_management::{ScanFilter, ScanHistory};
-
     let db_path = shellexpand::tilde(&args.db_path);
-
     let history = ScanHistory::open(&db_path).map_err(|e| {
         rustnmap_common::Error::Other(format!("Failed to open history database: {e}"))
     })?;
@@ -230,8 +227,6 @@ fn handle_list_profiles_command(args: &Args) -> Result<()> {
 
 /// Handle --validate-profile command
 fn handle_validate_profile_command(profile_path: &std::path::Path) -> Result<()> {
-    use rustnmap_scan_management::ScanProfile;
-
     let profile = ScanProfile::from_file(profile_path)
         .map_err(|e| rustnmap_common::Error::Other(format!("Failed to load profile: {e}")))?;
 
@@ -277,7 +272,7 @@ output:
 
 /// Handle --diff command
 async fn handle_diff_command(args: &Args, diff_files: &[String]) -> Result<()> {
-    use rustnmap_scan_management::{DiffFormat, ScanDiff, ScanHistory};
+    use rustnmap_scan_management::{DiffFormat, ScanDiff};
 
     // If --from-history is specified, load from database
     if args.from_history.is_some() {
@@ -382,8 +377,6 @@ async fn handle_diff_command(args: &Args, diff_files: &[String]) -> Result<()> {
 
 /// Handle profile-based scanning
 async fn handle_profile_scan(args: &Args, profile_path: &std::path::Path) -> Result<()> {
-    use rustnmap_scan_management::ScanProfile;
-
     let profile = ScanProfile::from_file(profile_path)
         .map_err(|e| rustnmap_common::Error::Other(format!("Failed to load profile: {e}")))?;
 
@@ -496,6 +489,9 @@ async fn handle_profile_scan(args: &Args, profile_path: &std::path::Path) -> Res
         );
     }
 
+    // Create database context for output
+    let mut db_context = DatabaseContext::new();
+
     // Load service database for port-to-service name mappings
     let services_db_path = db_dir.join("nmap-services");
     if services_db_path.exists() {
@@ -504,9 +500,9 @@ async fn handle_profile_scan(args: &Args, profile_path: &std::path::Path) -> Res
             services_db_path.display()
         );
         match rustnmap_fingerprint::ServiceDatabase::load_from_file(&services_db_path).await {
-            Ok(_db) => {
+            Ok(db) => {
                 info!("Services database loaded successfully");
-                // Note: Service database is available but not yet used in output
+                db_context.services = Some(Arc::new(db));
             }
             Err(e) => {
                 warn!("Failed to load services database: {e}");
@@ -527,9 +523,9 @@ async fn handle_profile_scan(args: &Args, profile_path: &std::path::Path) -> Res
             protocols_db_path.display()
         );
         match rustnmap_fingerprint::ProtocolDatabase::load_from_file(&protocols_db_path).await {
-            Ok(_db) => {
+            Ok(db) => {
                 info!("Protocols database loaded successfully");
-                // Note: Protocols database is available but not yet used in output
+                db_context.protocols = Some(Arc::new(db));
             }
             Err(e) => {
                 warn!("Failed to load protocols database: {e}");
@@ -547,9 +543,9 @@ async fn handle_profile_scan(args: &Args, profile_path: &std::path::Path) -> Res
     if rpc_db_path.exists() {
         info!("Loading RPC database from: {}", rpc_db_path.display());
         match rustnmap_fingerprint::RpcDatabase::load_from_file(&rpc_db_path).await {
-            Ok(_db) => {
+            Ok(db) => {
                 info!("RPC database loaded successfully");
-                // Note: RPC database is available but not yet used in output
+                db_context.rpc = Some(Arc::new(db));
             }
             Err(e) => {
                 warn!("Failed to load RPC database: {e}");
@@ -593,7 +589,7 @@ async fn handle_profile_scan(args: &Args, profile_path: &std::path::Path) -> Res
     let command_line = build_command_line_string(args);
 
     // Output results
-    output_results(args, &scan_result, &command_line)?;
+    output_results(args, &scan_result, &command_line, &db_context)?;
 
     info!("Scan completed successfully");
     Ok(())
@@ -916,6 +912,9 @@ async fn run_normal_scan(args: &Args) -> Result<()> {
         );
     }
 
+    // Create database context for output
+    let mut db_context = DatabaseContext::new();
+
     // Load service database for port-to-service name mappings
     let services_db_path = db_dir.join("nmap-services");
     if services_db_path.exists() {
@@ -924,9 +923,9 @@ async fn run_normal_scan(args: &Args) -> Result<()> {
             services_db_path.display()
         );
         match rustnmap_fingerprint::ServiceDatabase::load_from_file(&services_db_path).await {
-            Ok(_db) => {
+            Ok(db) => {
                 info!("Services database loaded successfully");
-                // Note: Service database is available but not yet used in output
+                db_context.services = Some(Arc::new(db));
             }
             Err(e) => {
                 warn!("Failed to load services database: {e}");
@@ -947,9 +946,9 @@ async fn run_normal_scan(args: &Args) -> Result<()> {
             protocols_db_path.display()
         );
         match rustnmap_fingerprint::ProtocolDatabase::load_from_file(&protocols_db_path).await {
-            Ok(_db) => {
+            Ok(db) => {
                 info!("Protocols database loaded successfully");
-                // Note: Protocols database is available but not yet used in output
+                db_context.protocols = Some(Arc::new(db));
             }
             Err(e) => {
                 warn!("Failed to load protocols database: {e}");
@@ -967,9 +966,9 @@ async fn run_normal_scan(args: &Args) -> Result<()> {
     if rpc_db_path.exists() {
         info!("Loading RPC database from: {}", rpc_db_path.display());
         match rustnmap_fingerprint::RpcDatabase::load_from_file(&rpc_db_path).await {
-            Ok(_db) => {
+            Ok(db) => {
                 info!("RPC database loaded successfully");
-                // Note: RPC database is available but not yet used in output
+                db_context.rpc = Some(Arc::new(db));
             }
             Err(e) => {
                 warn!("Failed to load RPC database: {e}");
@@ -1021,7 +1020,7 @@ async fn run_normal_scan(args: &Args) -> Result<()> {
     let command_line = build_command_line_string(args);
 
     // Output results
-    output_results(args, &scan_result, &command_line)?;
+    output_results(args, &scan_result, &command_line, &db_context)?;
 
     #[cfg(feature = "diagnostic")]
     {
@@ -1579,7 +1578,7 @@ fn build_command_line_string(args: &Args) -> String {
 }
 
 /// Outputs scan results based on command-line arguments.
-fn output_results(args: &Args, result: &ScanResult, command_line: &str) -> Result<()> {
+fn output_results(args: &Args, result: &ScanResult, command_line: &str, db_context: &DatabaseContext) -> Result<()> {
     // Handle quiet mode
     if args.quiet || args.no_output {
         return Ok(());
@@ -1589,18 +1588,18 @@ fn output_results(args: &Args, result: &ScanResult, command_line: &str) -> Resul
     if args.output_script_kiddie {
         print_script_kiddie_output(result);
     } else {
-        print_normal_output(args, result, command_line);
+        print_normal_output(args, result, command_line, db_context);
     }
 
     // Write to output files if specified
     if let Some(basename) = &args.output_all {
-        write_all_formats(result, basename, args.append_output)?;
+        write_all_formats(result, basename, args.append_output, db_context)?;
     } else {
         if let Some(path) = &args.output_normal {
-            write_normal_output(result, path, args.append_output)?;
+            write_normal_output(result, path, args.append_output, db_context)?;
         }
         if let Some(path) = &args.output_xml {
-            write_xml_output(result, path, args.append_output)?;
+            write_xml_output(result, path, args.append_output, db_context)?;
         }
         if let Some(path) = &args.output_json {
             write_json_output(result, path, args.append_output)?;
@@ -1609,7 +1608,7 @@ fn output_results(args: &Args, result: &ScanResult, command_line: &str) -> Resul
             write_ndjson_output(result, path, args.append_output)?;
         }
         if let Some(path) = &args.output_grepable {
-            write_grepable_output(result, path, args.append_output)?;
+            write_grepable_output(result, path, args.append_output, db_context)?;
         }
         if let Some(path) = &args.output_markdown {
             write_markdown_output(result, path, args.append_output)?;
@@ -1620,8 +1619,7 @@ fn output_results(args: &Args, result: &ScanResult, command_line: &str) -> Resul
 }
 
 /// Prints normal formatted output to console.
-fn print_normal_output(args: &Args, result: &ScanResult, command_line: &str) {
-    use std::io::Write;
+fn print_normal_output(args: &Args, result: &ScanResult, command_line: &str, _db_context: &DatabaseContext) {
     let stdout = std::io::stdout();
     let mut handle = stdout.lock();
 
@@ -1751,7 +1749,6 @@ fn print_port_normal<W: Write>(handle: &mut W, _args: &Args, port: &PortResult) 
 
 /// Prints output in script kiddie format.
 fn print_script_kiddie_output(result: &ScanResult) {
-    use std::io::Write;
     let stdout = std::io::stdout();
     let mut handle = stdout.lock();
 
@@ -1781,7 +1778,7 @@ fn print_script_kiddie_output(result: &ScanResult) {
 }
 
 /// Writes output in all formats.
-fn write_all_formats(result: &ScanResult, basename: &std::path::Path, append: bool) -> Result<()> {
+fn write_all_formats(result: &ScanResult, basename: &std::path::Path, append: bool, db_context: &DatabaseContext) -> Result<()> {
     let normal_path = basename.with_extension("nmap");
     let xml_path = basename.with_extension("xml");
     let grepable_path = basename.with_extension("gnmap");
@@ -1789,9 +1786,9 @@ fn write_all_formats(result: &ScanResult, basename: &std::path::Path, append: bo
     let ndjson_path = basename.with_extension("ndjson");
     let md_path = basename.with_extension("md");
 
-    write_normal_output(result, &normal_path, append)?;
-    write_xml_output(result, &xml_path, append)?;
-    write_grepable_output(result, &grepable_path, append)?;
+    write_normal_output(result, &normal_path, append, db_context)?;
+    write_xml_output(result, &xml_path, append, db_context)?;
+    write_grepable_output(result, &grepable_path, append, db_context)?;
     write_json_output(result, &json_path, append)?;
     write_ndjson_output(result, &ndjson_path, append)?;
     write_markdown_output(result, &md_path, append)?;
@@ -1807,8 +1804,6 @@ fn write_all_formats(result: &ScanResult, basename: &std::path::Path, append: bo
 ///
 /// Returns an error if the file cannot be opened or created.
 fn open_output_file(path: &std::path::Path, append: bool) -> Result<std::fs::File> {
-    use std::fs::File;
-
     tokio::task::block_in_place(|| {
         if append {
             std::fs::OpenOptions::new()
@@ -1827,11 +1822,8 @@ fn open_output_file(path: &std::path::Path, append: bool) -> Result<std::fs::Fil
 }
 
 /// Writes normal format output to file.
-fn write_normal_output(result: &ScanResult, path: &std::path::Path, append: bool) -> Result<()> {
-    use std::io::Write;
-
+fn write_normal_output(result: &ScanResult, path: &std::path::Path, append: bool, _db_context: &DatabaseContext) -> Result<()> {
     let mut file = open_output_file(path, append)?;
-
     // Write header
     writeln!(
         file,
@@ -1866,8 +1858,19 @@ fn write_normal_output(result: &ScanResult, path: &std::path::Path, append: bool
 
         for port in &host.ports {
             if matches!(port.state, PortState::Open) {
-                writeln!(file, "Port {}: open", port.number)
-                    .map_err(|e| rustnmap_common::Error::Other(format!("Write error: {e}")))?;
+                let protocol_str = match port.protocol {
+                    Protocol::Tcp => "tcp",
+                    Protocol::Udp => "udp",
+                    Protocol::Sctp => "sctp",
+                };
+                let service_name = _db_context.lookup_service(port.number, protocol_str);
+                if let Some(name) = service_name {
+                    writeln!(file, "Port {}: open {}", port.number, name)
+                        .map_err(|e| rustnmap_common::Error::Other(format!("Write error: {e}")))?;
+                } else {
+                    writeln!(file, "Port {}: open", port.number)
+                        .map_err(|e| rustnmap_common::Error::Other(format!("Write error: {e}")))?;
+                }
             }
         }
         writeln!(file).map_err(|e| rustnmap_common::Error::Other(format!("Write error: {e}")))?;
@@ -1897,11 +1900,8 @@ fn write_normal_output(result: &ScanResult, path: &std::path::Path, append: bool
 }
 
 /// Writes XML format output to file.
-fn write_xml_output(result: &ScanResult, path: &std::path::Path, append: bool) -> Result<()> {
-    use std::io::Write;
-
+fn write_xml_output(result: &ScanResult, path: &std::path::Path, append: bool, _db_context: &DatabaseContext) -> Result<()> {
     let mut file = open_output_file(path, append)?;
-
     writeln!(file, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>")
         .map_err(|e| rustnmap_common::Error::Other(format!("Write error: {e}")))?;
     writeln!(
@@ -1967,9 +1967,7 @@ fn write_xml_output(result: &ScanResult, path: &std::path::Path, append: bool) -
 }
 
 /// Writes grepable format output to file.
-fn write_grepable_output(result: &ScanResult, path: &std::path::Path, append: bool) -> Result<()> {
-    use std::io::Write;
-
+fn write_grepable_output(result: &ScanResult, path: &std::path::Path, append: bool, _db_context: &DatabaseContext) -> Result<()> {
     let mut file = open_output_file(path, append)?;
 
     for host in &result.hosts {
@@ -1982,7 +1980,15 @@ fn write_grepable_output(result: &ScanResult, path: &std::path::Path, append: bo
             .ports
             .iter()
             .filter(|p| matches!(p.state, PortState::Open))
-            .map(|p| format!("{}/open/tcp//", p.number))
+            .map(|p| {
+                let protocol_str = match p.protocol {
+                    Protocol::Tcp => "tcp",
+                    Protocol::Udp => "udp",
+                    Protocol::Sctp => "sctp",
+                };
+                let service_name = _db_context.lookup_service(p.number, protocol_str).unwrap_or("");
+                format!("{}/open/{}/{}/", p.number, protocol_str, service_name)
+            })
             .collect();
 
         writeln!(
@@ -2005,9 +2011,6 @@ fn write_grepable_output(result: &ScanResult, path: &std::path::Path, append: bo
 
 /// Writes NDJSON format output to file.
 fn write_ndjson_output(result: &ScanResult, path: &std::path::Path, append: bool) -> Result<()> {
-    use rustnmap_output::NdjsonFormatter;
-    use std::io::Write;
-
     let formatter = NdjsonFormatter::new();
     let output = formatter
         .format_scan_result(result)
@@ -2023,9 +2026,6 @@ fn write_ndjson_output(result: &ScanResult, path: &std::path::Path, append: bool
 
 /// Writes Markdown format output to file.
 fn write_markdown_output(result: &ScanResult, path: &std::path::Path, append: bool) -> Result<()> {
-    use rustnmap_output::MarkdownFormatter;
-    use std::io::Write;
-
     let formatter = MarkdownFormatter::new();
     let output = formatter
         .format_scan_result(result)
@@ -2041,9 +2041,6 @@ fn write_markdown_output(result: &ScanResult, path: &std::path::Path, append: bo
 
 /// Writes JSON format output to file.
 fn write_json_output(result: &ScanResult, path: &std::path::Path, append: bool) -> Result<()> {
-    use rustnmap_output::JsonFormatter;
-    use std::io::Write;
-
     let formatter = JsonFormatter::new();
     let output = formatter
         .format_scan_result(result)
