@@ -1128,6 +1128,16 @@ fn build_scan_config(args: &Args) -> Result<ScanConfig> {
         config.nse_categories = script.split(',').map(String::from).collect();
     }
 
+    // Script timeout
+    if let Some(timeout) = &args.script_timeout {
+        match parse_time_duration(timeout) {
+            Ok(duration) => config.script_timeout = duration,
+            Err(e) => {
+                warn!("Invalid script timeout '{timeout}': {e}. Using default.");
+            }
+        }
+    }
+
     // Scan delay
     if let Some(delay) = args.scan_delay {
         config.scan_delay = std::time::Duration::from_millis(delay);
@@ -1307,6 +1317,66 @@ fn parse_decoy_ips(s: &str) -> Result<Vec<std::net::IpAddr>> {
         }
     }
     Ok(ips)
+}
+
+/// Parses nmap-style time specification into Duration.
+///
+/// # Supported Formats
+///
+/// - Plain number: `60` -> 60 seconds
+/// - Milliseconds: `500ms` -> 500ms
+/// - Seconds: `30s` -> 30 seconds
+/// - Minutes: `5m` -> 5 minutes
+/// - Hours: `1h` -> 1 hour
+/// - Zero: `0` -> no timeout (Duration::MAX)
+///
+/// # Errors
+///
+/// Returns an error if the string cannot be parsed.
+fn parse_time_duration(input: &str) -> Result<std::time::Duration> {
+    let input = input.trim();
+
+    // Handle special case: 0 means no timeout
+    if input == "0" {
+        return Ok(std::time::Duration::MAX);
+    }
+
+    // Check for "ms" suffix (milliseconds)
+    if input.len() > 2 {
+        let suffix = &input[input.len() - 2..];
+        if suffix == "ms" {
+            let num_str = &input[..input.len() - 2];
+            let ms: u64 = num_str.parse().map_err(|_| {
+                rustnmap_common::Error::Other(format!("Invalid milliseconds value: {num_str}"))
+            })?;
+            return Ok(std::time::Duration::from_millis(ms));
+        }
+    }
+
+    // Check for single-char suffix (s, m, h)
+    if let Some(c) = input.chars().last() {
+        match c {
+            's' | 'm' | 'h' => {
+                let num_str = &input[..input.len() - 1];
+                let num: u64 = num_str.parse().map_err(|_| {
+                    rustnmap_common::Error::Other(format!("Invalid time value: {num_str}"))
+                })?;
+                return Ok(match c {
+                    's' => std::time::Duration::from_secs(num),
+                    'm' => std::time::Duration::from_secs(num * 60),
+                    'h' => std::time::Duration::from_secs(num * 3600),
+                    _ => unreachable!(),
+                });
+            }
+            _ => {}
+        }
+    }
+
+    // No recognized suffix, try parsing as plain seconds
+    let secs: u64 = input.parse().map_err(|_| {
+        rustnmap_common::Error::Other(format!("Invalid time format: {input}"))
+    })?;
+    Ok(std::time::Duration::from_secs(secs))
 }
 
 /// Parses data payload from CLI arguments.
@@ -2131,5 +2201,47 @@ mod tests {
         assert!(cfg.fragmentation.is_some());
         assert!(cfg.source.source_ip.is_some());
         assert_eq!(cfg.source.source_port, Some(443));
+    }
+
+    #[test]
+    fn test_parse_time_duration_seconds() {
+        let result = parse_time_duration("30s").unwrap();
+        assert_eq!(result, std::time::Duration::from_secs(30));
+    }
+
+    #[test]
+    fn test_parse_time_duration_minutes() {
+        let result = parse_time_duration("5m").unwrap();
+        assert_eq!(result, std::time::Duration::from_secs(300));
+    }
+
+    #[test]
+    fn test_parse_time_duration_hours() {
+        let result = parse_time_duration("1h").unwrap();
+        assert_eq!(result, std::time::Duration::from_secs(3600));
+    }
+
+    #[test]
+    fn test_parse_time_duration_milliseconds() {
+        let result = parse_time_duration("500ms").unwrap();
+        assert_eq!(result, std::time::Duration::from_millis(500));
+    }
+
+    #[test]
+    fn test_parse_time_duration_plain_number() {
+        let result = parse_time_duration("60").unwrap();
+        assert_eq!(result, std::time::Duration::from_secs(60));
+    }
+
+    #[test]
+    fn test_parse_time_duration_zero() {
+        let result = parse_time_duration("0").unwrap();
+        assert_eq!(result, std::time::Duration::MAX);
+    }
+
+    #[test]
+    fn test_parse_time_duration_invalid() {
+        let result = parse_time_duration("invalid");
+        assert!(result.is_err());
     }
 }

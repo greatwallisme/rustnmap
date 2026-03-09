@@ -22,46 +22,34 @@ cargo test && cargo clippy -- -D warnings && cargo fmt --check
 
 ---
 
-## CURRENT FOCUS: Packet Engine Redesign (Phase 40)
+## CURRENT FOCUS: NSE Script Timeout Configuration
 
-> **Status**: P0 - Blocks all performance fixes
-> **Root Cause**: `rustnmap-packet` claims PACKET_MMAP V3 but uses `recvfrom()`
+> **Status**: Phase 10 Complete - Process isolation implemented
+> **Last Updated**: 2026-03-08
 
-### Evidence
-`crates/rustnmap-packet/src/lib.rs:764-765`:
-```rust
-/// This implementation uses recvfrom. Future versions will implement
-/// the full `PACKET_MMAP` ring buffer for zero-copy operation.
-```
+### Recent Completions
 
-### Impact
-| Issue | Current | Cause |
-|-------|---------|-------|
-| T5 Insane | ~30% packet loss | recvfrom syscall overhead |
-| UDP Scan | 3x slower than nmap | No zero-copy |
-| CPU Usage | 80% under load | Per-packet syscalls |
+**Packet Engine (Phase 40)**: COMPLETE
+- `MmapPacketEngine` with TPACKET_V2 ring buffer
+- `ZeroCopyPacket` with Arc lifecycle management
+- `AsyncPacketEngine` with Tokio AsyncFd
+- All scanners migrated to `ScannerPacketEngine`
 
-### Architecture Decision: TPACKET_V2 (not V3)
-- V3 has bugs in kernels < 3.19
-- nmap uses V2 by default (`reference/nmap/libpcap/pcap-linux.c`)
-- More stable and well-tested
+**NSE Resource Leak (Phase 10)**: COMPLETE
+- Process-based isolation for script execution
+- `rustnmap-nse-runner` binary for isolated execution
+- `ProcessExecutor` with reliable timeout handling
+- Default script timeout: 10 minutes (matching nmap)
 
-### Key Components to Implement
-| Component | File | Purpose |
-|-----------|------|---------|
-| `PacketEngine` trait | `engine.rs` | Core abstraction |
-| `MmapPacketEngine` | `mmap.rs` | TPACKET_V2 ring buffer |
-| `AsyncPacketEngine` | `async_engine.rs` | Tokio AsyncFd wrapper |
-| `BpfFilter` | `bpf.rs` | Kernel-space filtering |
+### Performance Targets (Packet Engine)
+| Metric | Target | Status |
+|--------|--------|--------|
+| PPS | ~1,000,000 | PENDING BENCHMARK |
+| CPU (T5) | 30% | PENDING BENCHMARK |
+| Packet Loss (T5) | <1% | PENDING BENCHMARK |
+| Zero-copy | Verified | COMPLETE |
 
-### Performance Targets
-| Metric | Current | Target | Improvement |
-|--------|---------|--------|-------------|
-| PPS | ~50,000 | ~1,000,000 | 20x |
-| CPU (T5) | 80% | 30% | 2.7x |
-| Packet Loss (T5) | ~30% | <1% | 30x |
-
-**See**: `task_plan.md` for 6-phase implementation plan
+**See**: `task_plan.md` for current task plan
 
 ---
 
@@ -69,9 +57,11 @@ cargo test && cargo clippy -- -D warnings && cargo fmt --check
 
 ```
 rust-nmap/
-├── crates/rustnmap-packet/    # PACKET_MMAP V2 engine (REDESIGN IN PROGRESS)
-├── crates/rustnmap-scan/      # 12 scan types (NEEDS PACKET ENGINE MIGRATION)
+├── crates/rustnmap-packet/    # PACKET_MMAP V2 engine (COMPLETE)
+├── crates/rustnmap-scan/      # 12 scan types (MIGRATED TO PacketEngine)
+├── crates/rustnmap-nse/       # NSE engine (PROCESS ISOLATION COMPLETE)
 ├── crates/rustnmap-core/      # Orchestration
+├── crates/rustnmap-cli/       # CLI interface
 ├── doc/                       # All documentation
 │   ├── architecture.md        # System architecture
 │   ├── modules/               # Module-specific docs

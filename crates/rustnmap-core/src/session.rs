@@ -161,6 +161,8 @@ pub struct ScanConfig {
     pub nse_scripts: bool,
     /// NSE script categories to run.
     pub nse_categories: Vec<String>,
+    /// Script execution timeout.
+    pub script_timeout: std::time::Duration,
     /// Host timeout.
     pub host_timeout: std::time::Duration,
     /// Scan delay between probes.
@@ -196,6 +198,8 @@ impl Default for ScanConfig {
             traceroute: false,
             nse_scripts: false,
             nse_categories: Vec::new(),
+            // Default script timeout of 10 minutes, matching nmap's default.
+            script_timeout: rustnmap_nse::DEFAULT_SCRIPT_TIMEOUT,
             host_timeout: std::time::Duration::from_secs(900),
             // Default scan delay of 1 second, also used as initial RTT timeout for scanners.
             // Nmap T3 (Normal) uses similar timing with ~1s initial RTT estimates.

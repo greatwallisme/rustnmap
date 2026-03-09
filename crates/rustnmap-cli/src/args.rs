@@ -489,6 +489,10 @@ pub struct Args {
     #[arg(long, help_heading = "Scripting", value_name = "SCRIPT")]
     pub script_help: Option<String>,
 
+    /// Script execution timeout (e.g., 30s, 5m, 1h, or 0 for no timeout)
+    #[arg(long, help_heading = "Scripting", value_name = "TIME")]
+    pub script_timeout: Option<String>,
+
     /// Trace hop path to host
     #[arg(long, help_heading = "Misc")]
     pub traceroute: bool,

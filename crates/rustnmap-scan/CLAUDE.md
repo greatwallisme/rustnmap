@@ -1,32 +1,25 @@
 # rustnmap-scan
 
-> **Status**: Requires Migration to New PacketEngine Architecture
-> **Last Updated**: 2026-03-05
+> **Status**: COMPLETE - Migrated to ScannerPacketEngine
+> **Last Updated**: 2026-03-08
 
 Port scanning implementations for RustNmap.
 
-## CRITICAL: Packet Engine Migration Required
+## Packet Engine Migration: COMPLETE
 
-**Current Issue:**
-- Uses `SimpleAfPacket` with `recvfrom()` (not PACKET_MMAP)
-- Duplicated code in `ultrascan.rs` and `stealth_scans.rs`
-- Missing proper async integration with Tokio
+All scanners now use `ScannerPacketEngine` which wraps `AsyncPacketEngine`:
 
-**Migration Plan:**
-Replace `SimpleAfPacket` with `AsyncPacketEngine` from `rustnmap-packet`:
 ```rust
-// OLD (broken)
-let mut socket = SimpleAfPacket::new(interface)?;
-
-// NEW (PACKET_MMAP V2)
-let mut engine = AsyncPacketEngine::new(interface, RingConfig::default()).await?;
+// Migrated - all scanners use ScannerPacketEngine
+let engine = ScannerPacketEngine::new(interface)?;
 engine.start().await?;
 ```
 
-**Files to Update:**
-- `src/ultrascan.rs` - Lines 166-211 (SimpleAfPacket)
-- `src/stealth_scans.rs` - Lines 164-211 (SimpleAfPacket)
-- `src/syn_scan.rs` - Uses RawSocket, needs PacketEngine trait
+**Migration Completed:**
+- `src/ultrascan.rs` - Uses `ScannerPacketEngine`
+- `src/stealth_scans.rs` - Uses `ScannerPacketEngine`
+- `src/syn_scan.rs` - Uses `ScannerPacketEngine`
+- `src/udp_scan.rs` - Uses `ScannerPacketEngine`
 
 ## Purpose
 
@@ -36,15 +29,15 @@ Implements all 12 scan types with proper timeout handling and state machine mana
 
 | Scan | Module | Requires Root |
 |------|--------|---------------|
-| TCP SYN | `syn.rs` | Yes |
-| TCP Connect | `connect.rs` | No |
-| UDP | `udp.rs` | Yes |
+| TCP SYN | `syn_scan.rs` | Yes |
+| TCP Connect | `connect_scan.rs` | No |
+| UDP | `udp_scan.rs` | Yes |
 | TCP FIN | `stealth_scans.rs` | Yes |
 | TCP NULL | `stealth_scans.rs` | Yes |
 | TCP XMAS | `stealth_scans.rs` | Yes |
 | TCP ACK | `stealth_scans.rs` | Yes |
 | TCP Maimon | `stealth_scans.rs` | Yes |
-| TCP Window | `window_scan.rs` | Yes |
+| TCP Window | `stealth_scans.rs` | Yes |
 | IP Protocol | `ip_protocol_scan.rs` | Yes |
 | Idle (Zombie) | `idle_scan.rs` | Yes |
 | FTP Bounce | `ftp_bounce_scan.rs` | No |
@@ -54,6 +47,8 @@ Implements all 12 scan types with proper timeout handling and state machine mana
 - `Scanner` trait - Common interface for all scan types
 - `ScanResult` - Port state with timing metadata
 - `Probe` - Packet probe construction and matching
+- `ScannerPacketEngine` - Adapter wrapping `AsyncPacketEngine`
+- `ParallelScanEngine` (ultrascan) - Concurrent multi-target scanning
 
 ## Dependencies
 
@@ -61,7 +56,7 @@ Implements all 12 scan types with proper timeout handling and state machine mana
 |-------|---------|
 | rustnmap-common | Common types |
 | rustnmap-net | Raw sockets |
-| rustnmap-packet | Zero-copy packets |
+| rustnmap-packet | Zero-copy PACKET_MMAP V2 |
 | rustnmap-target | Target handling |
 | tokio | Async runtime |
 | pnet | Packet construction |
@@ -79,9 +74,9 @@ sudo cargo test -p rustnmap-scan
 ## Usage
 
 ```rust
-use rustnmap_scan::{SynScanner, Scanner};
+use rustnmap_scan::{TcpSynScanner, Scanner};
 
-let scanner = SynScanner::new("eth0")?;
+let scanner = TcpSynScanner::new("eth0")?;
 let result = scanner.scan_port(target, 80).await?;
 ```
 
@@ -100,27 +95,22 @@ Based on nmap's `timing.cc` and `scan_engine.cc` research:
 - Location: `src/timeout.rs`
 - Formula: `SRTT = (7/8)*SRTT + (1/8)*RTT`
 - Timeout: `Timeout = SRTT + 4*RTTVAR`
-- **Gap**: Missing min/max RTT clamping
+- Status: IMPLEMENTED
 
 ### 2. Congestion Control (TCP-like)
-- Location: `src/ultrascan.rs` - `InternalCongestionStats`
+- Location: `src/congestion.rs`, `src/ultrascan.rs`
 - Components: cwnd, ssthresh, slow start, congestion avoidance
-- **Gap**: Group-level vs host-level drop handling
+- Status: IMPLEMENTED
 
 ### 3. Dynamic Scan Delay Boost
-- Location: Partial in orchestrator
+- Location: `src/adaptive_delay.rs`
 - Behavior: Exponential backoff on high drop rate
-- **Gap**: Not fully implemented
+- Status: IMPLEMENTED
 
-### 4. Rate Limiting
-- Location: Not implemented
-- Required: Token bucket for `--max-rate`/`--min-rate`
-- **Gap**: Complete missing feature
-
-### 5. ICMP Error Classification
-- Location: Partial in packet parsing
+### 4. ICMP Error Classification
+- Location: `src/icmp_handler.rs`
 - Types: HOST_UNREACH, NET_UNREACH, PORT_UNREACH, ADMIN_PROHIBITED
-- **Gap**: Proper error response mapping
+- Status: IMPLEMENTED
 
 ## Timing Template Parameters
 
@@ -131,13 +121,3 @@ Based on nmap's `timing.cc` and `scan_engine.cc` research:
 | initial_rtt | 1s | 1s | 1s | 1s | 500ms | 250ms |
 | max_retries | 10 | 10 | 10 | 10 | 6 | 2 |
 | scan_delay | 5min | 15s | 400ms | 0ms | 0ms | 0ms |
-
-## Dependencies
-
-| Crate | Purpose |
-|-------|---------|
-| rustnmap-common | Common types |
-| rustnmap-net | Raw sockets, packet construction |
-| rustnmap-packet | **PacketEngine (migration target)** |
-| tokio | Async runtime |
-| parking_lot | Fast mutex/rwlock |

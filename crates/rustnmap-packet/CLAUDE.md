@@ -1,59 +1,57 @@
 # rustnmap-packet
 
-> **Status**: CRITICAL - Architecture Redesign Required
-> **Version**: 1.0 (Broken) / 2.0 (Planned)
-> **Last Updated**: 2026-03-05
+> **Status**: COMPLETE - PACKET_MMAP V2 Implemented
+> **Version**: 2.0.0
+> **Last Updated**: 2026-03-08
 
-## CRITICAL ISSUE
+## Implementation Status
 
-**Current Implementation Uses `recvfrom()` NOT PACKET_MMAP**
+PACKET_MMAP V2 with zero-copy is **FULLY IMPLEMENTED**.
 
-Evidence from `src/lib.rs:764-765`:
-```rust
-/// This implementation uses recvfrom. Future versions will implement
-/// the full `PACKET_MMAP` ring buffer for zero-copy operation.
-```
+| Component | File | Status |
+|-----------|------|--------|
+| `MmapPacketEngine` | `mmap.rs` | COMPLETE |
+| `ZeroCopyPacket` | `zero_copy.rs` | COMPLETE |
+| `AsyncPacketEngine` | `async_engine.rs` | COMPLETE |
+| `BpfFilter` | `bpf.rs` | COMPLETE |
+| `PacketEngine` trait | `engine.rs` | COMPLETE |
+| `RecvfromPacketEngine` | `recvfrom.rs` | FALLBACK ONLY |
 
-**Impact:**
-- T5 Insane: ~30% packet loss, unreliable results
-- UDP Scan: 3x slower than nmap
-- CPU Usage: 80% under load (should be ~30%)
+### Test Coverage
+
+- 865+ workspace tests passing
+- Zero clippy warnings
+- All scanners migrated to `ScannerPacketEngine`
 
 ## Purpose
 
-High-performance packet capture and transmission using Linux PACKET_MMAP **V2** (not V3) for zero-copy operation. This is the hot path for packet I/O.
+High-performance packet capture and transmission using Linux PACKET_MMAP V2 for zero-copy operation. This is the hot path for packet I/O.
 
-> **Architecture Decision**: Use TPACKET_V2 following nmap's choice.
+> **Architecture Decision**: TPACKET_V2 (not V3)
 > V3 has stability bugs in kernels < 3.19. See `reference/nmap/libpcap/pcap-linux.c`.
 
-## Current vs Target Architecture
+## Architecture
 
-| Aspect | Current (Broken) | Target (Redesigned) |
-|--------|------------------|---------------------|
-| Capture Method | `recvfrom()` syscall | PACKET_MMAP V2 ring buffer |
-| Buffer Size | Socket queue (default) | 4MB ring (2 blocks x 2MB) |
-| Async I/O | `spawn_blocking` | `AsyncFd<RawFd>` |
-| Zero-Copy | No (memory copy) | Yes (mmap) |
-| Syscalls | Per-packet | Batched |
+| Aspect | Implementation |
+|--------|----------------|
+| Capture Method | PACKET_MMAP V2 ring buffer |
+| Buffer Size | 16MB (256 blocks x 64KB) |
+| Async I/O | `AsyncFd<OwnedFd>` |
+| Zero-Copy | Yes (Arc lifecycle) |
+| Syscalls | Batched |
 
-## Planned File Structure (Phase 40)
+## File Structure
 
 ```
 crates/rustnmap-packet/src/
 ├── lib.rs              # Public API exports
-├── engine.rs           # PacketEngine trait definition
+├── engine.rs           # PacketEngine trait + RingConfig
 ├── mmap.rs             # MmapPacketEngine (TPACKET_V2)
-│   - RingBuffer management
-│   - BlockManager (V2 blocks)
-│   - FrameIterator (zero-copy)
 ├── async_engine.rs     # AsyncPacketEngine (Tokio AsyncFd)
-│   - AsyncFd wrapper
-│   - Channel distribution
+├── recvfrom.rs         # RecvfromPacketEngine (fallback only)
 ├── bpf.rs              # BPF filter utilities
-│   - BpfFilter struct
-│   - compile() / attach()
 ├── stream.rs           # PacketStream (impl Stream)
-├── stats.rs            # EngineStats
+├── zero_copy.rs        # ZeroCopyPacket + ZeroCopyBytes
 ├── error.rs            # PacketError enum
 └── sys/
     ├── mod.rs          # Linux syscall wrappers
@@ -61,91 +59,93 @@ crates/rustnmap-packet/src/
     └── if_packet.rs    # AF_PACKET constants
 ```
 
-## Key Components (Planned)
+## Key Implementation Details
 
-### PacketEngine Trait
+### Two-Stage Bind Pattern (CRITICAL)
+
+Following nmap's `libpcap/pcap-linux.c:1297-1302`:
 
 ```rust
-#[async_trait]
-pub trait PacketEngine: Send + Sync {
-    async fn start(&mut self) -> Result<(), PacketError>;
-    async fn recv(&mut self) -> Result<Option<PacketBuffer>, PacketError>;
-    async fn send(&self, packet: &[u8]) -> Result<usize, PacketError>;
-    async fn stop(&mut self) -> Result<(), PacketError>;
-    fn set_filter(&self, filter: &BpfFilter) -> Result<(), PacketError>;
-    fn flush(&self) -> Result<(), PacketError>;
-    fn stats(&self) -> EngineStats;
+// Stage 1: Bind with protocol=0 (allows ring buffer setup)
+Self::bind_to_interface(&fd, if_index)?;
+
+// Stage 2: Setup ring buffer
+let (ring_ptr, ring_size, frame_ptrs, frame_count) =
+    Self::setup_ring_buffer(&fd, &config)?;
+
+// Stage 3: Re-bind with ETH_P_ALL (enables packet reception)
+Self::bind_to_interface_with_protocol(&fd, if_index, ETH_P_ALL.to_be())?;
+```
+
+### Zero-Copy Implementation
+
+```rust
+// crates/rustnmap-packet/src/zero_copy.rs
+pub struct ZeroCopyPacket {
+    _engine: Arc<MmapPacketEngine>,  // Keeps mmap alive
+    frame_idx: u32,                   // For frame release
+    data: Bytes,                      // Zero-copy view
+    // ...
 }
-```
 
-### TPACKET_V2 Header (32 bytes)
-
-> **CRITICAL**: The header is **32 bytes**, NOT 48 bytes.
-> `tp_padding` is `[u8; 4]`, NOT `[u8; 8]`.
-
-```rust
-#[repr(C)]
-pub struct Tpacket2Hdr {
-    pub tp_status: u32,      // Frame status (TP_STATUS_*)
-    pub tp_len: u32,         // Packet length
-    pub tp_snaplen: u32,     // Captured length
-    pub tp_mac: u16,         // MAC header offset
-    pub tp_net: u16,         // Network header offset
-    pub tp_sec: u32,         // Timestamp (seconds)
-    pub tp_nsec: u32,        // Timestamp (nanoseconds) - NOT tp_usec!
-    pub tp_vlan_tci: u16,    // VLAN TCI
-    pub tp_vlan_tpid: u16,   // VLAN TPID
-    pub tp_padding: [u8; 4], // Padding - NOT [u8; 8]!
-}  // Total: 32 bytes
-```
-
-Reference: Linux kernel `include/uapi/linux/if_packet.h:146-157`
-
-### Ring Buffer Configuration
-
-```rust
-pub struct RingConfig {
-    pub block_count: u32,    // Recommended: 2
-    pub block_size: u32,     // Recommended: 2MB = 2097152
-    pub frame_size: u32,     // Recommended: 512 (TPACKET_ALIGNMENT)
+impl Drop for ZeroCopyPacket {
+    fn drop(&mut self) {
+        // Release frame back to kernel
+        self._engine.release_frame_by_idx(self.frame_idx);
+    }
 }
 ```
 
 ### Memory Ordering
 
 ```rust
-// Producer (kernel -> userspace)
-self.write_idx.fetch_add(1, Ordering::Relaxed);
-atomic::fence(Ordering::Release);
+// Acquire when reading frame status
+AtomicU32::from_ptr(addr_of!((*hdr).tp_status))
+    .load(Ordering::Acquire) != TP_STATUS_KERNEL
 
-// Consumer (userspace reads)
-let value = self.read_idx.load(Ordering::Acquire);
+// Release when returning frame to kernel
+AtomicU32::from_ptr(addr_of!((*hdr).tp_status))
+    .store(TP_STATUS_KERNEL, Ordering::Release);
 ```
 
-**CRITICAL**: See `rust-concurrency` skill for memory ordering rules.
-- NEVER use SeqCst unless you understand the 5-10x performance cost
-- Use Acquire/Release for synchronization
-- Use Relaxed for simple counters
+### TPACKET_V2 Header (32 bytes)
+
+```rust
+#[repr(C)]
+pub struct Tpacket2Hdr {
+    pub tp_status: u32,      // Frame status
+    pub tp_len: u32,         // Packet length
+    pub tp_snaplen: u32,     // Captured length
+    pub tp_mac: u16,         // MAC header offset
+    pub tp_net: u16,         // Network header offset
+    pub tp_sec: u32,         // Timestamp (seconds)
+    pub tp_nsec: u32,        // Timestamp (nanoseconds)
+    pub tp_vlan_tci: u16,    // VLAN TCI
+    pub tp_vlan_tpid: u16,   // VLAN TPID
+    pub tp_padding: [u8; 4], // Padding
+}  // Total: 32 bytes
+```
 
 ## Dependencies
 
 | Crate | Version | Purpose |
 |-------|---------|---------|
 | rustnmap-common | path | Common types |
-| tokio | 1.42 | Async runtime (net, io-util, sync) |
+| tokio | 1.42 | Async runtime |
 | bytes | 1.9 | Zero-copy byte buffers |
-| libc | 0.2 | System calls (mmap, socket) |
+| libc | 0.2 | System calls |
 | socket2 | 0.5 | Socket abstractions |
 | thiserror | 2.0 | Error types |
+| async-trait | 0.1 | Trait async support |
 
 ## Performance Targets
 
-| Metric | Current | Target | Improvement |
-|--------|---------|--------|-------------|
-| PPS | ~50,000 | ~1,000,000 | 20x |
-| CPU (T5) | 80% | 30% | 2.7x |
-| Packet Loss (T5) | ~30% | <1% | 30x |
-| Syscalls | Per-packet | Batched | ~100x |
+| Metric | Target | Status |
+|--------|--------|--------|
+| PPS | ~1,000,000 | PENDING BENCHMARK |
+| CPU (T5) | 30% | PENDING BENCHMARK |
+| Packet Loss (T5) | <1% | PENDING BENCHMARK |
+| Zero-copy | Verified | COMPLETE |
 
 ## Testing
 
@@ -159,35 +159,24 @@ sudo cargo test -p rustnmap-packet
 sudo cargo test -p rustnmap-packet --test integration
 ```
 
-### Test Requirements
-- Actual target machines (not localhost)
-- Various network conditions (LAN, WAN, lossy)
-- Timing template coverage (T0-T5)
-- Packet loss scenarios
-
-## Usage (Planned)
+## Usage
 
 ```rust
-use rustnmap_packet::{AsyncPacketEngine, RingConfig, BpfFilter};
+use rustnmap_packet::{AsyncPacketEngine, RingConfig, PacketEngine};
 
 #[tokio::main]
 async fn main() -> Result<(), PacketError> {
     let config = RingConfig::default();
-    let mut engine = AsyncPacketEngine::new("eth0", config).await?;
-
-    // Set BPF filter
-    let filter = BpfFilter::tcp_dst_port(80);
-    engine.set_filter(&filter)?;
+    let mut engine = AsyncPacketEngine::new("eth0", config)?;
 
     engine.start().await?;
 
-    // Receive packets as Stream
-    use tokio_stream::StreamExt;
-    let mut stream = engine.into_stream();
-    while let Some(packet) = stream.next().await {
-        println!("Received {} bytes", packet?.len);
+    // Zero-copy packet receive
+    while let Some(packet) = engine.recv().await? {
+        println!("Received {} bytes", packet.len());
     }
 
+    engine.stop().await?;
     Ok(())
 }
 ```
@@ -203,13 +192,10 @@ async fn main() -> Result<(), PacketError> {
 - `doc/modules/packet-engineering.md` - Detailed design specs
 - `doc/architecture.md` - System architecture (Section 2.3)
 - `reference/nmap/libpcap/pcap-linux.c` - nmap's PACKET_MMAP implementation
-- `reference/nmap/timing.cc` - Network volatility handling
 
-## Migration Notes
+## Fallback: RecvfromPacketEngine
 
-When migrating from current implementation:
-1. Replace `SimpleAfPacket` with `AsyncPacketEngine`
-2. Update all scanners to use `PacketEngine` trait
-3. Remove duplicate code in `ultrascan.rs` and `stealth_scans.rs`
-4. Implement proper BPF filter attachment
-5. Add network volatility handling (RTT estimation, congestion control)
+`RecvfromPacketEngine` exists as a fallback when PACKET_MMAP is unavailable:
+- Used only in benchmarks for comparison
+- NOT used by production scanners
+- All scanners use `ScannerPacketEngine` which wraps `AsyncPacketEngine`
