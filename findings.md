@@ -1,8 +1,8 @@
 # Research Findings
 
 > **Created**: 2026-03-07
-> **Updated**: 2026-03-09 14:09
-> **Status**: Database integration research completed
+> **Updated**: 2026-03-09 22:10
+> **Status**: CLI Compatibility Audit in Progress
 
 ---
 
@@ -2195,4 +2195,518 @@ Created/updated comprehensive documentation:
 **Service name handling is correct** (populated during scanning), but **implementation has serious redundancy** (two ServiceDatabase definitions). This is a maintenance issue, not a functionality issue.
 
 The documentation now accurately reflects the actual architecture, providing a solid foundation for future refactoring work.
+
+
+---
+
+## NSE SCRIPT SELECTOR & DATABASE FIXES (2026-03-09)
+
+### Session Investigation
+
+**Trigger**: User requested verification of RPC, MAC, and NSE functionality
+
+**Approach**: 
+1. Systematic testing with `cargo test` for all crates
+2. Manual verification with actual scan commands
+3. Root cause analysis using systematic-debugging skill
+4. Zero tolerance for test failures
+
+### Problems Discovered
+
+#### Problem 1: NSE Script Selection Limited to Categories Only
+
+**Symptom**:
+```
+$ ./target/release/rustnmap -p 80 --script=http-title scanme.nmap.org
+WARN: Unknown script category: http-title
+```
+
+**Root Cause**:
+- CLI only supported category-based selection: `--script=default`
+- `nse_categories: Vec<String>` parsed as comma-separated category names
+- Script names treated as category lookup, failing for non-category strings
+
+**Reference Implementation** (nmap):
+- Supports script names, categories, wildcards, boolean expressions
+- Syntax: `--script=http-title,banner`, `--script="vuln and not intrusive"`
+- File: `nmap/script.cc` selector parsing
+
+#### Problem 2: MAC Prefix Database Parsing Failure
+
+**Symptom**:
+```
+WARN: Failed to load MAC prefix database: Failed to parse fingerprint database at line 36970
+WARN: Failed to load MAC prefix database: Failed to parse fingerprint database at line 42688
+```
+
+**Investigation**:
+```bash
+$ sed -n '36970p' db/nmap-mac-prefixes
+0055DA0 Shinko Technos
+
+$ sed -n '42688p' db/nmap-mac-prefixes  
+001BC5000 Converging Systems
+```
+
+**Root Cause**:
+- Database contains 6-12 character OUIs (extended prefixes)
+- Code validation: `if oui.len() != 6`
+- 5718 entries rejected out of 49058 total
+
+**Nmap Behavior**:
+- Supports extended OUIs for more specific vendor identification
+- Uses longest-prefix matching algorithm
+
+#### Problem 3: Missing Info Category
+
+**Symptom**:
+```
+ERROR: Failed to load NSE scripts from /root/.rustnmap/scripts
+ERROR: invalid script category 'info' in 'parse'
+```
+
+**Root Cause**:
+- Script `multicast-profinet-discovery.nse` uses:
+  ```lua
+  categories = {"discovery", "info", "safe", "broadcast"}
+  ```
+- `ScriptCategory` enum lacked `Info` variant
+- `parse_categories()` returned `Err` for unknown category
+
+#### Problem 4: Lua Table Parsing for Categories
+
+**Symptom**:
+- Scripts loaded but had empty categories: `categories: []`
+- Category-based selectors returned 0 results
+
+**Root Cause**:
+- `extract_field()` only supported string literals: `field = "value"`
+- NSE scripts use Lua tables: `categories = {"default", "safe"}`
+- Pattern matching didn't handle `{...}` syntax
+
+### Solutions Implemented
+
+#### Solution 1: Complete NSE Script Selector
+
+**File**: `crates/rustnmap-nse/src/selector.rs` (628 lines)
+
+**Design**:
+```rust
+pub enum ScriptSelector {
+    All,
+    Category(Vec<ScriptCategory>),
+    Pattern(String),  // Wildcard support
+    And(Box<Self>, Box<Self>),
+    Or(Box<Self>, Box<Self>),
+    Not(Box<Self>),
+}
+```
+
+**Supported Syntax** (all verified working):
+| Syntax | Example | Scripts Selected | Status |
+|--------|---------|------------------|--------|
+| Script name | `--script=http-title` | 1 | ✅ |
+| Category | `--script=vuln` | 105 | ✅ |
+| Wildcard | `--script="http-*"` | 134 | ✅ |
+| OR | `--script="http-title or banner"` | 2 | ✅ |
+| AND | `--script="vuln and not intrusive"` | varies | ✅ |
+| NOT | `--script="vuln and not intrusive"` | varies | ✅ |
+| Comma | `--script="http-title,banner"` | 2 | ✅ |
+| All | `--script=all` | 612 | ✅ |
+
+**Key Implementation Details**:
+- Token-based parsing (identifier, and, or, not)
+- Operator precedence: NOT > AND > OR
+- Pattern matching via `select_by_pattern()` in ScriptDatabase
+- Set operations for boolean logic
+
+#### Solution 2: MAC Prefix Extended OUI Support
+
+**File**: `crates/rustnmap-fingerprint/src/database/mac.rs`
+
+**Changes**:
+```rust
+// Before
+if !(oui.len() == 6 || oui.len() == 7) || !oui.chars().all(|c| c.is_ascii_hexdigit()) {
+    return Err(FingerprintError::ParseError {...});
+}
+
+// After
+if !(6..=12).contains(&oui.len()) || !oui.chars().all(|c| c.is_ascii_hexdigit()) {
+    return Err(FingerprintError::ParseError {...});
+}
+```
+
+**Longest-Prefix Matching**:
+```rust
+pub fn lookup(&self, mac: &str) -> Option<&str> {
+    let normalized = Self::normalize_mac(mac)?;
+    
+    // Try longest match first (12 chars down to 6)
+    for len in (6..=normalized.len().min(12)).rev() {
+        let oui = &normalized[..len];
+        if let Some(vendor) = self.prefixes.get(oui) {
+            return Some(vendor);
+        }
+    }
+    None
+}
+```
+
+**Results**:
+- Before: 43340 entries loaded (86% success rate)
+- After: 49058 entries loaded (100% success rate) ✅
+- Extended OUI examples:
+  - 6 chars: `000000` (Xerox)
+  - 7 chars: `0055DA0` (Shinko Technos)
+  - 8 chars: `001BC500` (Converging Systems)
+
+#### Solution 3: Info Category Addition
+
+**Files**:
+- `crates/rustnmap-nse/src/script.rs`
+- `crates/rustnmap-nse/src/selector.rs`
+
+**Changes**:
+```rust
+pub enum ScriptCategory {
+    // ... existing variants ...
+    /// Information gathering.
+    Info,
+    // ... rest ...
+}
+```
+
+**All updated locations**:
+- `from_str()`: Added `"info" => Some(Self::Info)`
+- `as_str()`: Added `Self::Info => "info"`
+- `parse_category()`: Added `"info" => Ok(ScriptCategory::Info)`
+
+#### Solution 4: Lua Table Parsing
+
+**File**: `crates/rustnmap-nse/src/registry.rs`
+
+**Added Pattern**:
+```rust
+format!("{field} = {{")  // NEW: Lua table syntax
+```
+
+**Brace Matching Algorithm**:
+```rust
+let mut depth = 1;
+let mut end_pos = 0;
+for (i, ch) in remaining.chars().enumerate() {
+    match ch {
+        '{' => depth += 1,
+        '}' => {
+            depth -= 1;
+            if depth == 0 {
+                end_pos = i;
+                break;
+            }
+        }
+        _ => {}
+    }
+}
+```
+
+**Extracted Content**: `"\"default\", \"discovery\", \"safe\""`
+**Parsed Result**: `["default", "discovery", "safe"]` ✅
+
+### Verification Results
+
+**Test Results** (all zero failures):
+```
+NSE tests:       128 passed, 0 failed ✅
+Fingerprint:     106 passed, 0 failed ✅
+Selector tests:  10 passed, 0 failed ✅
+```
+
+**Database Loading**:
+```
+MAC Prefix:      49058 entries ✅
+Protocols:       147 entries ✅
+RPC:             1700 entries ✅
+NSE Scripts:     612 scripts ✅
+```
+
+**Functional Verification**:
+- RPC service names: `111/tcp → rpcbind`, `2049/tcp → nfs` ✅
+- NSE script name selection: `--script=http-title` ✅
+- NSE category selection: `--script=vuln` ✅
+- NSE wildcard selection: `--script="http-*"` ✅
+- NSE boolean expressions: `--script="http-title or banner"` ✅
+- NSE info category: `--script=info` → 1 script ✅
+
+### Code Quality Metrics
+
+**Lines Changed**:
+- `selector.rs`: +628 lines (new file)
+- `mac.rs`: ~50 lines modified
+- `script.rs`: ~10 lines modified
+- `registry.rs`: ~60 lines modified
+- `orchestrator.rs`: ~30 lines modified
+- `cli.rs`: ~20 lines modified
+- `session.rs`: ~5 lines modified
+
+**Test Coverage**:
+- All existing tests still pass
+- 10 new selector tests added
+- Zero warnings, zero errors
+
+### Commits
+
+1. **`86fe0d1`**: feat(nse, db): Add complete NSE script selector and fix MAC/RPC database support
+   - 22 files changed, 1499 insertions(+), 632 deletions(-)
+   - Includes selector module, MAC fixes, Info category, config refactor
+
+2. **`02748b8`**: feat(data): Add nmap databases, NSE scripts, and NSE libraries
+   - 805 files changed, 64397 insertions(+)
+   - Database files, NSE libraries, 613 NSE scripts
+
+### Key Learnings
+
+1. **Nmap Compatibility**: Full nmap --script syntax is complex but essential
+   - Must support names, categories, wildcards, boolean logic
+   - Token-based parsing required, not simple string splitting
+
+2. **Database Compatibility**: Nmap databases use extended formats
+   - MAC prefixes vary from 6-12 characters (not just 3-byte OUI)
+   - Longest-prefix matching for specificity
+
+3. **NSE Script Categories**: 15 official categories, plus custom ones
+   - Must handle all official categories: auth, broadcast, brute, default, discovery, dos, exploit, external, fuzzer, intrusive, malware, safe, version, vuln, **info**
+   - Custom categories like "info" exist in community scripts
+
+4. **Lua Table Parsing**: NSE Lua files use table syntax extensively
+   - Cannot rely only on string literals
+   - Must support proper Lua table parsing with brace matching
+
+### Next Steps
+
+All high-priority database and NSE issues are now resolved:
+- ✅ NSE script selection fully implemented
+- ✅ MAC prefix database 100% compatibility
+- ✅ RPC database working correctly
+- ✅ All tests passing
+
+Ready for next phase: Performance optimization or new feature development.
+
+---
+
+## CLI COMPATIBILITY AUDIT (2026-03-09)
+
+### Problem Discovery
+
+User reported: "现在rustnamp 的cli 还不完善，比如 无法像nmap那样使用 -Pn 缩写参数 必须要用全写参数"
+
+**Verification**:
+```bash
+$ ./target/release/rustnmap -Pn localhost -p 22
+error: unexpected argument '-P' found
+
+$ nmap -Pn localhost -p 22
+# Works perfectly - shows scan results
+```
+
+**Confirmed**: Critical short options are missing from CLI.
+
+### Comprehensive Audit Results
+
+#### 1. Missing Short Options (High Impact)
+
+These are the most critical missing options that users expect to work:
+
+| Short | Long Field | nmap Category | Priority |
+|-------|------------|---------------|----------|
+| `-Pn` | `disable_ping` | Host Discovery | 🔴 CRITICAL |
+| `-sV` | `service_detection` | Service/Version | 🔴 CRITICAL |
+| `-sC` | `script=default` | Scripts | 🔴 CRITICAL |
+| `-n` | (new field) | DNS | 🔴 HIGH |
+| `-R` | (new field) | DNS | 🟡 MEDIUM |
+| `-r` | (new field) | Port Order | 🟡 MEDIUM |
+| `-oN` | `output_normal` | Output | 🔴 HIGH |
+| `-oX` | `output_xml` | Output | 🔴 HIGH |
+| `-oG` | `output_grepable` | Output | 🔴 HIGH |
+| `-oA` | `output_all` | Output | 🔴 HIGH |
+
+#### 2. Wrong Option Names
+
+| Current | Should Be | Impact |
+|---------|-----------|--------|
+| `--exclude-port` | `--exclude-ports` | 🔴 HIGH - breaks compatibility |
+| `host_timeout` | Positional field only | 🟡 MEDIUM - field exists but nmap uses positional |
+
+#### 3. Missing Long Options by Category
+
+**Host Discovery** (13 missing):
+- `-sL` - List Scan
+- `-sn` - Ping Scan (disable port scan)
+- `-PS[portlist]` - TCP SYN Discovery
+- `-PA[portlist]` - TCP ACK Discovery
+- `-PU[portlist]` - UDP Discovery
+- `-PY[portlist]` - SCTP Discovery
+- `-PE` - ICMP Echo Discovery
+- `-PP` - ICMP Timestamp Discovery
+- `-PM` - ICMP Netmask Discovery
+- `-PO[protocol list]` - IP Protocol Ping
+- `--dns-servers <serv1[,serv2],...>` - Custom DNS servers
+- `--system-dns` - Use OS DNS resolver
+- `--traceroute` - Trace hop path
+
+**Scan Techniques** (8 missing):
+- `-sI <zombie host[:probeport]>` - Idle Scan
+- `-sY` - SCTP INIT Scan
+- `-sZ` - SCTP COOKIE-ECHO Scan
+- `-sO` - IP Protocol Scan
+- `-b <FTP relay host>` - FTP Bounce Scan
+- `--scanflags <flags>` - Customize TCP flags
+- `-r` - Scan ports sequentially
+
+**Service/Version Detection** (4 missing):
+- `--version-light` - Light probes (intensity 2)
+- `--version-all` - All probes (intensity 9)
+- `--version-trace` - Show detailed version scan activity
+
+**Script Scan** (4 missing):
+- `--script-args-file <filename>` - Load args from file
+- `--script-trace` - Show all data sent/received
+
+**Timing and Performance** (8 missing):
+- `--min-hostgroup <size>` - Parallel host scan min group size
+- `--max-hostgroup <size>` - Parallel host scan max group size
+- `--min-rtt-timeout <time>` - Min probe round trip time
+- `--max-rtt-timeout <time>` - Max probe round trip time
+- `--initial-rtt-timeout <time>` - Initial RTT timeout
+- `--max-retries <tries>` - Max probe retransmissions
+- `--host-timeout <time>` - Give up on target after this long
+- `--max-scan-delay <time>` - Adjust delay between probes
+
+**Firewall/IDS Evasion** (8 missing):
+- `--proxies <url1,[url2],...>` - HTTP/SOCKS4 proxies
+- `--ip-options <options>` - Send packets with IP options
+- `--ttl <val>` - Set IP time-to-live field
+- `--spoof-mac <mac/prefix/vendor>` - Spoof MAC address
+- `--badsum` - Send packets with bogus checksum
+
+**Output** (6 missing):
+- `-oN <file>` - Normal output (currently only `--output-normal`)
+- `-oX <file>` - XML output (currently only `--output-xml`)
+- `-oG <file>` - Grepable output (currently only `--output-grepable`)
+- `-oA <basename>` - All formats at once
+- `--stylesheet <path/URL>` - XSL stylesheet for XML
+- `--webxml` - Reference Nmap.Org stylesheet
+- `--no-stylesheet` - No XSL stylesheet
+- `--noninteractive` - Disable runtime interactions
+
+**Misc** (7 missing):
+- `-6` - Enable IPv6 scanning
+- `--privileged` - Assume fully privileged
+- `--unprivileged` - Assume no raw socket privileges
+- `V` and `h` short options (version, help) - ⚠️ Already exist
+
+### Implementation Priority Matrix
+
+| Priority | Options | Complexity | Impact |
+|----------|---------|------------|--------|
+| 🔴 P0 | `-Pn`, `-sV`, `-sC` | Low | CRITICAL - Daily usage |
+| 🔴 P0 | `-oN`, `-oX`, `-oG`, `-oA` | Low | HIGH - Scripting |
+| 🔴 P1 | `-n`, `-R` | Medium | HIGH - Automation |
+| 🟡 P2 | `--exclude-ports` fix | Low | MEDIUM - Compatibility |
+| 🟡 P2 | Host discovery options (`-PS`, `-PA`, etc.) | High | MEDIUM - Advanced users |
+| 🟢 P3 | Timing/performance options | Medium | LOW - Optimization |
+| 🟢 P3 | Evasion/spoofing options | High | LOW - Specialized |
+| 🟢 P4 | IPv6 (`-6`) | High | LOW - Edge case |
+
+### Code Changes Required
+
+#### File: `crates/rustnmap-cli/src/args.rs`
+
+**Critical changes (P0)**:
+```rust
+// Change line ~521: Add -Pn short option
+#[arg(short = 'P', long = "disable-ping", help_heading = "Host Discovery")]
+pub disable_ping: bool,
+
+// Change line ~235: Add -sV short option
+#[arg(short = 'V', long = "service-detection", help_heading = "Service/OS Detection")]
+pub service_detection: bool,
+
+// Add after line ~476: Add -sC convenience option
+#[arg(short = 'C', long, help_heading = "Scripting", conflicts_with = "script")]
+pub script_default: bool,
+
+// Add new fields for DNS control
+#[arg(short = 'n', long, help_heading = "Misc")]
+pub no_dns: bool,
+
+#[arg(short = 'R', long, help_heading = "Misc")]
+pub always_dns: bool,
+
+// Add new field for sequential port scan
+#[arg(short = 'r', long, help_heading = "Port Specification")]
+pub randomize_ports: bool,  // Note: -r in nmap means "sequential", not random
+
+// Change line ~355-379: Add short options for output
+#[arg(short = 'N', long = "output-normal", ...)]
+pub output_normal: Option<PathBuf>,
+
+#[arg(short = 'X', long = "output-xml", ...)]
+pub output_xml: Option<PathBuf>,
+
+#[arg(short = 'G', long = "output-grepable", ...)]
+pub output_grepable: Option<PathBuf>,
+
+// Fix line ~202: Change exclude-port to exclude-ports
+#[arg(long = "exclude-ports", help_heading = "Port Specification", ...)]
+pub exclude_ports: Option<String>,
+```
+
+**Medium priority changes (P1-P2)**:
+- Add host discovery probe options (`-PS`, `-PA`, `-PU`, `-PE`, `-PP`, `-PM`)
+- Add timing options (`--min-rtt-timeout`, `--max-rtt-timeout`, etc.)
+- Add helper options (`--version-light`, `--version-all`, etc.)
+
+#### File: `crates/rustnmap-cli/src/cli.rs`
+
+**Wire up new options**:
+- Map `disable_ping` → `config.host_discovery`
+- Map `no_dns` → `config.no_dns`
+- Map `always_dns` → `config.always_dns`
+- Map `randomize_ports` → `config.randomize_ports`
+- Map `-sC` → `config.nse_selector = Some("default".to_string())`
+
+### Verification Commands
+
+After implementing, test with:
+```bash
+# P0 tests (critical)
+rustnmap -Pn localhost -p 22
+rustnmap -sV localhost
+rustnmap -sC localhost
+rustnmap -n localhost
+rustnmap -oN test.txt -oX test.xml localhost
+rustnmap -oA test localhost
+
+# P1 tests
+rustnmap -PS22,80,443 localhost
+rustnmap -PA80 localhost
+rustnmap -PE localhost
+
+# P2 tests
+rustnmap -p 1-100 --exclude-ports 22,80 localhost
+rustnmap -r localhost
+
+# Verify no regression
+rustnmap --help
+cargo test -p rustnmap-cli
+cargo clippy -p rustnmap-cli -- -D warnings
+```
+
+### References
+
+- Nmap man page: `man nmap`
+- Nmap book: https://nmap.org/book/man.html
+- Current args.rs: `/root/project/rust-nmap/crates/rustnmap-cli/src/args.rs`
+- Current cli.rs: `/root/project/rust-nmap/crates/rustnmap-cli/src/cli.rs`
 

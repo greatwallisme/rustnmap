@@ -18,7 +18,7 @@
 //! This module provides the main scan execution logic, integrating all
 //! `RustNmap` components into a unified command-line interface.
 
-use crate::args::Args;
+use crate::args::{Args, OutputFormat};
 use rustnmap_common::Result;
 use rustnmap_core::session::ScanType as CoreScanType;
 use rustnmap_core::session::{
@@ -1175,8 +1175,13 @@ fn build_scan_config(args: &Args) -> Result<ScanConfig> {
     config.traceroute = args.traceroute;
 
     // NSE scripts
-    config.nse_scripts = args.script.is_some();
-    config.nse_selector = args.script.clone();
+    // Handle -sC (default scripts) and --script=...
+    config.nse_scripts = args.script.is_some() || args.script_default;
+    config.nse_selector = if args.script_default {
+        Some("default".to_string())
+    } else {
+        args.script.clone()
+    };
 
     // Script timeout
     if let Some(timeout) = &args.script_timeout {
@@ -1597,27 +1602,32 @@ fn output_results(
     }
 
     // Write to output files if specified
-    if let Some(basename) = &args.output_all {
-        write_all_formats(result, basename, args.append_output, db_context)?;
-    } else {
-        if let Some(path) = &args.output_normal {
-            write_normal_output(result, path, args.append_output, db_context)?;
+    if let Some(output_format) = &args.output {
+        match output_format {
+            OutputFormat::Normal(path) => {
+                write_normal_output(result, path, args.append_output, db_context)?;
+            }
+            OutputFormat::Xml(path) => {
+                write_xml_output(result, path, args.append_output, db_context)?;
+            }
+            OutputFormat::Grepable(path) => {
+                write_grepable_output(result, path, args.append_output)?;
+            }
+            OutputFormat::All(basename) => {
+                write_all_formats(result, basename, args.append_output, db_context)?;
+            }
         }
-        if let Some(path) = &args.output_xml {
-            write_xml_output(result, path, args.append_output, db_context)?;
-        }
-        if let Some(path) = &args.output_json {
-            write_json_output(result, path, args.append_output)?;
-        }
-        if let Some(path) = &args.output_ndjson {
-            write_ndjson_output(result, path, args.append_output)?;
-        }
-        if let Some(path) = &args.output_grepable {
-            write_grepable_output(result, path, args.append_output)?;
-        }
-        if let Some(path) = &args.output_markdown {
-            write_markdown_output(result, path, args.append_output)?;
-        }
+    }
+
+    // Handle rustnmap-specific output formats
+    if let Some(path) = &args.output_json {
+        write_json_output(result, path, args.append_output)?;
+    }
+    if let Some(path) = &args.output_ndjson {
+        write_ndjson_output(result, path, args.append_output)?;
+    }
+    if let Some(path) = &args.output_markdown {
+        write_markdown_output(result, path, args.append_output)?;
     }
 
     Ok(())

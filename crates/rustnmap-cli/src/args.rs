@@ -16,10 +16,36 @@
 //! Command-line argument parsing for `RustNmap`.
 //!
 //! This module provides comprehensive Nmap-compatible argument parsing
-//! using clap's derive API.
+//! using lexopt for proper compound short option support.
 
-use clap::Parser;
+use crate::help::{print_help, print_version};
+use lexopt::{Arg, Parser, ValueExt};
 use std::path::PathBuf;
+
+/// Output format specification for nmap-compatible `-o` options.
+///
+/// Represents the parsed result of `-oN`, `-oX`, `-oG`, or `-oA` options.
+#[derive(Debug, Clone)]
+pub enum OutputFormat {
+    /// Normal output (-oN)
+    Normal(PathBuf),
+    /// XML output (-oX)
+    Xml(PathBuf),
+    /// Grepable output (-oG)
+    Grepable(PathBuf),
+    /// All formats (-oA), takes basename and outputs to .nmap, .xml, .gnmap
+    All(PathBuf),
+}
+
+impl OutputFormat {
+    /// Returns the file path for this output format.
+    #[must_use]
+    pub const fn path(&self) -> &PathBuf {
+        match self {
+            Self::Normal(p) | Self::Xml(p) | Self::Grepable(p) | Self::All(p) => p,
+        }
+    }
+}
 
 /// `RustNmap` - Modern, high-performance network scanner written in Rust.
 ///
@@ -34,629 +60,919 @@ use std::path::PathBuf;
 /// - CIDR notation: `192.168.1.0/24`
 /// - Ranges: `192.168.1.1-100`
 /// - Octet ranges: `192.168.1-10.*`
-///
-/// # Examples
-///
-/// Basic TCP SYN scan:
-/// ```bash
-/// rustnmap -sS 192.168.1.1
-/// ```
-///
-/// Service detection and OS fingerprinting:
-/// ```bash
-/// rustnmap -sS -sV -O 192.168.1.1
-/// ```
-///
-/// Scan with NSE scripts:
-/// ```bash
-/// rustnmap -sS --script=default 192.168.1.1
-/// ```
-///
-/// Output to multiple formats:
-/// ```bash
-/// rustnmap -sS -oA scan_results 192.168.1.1
-/// ```
-#[derive(Debug, Clone, Default, Parser)]
-#[command(
-    name = "rustnmap",
-    author = "greatwallisme <greatwallisme@gmail.com>",
-    version = env!("CARGO_PKG_VERSION"),
-    about = "Network Mapper, modern high-performance network scanner",
-    long_about = "RustNmap provides 100% functional parity with Nmap while leveraging Rust's \
-                  safety guarantees and asynchronous capabilities for improved performance.",
-    after_help = "See https://github.com/greatwalllisme/rustnmap for more information.",
-    max_term_width = 100,
-    args_override_self = true
-)]
+#[derive(Debug, Clone, Default)]
 #[allow(
     clippy::struct_excessive_bools,
     reason = "Args is a CLI argument struct with independent boolean flags"
 )]
 pub struct Args {
     /// Target hosts to scan
-    #[arg(
-        required = true,
-        num_args = 1..,
-        help_heading = "Target Specification",
-        value_name = "TARGET"
-    )]
     pub targets: Vec<String>,
 
-    // ============================================
     // Scan Types
-    // ============================================
-    /// TCP SYN scan (default with root). Also -sS (nmap style).
-    #[arg(
-        long,
-        help_heading = "Scan Types",
-        conflicts_with_all = ["scan_connect", "scan_udp", "scan_fin",
-                             "scan_null", "scan_xmas", "scan_maimon", "scan_ack", "scan_window"]
-    )]
+    /// TCP SYN scan (default with root)
     pub scan_syn: bool,
-
-    /// TCP Connect scan (default without root). Also -sT (nmap style).
-    #[arg(
-        long,
-        help_heading = "Scan Types",
-        conflicts_with_all = ["scan_syn", "scan_udp", "scan_fin",
-                             "scan_null", "scan_xmas", "scan_maimon", "scan_ack", "scan_window"]
-    )]
+    /// TCP Connect scan (default without root)
     pub scan_connect: bool,
-
-    /// UDP scan. Also -sU (nmap style).
-    #[arg(
-        long,
-        help_heading = "Scan Types",
-        conflicts_with_all = ["scan_syn", "scan_connect", "scan_fin",
-                             "scan_null", "scan_xmas", "scan_maimon", "scan_ack", "scan_window"]
-    )]
+    /// UDP scan
     pub scan_udp: bool,
-
-    /// TCP FIN scan. Also -sF (nmap style).
-    #[arg(
-        long,
-        help_heading = "Scan Types",
-        conflicts_with_all = ["scan_syn", "scan_connect", "scan_udp",
-                             "scan_null", "scan_xmas", "scan_maimon", "scan_ack", "scan_window"]
-    )]
+    /// TCP FIN scan
     pub scan_fin: bool,
-
-    /// TCP NULL scan. Also -sN (nmap style).
-    #[arg(
-        long,
-        help_heading = "Scan Types",
-        conflicts_with_all = ["scan_syn", "scan_connect", "scan_udp",
-                             "scan_fin", "scan_xmas", "scan_maimon", "scan_ack", "scan_window"]
-    )]
+    /// TCP NULL scan
     pub scan_null: bool,
-
-    /// TCP XMAS scan. Also -sX (nmap style).
-    #[arg(
-        long,
-        help_heading = "Scan Types",
-        conflicts_with_all = ["scan_syn", "scan_connect", "scan_udp",
-                             "scan_fin", "scan_null", "scan_maimon", "scan_ack", "scan_window"]
-    )]
+    /// TCP XMAS scan
     pub scan_xmas: bool,
-
-    /// TCP MAIMON scan. Also -sM (nmap style).
-    #[arg(
-        long,
-        help_heading = "Scan Types",
-        conflicts_with_all = ["scan_syn", "scan_connect", "scan_udp",
-                             "scan_fin", "scan_null", "scan_xmas", "scan_ack", "scan_window"]
-    )]
+    /// TCP MAIMON scan
     pub scan_maimon: bool,
-
-    /// TCP ACK scan. Also -sA (nmap style).
-    #[arg(
-        long,
-        help_heading = "Scan Types",
-        conflicts_with_all = ["scan_syn", "scan_connect", "scan_udp",
-                             "scan_fin", "scan_null", "scan_xmas", "scan_maimon", "scan_window"]
-    )]
+    /// TCP ACK scan
     pub scan_ack: bool,
-
-    /// TCP Window scan. Also -sW (nmap style).
-    #[arg(
-        long,
-        help_heading = "Scan Types",
-        conflicts_with_all = ["scan_syn", "scan_connect", "scan_udp",
-                             "scan_fin", "scan_null", "scan_xmas", "scan_maimon", "scan_ack"]
-    )]
+    /// TCP Window scan
     pub scan_window: bool,
-
-    /// Scan type (nmap style: -sS, -sT, -sU, -sF, -sN, -sX, -sM, -sA, -sW)
-    #[arg(
-        short = 's',
-        long,
-        value_name = "TYPE",
-        help_heading = "Scan Types",
-        conflicts_with_all = ["scan_syn", "scan_connect", "scan_udp",
-                             "scan_fin", "scan_null", "scan_xmas", "scan_maimon", "scan_ack", "scan_window"]
-    )]
+    /// Scan type from -s option (S, T, U, F, N, X, M, A, W, V, C)
     pub scan_type: Option<String>,
 
-    // ============================================
     // Port Specification
-    // ============================================
     /// Ports to scan (e.g., -p 22,80,443 or -p 1-1000)
-    #[arg(
-        short = 'p',
-        long,
-        help_heading = "Port Specification",
-        value_name = "PORTS",
-        conflicts_with_all = ["port_range_all", "top_ports", "fast_scan"]
-    )]
     pub ports: Option<String>,
-
     /// Scan all 65535 ports
-    #[arg(
-        long,
-        help_heading = "Port Specification",
-        conflicts_with_all = ["ports", "top_ports", "fast_scan"]
-    )]
     pub port_range_all: bool,
-
-    /// Exclude specified ports from scan (e.g., -p 1-100 --exclude-port 22,80)
-    #[arg(long, help_heading = "Port Specification", value_name = "PORTS")]
+    /// Exclude specified ports from scan
     pub exclude_port: Option<String>,
-
-    /// Top `<N>` most common ports
-    #[arg(
-        long,
-        help_heading = "Port Specification",
-        value_name = "N",
-        conflicts_with_all = ["ports", "port_range_all"]
-    )]
+    /// Top N most common ports
     pub top_ports: Option<u16>,
-
     /// Scan fewer ports than the default scan (top 100)
-    #[arg(
-        short = 'F',
-        long,
-        help_heading = "Port Specification",
-        conflicts_with_all = ["ports", "port_range_all"]
-    )]
     pub fast_scan: bool,
-
     /// Scan the specified protocol
-    #[arg(long, help_heading = "Port Specification", value_name = "PROTOCOL")]
     pub protocol: Option<String>,
+    /// Scan ports sequentially (don't randomize)
+    pub sequential_ports: bool,
 
-    // ============================================
     // Service/OS Detection
-    // ============================================
-    /// Aggressive scan options (enables OS detection, service detection, version scanning, and scripts)
-    #[arg(short = 'A', long, help_heading = "Service/OS Detection")]
+    /// Aggressive scan options
     pub aggressive_scan: bool,
-
     /// Probe open ports to determine service/version info
-    #[arg(long, help_heading = "Service/OS Detection")]
     pub service_detection: bool,
-
     /// Intensity level of service detection (0-9)
-    #[arg(
-        long,
-        help_heading = "Service/OS Detection",
-        value_name = "LEVEL",
-        requires = "service_detection"
-    )]
     pub version_intensity: Option<u8>,
-
     /// Detect operating system
-    #[arg(short = 'O', long, help_heading = "Service/OS Detection")]
     pub os_detection: bool,
-
     /// Limit OS detection to promising targets
-    #[arg(long, help_heading = "Service/OS Detection", requires = "os_detection")]
     pub osscan_limit: bool,
-
     /// Guess OS more aggressively
-    #[arg(long, help_heading = "Service/OS Detection", requires = "os_detection")]
     pub osscan_guess: bool,
 
-    // ============================================
     // Timing and Performance
-    // ============================================
     /// Timing template (0-5, higher is faster)
-    #[arg(
-        short = 'T',
-        long,
-        help_heading = "Timing and Performance",
-        value_name = "LEVEL"
-    )]
     pub timing: Option<u8>,
-
     /// Minimum milliseconds between probes
-    #[arg(long, help_heading = "Timing and Performance", value_name = "MS")]
     pub scan_delay: Option<u64>,
-
     /// Maximum milliseconds overall probe timeout
-    #[arg(long, help_heading = "Timing and Performance", value_name = "MS")]
     pub min_parallelism: Option<usize>,
-
     /// Maximum number of parallel probes
-    #[arg(long, help_heading = "Timing and Performance", value_name = "NUM")]
     pub max_parallelism: Option<usize>,
-
     /// Minimum rate (packets per second)
-    #[arg(long, help_heading = "Timing and Performance", value_name = "NUM")]
     pub min_rate: Option<u64>,
-
     /// Maximum rate (packets per second)
-    #[arg(long, help_heading = "Timing and Performance", value_name = "NUM")]
     pub max_rate: Option<u64>,
 
-    // ============================================
     // Firewall/IDS Evasion
-    // ============================================
     /// Decoy scan with multiple hosts
-    #[arg(
-        short = 'D',
-        long,
-        help_heading = "Firewall/IDS Evasion",
-        value_name = "DECOYS"
-    )]
     pub decoys: Option<String>,
-
     /// Spoof source address
-    #[arg(
-        short = 'S',
-        long,
-        help_heading = "Firewall/IDS Evasion",
-        value_name = "IP"
-    )]
     pub spoof_ip: Option<String>,
-
     /// Use specified interface
-    #[arg(
-        short = 'e',
-        long,
-        help_heading = "Firewall/IDS Evasion",
-        value_name = "IFACE"
-    )]
     pub interface: Option<String>,
-
     /// Fragment packets (MTU)
-    #[arg(
-        short = 'f',
-        long,
-        help_heading = "Firewall/IDS Evasion",
-        value_name = "MTU"
-    )]
     pub fragment_mtu: Option<u16>,
-
     /// Specify source port number
-    #[arg(
-        short = 'g',
-        long,
-        help_heading = "Firewall/IDS Evasion",
-        value_name = "PORT"
-    )]
     pub source_port: Option<u16>,
-
     /// Use specific data length
-    #[arg(long, help_heading = "Firewall/IDS Evasion", value_name = "LEN")]
     pub data_length: Option<usize>,
-
     /// Append custom binary data to packets
-    #[arg(long, help_heading = "Firewall/IDS Evasion", value_name = "HEX")]
     pub data_hex: Option<String>,
-
     /// Append custom string data to packets
-    #[arg(long, help_heading = "Firewall/IDS Evasion", value_name = "STRING")]
     pub data_string: Option<String>,
 
-    // ============================================
     // Output Formats
-    // ============================================
-    /// Normal output to file
-    #[arg(
-        long,
-        help_heading = "Output",
-        value_name = "FILE",
-        conflicts_with = "output_all"
-    )]
-    pub output_normal: Option<PathBuf>,
-
-    /// XML output to file
-    #[arg(
-        long,
-        help_heading = "Output",
-        value_name = "FILE",
-        conflicts_with = "output_all"
-    )]
-    pub output_xml: Option<PathBuf>,
-
-    /// Grepable output to file
-    #[arg(
-        long,
-        help_heading = "Output",
-        value_name = "FILE",
-        conflicts_with = "output_all"
-    )]
-    pub output_grepable: Option<PathBuf>,
-
+    /// Output file in specified format
+    pub output: Option<OutputFormat>,
     /// JSON output to file
-    #[arg(
-        long,
-        help_heading = "Output",
-        value_name = "FILE",
-        conflicts_with = "output_all"
-    )]
     pub output_json: Option<PathBuf>,
-
-    /// NDJSON output to file (newline-delimited JSON for pipelines)
-    #[arg(
-        long,
-        help_heading = "Output",
-        value_name = "FILE",
-        conflicts_with = "output_all"
-    )]
+    /// NDJSON output to file
     pub output_ndjson: Option<PathBuf>,
-
     /// Markdown output to file
-    #[arg(
-        long,
-        help_heading = "Output",
-        value_name = "FILE",
-        conflicts_with = "output_all"
-    )]
     pub output_markdown: Option<PathBuf>,
-
-    /// Output all formats to basename
-    #[arg(
-        long,
-        help_heading = "Output",
-        value_name = "BASENAME",
-        conflicts_with_all = ["output_normal", "output_xml",
-                             "output_grepable", "output_json",
-                             "output_ndjson", "output_markdown"]
-    )]
-    pub output_all: Option<PathBuf>,
-
     /// Script Kiddie output
-    #[arg(long, help_heading = "Output")]
     pub output_script_kiddie: bool,
-
     /// No output (suppress default output)
-    #[arg(long, help_heading = "Output")]
     pub no_output: bool,
-
-    /// Enable streaming output (output hosts as they are discovered)
-    #[arg(long, help_heading = "Output")]
+    /// Enable streaming output
     pub stream: bool,
-
-    /// Append to output files (don't overwrite)
-    #[arg(long, help_heading = "Output")]
+    /// Append to output files
     pub append_output: bool,
-
-    /// Increase verbosity level (use -v, -vv, -vvv)
-    #[arg(
-        short = 'v',
-        long,
-        help_heading = "Output",
-        action = clap::ArgAction::Count
-    )]
+    /// Increase verbosity level
     pub verbose: u8,
-
-    /// Decrease verbosity level (quiet mode)
-    #[arg(short = 'q', long, help_heading = "Output")]
+    /// Decrease verbosity level
     pub quiet: bool,
-
-    /// Increase debugging level (use -d, -dd, -ddd...)
-    #[arg(
-        short = 'd',
-        long,
-        help_heading = "Output",
-        action = clap::ArgAction::Count
-    )]
+    /// Increase debugging level
     pub debug: u8,
-
     /// Display reason codes for port status
-    #[arg(long, help_heading = "Output")]
     pub reasons: bool,
-
     /// Show open ports in summary
-    #[arg(long, help_heading = "Output")]
     pub open: bool,
-
     /// Show packet trace of scan
-    #[arg(long, help_heading = "Output")]
     pub packet_trace: bool,
-
     /// Show interface list and routes
-    #[arg(long, help_heading = "Output")]
     pub if_list: bool,
 
-    // ============================================
-    // Misc
-    // ============================================
+    // Scripting
     /// NSE scripts to run
-    #[arg(long, help_heading = "Scripting", value_name = "SCRIPTS")]
     pub script: Option<String>,
-
+    /// Run default script set
+    pub script_default: bool,
     /// Script arguments
-    #[arg(long, help_heading = "Scripting", value_name = "ARGS")]
     pub script_args: Option<String>,
-
     /// Script update database
-    #[arg(long, help_heading = "Scripting")]
     pub script_updatedb: bool,
-
     /// Script help for specified script
-    #[arg(long, help_heading = "Scripting", value_name = "SCRIPT")]
     pub script_help: Option<String>,
-
-    /// Script execution timeout (e.g., 30s, 5m, 1h, or 0 for no timeout)
-    #[arg(long, help_heading = "Scripting", value_name = "TIME")]
+    /// Script execution timeout
     pub script_timeout: Option<String>,
 
+    // Misc
     /// Trace hop path to host
-    #[arg(long, help_heading = "Misc")]
     pub traceroute: bool,
-
     /// Number of traceroute probes
-    #[arg(long, help_heading = "Misc", value_name = "NUM")]
     pub traceroute_hops: Option<u8>,
-
     /// Read target specifications from file
-    #[arg(short = 'i', long, help_heading = "Misc", value_name = "FILE")]
     pub input_file: Option<PathBuf>,
-
     /// Randomize target host order
-    #[arg(long, help_heading = "Misc")]
     pub randomize_hosts: bool,
-
     /// Host group size
-    #[arg(long, help_heading = "Misc", value_name = "NUM")]
     pub host_group_size: Option<usize>,
-
     /// Ping type for host discovery
-    #[arg(long, help_heading = "Misc", value_name = "TYPE")]
     pub ping_type: Option<String>,
-
     /// Disable ping (skip host discovery)
-    #[arg(long, help_heading = "Misc")]
     pub disable_ping: bool,
-
     /// Retry ratio for host discovery
-    #[arg(long, help_heading = "Misc", value_name = "RATIO")]
     pub host_timeout: Option<u64>,
-
     /// Print the interacted URLs
-    #[arg(long, help_heading = "Misc")]
     pub print_urls: bool,
+    /// Never do DNS resolution
+    pub no_dns: bool,
+    /// Always do DNS resolution
+    pub always_dns: bool,
 
-    // ============================================
-    // Scan Management (Phase 3)
-    // ============================================
+    // Scan Management
     /// Query scan history
-    #[arg(long, help_heading = "Scan Management", conflicts_with_all = ["targets", "diff", "profile"])]
     pub history: bool,
-
     /// List available profiles
-    #[arg(long, help_heading = "Scan Management", conflicts_with_all = ["targets", "history", "diff"])]
     pub list_profiles: bool,
-
     /// Validate a profile file
-    #[arg(long, help_heading = "Scan Management", value_name = "FILE", conflicts_with_all = ["targets", "history", "list_profiles", "diff"])]
     pub validate_profile: Option<PathBuf>,
-
     /// Generate a profile template
-    #[arg(long, help_heading = "Scan Management", conflicts_with_all = ["targets", "history", "list_profiles", "validate_profile", "diff"])]
     pub generate_profile: bool,
-
     /// Use a scan profile
-    #[arg(long, help_heading = "Scan Management", value_name = "FILE", conflicts_with_all = ["history", "list_profiles", "validate_profile", "generate_profile", "diff"])]
     pub profile: Option<PathBuf>,
-
     /// Compare two scans
-    #[arg(long, help_heading = "Scan Management", value_name = "FILES", num_args = 2, conflicts_with_all = ["history", "list_profiles", "validate_profile", "generate_profile", "profile"])]
     pub diff: Option<Vec<String>>,
-
     /// Compare scans from history database
-    #[arg(long, help_heading = "Scan Management", value_name = "SCAN_IDS", num_args = 2, requires = "diff", conflicts_with_all = ["history", "list_profiles", "validate_profile", "generate_profile", "profile"])]
     pub from_history: Option<Vec<String>>,
-
     /// Diff output format
-    #[arg(
-        long,
-        help_heading = "Scan Management",
-        value_name = "FORMAT",
-        default_value = "text",
-        requires = "diff"
-    )]
     pub diff_format: String,
-
     /// Show only vulnerability changes in diff
-    #[arg(long, help_heading = "Scan Management", requires = "diff")]
     pub vulns_only: bool,
-
     /// Filter history by time range (since)
-    #[arg(
-        long,
-        help_heading = "Scan Management",
-        value_name = "DATE",
-        requires = "history"
-    )]
     pub since: Option<String>,
-
     /// Filter history by time range (until)
-    #[arg(
-        long,
-        help_heading = "Scan Management",
-        value_name = "DATE",
-        requires = "history"
-    )]
     pub until: Option<String>,
-
     /// Filter history by target
-    #[arg(
-        long,
-        help_heading = "Scan Management",
-        value_name = "TARGET",
-        requires = "history"
-    )]
     pub target: Option<String>,
-
     /// Filter history by scan type
-    #[arg(
-        long,
-        help_heading = "Scan Management",
-        value_name = "TYPE",
-        requires = "history"
-    )]
     pub scan_type_filter: Option<String>,
-
     /// Limit history results
-    #[arg(
-        long,
-        help_heading = "Scan Management",
-        value_name = "NUM",
-        requires = "history"
-    )]
     pub limit: Option<usize>,
-
     /// Show scan details by ID
-    #[arg(
-        long,
-        help_heading = "Scan Management",
-        value_name = "SCAN_ID",
-        requires = "history"
-    )]
     pub scan_id: Option<String>,
-
     /// Database path for scan history
-    #[arg(
-        long,
-        help_heading = "Scan Management",
-        value_name = "PATH",
-        default_value = "~/.rustnmap/scans.db"
-    )]
     pub db_path: String,
-
-    /// Data directory for Nmap databases (nmap-services, nmap-os-db, etc.)
-    #[arg(
-        long,
-        help_heading = "Scan Management",
-        value_name = "DIR",
-        default_value = "~/.rustnmap"
-    )]
+    /// Data directory for Nmap databases
     pub datadir: String,
-
-    /// DNS server for local IP detection (default: 8.8.8.8:53)
-    #[arg(
-        long,
-        help_heading = "Scan Management",
-        value_name = "ADDRESS",
-        default_value = "8.8.8.8:53"
-    )]
+    /// DNS server for local IP detection
     pub dns_server: String,
 }
 
+/// Error type for argument parsing.
+#[derive(Debug)]
+pub enum ParseError {
+    /// Unknown option
+    UnknownOption(String),
+    /// Missing required value for option
+    MissingValue(String),
+    /// Invalid value for option
+    InvalidValue(String, String),
+    /// IO error
+    Io(std::io::Error),
+}
+
+impl std::fmt::Display for ParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Self::UnknownOption(opt) => write!(f, "Unknown option: {opt}"),
+            Self::MissingValue(opt) => write!(f, "Option {opt} requires a value"),
+            Self::InvalidValue(opt, value) => write!(f, "Invalid value '{value}' for option {opt}"),
+            Self::Io(e) => write!(f, "IO error: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for ParseError {}
+
+impl From<std::io::Error> for ParseError {
+    fn from(e: std::io::Error) -> Self {
+        Self::Io(e)
+    }
+}
+
+impl From<lexopt::Error> for ParseError {
+    fn from(e: lexopt::Error) -> Self {
+        Self::UnknownOption(e.to_string())
+    }
+}
+
 impl Args {
+    /// Parse command-line arguments from environment.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if argument parsing fails or help/version was requested
+    /// (in which case the function prints and exits).
+    pub fn parse() -> Result<Self, ParseError> {
+        let mut args = Self::default();
+        let mut parser = Parser::from_env();
+
+        // Set default values
+        args.db_path = "~/.rustnmap/scans.db".to_string();
+        args.datadir = "~/.rustnmap".to_string();
+        args.dns_server = "8.8.8.8:53".to_string();
+        args.diff_format = "text".to_string();
+
+        while let Some(arg) = parser.next()? {
+            match arg {
+                // Help
+                Arg::Short('h') | Arg::Long("help") => {
+                    print_help()?;
+                    std::process::exit(0);
+                }
+
+                // Version
+                Arg::Short('V') | Arg::Long("version") => {
+                    print_version()?;
+                    std::process::exit(0);
+                }
+
+                // Compound scan options (-sS, -sT, -sU, -sV, -sC, -sF, -sN, -sX, -sM, -sA, -sW)
+                Arg::Short('s') => {
+                    // Use raw_args to get compound option
+                    let mut raw = parser.raw_args()?;
+                    if let Some(next_arg) = raw.next() {
+                        let next_str = next_arg.to_string_lossy();
+
+                        // Handle compound scan types
+                        for ch in next_str.chars() {
+                            match ch {
+                                'S' => args.scan_syn = true,
+                                'T' => args.scan_connect = true,
+                                'U' => args.scan_udp = true,
+                                'V' => args.service_detection = true,
+                                'C' => args.script_default = true,
+                                'F' => args.scan_fin = true,
+                                'N' => args.scan_null = true,
+                                'X' => args.scan_xmas = true,
+                                'M' => args.scan_maimon = true,
+                                'A' => args.scan_ack = true,
+                                'W' => args.scan_window = true,
+                                _ => {
+                                    args.scan_type = Some(ch.to_string());
+                                }
+                            }
+                        }
+                    } else {
+                        // Standalone -s needs a value
+                        let value = parser.value()?.string()?;
+                        args.scan_type = Some(value);
+                    }
+                }
+
+                // Compound output options (-oN file, -oX file, -oG file, -oA file)
+                Arg::Short('o') => {
+                    // Use raw_args to get compound option
+                    let mut raw = parser.raw_args()?;
+                    if let Some(next_arg) = raw.next() {
+                        let format_char = next_arg.to_string_lossy();
+                        let path = PathBuf::from(parser.value()?.string()?);
+
+                        match format_char.as_ref() {
+                            "N" => args.output = Some(OutputFormat::Normal(path)),
+                            "X" => args.output = Some(OutputFormat::Xml(path)),
+                            "G" => args.output = Some(OutputFormat::Grepable(path)),
+                            "A" => args.output = Some(OutputFormat::All(path)),
+                            _ => {
+                                return Err(ParseError::UnknownOption(format!(
+                                    "-o{format_char}"
+                                )))
+                            }
+                        }
+                    } else {
+                        // --output long form
+                        let value = parser.value()?;
+                        // Try parsing as format:path
+                        let value_str = value.string()?;
+                        if let Some((format, path)) = value_str.split_once(':') {
+                            let path = PathBuf::from(path);
+                            match format {
+                                "N" => args.output = Some(OutputFormat::Normal(path)),
+                                "X" => args.output = Some(OutputFormat::Xml(path)),
+                                "G" => args.output = Some(OutputFormat::Grepable(path)),
+                                "A" => args.output = Some(OutputFormat::All(path)),
+                                _ => {
+                                    return Err(ParseError::UnknownOption(format!("-o{format}")))
+                                }
+                            }
+                        } else {
+                            return Err(ParseError::InvalidValue("-o".to_string(), value_str));
+                        }
+                    }
+                }
+
+                // Timing template (-T0 through -T5)
+                Arg::Short('T') => {
+                    // Check if next arg is attached (e.g., -T4) or separate
+                    let mut raw = parser.raw_args()?;
+                    if let Some(next_arg) = raw.next() {
+                        let timing_str = next_arg.to_string_lossy();
+                        if let Ok(timing) = timing_str.parse::<u8>() {
+                            if timing <= 5 {
+                                args.timing = Some(timing);
+                            } else {
+                                return Err(ParseError::InvalidValue("-T".to_string(), timing_str.to_string()));
+                            }
+                        } else {
+                            return Err(ParseError::InvalidValue("-T".to_string(), timing_str.to_string()));
+                        }
+                    } else {
+                        // Separate value
+                        let timing = parser.value()?.string()?;
+                        if let Ok(timing_val) = timing.parse::<u8>() {
+                            if timing_val <= 5 {
+                                args.timing = Some(timing_val);
+                            } else {
+                                return Err(ParseError::InvalidValue("-T".to_string(), timing));
+                            }
+                        } else {
+                            return Err(ParseError::InvalidValue("-T".to_string(), timing));
+                        }
+                    }
+                }
+
+                // Aggressive scan
+                Arg::Short('A') => {
+                    args.aggressive_scan = true;
+                }
+
+                // Verbosity
+                Arg::Short('v') => {
+                    args.verbose += 1;
+                }
+                Arg::Long("verbose") => {
+                    args.verbose += 1;
+                }
+
+                // Quiet
+                Arg::Short('q') | Arg::Long("quiet") => {
+                    args.quiet = true;
+                }
+
+                // Debug
+                Arg::Short('d') => {
+                    args.debug += 1;
+                }
+                Arg::Long("debug") => {
+                    args.debug += 1;
+                }
+
+                // Port specification
+                Arg::Short('p') => {
+                    args.ports = Some(parser.value()?.string()?);
+                }
+                Arg::Long("ports") => {
+                    args.ports = Some(parser.value()?.string()?);
+                }
+
+                // Fast scan
+                Arg::Short('F') => {
+                    args.fast_scan = true;
+                }
+                Arg::Long("fast-scan") => {
+                    args.fast_scan = true;
+                }
+
+                // Sequential ports
+                Arg::Short('r') => {
+                    args.sequential_ports = true;
+                }
+                Arg::Long("sequential-ports") => {
+                    args.sequential_ports = true;
+                }
+
+                // Service detection (-sV is handled above)
+                Arg::Long("service-detection") | Arg::Long("version-detection") => {
+                    args.service_detection = true;
+                }
+
+                // Version intensity
+                Arg::Long("version-intensity") => {
+                    let intensity = parser.value()?.string()?;
+                    if let Ok(val) = intensity.parse::<u8>() {
+                        if val <= 9 {
+                            args.version_intensity = Some(val);
+                        } else {
+                            return Err(ParseError::InvalidValue("--version-intensity".to_string(), intensity));
+                        }
+                    } else {
+                        return Err(ParseError::InvalidValue("--version-intensity".to_string(), intensity));
+                    }
+                }
+
+                // OS detection
+                Arg::Short('O') => {
+                    args.os_detection = true;
+                }
+                Arg::Long("osscan-limit") => {
+                    args.osscan_limit = true;
+                }
+                Arg::Long("osscan-guess") => {
+                    args.osscan_guess = true;
+                }
+
+                // Decoys
+                Arg::Short('D') => {
+                    args.decoys = Some(parser.value()?.string()?);
+                }
+                Arg::Long("decoys") => {
+                    args.decoys = Some(parser.value()?.string()?);
+                }
+
+                // Spoof IP
+                Arg::Short('S') => {
+                    args.spoof_ip = Some(parser.value()?.string()?);
+                }
+                Arg::Long("spoof-ip") => {
+                    args.spoof_ip = Some(parser.value()?.string()?);
+                }
+
+                // Interface
+                Arg::Short('e') => {
+                    args.interface = Some(parser.value()?.string()?);
+                }
+                Arg::Long("interface") => {
+                    args.interface = Some(parser.value()?.string()?);
+                }
+
+                // Fragment MTU
+                Arg::Short('f') => {
+                    // Check if value is attached
+                    let mut raw = parser.raw_args()?;
+                    if let Some(next_arg) = raw.next() {
+                        let mtu_str = next_arg.to_string_lossy();
+                        if let Ok(mtu) = mtu_str.parse::<u16>() {
+                            args.fragment_mtu = Some(mtu);
+                        } else {
+                            // Just set flag without MTU
+                            args.fragment_mtu = Some(16); // default MTU
+                        }
+                    } else {
+                        // Flag without value
+                        args.fragment_mtu = Some(16); // default MTU
+                    }
+                }
+                Arg::Long("fragment-mtu") | Arg::Long("mtu") => {
+                    let mtu = parser.value()?.string()?;
+                    if let Ok(val) = mtu.parse::<u16>() {
+                        args.fragment_mtu = Some(val);
+                    } else {
+                        return Err(ParseError::InvalidValue("--fragment-mtu".to_string(), mtu));
+                    }
+                }
+
+                // Source port
+                Arg::Short('g') => {
+                    let port = parser.value()?.string()?;
+                    if let Ok(val) = port.parse::<u16>() {
+                        args.source_port = Some(val);
+                    } else {
+                        return Err(ParseError::InvalidValue("-g".to_string(), port));
+                    }
+                }
+                Arg::Long("source-port") => {
+                    let port = parser.value()?.string()?;
+                    if let Ok(val) = port.parse::<u16>() {
+                        args.source_port = Some(val);
+                    } else {
+                        return Err(ParseError::InvalidValue("--source-port".to_string(), port));
+                    }
+                }
+
+                // Data length
+                Arg::Long("data-length") => {
+                    let len = parser.value()?.string()?;
+                    if let Ok(val) = len.parse::<usize>() {
+                        args.data_length = Some(val);
+                    } else {
+                        return Err(ParseError::InvalidValue("--data-length".to_string(), len));
+                    }
+                }
+
+                // Data hex
+                Arg::Long("data-hex") => {
+                    args.data_hex = Some(parser.value()?.string()?);
+                }
+
+                // Data string
+                Arg::Long("data-string") => {
+                    args.data_string = Some(parser.value()?.string()?);
+                }
+
+                // Scan delay
+                Arg::Long("scan-delay") => {
+                    let delay = parser.value()?.string()?;
+                    if let Ok(val) = delay.parse::<u64>() {
+                        args.scan_delay = Some(val);
+                    } else {
+                        return Err(ParseError::InvalidValue("--scan-delay".to_string(), delay));
+                    }
+                }
+
+                // Min parallelism
+                Arg::Long("min-parallelism") => {
+                    let val = parser.value()?.string()?;
+                    if let Ok(parsed) = val.parse::<usize>() {
+                        args.min_parallelism = Some(parsed);
+                    } else {
+                        return Err(ParseError::InvalidValue("--min-parallelism".to_string(), val));
+                    }
+                }
+
+                // Max parallelism
+                Arg::Long("max-parallelism") => {
+                    let val = parser.value()?.string()?;
+                    if let Ok(parsed) = val.parse::<usize>() {
+                        args.max_parallelism = Some(parsed);
+                    } else {
+                        return Err(ParseError::InvalidValue("--max-parallelism".to_string(), val));
+                    }
+                }
+
+                // Min rate
+                Arg::Long("min-rate") => {
+                    let rate = parser.value()?.string()?;
+                    if let Ok(val) = rate.parse::<u64>() {
+                        args.min_rate = Some(val);
+                    } else {
+                        return Err(ParseError::InvalidValue("--min-rate".to_string(), rate));
+                    }
+                }
+
+                // Max rate
+                Arg::Long("max-rate") => {
+                    let rate = parser.value()?.string()?;
+                    if let Ok(val) = rate.parse::<u64>() {
+                        args.max_rate = Some(val);
+                    } else {
+                        return Err(ParseError::InvalidValue("--max-rate".to_string(), rate));
+                    }
+                }
+
+                // Exclude ports
+                Arg::Long("exclude-ports") => {
+                    args.exclude_port = Some(parser.value()?.string()?);
+                }
+
+                // Top ports
+                Arg::Long("top-ports") => {
+                    let num = parser.value()?.string()?;
+                    if let Ok(val) = num.parse::<u16>() {
+                        args.top_ports = Some(val);
+                    } else {
+                        return Err(ParseError::InvalidValue("--top-ports".to_string(), num));
+                    }
+                }
+
+                // Protocol
+                Arg::Long("protocol") => {
+                    args.protocol = Some(parser.value()?.string()?);
+                }
+
+                // Port range all
+                Arg::Long("port-range-all") => {
+                    args.port_range_all = true;
+                }
+
+                // Output JSON
+                Arg::Long("output-json") => {
+                    args.output_json = Some(PathBuf::from(parser.value()?.string()?));
+                }
+
+                // Output NDJSON
+                Arg::Long("output-ndjson") => {
+                    args.output_ndjson = Some(PathBuf::from(parser.value()?.string()?));
+                }
+
+                // Output Markdown
+                Arg::Long("output-markdown") => {
+                    args.output_markdown = Some(PathBuf::from(parser.value()?.string()?));
+                }
+
+                // Script kiddie output
+                Arg::Long("output-script-kiddie") => {
+                    args.output_script_kiddie = true;
+                }
+
+                // No output
+                Arg::Long("no-output") => {
+                    args.no_output = true;
+                }
+
+                // Stream output
+                Arg::Long("stream") => {
+                    args.stream = true;
+                }
+
+                // Append output
+                Arg::Long("append-output") => {
+                    args.append_output = true;
+                }
+
+                // Reasons
+                Arg::Long("reason") | Arg::Long("reasons") => {
+                    args.reasons = true;
+                }
+
+                // Open only
+                Arg::Long("open") => {
+                    args.open = true;
+                }
+
+                // Packet trace
+                Arg::Long("packet-trace") => {
+                    args.packet_trace = true;
+                }
+
+                // Interface list
+                Arg::Long("iflist") => {
+                    args.if_list = true;
+                }
+
+                // Script
+                Arg::Long("script") => {
+                    args.script = Some(parser.value()?.string()?);
+                }
+
+                // Script args
+                Arg::Long("script-args") => {
+                    args.script_args = Some(parser.value()?.string()?);
+                }
+
+                // Script updatedb
+                Arg::Long("script-updatedb") => {
+                    args.script_updatedb = true;
+                }
+
+                // Script help
+                Arg::Long("script-help") => {
+                    args.script_help = Some(parser.value()?.string()?);
+                }
+
+                // Script timeout
+                Arg::Long("script-timeout") => {
+                    args.script_timeout = Some(parser.value()?.string()?);
+                }
+
+                // Traceroute
+                Arg::Long("traceroute") => {
+                    args.traceroute = true;
+                }
+
+                // Traceroute hops
+                Arg::Long("traceroute-hops") => {
+                    let hops = parser.value()?.string()?;
+                    if let Ok(val) = hops.parse::<u8>() {
+                        args.traceroute_hops = Some(val);
+                    } else {
+                        return Err(ParseError::InvalidValue("--traceroute-hops".to_string(), hops));
+                    }
+                }
+
+                // Input file
+                Arg::Short('i') => {
+                    args.input_file = Some(PathBuf::from(parser.value()?.string()?));
+                }
+                Arg::Long("input-file") => {
+                    args.input_file = Some(PathBuf::from(parser.value()?.string()?));
+                }
+
+                // Randomize hosts
+                Arg::Long("randomize-hosts") => {
+                    args.randomize_hosts = true;
+                }
+
+                // Host group size
+                Arg::Long("host-group-size") => {
+                    let size = parser.value()?.string()?;
+                    if let Ok(val) = size.parse::<usize>() {
+                        args.host_group_size = Some(val);
+                    } else {
+                        return Err(ParseError::InvalidValue("--host-group-size".to_string(), size));
+                    }
+                }
+
+                // Ping type
+                Arg::Long("ping-type") => {
+                    args.ping_type = Some(parser.value()?.string()?);
+                }
+
+                // Disable ping (skip host discovery)
+                Arg::Short('P') => {
+                    // Check if it's compound like -Pn
+                    let mut raw = parser.raw_args()?;
+                    if let Some(next_arg) = raw.next() {
+                        let next_str = next_arg.to_string_lossy();
+                        if next_str == "n" {
+                            args.disable_ping = true;
+                        } else {
+                            args.ping_type = Some(next_str.to_string());
+                        }
+                    } else {
+                        // Standalone -P means disable ping in nmap
+                        args.disable_ping = true;
+                    }
+                }
+                Arg::Long("disable-ping") => {
+                    args.disable_ping = true;
+                }
+
+                // Host timeout
+                Arg::Long("host-timeout") => {
+                    let timeout = parser.value()?.string()?;
+                    if let Ok(val) = timeout.parse::<u64>() {
+                        args.host_timeout = Some(val);
+                    } else {
+                        return Err(ParseError::InvalidValue("--host-timeout".to_string(), timeout));
+                    }
+                }
+
+                // Print URLs
+                Arg::Long("print-urls") => {
+                    args.print_urls = true;
+                }
+
+                // No DNS
+                Arg::Short('n') => {
+                    args.no_dns = true;
+                }
+                Arg::Long("no-dns") => {
+                    args.no_dns = true;
+                }
+
+                // Always DNS
+                Arg::Short('R') => {
+                    args.always_dns = true;
+                }
+                Arg::Long("always-dns") => {
+                    args.always_dns = true;
+                }
+
+                // DNS servers
+                Arg::Long("dns-servers") => {
+                    // Store but don't use - this would need different handling
+                    let _servers = parser.value()?;
+                }
+
+                // History
+                Arg::Long("history") => {
+                    args.history = true;
+                }
+
+                // List profiles
+                Arg::Long("list-profiles") => {
+                    args.list_profiles = true;
+                }
+
+                // Validate profile
+                Arg::Long("validate-profile") => {
+                    args.validate_profile = Some(PathBuf::from(parser.value()?.string()?));
+                }
+
+                // Generate profile
+                Arg::Long("generate-profile") => {
+                    args.generate_profile = true;
+                }
+
+                // Profile
+                Arg::Long("profile") => {
+                    args.profile = Some(PathBuf::from(parser.value()?.string()?));
+                }
+
+                // Diff
+                Arg::Long("diff") => {
+                    let mut files = Vec::new();
+                    files.push(parser.value()?.string()?);
+                    files.push(parser.value()?.string()?);
+                    args.diff = Some(files);
+                }
+
+                // From history
+                Arg::Long("from-history") => {
+                    let mut ids = Vec::new();
+                    ids.push(parser.value()?.string()?);
+                    ids.push(parser.value()?.string()?);
+                    args.from_history = Some(ids);
+                }
+
+                // Diff format
+                Arg::Long("diff-format") => {
+                    args.diff_format = parser.value()?.string()?;
+                }
+
+                // Vulns only
+                Arg::Long("vulns-only") => {
+                    args.vulns_only = true;
+                }
+
+                // Since
+                Arg::Long("since") => {
+                    args.since = Some(parser.value()?.string()?);
+                }
+
+                // Until
+                Arg::Long("until") => {
+                    args.until = Some(parser.value()?.string()?);
+                }
+
+                // Target (for history filtering)
+                Arg::Long("target") => {
+                    args.target = Some(parser.value()?.string()?);
+                }
+
+                // Scan type filter
+                Arg::Long("scan-type-filter") => {
+                    args.scan_type_filter = Some(parser.value()?.string()?);
+                }
+
+                // Limit
+                Arg::Long("limit") => {
+                    let limit = parser.value()?.string()?;
+                    if let Ok(val) = limit.parse::<usize>() {
+                        args.limit = Some(val);
+                    } else {
+                        return Err(ParseError::InvalidValue("--limit".to_string(), limit));
+                    }
+                }
+
+                // Scan ID
+                Arg::Long("scan-id") => {
+                    args.scan_id = Some(parser.value()?.string()?);
+                }
+
+                // Database path
+                Arg::Long("db-path") => {
+                    args.db_path = parser.value()?.string()?;
+                }
+
+                // Data directory
+                Arg::Long("datadir") => {
+                    args.datadir = parser.value()?.string()?;
+                }
+
+                // DNS server
+                Arg::Long("dns-server") => {
+                    args.dns_server = parser.value()?.string()?;
+                }
+
+                // Positional arguments (targets)
+                Arg::Value(val) => {
+                    args.targets.push(val.string()?);
+                }
+
+                _ => {
+                    return Err(ParseError::UnknownOption(format!("{arg:?}")));
+                }
+            }
+        }
+
+        Ok(args)
+    }
+
     /// Validate arguments and check for conflicts.
     ///
     /// # Errors
@@ -688,14 +1004,13 @@ impl Args {
                 .map_err(|_| format!("Invalid spoof IP address: {ip}"))?;
         }
 
-        // Validate decoy IP addresses (supports RND:number syntax)
+        // Validate decoy IP addresses
         if let Some(ref decoys) = self.decoys {
             for part in decoys.split(',') {
                 let part = part.trim();
                 if part.is_empty() {
                     continue;
                 }
-                // Check for RND:number syntax
                 if let Some(number_str) = part.strip_prefix("RND:") {
                     let count: usize = number_str
                         .parse()
@@ -704,14 +1019,13 @@ impl Args {
                         return Err(format!("RND count must be between 1 and 100, got {count}"));
                     }
                 } else {
-                    // Validate as explicit IP address
                     part.parse::<std::net::IpAddr>()
                         .map_err(|_| format!("Invalid decoy IP address: {part}"))?;
                 }
             }
         }
 
-        // Validate fragment MTU (must be between 8 and 1500)
+        // Validate fragment MTU
         if let Some(mtu) = self.fragment_mtu {
             if !(8..=1500).contains(&mtu) {
                 return Err(format!(
@@ -749,7 +1063,7 @@ impl Args {
             };
         }
 
-        // Handle long options (--scan-syn, --scan-connect, etc.)
+        // Handle boolean flags
         if self.scan_udp {
             ScanType::Udp
         } else if self.scan_fin {
@@ -801,50 +1115,39 @@ mod tests {
 
     #[test]
     fn test_args_validation_timing() {
-        let args = Args {
-            targets: vec!["192.168.1.1".to_string()],
-            timing: Some(6),
-            ..Default::default()
-        };
+        let mut args = Args::default();
+        args.targets = vec!["192.168.1.1".to_string()];
+        args.timing = Some(6);
         assert!(args.validate().is_err());
     }
 
     #[test]
     fn test_args_validation_valid() {
-        let args = Args {
-            targets: vec!["192.168.1.1".to_string()],
-            timing: Some(3),
-            ..Default::default()
-        };
+        let mut args = Args::default();
+        args.targets = vec!["192.168.1.1".to_string()];
+        args.timing = Some(3);
         assert!(args.validate().is_ok());
     }
 
     #[test]
     fn test_scan_type_default() {
-        let args = Args {
-            targets: vec!["192.168.1.1".to_string()],
-            ..Default::default()
-        };
+        let args = Args::default();
         assert_eq!(args.scan_type(), ScanType::Syn);
     }
 
     #[test]
     fn test_scan_type_udp() {
-        let args = Args {
-            targets: vec!["192.168.1.1".to_string()],
-            scan_udp: true,
-            ..Default::default()
-        };
+        let mut args = Args::default();
+        args.targets = vec!["192.168.1.1".to_string()];
+        args.scan_udp = true;
         assert_eq!(args.scan_type(), ScanType::Udp);
     }
 
     #[test]
     fn test_scan_type_connect() {
-        let args = Args {
-            targets: vec!["192.168.1.1".to_string()],
-            scan_connect: true,
-            ..Default::default()
-        };
+        let mut args = Args::default();
+        args.targets = vec!["192.168.1.1".to_string()];
+        args.scan_connect = true;
         assert_eq!(args.scan_type(), ScanType::Connect);
     }
 }

@@ -13,4 +13,4 @@ benchmarks/reports/*.json
 
 # Benchmarks results
 benchmarks/reports/*.txt
-benchmarks/logs/*.log
+benchmarks/logs/*.log[examples]/*

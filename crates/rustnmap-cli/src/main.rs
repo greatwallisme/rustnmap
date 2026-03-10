@@ -18,16 +18,19 @@
 //! This is the binary entry point that parses command-line arguments
 //! and coordinates the scanning workflow using the orchestrator library.
 
-use clap::Parser;
+use rustnmap_cli::args::Args;
 use rustnmap_common::Result;
 use tracing::info;
 
-use rustnmap_cli::{args::Args, cli::run_scan};
+use rustnmap_cli::cli::run_scan;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     // Parse command-line arguments
-    let args = Args::parse();
+    let args = Args::parse().unwrap_or_else(|e| {
+        tracing::error!("Failed to parse arguments: {e}");
+        std::process::exit(1);
+    });
 
     // Run the scan using the orchestrator library
     let result = run_scan(args).await;

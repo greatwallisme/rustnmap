@@ -6,10 +6,11 @@ use std::net::IpAddr;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use rustnmap_cli::args::Args;
+use rustnmap_cli::args::{Args, OutputFormat};
 use rustnmap_output::models::{
-    HostResult, HostStatus, HostTimes, PortResult, PortState, Protocol, ScanMetadata, ScanResult,
-    ScanStatistics, ScanType, ServiceInfo,
+    HostResult, HostStatus, HostTimes, MacAddress, OsMatch, PortResult, PortState, Protocol,
+    ScanMetadata, ScanResult, ScanStatistics, ScanType, ServiceInfo, TracerouteHop,
+    TracerouteResult,
 };
 
 /// Creates a mock `ScanResult` for testing output formatters.
@@ -348,8 +349,6 @@ fn test_empty_scan_result() {
 /// Test `ScanResult` with MAC address.
 #[test]
 fn test_scan_result_with_mac_address() {
-    use rustnmap_output::models::MacAddress;
-
     let result = ScanResult {
         metadata: ScanMetadata::default(),
         hosts: vec![HostResult {
@@ -415,16 +414,16 @@ fn test_cli_args_output_options() {
     // Test with output file
     let args = Args {
         targets: vec!["127.0.0.1".to_string()],
-        output_normal: Some(PathBuf::from("/tmp/test.nmap")),
+        output: Some(OutputFormat::Normal(PathBuf::from("/tmp/test.nmap"))),
         ..Default::default()
     };
     assert!(args.validate().is_ok());
-    assert!(args.output_normal.is_some());
+    assert!(args.output.is_some());
 
     // Test with XML output
     let args = Args {
         targets: vec!["127.0.0.1".to_string()],
-        output_xml: Some(PathBuf::from("/tmp/test.xml")),
+        output: Some(OutputFormat::Xml(PathBuf::from("/tmp/test.xml"))),
         ..Default::default()
     };
     assert!(args.validate().is_ok());
@@ -440,7 +439,7 @@ fn test_cli_args_output_options() {
     // Test with all formats
     let args = Args {
         targets: vec!["127.0.0.1".to_string()],
-        output_all: Some(PathBuf::from("/tmp/test")),
+        output: Some(OutputFormat::All(PathBuf::from("/tmp/test"))),
         ..Default::default()
     };
     assert!(args.validate().is_ok());
@@ -451,7 +450,7 @@ fn test_cli_args_output_options() {
 fn test_cli_args_append_option() {
     let args = Args {
         targets: vec!["127.0.0.1".to_string()],
-        output_normal: Some(PathBuf::from("/tmp/test.nmap")),
+        output: Some(OutputFormat::Normal(PathBuf::from("/tmp/test.nmap"))),
         append_output: true,
         ..Default::default()
     };
@@ -485,8 +484,6 @@ fn test_host_times() {
 /// Test `ScanResult` with traceroute information.
 #[test]
 fn test_scan_result_with_traceroute() {
-    use rustnmap_output::models::{TracerouteHop, TracerouteResult};
-
     let result = ScanResult {
         metadata: ScanMetadata::default(),
         hosts: vec![HostResult {
@@ -547,13 +544,11 @@ fn test_scan_result_with_traceroute() {
 /// Helper function to test output formatting via `Args` validation.
 #[test]
 fn test_output_args_combinations() {
-    // Test all output formats together
+    // Test all output formats together - note only one can be used at a time with new enum
     let args = Args {
         targets: vec!["127.0.0.1".to_string()],
-        output_normal: Some(PathBuf::from("/tmp/out.nmap")),
-        output_xml: Some(PathBuf::from("/tmp/out.xml")),
+        output: Some(OutputFormat::All(PathBuf::from("/tmp/out"))),
         output_json: Some(PathBuf::from("/tmp/out.json")),
-        output_grepable: Some(PathBuf::from("/tmp/out.gnmap")),
         ..Default::default()
     };
     assert!(args.validate().is_ok());
@@ -571,8 +566,6 @@ fn test_output_args_combinations() {
 /// Test `ScanResult` with OS matches.
 #[test]
 fn test_scan_result_with_os_matches() {
-    use rustnmap_output::models::OsMatch;
-
     let result = ScanResult {
         metadata: ScanMetadata::default(),
         hosts: vec![HostResult {

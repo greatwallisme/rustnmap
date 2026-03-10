@@ -291,21 +291,6 @@ impl MacPrefixDatabase {
         None
     }
 
-    /// Extract OUI from a MAC address string.
-    ///
-    /// Normalizes various MAC address formats and extracts the
-    /// first 3 bytes (24 bits) as a 6-character hex string.
-    fn extract_oui(mac: &str) -> Option<String> {
-        let normalized = Self::normalize_mac(mac)?;
-
-        // Take first 6 characters (3 bytes)
-        if normalized.len() >= 6 {
-            Some(normalized[..6].to_uppercase())
-        } else {
-            None
-        }
-    }
-
     /// Normalize MAC address to a continuous hex string.
     ///
     /// Removes all separators (colon, hyphen, dot) and returns

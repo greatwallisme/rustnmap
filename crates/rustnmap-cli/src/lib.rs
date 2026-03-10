@@ -20,6 +20,7 @@
 
 pub mod args;
 pub mod cli;
+pub mod help;
 
 // Re-export main types
-pub use args::Args;
+pub use args::{Args, ScanType};
