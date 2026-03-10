@@ -402,3 +402,38 @@ bench-rustnmap-ports ports:
     cargo build --release
     TEST_PORTS={{ports}} ./benchmarks/rustnmap_test.sh
 
+# Setup default data directory (~/.rustnmap)
+# Copies db/, scripts/, and nselib/ from project root
+setup_datadir:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    DATADIR="${HOME}/.rustnmap"
+
+    echo "Installing data files to ${DATADIR}..."
+
+    # Create directories
+    mkdir -p "${DATADIR}/db"
+    mkdir -p "${DATADIR}/scripts"
+    mkdir -p "${DATADIR}/nselib"
+
+    # Copy databases
+    if [ -d "./db" ]; then
+        cp -r ./db/* "${DATADIR}/db/"
+        echo "  - Databases: $(ls -1 "${DATADIR}/db" | wc -l) files"
+    fi
+
+    # Copy scripts
+    if [ -d "./scripts" ]; then
+        cp -r ./scripts/* "${DATADIR}/scripts/"
+        echo "  - Scripts: $(ls -1 "${DATADIR}/scripts" | wc -l) files"
+    fi
+
+    # Copy nselib
+    if [ -d "./nselib" ]; then
+        cp -r ./nselib/* "${DATADIR}/nselib/"
+        echo "  - NSE libraries: $(ls -1 "${DATADIR}/nselib" | wc -l) files"
+    fi
+
+    echo "Done."
+

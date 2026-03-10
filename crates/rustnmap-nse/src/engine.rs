@@ -363,6 +363,11 @@ impl ScriptEngine {
         let start = std::time::Instant::now();
         let mut lua = NseLua::new_default()?;
 
+        // Register NSE standard libraries (nmap, stdnse, comm, shortport)
+        // These libraries are implemented in Rust and exposed to Lua via mlua FFI
+        // This MUST be done before loading the script, as scripts use require() to access them
+        crate::libs::register_all(&mut lua)?;
+
         // Load the script
         lua.load_script(&script.source, &script.id)?;
 

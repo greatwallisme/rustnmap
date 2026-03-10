@@ -38,6 +38,8 @@ pub enum ScriptCategory {
     Intrusive,
     /// Malware detection.
     Malware,
+    /// Information gathering.
+    Info,
     /// Non-intrusive checks.
     Safe,
     /// Version detection.
@@ -74,6 +76,7 @@ impl ScriptCategory {
             "fuzzer" => Some(Self::Fuzzer),
             "intrusive" => Some(Self::Intrusive),
             "malware" => Some(Self::Malware),
+            "info" => Some(Self::Info),
             "safe" => Some(Self::Safe),
             "version" => Some(Self::Version),
             "vuln" => Some(Self::Vuln),
@@ -96,6 +99,7 @@ impl ScriptCategory {
             Self::Fuzzer => "fuzzer",
             Self::Intrusive => "intrusive",
             Self::Malware => "malware",
+            Self::Info => "info",
             Self::Safe => "safe",
             Self::Version => "version",
             Self::Vuln => "vuln",

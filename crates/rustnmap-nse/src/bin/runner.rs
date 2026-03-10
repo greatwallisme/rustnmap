@@ -19,6 +19,10 @@ use std::process::ExitCode;
 use mlua::Lua;
 use serde::{Deserialize, Serialize};
 
+// NSE 库由 Rust 实现，需要注册到 Lua 运行时
+use rustnmap_nse::libs;
+use rustnmap_nse::lua::{LuaConfig, NseLua};
+
 /// Runner process execution status.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 enum RunnerStatus {
@@ -42,6 +46,7 @@ struct RunnerOutput {
 }
 
 /// Parse command line arguments.
+#[allow(clippy::print_stderr, reason = "command-line tool help output")]
 fn parse_args() -> Option<(IpAddr, Option<u64>, Option<String>)> {
     let args: Vec<String> = std::env::args().collect();
 
@@ -65,7 +70,9 @@ fn parse_args() -> Option<(IpAddr, Option<u64>, Option<String>)> {
                 script_file = args.get(i).cloned();
             }
             "--help" | "-h" => {
-                eprintln!("Usage: rustnmap-nse-runner --target IP [--timeout-ms MS] [--file SCRIPT]");
+                eprintln!(
+                    "Usage: rustnmap-nse-runner --target IP [--timeout-ms MS] [--file SCRIPT]"
+                );
                 eprintln!("       Reads script from stdin if --file not specified.");
                 return None;
             }
@@ -80,6 +87,7 @@ fn parse_args() -> Option<(IpAddr, Option<u64>, Option<String>)> {
 }
 
 /// Set CPU time limit for the process.
+#[allow(clippy::print_stderr, reason = "system warning message")]
 fn set_cpu_limit(timeout_ms: u64) {
     // Set CPU time limit to timeout + 5 seconds margin
     let cpu_limit: u64 = timeout_ms / 1000 + 5;
@@ -113,16 +121,36 @@ fn read_script_source(script_file: Option<&String>) -> io::Result<String> {
 }
 
 /// Output result as JSON to stdout.
+#[allow(
+    clippy::print_stdout,
+    clippy::print_stderr,
+    reason = "JSON output and error reporting"
+)]
 fn output_result(result: &RunnerOutput) {
     match serde_json::to_string(result) {
-        Ok(json) => println!("{json}"),
-        Err(e) => eprintln!("Failed to serialize result: {e}"),
+        Ok(json) => {
+            println!("{json}");
+        }
+        Err(e) => {
+            eprintln!("Failed to serialize result: {e}");
+        }
     }
 }
 
 /// Execute an NSE script and Returns output string on success.
 fn execute_script(source: &str, script_id: &str, target_ip: IpAddr) -> Result<String, String> {
-    let lua = Lua::new();
+    // Create NSE Lua runtime wrapper
+    let mut nse_lua =
+        NseLua::new(LuaConfig::default()).map_err(|e| format!("Failed to create NSE Lua: {e}"))?;
+
+    // Register NSE standard libraries (nmap, stdnse, comm, shortport)
+    // These libraries are implemented in Rust and exposed to Lua via mlua FFI
+    // This MUST be done before loading the script, as scripts use require() to access them
+    libs::register_all(&mut nse_lua)
+        .map_err(|e| format!("Failed to register NSE libraries: {e}"))?;
+
+    // Get the underlying Lua instance
+    let lua = nse_lua.lua_mut();
 
     // Load the script
     lua.load(source)
@@ -182,7 +210,7 @@ fn create_host_table(lua: &Lua, target_ip: IpAddr) -> Result<mlua::Table, String
         .set("ip", ip_str.clone())
         .map_err(|e| format!("Failed to set host.ip: {e}"))?;
 
-    // Set canonical IP (same as ip for now)
+    // Set canonical IP (for IP-only targets, this equals ip)
     host_table
         .set("canonical_ip", ip_str)
         .map_err(|e| format!("Failed to set host.canonical_ip: {e}"))?;

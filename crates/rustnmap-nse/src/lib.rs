@@ -76,12 +76,14 @@ pub mod lua;
 pub mod process_executor;
 pub mod registry;
 pub mod script;
+pub mod selector;
 
 // Re-exports for convenience
 pub use engine::{ScriptEngine, ScriptScheduler};
 pub use error::{Error, Result};
 pub use registry::ScriptDatabase;
 pub use script::{NseScript, ScriptCategory, ScriptOutput};
+pub use selector::ScriptSelector;
 
 /// NSE engine version for compatibility checking.
 ///

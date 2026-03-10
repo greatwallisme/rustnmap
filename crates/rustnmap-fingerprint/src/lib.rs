@@ -99,8 +99,7 @@ pub type Result<T> = std::result::Result<T, error::FingerprintError>;
 // Re-exports for convenience
 #[doc(inline)]
 pub use database::{
-    DatabaseUpdater, MacPrefixDatabase, ProtocolDatabase, RpcDatabase, ServiceDatabase,
-    UpdateOptions,
+    DatabaseUpdater, MacPrefixDatabase, ProtocolDatabase, RpcDatabase, UpdateOptions,
 };
 pub use error::FingerprintError;
 pub use os::{

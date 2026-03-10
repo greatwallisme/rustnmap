@@ -34,9 +34,9 @@ use rustnmap_target::discovery::{HostDiscovery, HostState as DiscoveryHostState}
 use rustnmap_target::Target;
 
 use tokio::sync::{Mutex, RwLock};
-use tracing::{debug, info, instrument, warn};
+use tracing::{debug, error, info, instrument, warn};
 
-use crate::error::Result;
+use crate::error::{CoreError, Result};
 use crate::scheduler::{ScheduledTask, TaskPriority, TaskScheduler};
 use crate::session::{ScanConfig, ScanSession, ScanType};
 use crate::state::{HostState, PortScanState, ScanProgress};
@@ -695,7 +695,11 @@ impl ScanOrchestrator {
                             .open("/tmp/rustnmap_diagnostic.txt")
                         {
                             let _ = writeln!(file, "\n=== PortScanning Phase ===");
-                            let _ = writeln!(file, "run_port_scanning() call: {:?}", before_port_scan.elapsed());
+                            let _ = writeln!(
+                                file,
+                                "run_port_scanning() call: {:?}",
+                                before_port_scan.elapsed()
+                            );
                         }
                     }
                 }
@@ -763,10 +767,23 @@ impl ScanOrchestrator {
             {
                 let _ = writeln!(file, "\n=== Orchestrator.run() Timing ===");
                 let _ = writeln!(file, "Total run(): {:?}", run_start.elapsed());
-                let _ = writeln!(file, "Phases execution: {:?}", after_phases.duration_since(before_phases));
-                let _ = writeln!(file, "build_scan_result(): {:?}", after_build.duration_since(before_build));
-                let _ = writeln!(file, "Other overhead: {:?}",
-                    run_start.elapsed() - after_phases.duration_since(before_phases) - after_build.duration_since(before_build));
+                let _ = writeln!(
+                    file,
+                    "Phases execution: {:?}",
+                    after_phases.duration_since(before_phases)
+                );
+                let _ = writeln!(
+                    file,
+                    "build_scan_result(): {:?}",
+                    after_build.duration_since(before_build)
+                );
+                let _ = writeln!(
+                    file,
+                    "Other overhead: {:?}",
+                    run_start.elapsed()
+                        - after_phases.duration_since(before_phases)
+                        - after_build.duration_since(before_build)
+                );
             }
         }
 
@@ -2389,48 +2406,26 @@ impl ScanOrchestrator {
         // Since ScriptDatabase doesn't implement Clone, we need to create engine differently
         let engine = self.session.nse_registry.create_engine();
 
-        // Get script categories to run
-        let categories: Vec<rustnmap_nse::ScriptCategory> =
-            if self.session.config.nse_categories.is_empty() {
-                // Default to 'default' category if none specified
-                vec![rustnmap_nse::ScriptCategory::Default]
-            } else {
-                self.session
-                    .config
-                    .nse_categories
-                    .iter()
-                    .filter_map(|c| match c.as_str() {
-                        "auth" => Some(rustnmap_nse::ScriptCategory::Auth),
-                        "broadcast" => Some(rustnmap_nse::ScriptCategory::Broadcast),
-                        "brute" => Some(rustnmap_nse::ScriptCategory::Brute),
-                        "default" => Some(rustnmap_nse::ScriptCategory::Default),
-                        "discovery" => Some(rustnmap_nse::ScriptCategory::Discovery),
-                        "dos" => Some(rustnmap_nse::ScriptCategory::Dos),
-                        "exploit" => Some(rustnmap_nse::ScriptCategory::Exploit),
-                        "external" => Some(rustnmap_nse::ScriptCategory::External),
-                        "fuzzer" => Some(rustnmap_nse::ScriptCategory::Fuzzer),
-                        "intrusive" => Some(rustnmap_nse::ScriptCategory::Intrusive),
-                        "malware" => Some(rustnmap_nse::ScriptCategory::Malware),
-                        "safe" => Some(rustnmap_nse::ScriptCategory::Safe),
-                        "version" => Some(rustnmap_nse::ScriptCategory::Version),
-                        "vuln" => Some(rustnmap_nse::ScriptCategory::Vuln),
-                        _ => {
-                            warn!("Unknown script category: {}", c);
-                            None
-                        }
-                    })
-                    .collect()
-            };
+        // Parse script selector expression
+        let selector_expr = self.session.config.nse_selector.as_deref().unwrap_or("default");
+        let selector = rustnmap_nse::ScriptSelector::parse(selector_expr).map_err(|e| {
+            error!("Failed to parse script selector '{}': {}", selector_expr, e);
+            CoreError::config(format!("Invalid --script argument: {e}"))
+        })?;
 
-        // Select scripts by category
-        let scripts: Vec<&rustnmap_nse::NseScript> = engine.scheduler().select_scripts(&categories);
+        // Select scripts using the selector
+        let scripts: Vec<&rustnmap_nse::NseScript> = selector.select(engine.database());
 
         if scripts.is_empty() {
-            debug!("No scripts match the specified categories");
+            debug!("No scripts match the selector '{}'", selector_expr);
             return Ok(());
         }
 
-        debug!("Selected {} scripts for execution", scripts.len());
+        debug!(
+            "Selected {} scripts for execution from selector '{}'",
+            scripts.len(),
+            selector_expr
+        );
 
         // Check if we're in a tokio runtime context
         if tokio::runtime::Handle::try_current().is_err() {

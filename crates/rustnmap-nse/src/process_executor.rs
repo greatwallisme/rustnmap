@@ -133,16 +133,22 @@ impl ProcessExecutor {
         Self::write_script_to_child(&mut child, script_source, script_id)?;
 
         // Wait with timeout
-        let status = child.wait_timeout(timeout).map_err(|e| Error::ExecutionError {
-            script_id: script_id.to_string(),
-            message: format!("Failed to wait for runner process: {e}"),
-        })?;
+        let status = child
+            .wait_timeout(timeout)
+            .map_err(|e| Error::ExecutionError {
+                script_id: script_id.to_string(),
+                message: format!("Failed to wait for runner process: {e}"),
+            })?;
 
         match status {
             None => Ok(Self::create_timeout_result(script_id, target_ip, timeout)),
-            Some(exit_status) => {
-                Ok(Self::handle_process_result(child, exit_status, script_id, target_ip, start))
-            }
+            Some(exit_status) => Ok(Self::handle_process_result(
+                child,
+                exit_status,
+                script_id,
+                target_ip,
+                start,
+            )),
         }
     }
 
@@ -169,7 +175,11 @@ impl ProcessExecutor {
     }
 
     /// Write script source to the runner's stdin.
-    fn write_script_to_child(child: &mut Child, script_source: &str, script_id: &str) -> Result<()> {
+    fn write_script_to_child(
+        child: &mut Child,
+        script_source: &str,
+        script_id: &str,
+    ) -> Result<()> {
         if let Some(mut stdin) = child.stdin.take() {
             stdin
                 .write_all(script_source.as_bytes())
@@ -214,12 +224,15 @@ impl ProcessExecutor {
         let runner_output: Option<RunnerOutput> = serde_json::from_str(&stdout_content).ok();
 
         match runner_output {
-            Some(output) => {
-                Self::parse_runner_output(output, script_id, target_ip, start)
-            }
-            None => {
-                Self::handle_raw_output(exit_status, stdout_content, stderr, script_id, target_ip, start)
-            }
+            Some(output) => Self::parse_runner_output(output, script_id, target_ip, start),
+            None => Self::handle_raw_output(
+                exit_status,
+                stdout_content,
+                stderr,
+                script_id,
+                target_ip,
+                start,
+            ),
         }
     }
 

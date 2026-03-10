@@ -1054,8 +1054,18 @@ impl ParallelScanEngine {
             {
                 let _ = writeln!(file, "\n=== TCP SYN Scan Timing ===");
                 let _ = writeln!(file, "Total: {:?}", total_time);
-                let _ = writeln!(file, "Send: {:?} ({:.1}%)", total_send_time, (total_send_time.as_secs_f64() / total_time.as_secs_f64()) * 100.0);
-                let _ = writeln!(file, "Wait: {:?} ({:.1}%)", total_wait_time, (total_wait_time.as_secs_f64() / total_time.as_secs_f64()) * 100.0);
+                let _ = writeln!(
+                    file,
+                    "Send: {:?} ({:.1}%)",
+                    total_send_time,
+                    (total_send_time.as_secs_f64() / total_time.as_secs_f64()) * 100.0
+                );
+                let _ = writeln!(
+                    file,
+                    "Wait: {:?} ({:.1}%)",
+                    total_wait_time,
+                    (total_wait_time.as_secs_f64() / total_time.as_secs_f64()) * 100.0
+                );
                 let _ = writeln!(file, "Iterations: {}", loop_iterations);
                 let _ = writeln!(file, "Packets: {}", packets_received);
             }

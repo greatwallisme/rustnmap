@@ -2066,3 +2066,133 @@ T5 multi-port (22,80,443,8080):
 - Single-port scans were unaffected
 - The fix aligns with nmap's congestion control strategy where retries are not limited by cwnd
 
+
+---
+
+## DATABASE ARCHITECTURE ISSUES (2026-03-09) ⚠️ CRITICAL
+
+### Deep Code Review Findings
+
+After implementing database integration, discovered **severe architectural problems** through systematic code review.
+
+### Issue 1: ServiceDatabase 重复定义
+
+**Problem**: ServiceDatabase is defined **twice** in the codebase.
+
+| Location | File | Status | Usage |
+|----------|------|--------|-------|
+| Definition 1 | `rustnmap-common/src/services.rs` | ✅ Actually used | Global singleton `ServiceDatabase::global()` |
+| Definition 2 | `rustnmap-fingerprint/src/database/services.rs` | ⚠️ Barely used | Only in DatabaseContext.services (90% unused) |
+
+**Impact**:
+- **Code duplication**: Two crates maintain identical database logic
+- **Maintenance burden**: Bug fixes require synchronization
+- **API confusion**: Developers unclear which ServiceDatabase to use
+- **Potential inconsistency**: Two implementations may produce different results
+
+**Actual usage in code**:
+```rust
+// crates/rustnmap-core/src/orchestrator.rs:2815-2822
+// Scanning phase uses rustnmap-common global singleton
+fn service_info_from_db(port: u16, protocol: ServiceProtocol) -> Option<ServiceInfo> {
+    let db = rustnmap_common::ServiceDatabase::global();  // ← This one is used
+    let name = db.lookup(port, protocol)?;
+    // ...
+}
+
+// crates/rustnmap-cli/src/cli.rs:505
+// rustnmap-fingerprint version is loaded but mostly ignored
+db_context.services = Some(Arc::new(rustnmap_fingerprint::ServiceDatabase::load_from_file(&path).await?));
+// ↑ 90% of code paths don't use this
+```
+
+### Issue 2: DatabaseContext 过度设计
+
+**Problem**: `DatabaseContext.services` field is 90% unused.
+
+| Function | db_context parameter | services field usage |
+|----------|---------------------|---------------------|
+| `print_normal_output` | `_db_context` | ❌ Not used |
+| `write_normal_output` | `_db_context` | ❌ Not used |
+| `write_xml_output` | `_db_context` | ❌ Not used |
+| `write_grepable_output` | `_db_context` | ✅ **Only usage** (cli.rs:2007) |
+
+**Root cause**: Service names are already populated during scanning phase via `rustnmap_common::ServiceDatabase::global()`, so output phase doesn't need database lookup.
+
+### Issue 3: Service Name Population Timing
+
+**Current implementation** (actually correct, but different from design docs):
+
+```
+Scanning Phase (orchestrator.rs)
+    ↓
+1. Port scan completes
+    ↓
+2. Immediately populate service name:
+   rustnmap_common::ServiceDatabase::global().lookup(...)
+    ↓
+3. Store in PortResult.service
+    ↓
+Service Detection Phase (if -sV enabled)
+    ↓
+4. Probe service details
+    ↓
+5. Override PortResult.service with detected info
+    ↓
+Output Phase (cli.rs)
+    ↓
+6. Directly use port.service (already populated)
+```
+
+**Comparison with Nmap**:
+| Aspect | Nmap | RustNmap | Assessment |
+|--------|------|----------|------------|
+| Lookup timing | Output phase | Scanning phase | ✅ RustNmap optimization |
+| Detection override | Yes | Yes | ✅ Consistent |
+| Database definitions | Single definition | **Duplicated** | ❌ Problem |
+
+### Documentation Updates
+
+Created/updated comprehensive documentation:
+
+1. **doc/database.md** - Added Section 4.6 "数据库架构实现分析":
+   - ServiceDatabase dual implementation analysis
+   - Service name population flow
+   - DatabaseContext usage statistics
+   - Comparison with Nmap
+   - Refactoring recommendations
+
+2. **doc/database-integration.md** - Added "Implementation Status" section:
+   - Completed implementation tracking
+   - Issue 1-3 with severity ratings
+   - Actual data flow diagram
+   - Update suggestions
+
+3. **memory/database_architecture_issues.md** - Persistent memory for new sessions:
+   - Detailed code references
+   - Verification checklist
+   - Quick decision tree
+   - Related documentation links
+
+### Refactoring Priority
+
+| Priority | Issue | Complexity | Type |
+|----------|-------|------------|------|
+| 🔴 High | ServiceDatabase duplication | Medium | Architecture |
+| 🔴 High | NSE script selection incomplete | Medium | Feature |
+| 🟡 Medium | MAC prefix only supports 6-char | Low | Bug |
+| 🟡 Medium | DatabaseContext over-designed | Low | Optimization |
+
+### Related Analysis Files
+
+- `database_architecture_analysis.md` - Complete architecture analysis
+- `database_final_summary.md` - Problem summary and fix priorities
+- `task_plan_doc_update.md` - Documentation update task plan
+- `progress_doc_update.md` - Update progress log
+
+### Key Takeaway
+
+**Service name handling is correct** (populated during scanning), but **implementation has serious redundancy** (two ServiceDatabase definitions). This is a maintenance issue, not a functionality issue.
+
+The documentation now accurately reflects the actual architecture, providing a solid foundation for future refactoring work.
+

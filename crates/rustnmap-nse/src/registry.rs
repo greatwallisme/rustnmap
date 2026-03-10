@@ -167,11 +167,12 @@ impl ScriptDatabase {
 
     /// Extract a field value from Lua source.
     fn extract_field(source: &str, field: &str) -> Option<String> {
-        // Try pattern: field = [[...]] or field = "..." or field = '...'
+        // Try pattern: field = [[...]] or field = "..." or field = '...' or field = {...}
         let patterns = [
             format!("{field} = {{{{{{"),
             format!("{field} = \""),
             format!("{field} = '"),
+            format!("{field} = {{"),
         ];
 
         for pattern in patterns {
@@ -184,8 +185,28 @@ impl ScriptDatabase {
                     remaining.find("]]")
                 } else if pattern.ends_with('"') {
                     remaining.find('"')
-                } else {
+                } else if pattern.ends_with('\'') {
                     remaining.find('\'')
+                } else if pattern.ends_with('{') {
+                    // For Lua tables, find matching closing brace
+                    let mut depth = 1;
+                    let mut end_pos = 0;
+                    for (i, ch) in remaining.chars().enumerate() {
+                        match ch {
+                            '{' => depth += 1,
+                            '}' => {
+                                depth -= 1;
+                                if depth == 0 {
+                                    end_pos = i;
+                                    break;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    Some(end_pos)
+                } else {
+                    None
                 };
 
                 if let Some(end_pos) = end {

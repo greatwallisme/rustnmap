@@ -11,6 +11,13 @@
 | `payloads`          | UDP/协议载荷   | `nmap-payloads`       | 低    |
 | `script-db`         | NSE 脚本索引   | `script.db`           | 中    |
 
+**重要**: `nmap-mac-prefixes` 文件支持**三种** IEEE OUI 格式：
+- **MA-S (9字符)**: 36位扩展OUI - `001BC5000 Converging Systems`
+- **MA-M (7字符)**: 28位中等OUI - `0055DA0 Shinko Technos`
+- **MA-L (6字符)**: 24位标准OUI - `0055DA Ieee Registration Authority`
+
+查找时按**最长前缀优先**原则（先9→再7→最后6）。
+
 ## 4.2 服务探测数据库格式
 
 ```
@@ -243,5 +250,377 @@ impl DatabaseManager {
 }
 ```
 
+## 4.5 MAC 前缀数据库格式
+
+`nmap-mac-prefixes` 文件存储 MAC 地址 OUI (Organizationally Unique Identifier) 到厂商名称的映射。
+
+### 4.5.1 文件格式
+
+```
+# $Id$
+#
+# MAC/Vendor database file for Nmap
+#
+# Format: OUI<whitespace>Vendor Name
+#
+# OUI formats (IEEE MAC Address Block types):
+#   - 6 hex digits (24-bit) MA-L (MAC Address Block - Large)
+#   - 7 hex digits (28-bit) MA-M (MAC Address Block - Medium)
+#   - 9 hex digits (36-bit) MA-S (MAC Address Block - Small)
+#
+# Examples:
+000000    Private
+0050C2   Cisco Systems             # MA-L (24-bit)
+0055DA Ieee Registration Authority # MA-L (24-bit)
+0055DA0 Shinko Technos            # MA-M (28-bit)
+0055DA1 KoolPOS                    # MA-M (28-bit)
+001BC5000 Converging Systems      # MA-S (36-bit)
+001BC5001 OpenRB.com               # MA-S (36-bit)
+```
+
+### 4.5.2 OUI 格式说明
+
+参考 `reference/nmap/MACLookup.cc:119-147`
+
+**MA-L (6字符, 24位) - MAC Address Block Large**
+- IEEE 标准 OUI 分配
+- 前 24 位标识厂商
+- 示例: `0050C2 Cisco Systems`
+
+**MA-M (7字符, 28位) - MAC Address Block Medium**
+- IEEE 扩展格式
+- 前 28 位标识特定子厂商/产品线
+- 示例: `0055DA0 Shinko Technos`
+
+**MA-S (9字符, 36位) - MAC Address Block Small**
+- IEEE 小型块分配
+- 前 36 位提供更细粒度的标识
+- 示例: `001BC5000 Converging Systems`
+
+**统计数据** (2026-03-09 当前数据库):
+- 总条目数: ~49,000
+- 6 字符 (MA-L): ~37,000 (75%)
+- 7 字符 (MA-M): ~5,700 (12%)
+- 9 字符 (MA-S): ~6,400 (13%)
+
+### 4.5.3 查找逻辑（最长前缀优先）
+
+参考 `reference/nmap/MACLookup.cc:190-206`
+
+```rust
+pub fn lookup(&self, mac: &str) -> Option<&str> {
+    let normalized = Self::normalize_mac(mac); // "0050C2AB123456"
+
+    // 1. 先尝试 MA-S (9字符, 36位) - 最高优先级
+    if normalized.len() >= 9 {
+        if let Some(vendor) = self.prefixes.get(&normalized[..9]) {
+            return Some(vendor);
+        }
+    }
+
+    // 2. 再尝试 MA-M (7字符, 28位) - 中等优先级
+    if normalized.len() >= 7 {
+        if let Some(vendor) = self.prefixes.get(&normalized[..7]) {
+            return Some(vendor);
+        }
+    }
+
+    // 3. 最后尝试 MA-L (6字符, 24位) - 最低优先级
+    if normalized.len() >= 6 {
+        self.prefixes.get(&normalized[..6]).map(String::as_str)
+    } else {
+        None
+    }
+}
+```
+
+### 4.5.4 解析器要求
+
+```rust
+pub struct MacPrefixDatabase {
+    // Maps OUI (6, 7, or 9 hex chars) to vendor name
+    prefixes: HashMap<String, String>,
+}
+
+impl MacPrefixDatabase {
+    pub fn parse(content: &str) -> Result<Self> {
+        for (line_num, line) in content.lines().enumerate() {
+            let line = line.trim();
+
+            // Skip comments and empty lines
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            let oui = parts[0].to_uppercase();
+
+            // Support MA-L (6), MA-M (7), and MA-S (9) formats
+            let valid_len = oui.len() == 6 || oui.len() == 7 || oui.len() == 9;
+            if !valid_len || !oui.chars().all(|c| c.is_ascii_hexdigit()) {
+                return Err(ParseError {
+                    line: line_num + 1,
+                    content: format!("Invalid OUI format: {} (expected 6, 7, or 9 hex digits)", oui),
+                });
+            }
+
+            let vendor = parts[1..].join(" ");
+            db.prefixes.insert(oui, vendor);
+        }
+        Ok(db)
+    }
+}
+```
+
+### 4.5.4 查找逻辑
+
+MAC 地址查找时，优先匹配最长前缀：
+1. 首先尝试 7 字符 OUI 匹配
+2. 如果未匹配，尝试 6 字符 OUI 匹配
+3. 返回匹配的厂商名称或 `None`
+
+```rust
+pub fn lookup(&self, mac: &str) -> Option<&str> {
+    let normalized = Self::normalize_mac(mac);
+
+    // Try 7-char OUI first (more specific)
+    if normalized.len() >= 7 {
+        if let Some(vendor) = self.prefixes.get(&normalized[..7]) {
+            return Some(vendor);
+        }
+    }
+
+    // Fall back to 6-char OUI
+    if normalized.len() >= 6 {
+        self.prefixes.get(&normalized[..6]).map(String::as_str)
+    } else {
+        None
+    }
+}
+```
+
 ---
 
+## 4.6 数据库架构实现分析
+
+> **添加时间**: 2026-03-09
+> **状态**: 反映实际代码实现
+
+### 4.6.1 ServiceDatabase 的双重实现
+
+**⚠️ 架构问题**: `ServiceDatabase` 被定义了两次，这是严重的代码重复。
+
+#### rustnmap-common::ServiceDatabase（实际使用）
+
+**位置**: `crates/rustnmap-common/src/services.rs`
+
+**特点**:
+- 全局单例模式: `ServiceDatabase::global()`
+- 支持运行时文件优先，fallback 到嵌入数据
+- 提供 `top_tcp_ports()` / `top_udp_ports()` 功能（用于 `--top-ports` 参数）
+
+**加载优先级**:
+1. `~/.rustnmap/db/nmap-services` (用户可替换)
+2. `reference/nmap/nmap-services` (编译时嵌入)
+
+**使用位置**:
+```rust
+// crates/rustnmap-core/src/orchestrator.rs:2815-2822
+fn service_info_from_db(port: u16, protocol: ServiceProtocol) -> Option<ServiceInfo> {
+    let db = rustnmap_common::ServiceDatabase::global();
+    let name = db.lookup(port, protocol)?;
+    // ...
+}
+```
+
+#### rustnmap-fingerprint::database::ServiceDatabase（几乎不使用）
+
+**位置**: `crates/rustnmap-fingerprint/src/database/services.rs`
+
+**特点**:
+- 独立的完整实现
+- 功能与 `rustnmap-common::ServiceDatabase` 完全重复
+- 仅在 `DatabaseContext` 中使用
+
+**使用情况**:
+```rust
+// crates/rustnmap-cli/src/cli.rs:493-505
+let mut db_context = DatabaseContext::new();
+let db = rustnmap_fingerprint::ServiceDatabase::load_from_file(&services_db_path).await?;
+db_context.services = Some(Arc::new(db));
+```
+
+**实际使用统计**: 仅在 `write_grepable_output()` 中的 1 处被使用。
+
+### 4.6.2 服务名填充流程
+
+#### 扫描阶段填充
+
+```rust
+// 1. 端口扫描完成时，立即填充服务名
+let port_result = PortResult {
+    number: port,
+    protocol,
+    state: output_state,
+    service: service_info_from_db(port, service_proto),  // ← 使用 rustnmap-common::ServiceDatabase::global()
+    scripts: Vec::new(),
+};
+
+// service_info_from_db 返回:
+ServiceInfo {
+    name: "http",              // 从 nmap-services 查找
+    method: "table",           // 标记为数据库查找
+    confidence: 3,             // nmap 默认置信度
+    product: None,
+    version: None,
+    // ...
+}
+```
+
+#### 服务探测覆盖
+
+```rust
+// 2. 如果执行了服务探测 (-sV)，覆盖默认服务名
+if let Some(service_info) = services.first() {
+    port_result.service = Some(ServiceInfo {
+        name: service_info.name.clone(),
+        product: service_info.product.clone(),
+        version: service_info.version.clone(),
+        method: "probed",       // 标记为探测结果
+        confidence: service_info.confidence,
+        // ...
+    });
+}
+```
+
+#### 输出阶段使用
+
+```rust
+// 3. 输出时直接使用已填充的服务名
+for port in &host.ports {
+    if let Some(service) = &port.service {
+        println!("{}/tcp open {}", port.number, service.name);
+    }
+}
+```
+
+### 4.6.3 DatabaseContext 使用情况
+
+**定义位置**: `crates/rustnmap-output/src/database_context.rs`
+
+```rust
+pub struct DatabaseContext {
+    pub services: Option<Arc<ServiceDatabase>>,
+    pub protocols: Option<Arc<ProtocolDatabase>>,
+    pub rpc: Option<Arc<RpcDatabase>>,
+}
+```
+
+**使用统计**:
+
+| 函数 | db_context 参数 | 实际使用 |
+|------|----------------|----------|
+| `print_normal_output` | `_db_context` | ❌ 未使用（下划线前缀表示未使用） |
+| `write_normal_output` | `_db_context` | ❌ 未使用 |
+| `write_xml_output` | `_db_context` | ❌ 未使用 |
+| `write_grepable_output` | `_db_context` | ✅ **唯一使用** |
+
+**grepable 输出中的使用**:
+```rust
+// crates/rustnmap-cli/src/cli.rs:2007
+let service_name = _db_context.lookup_service(p.number, protocol_str).unwrap_or("");
+```
+
+**结论**: `DatabaseContext` 的 `services` 字段 90% 未使用，属于过度设计。
+
+### 4.6.4 与 Nmap 的对比
+
+#### Nmap 的设计
+
+```cpp
+// reference/nmap/portlist.cc:919-950
+const char *Port::getNmapServiceName() {
+    // 1. 优先使用服务探测结果
+    if (service != NULL) {
+        return service->name;
+    }
+
+    // 2. fallback 到 nmap-services 查找
+    return nmap_getservbyport(portno, proto);
+}
+```
+
+#### RustNmap 的设计
+
+```rust
+// 服务名在扫描时已填充，输出时直接使用
+impl PortResult {
+    pub service: Option<ServiceInfo>,  // 已填充，无需再次查找
+}
+```
+
+**差异**:
+- **Nmap**: 输出时才查找服务名（延迟计算）
+- **RustNmap**: 扫描时填充服务名（提前计算）
+
+**评估**: RustNmap 的方式是合理的优化，避免重复查找。
+
+### 4.6.5 架构问题总结
+
+| 问题 | 严重性 | 影响 |
+|------|--------|------|
+| ServiceDatabase 重复定义 | 🔴 高 | 维护成本翻倍，潜在不一致 |
+| DatabaseContext 过度设计 | 🟡 中 | API 复杂，90% 未使用 |
+| 服务名填充流程 | ✅ 正确 | 优于 Nmap 的延迟计算 |
+| 数据库加载优先级 | ✅ 正确 | 用户可替换 + fallback |
+
+### 4.6.6 重构建议
+
+#### 删除重复的 ServiceDatabase
+
+```rust
+// ❌ 删除 rustnmap-fingerprint::database::ServiceDatabase
+// ✅ 全部使用 rustnmap-common::ServiceDatabase::global()
+
+// DatabaseContext 简化为:
+pub struct DatabaseContext {
+    pub protocols: Option<Arc<ProtocolDatabase>>,  // 保留
+    pub rpc: Option<Arc<RpcDatabase>>,            // 保留
+    // services 字段删除 - 使用全局单例
+}
+```
+
+#### 更新 grepable 输出
+
+```rust
+// 修改前:
+let service_name = _db_context.lookup_service(p.number, protocol_str).unwrap_or("");
+
+// 修改后:
+let service_proto = match protocol {
+    Protocol::Tcp => ServiceProtocol::Tcp,
+    Protocol::Udp => ServiceProtocol::Udp,
+    Protocol::Sctp => ServiceProtocol::Sctp,
+};
+let service_name = rustnmap_common::ServiceDatabase::global()
+    .lookup(p.number, service_proto)
+    .unwrap_or("");
+```
+
+### 4.6.7 数据库职责边界
+
+| 数据库 | 扫描阶段 | 输出阶段 | 位置 |
+|--------|----------|----------|------|
+| **ProbeDatabase** | ✅ 必需 | ❌ 不使用 | FingerprintDatabase |
+| **OS FingerprintDatabase** | ✅ 必需 | ❌ 不使用 | FingerprintDatabase |
+| **MacPrefixDatabase** | ✅ 必需 | ❌ 不使用 | FingerprintDatabase |
+| **ServiceDatabase** | ✅ 必需 | ⚠️ 仅 grepable | rustnmap-common (全局) |
+| **ProtocolDatabase** | ❌ 不使用 | ✅ 可选 | DatabaseContext |
+| **RpcDatabase** | ❌ 不使用 | ✅ 可选 | DatabaseContext |
+
+**关键发现**:
+- 扫描阶段和输出阶段的数据库职责分离是**正确的**
+- 问题在于 ServiceDatabase 被定义了两次
+- ProtocolDatabase 和 RpcDatabase 仅用于输出，设计合理
+
+---

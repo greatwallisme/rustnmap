@@ -162,8 +162,9 @@ impl MacPrefixDatabase {
             let oui = parts[0].to_uppercase();
             let vendor = parts[1..].join(" ");
 
-            // Validate OUI format (should be 6 hex digits)
-            if oui.len() != 6 || !oui.chars().all(|c| c.is_ascii_hexdigit()) {
+            // Validate OUI format (6-12 hex digits for extended prefixes)
+            // nmap supports OUIs from 3 bytes (6 chars) up to 6 bytes (12 chars)
+            if !(6..=12).contains(&oui.len()) || !oui.chars().all(|c| c.is_ascii_hexdigit()) {
                 return Err(FingerprintError::ParseError {
                     line: line_num,
                     content: format!("Invalid OUI format: {oui}"),
@@ -222,8 +223,18 @@ impl MacPrefixDatabase {
     /// ```
     #[must_use]
     pub fn lookup(&self, mac: &str) -> Option<&str> {
-        let oui = Self::extract_oui(mac)?;
-        self.prefixes.get(&oui).map(String::as_str)
+        let normalized = Self::normalize_mac(mac)?;
+
+        // Try longest match first (12 chars down to 6 chars)
+        // This ensures more specific prefixes match before general ones
+        for len in (6..=normalized.len().min(12)).rev() {
+            let oui = &normalized[..len];
+            if let Some(vendor) = self.prefixes.get(oui) {
+                return Some(vendor);
+            }
+        }
+
+        None
     }
 
     /// Lookup vendor with detailed information.
@@ -256,20 +267,28 @@ impl MacPrefixDatabase {
     /// ```
     #[must_use]
     pub fn lookup_detail(&self, mac: &str) -> Option<MacVendorInfo> {
-        let oui = Self::extract_oui(mac)?;
-        let vendor = self.prefixes.get(&oui)?;
+        let normalized = Self::normalize_mac(mac)?;
 
-        let is_private = vendor.to_lowercase().contains("private")
-            || oui == "000000"
-            || oui.starts_with('0')
-                && oui.len() > 1
-                && matches!(oui.chars().nth(1), Some('2' | '6' | 'A' | 'E'));
+        // Try longest match first (12 chars down to 6 chars)
+        for len in (6..=normalized.len().min(12)).rev() {
+            let oui = &normalized[..len];
+            if let Some(vendor) = self.prefixes.get(oui) {
+                let oui = oui.to_string();
+                let is_private = vendor.to_lowercase().contains("private")
+                    || oui == "000000"
+                    || oui.starts_with('0')
+                        && oui.len() > 1
+                        && matches!(oui.chars().nth(1), Some('2' | '6' | 'A' | 'E'));
 
-        Some(MacVendorInfo {
-            vendor: vendor.clone(),
-            oui,
-            is_private,
-        })
+                return Some(MacVendorInfo {
+                    vendor: vendor.clone(),
+                    oui,
+                    is_private,
+                });
+            }
+        }
+
+        None
     }
 
     /// Extract OUI from a MAC address string.

@@ -18,8 +18,7 @@
 //! This module provides the main scan execution logic, integrating all
 //! `RustNmap` components into a unified command-line interface.
 
-use std::sync::Arc;
-use std::{fs::File, io::Write};
+use crate::args::Args;
 use rustnmap_common::Result;
 use rustnmap_core::session::ScanType as CoreScanType;
 use rustnmap_core::session::{
@@ -28,13 +27,14 @@ use rustnmap_core::session::{
 };
 use rustnmap_core::{ScanConfig, ScanOrchestrator, ScanSession};
 use rustnmap_output::formatter::OutputFormatter;
-use rustnmap_output::{DatabaseContext, NdjsonFormatter, MarkdownFormatter, JsonFormatter};
 use rustnmap_output::models::{HostResult, PortResult, PortState, Protocol, ScanResult, ScanType};
+use rustnmap_output::{DatabaseContext, JsonFormatter, MarkdownFormatter, NdjsonFormatter};
 use rustnmap_scan::scanner::TimingTemplate;
-use rustnmap_target::{Target, TargetGroup, TargetParser};
 use rustnmap_scan_management::{ScanFilter, ScanHistory, ScanProfile};
+use rustnmap_target::{Target, TargetGroup, TargetParser};
+use std::sync::Arc;
+use std::{fs::File, io::Write};
 use tracing::{debug, error, info, warn};
-use crate::args::Args;
 
 /// Runs the main `RustNmap` scan workflow.
 ///
@@ -490,30 +490,8 @@ async fn handle_profile_scan(args: &Args, profile_path: &std::path::Path) -> Res
     }
 
     // Create database context for output
+    // Note: Service names are looked up using rustnmap_common::ServiceDatabase::global()
     let mut db_context = DatabaseContext::new();
-
-    // Load service database for port-to-service name mappings
-    let services_db_path = db_dir.join("nmap-services");
-    if services_db_path.exists() {
-        info!(
-            "Loading services database from: {}",
-            services_db_path.display()
-        );
-        match rustnmap_fingerprint::ServiceDatabase::load_from_file(&services_db_path).await {
-            Ok(db) => {
-                info!("Services database loaded successfully");
-                db_context.services = Some(Arc::new(db));
-            }
-            Err(e) => {
-                warn!("Failed to load services database: {e}");
-            }
-        }
-    } else {
-        debug!(
-            "Services database not found at: {}",
-            services_db_path.display()
-        );
-    }
 
     // Load protocols database for protocol number-to-name mappings
     let protocols_db_path = db_dir.join("nmap-protocols");
@@ -570,7 +548,11 @@ async fn handle_profile_scan(args: &Args, profile_path: &std::path::Path) -> Res
     let mut nse_registry = NseRegistry::new();
     if scripts_dir.exists() {
         if let Err(e) = nse_registry.load_from_directory(&scripts_dir) {
-            warn!("Failed to load NSE scripts from {}: {}", scripts_dir.display(), e);
+            warn!(
+                "Failed to load NSE scripts from {}: {}",
+                scripts_dir.display(),
+                e
+            );
         }
     }
     let nse_registry = Arc::new(nse_registry);
@@ -687,8 +669,7 @@ fn parse_date_flexible(date_str: &str) -> Option<chrono::DateTime<chrono::Utc>> 
 /// Parse targets from a string list
 fn parse_targets_from_list(target_list: &[String]) -> TargetGroup {
     // Try to use DNS resolver, fall back to no DNS if it fails
-    let parser = TargetParser::with_dns()
-        .unwrap_or_else(|_| TargetParser::new());
+    let parser = TargetParser::with_dns().unwrap_or_else(|_| TargetParser::new());
     let mut all_targets = Vec::new();
 
     for target_spec in target_list {
@@ -742,7 +723,11 @@ fn build_scan_config_from_profile(
         service_detection: profile.scan.service_detection,
         os_detection: profile.scan.os_detection,
         nse_scripts: !profile.scan.scripts.is_empty(),
-        nse_categories: profile.scan.scripts.clone(),
+        nse_selector: if profile.scan.scripts.is_empty() {
+            None
+        } else {
+            Some(profile.scan.scripts.join(","))
+        },
         ..ScanConfig::default()
     };
 
@@ -922,30 +907,8 @@ async fn run_normal_scan(args: &Args) -> Result<()> {
     }
 
     // Create database context for output
+    // Note: Service names are looked up using rustnmap_common::ServiceDatabase::global()
     let mut db_context = DatabaseContext::new();
-
-    // Load service database for port-to-service name mappings
-    let services_db_path = db_dir.join("nmap-services");
-    if services_db_path.exists() {
-        info!(
-            "Loading services database from: {}",
-            services_db_path.display()
-        );
-        match rustnmap_fingerprint::ServiceDatabase::load_from_file(&services_db_path).await {
-            Ok(db) => {
-                info!("Services database loaded successfully");
-                db_context.services = Some(Arc::new(db));
-            }
-            Err(e) => {
-                warn!("Failed to load services database: {e}");
-            }
-        }
-    } else {
-        debug!(
-            "Services database not found at: {}",
-            services_db_path.display()
-        );
-    }
 
     // Load protocols database for protocol number-to-name mappings
     let protocols_db_path = db_dir.join("nmap-protocols");
@@ -1002,7 +965,11 @@ async fn run_normal_scan(args: &Args) -> Result<()> {
     let mut nse_registry = NseRegistry::new();
     if scripts_dir.exists() {
         if let Err(e) = nse_registry.load_from_directory(&scripts_dir) {
-            warn!("Failed to load NSE scripts from {}: {}", scripts_dir.display(), e);
+            warn!(
+                "Failed to load NSE scripts from {}: {}",
+                scripts_dir.display(),
+                e
+            );
         }
     }
     let nse_registry = Arc::new(nse_registry);
@@ -1050,12 +1017,29 @@ async fn run_normal_scan(args: &Args) -> Result<()> {
         {
             let _ = writeln!(file, "\n=== CLI Timing ===");
             let _ = writeln!(file, "Total CLI: {:?}", cli_start.elapsed());
-            let _ = writeln!(file, "Parse targets: {:?}", after_parse.duration_since(before_parse));
-            let _ = writeln!(file, "Build config: {:?}", after_config.duration_since(before_config));
-            let _ = writeln!(file, "Orchestrator.run(): {:?}", after_orch.duration_since(before_orch));
-            let _ = writeln!(file, "Other CLI overhead: {:?}",
-                cli_start.elapsed() - after_parse.duration_since(before_parse)
-                - after_config.duration_since(before_config) - after_orch.duration_since(before_orch));
+            let _ = writeln!(
+                file,
+                "Parse targets: {:?}",
+                after_parse.duration_since(before_parse)
+            );
+            let _ = writeln!(
+                file,
+                "Build config: {:?}",
+                after_config.duration_since(before_config)
+            );
+            let _ = writeln!(
+                file,
+                "Orchestrator.run(): {:?}",
+                after_orch.duration_since(before_orch)
+            );
+            let _ = writeln!(
+                file,
+                "Other CLI overhead: {:?}",
+                cli_start.elapsed()
+                    - after_parse.duration_since(before_parse)
+                    - after_config.duration_since(before_config)
+                    - after_orch.duration_since(before_orch)
+            );
         }
     }
 
@@ -1173,7 +1157,7 @@ fn build_scan_config(args: &Args) -> Result<ScanConfig> {
         config.service_detection = true;
         config.os_detection = true;
         config.nse_scripts = true;
-        config.nse_categories = vec!["vuln".to_string()];
+        config.nse_selector = Some("vuln".to_string());
         config.timing_template = TimingTemplate::Aggressive;
     }
 
@@ -1192,9 +1176,7 @@ fn build_scan_config(args: &Args) -> Result<ScanConfig> {
 
     // NSE scripts
     config.nse_scripts = args.script.is_some();
-    if let Some(script) = &args.script {
-        config.nse_categories = script.split(',').map(String::from).collect();
-    }
+    config.nse_selector = args.script.clone();
 
     // Script timeout
     if let Some(timeout) = &args.script_timeout {
@@ -1441,9 +1423,9 @@ fn parse_time_duration(input: &str) -> Result<std::time::Duration> {
     }
 
     // No recognized suffix, try parsing as plain seconds
-    let secs: u64 = input.parse().map_err(|_| {
-        rustnmap_common::Error::Other(format!("Invalid time format: {input}"))
-    })?;
+    let secs: u64 = input
+        .parse()
+        .map_err(|_| rustnmap_common::Error::Other(format!("Invalid time format: {input}")))?;
     Ok(std::time::Duration::from_secs(secs))
 }
 
@@ -1596,7 +1578,12 @@ fn build_command_line_string(args: &Args) -> String {
 }
 
 /// Outputs scan results based on command-line arguments.
-fn output_results(args: &Args, result: &ScanResult, command_line: &str, db_context: &DatabaseContext) -> Result<()> {
+fn output_results(
+    args: &Args,
+    result: &ScanResult,
+    command_line: &str,
+    db_context: &DatabaseContext,
+) -> Result<()> {
     // Handle quiet mode
     if args.quiet || args.no_output {
         return Ok(());
@@ -1626,7 +1613,7 @@ fn output_results(args: &Args, result: &ScanResult, command_line: &str, db_conte
             write_ndjson_output(result, path, args.append_output)?;
         }
         if let Some(path) = &args.output_grepable {
-            write_grepable_output(result, path, args.append_output, db_context)?;
+            write_grepable_output(result, path, args.append_output)?;
         }
         if let Some(path) = &args.output_markdown {
             write_markdown_output(result, path, args.append_output)?;
@@ -1637,7 +1624,12 @@ fn output_results(args: &Args, result: &ScanResult, command_line: &str, db_conte
 }
 
 /// Prints normal formatted output to console.
-fn print_normal_output(args: &Args, result: &ScanResult, command_line: &str, _db_context: &DatabaseContext) {
+fn print_normal_output(
+    args: &Args,
+    result: &ScanResult,
+    command_line: &str,
+    _db_context: &DatabaseContext,
+) {
     let stdout = std::io::stdout();
     let mut handle = stdout.lock();
 
@@ -1796,7 +1788,12 @@ fn print_script_kiddie_output(result: &ScanResult) {
 }
 
 /// Writes output in all formats.
-fn write_all_formats(result: &ScanResult, basename: &std::path::Path, append: bool, db_context: &DatabaseContext) -> Result<()> {
+fn write_all_formats(
+    result: &ScanResult,
+    basename: &std::path::Path,
+    append: bool,
+    db_context: &DatabaseContext,
+) -> Result<()> {
     let normal_path = basename.with_extension("nmap");
     let xml_path = basename.with_extension("xml");
     let grepable_path = basename.with_extension("gnmap");
@@ -1806,7 +1803,7 @@ fn write_all_formats(result: &ScanResult, basename: &std::path::Path, append: bo
 
     write_normal_output(result, &normal_path, append, db_context)?;
     write_xml_output(result, &xml_path, append, db_context)?;
-    write_grepable_output(result, &grepable_path, append, db_context)?;
+    write_grepable_output(result, &grepable_path, append)?;
     write_json_output(result, &json_path, append)?;
     write_ndjson_output(result, &ndjson_path, append)?;
     write_markdown_output(result, &md_path, append)?;
@@ -1840,7 +1837,12 @@ fn open_output_file(path: &std::path::Path, append: bool) -> Result<std::fs::Fil
 }
 
 /// Writes normal format output to file.
-fn write_normal_output(result: &ScanResult, path: &std::path::Path, append: bool, _db_context: &DatabaseContext) -> Result<()> {
+fn write_normal_output(
+    result: &ScanResult,
+    path: &std::path::Path,
+    append: bool,
+    _db_context: &DatabaseContext,
+) -> Result<()> {
     let mut file = open_output_file(path, append)?;
     // Write header
     writeln!(
@@ -1876,12 +1878,13 @@ fn write_normal_output(result: &ScanResult, path: &std::path::Path, append: bool
 
         for port in &host.ports {
             if matches!(port.state, PortState::Open) {
-                let protocol_str = match port.protocol {
-                    Protocol::Tcp => "tcp",
-                    Protocol::Udp => "udp",
-                    Protocol::Sctp => "sctp",
+                let service_proto = match port.protocol {
+                    Protocol::Tcp => rustnmap_common::ServiceProtocol::Tcp,
+                    Protocol::Udp => rustnmap_common::ServiceProtocol::Udp,
+                    Protocol::Sctp => rustnmap_common::ServiceProtocol::Sctp,
                 };
-                let service_name = _db_context.lookup_service(port.number, protocol_str);
+                let service_name =
+                    rustnmap_common::ServiceDatabase::global().lookup(port.number, service_proto);
                 if let Some(name) = service_name {
                     writeln!(file, "Port {}: open {}", port.number, name)
                         .map_err(|e| rustnmap_common::Error::Other(format!("Write error: {e}")))?;
@@ -1918,7 +1921,12 @@ fn write_normal_output(result: &ScanResult, path: &std::path::Path, append: bool
 }
 
 /// Writes XML format output to file.
-fn write_xml_output(result: &ScanResult, path: &std::path::Path, append: bool, _db_context: &DatabaseContext) -> Result<()> {
+fn write_xml_output(
+    result: &ScanResult,
+    path: &std::path::Path,
+    append: bool,
+    _db_context: &DatabaseContext,
+) -> Result<()> {
     let mut file = open_output_file(path, append)?;
     writeln!(file, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>")
         .map_err(|e| rustnmap_common::Error::Other(format!("Write error: {e}")))?;
@@ -1985,7 +1993,7 @@ fn write_xml_output(result: &ScanResult, path: &std::path::Path, append: bool, _
 }
 
 /// Writes grepable format output to file.
-fn write_grepable_output(result: &ScanResult, path: &std::path::Path, append: bool, _db_context: &DatabaseContext) -> Result<()> {
+fn write_grepable_output(result: &ScanResult, path: &std::path::Path, append: bool) -> Result<()> {
     let mut file = open_output_file(path, append)?;
 
     for host in &result.hosts {
@@ -2004,7 +2012,14 @@ fn write_grepable_output(result: &ScanResult, path: &std::path::Path, append: bo
                     Protocol::Udp => "udp",
                     Protocol::Sctp => "sctp",
                 };
-                let service_name = _db_context.lookup_service(p.number, protocol_str).unwrap_or("");
+                let service_proto = match p.protocol {
+                    Protocol::Tcp => rustnmap_common::ServiceProtocol::Tcp,
+                    Protocol::Udp => rustnmap_common::ServiceProtocol::Udp,
+                    Protocol::Sctp => rustnmap_common::ServiceProtocol::Sctp,
+                };
+                let service_name = rustnmap_common::ServiceDatabase::global()
+                    .lookup(p.number, service_proto)
+                    .unwrap_or("");
                 format!("{}/open/{}/{}/", p.number, protocol_str, service_name)
             })
             .collect();

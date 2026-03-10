@@ -159,8 +159,8 @@ pub struct ScanConfig {
     pub traceroute: bool,
     /// Enable NSE scripts.
     pub nse_scripts: bool,
-    /// NSE script categories to run.
-    pub nse_categories: Vec<String>,
+    /// NSE script selector expression (e.g., "default", "http-title", "vuln and not intrusive").
+    pub nse_selector: Option<String>,
     /// Script execution timeout.
     pub script_timeout: std::time::Duration,
     /// Host timeout.
@@ -197,7 +197,7 @@ impl Default for ScanConfig {
             os_detection: false,
             traceroute: false,
             nse_scripts: false,
-            nse_categories: Vec::new(),
+            nse_selector: None,
             // Default script timeout of 10 minutes, matching nmap's default.
             script_timeout: rustnmap_nse::DEFAULT_SCRIPT_TIMEOUT,
             host_timeout: std::time::Duration::from_secs(900),

@@ -1060,6 +1060,20 @@ fn register_socket_type(lua: &mut LuaState) {
 
 #### 3.5.5.5 脚本加载和选择
 
+> **实现状态**: ⚠️ **部分实现** - 当前只支持类别选择，不支持脚本名/glob模式
+>
+> **当前限制**:
+> - ✅ 支持: `--script discovery`, `--script vuln` (类别)
+> - ❌ 不支持: `--script banner` (脚本名)
+> - ❌ 不支持: `--script http*` (glob模式)
+> - ❌ 不支持: `--script "/path/to/script.nse"` (文件路径)
+>
+> **实现位置**:
+> - CLI: `crates/rustnmap-cli/src/cli.rs:1195-1197`
+> - Orchestrator: `crates/rustnmap-core/src/orchestrator.rs:2393-2423`
+>
+> **设计规范** (参考 Nmap `nse_main.lua:724-812`):
+
 ```rust
 // 对应 nse_selectedbyname() - 脚本选择
 pub struct ScriptSelector {
@@ -1120,6 +1134,58 @@ impl ScriptSelector {
     }
 }
 ```
+
+#### 3.5.5.6a NSE 库注册机制
+
+NSE 标准库由 Rust 实现，通过 mlua FFI 暴露给 Lua 脚本。在执行任何脚本之前，必须先注册这些库。
+
+```rust
+// NSE 标准库注册
+//
+// rustnmap-nse/src/libs/mod.rs
+pub fn register_all(lua: &mut NseLua) -> Result<()> {
+    // 注册核心 NSE 库，使脚本可以通过 require() 访问
+    nmap::register(lua)?;      // nmap 库 - 核心扫描功能
+    stdnse::register(lua)?;    // stdnse 库 - 标准扩展函数
+    comm::register(lua)?;      // comm 库 - 网络通信
+    shortport::register(lua)?; // shortport 库 - 端口规则匹配
+    Ok(())
+}
+```
+
+**注册时机：**
+
+库注册必须在 Lua 状态创建后、脚本加载前执行：
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  1. Lua::new()          - 创建 Lua 状态                      │
+│  2. register_all()      - 注册 NSE 库                        │
+│  3. load(script)        - 加载脚本 (脚本中使用 require())    │
+│  4. set_global(host)    - 设置 host 表                       │
+│  5. call(action)        - 执行脚本                           │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**库依赖示例：**
+
+脚本中使用这些库：
+```lua
+local comm = require "comm"
+local nmap = require "nmap"
+local stdnse = require "stdnse"
+local shortport = require "shortport"
+
+portrule = shortport.http
+
+action = function(host, port)
+    return stdnse.format_output(true, { "test" })
+end
+```
+
+**实现位置：**
+- runner 二进制: `crates/rustnmap-nse/src/bin/runner.rs::execute_script()`
+- 主执行引擎: `crates/rustnmap-nse/src/engine.rs::execute_script()`
 
 #### 3.5.5.6 脚本执行引擎
 
@@ -1206,17 +1272,21 @@ impl ScriptEngine {
     // 准备 Lua 环境
     fn prepare_lua_environment(&self, context: &ScriptContext)
         -> Result<()> {
-        // 创建 host 表
+        // Step 1: 注册 NSE 标准库 (必须在加载脚本之前)
+        // 这些库由 Rust 实现并通过 mlua FFI 暴露给 Lua
+        rustnmap_nse::libs::register_all(&mut self.lua)?;
+
+        // Step 2: 创建 host 表
         let host_table = create_host_table(&context.host)?;
         self.lua.set_global("host", host_table)?;
 
-        // 创建 port 表 (如果存在)
+        // Step 3: 创建 port 表 (如果存在)
         if let Some(port) = &context.port {
             let port_table = create_port_table(port)?;
             self.lua.set_global("port", port_table)?;
         }
 
-        // 设置注册表
+        // Step 4: 设置注册表
         self.lua.set_global("registry", context.registry.clone())?;
 
         Ok(())

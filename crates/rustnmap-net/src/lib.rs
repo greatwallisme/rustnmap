@@ -278,7 +278,12 @@ pub mod raw_socket {
                 sin_family,
                 sin_port: 0, // Let kernel choose port
                 sin_addr: libc::in_addr {
-                    s_addr: u32::from_ne_bytes([addr_bytes[3], addr_bytes[2], addr_bytes[1], addr_bytes[0]]),
+                    s_addr: u32::from_ne_bytes([
+                        addr_bytes[3],
+                        addr_bytes[2],
+                        addr_bytes[1],
+                        addr_bytes[0],
+                    ]),
                 },
                 sin_zero: [0; 8],
             };
