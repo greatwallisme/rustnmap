@@ -12,6 +12,30 @@
 
 ### 新增功能 / New Features
 
+#### 2026-03-10: CLI Migration to lexopt ✅
+
+| 变更 | 状态 | 文档影响 |
+|------|------|---------|
+| 从 clap 迁移到 lexopt | ✅ 完成 | 已更新 `architecture.md`, `structure.md` |
+| 新增 CLI 模块文档 | ✅ 完成 | 新增 `modules/cli.md` |
+| 复合短选项支持 (-sS -sV -sC) | ✅ 完成 | 更新相关选项文档 |
+| 输出格式复合选项 (-oN/-oX/-oG/-oA) | ✅ 完成 | 更新输出格式文档 |
+| 二进制文件大小减少 12% | ✅ 完成 | 更新性能指标 |
+
+**重要变更:**
+- 移除依赖: `clap = { version = "4.5", features = ["derive", "wrap_help", "cargo"] }`
+- 新增依赖: `lexopt = "0.3"`
+- 新增文件: `crates/rustnmap-cli/src/help.rs` (手动帮助系统, 170 行)
+- 重构文件: `crates/rustnmap-cli/src/args.rs` (~1100 行重写)
+
+**Nmap 兼容性提升:**
+- ✅ `-sS -sV -sC -T4` 完全兼容
+- ✅ `-oN file`, `-oX file`, `-oG file`, `-oA basename` 完全兼容
+- ✅ `-Pn` 主机发现选项完全兼容
+- ✅ 所有 T0-T5 时序模板完全兼容
+
+**详细文档:** 见 `LEXOPT_MIGRATION_COMPLETE.md` 和 `doc/modules/cli.md`
+
 #### Phase 0: 基线修复 (Week 1-2)
 
 | 功能 | 状态 | 文档影响 |

@@ -217,7 +217,7 @@ rustnmap/
 │  ├── tokio (异步运行时)                                             │
 │  ├── mlua (Lua 绑定)                                                │
 │  ├── pnet (数据包处理)                                              │
-│  ├── clap (CLI 解析)                                                │
+│  ├── lexopt (CLI 解析, 2026-03-10 从 clap 迁移)                      │
 │  ├── serde/serde_json (序列化)                                      │
 │  ├── regex (正则匹配)                                               │
 │  ├── trust-dns (DNS 解析)                                           │
