@@ -35,6 +35,8 @@ impl AuthMiddleware {
 
 /// Middleware handler for API key authentication
 ///
+/// Skips authentication for health check endpoint.
+///
 /// # Errors
 ///
 /// Returns `StatusCode::UNAUTHORIZED` if the API key is missing or invalid.
@@ -43,6 +45,11 @@ pub async fn auth_middleware(
     request: Request<axum::body::Body>,
     next: Next,
 ) -> Result<Response, StatusCode> {
+    // Skip authentication for health check endpoint
+    if request.uri().path() == "/api/v1/health" {
+        return Ok(next.run(request).await);
+    }
+
     // Extract API key from headers
     let api_key = {
         let headers = request.headers();

@@ -2543,11 +2543,14 @@ dependencies = [
  "rustnmap-scan-management",
  "serde",
  "serde_json",
+ "serde_urlencoded",
+ "subtle",
  "thiserror 2.0.18",
  "tokio",
  "tower 0.4.13",
  "tower-http 0.5.2",
  "tracing",
+ "tracing-subscriber",
  "uuid",
 ]
 

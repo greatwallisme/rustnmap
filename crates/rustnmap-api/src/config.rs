@@ -2,6 +2,11 @@
 
 use std::time::Duration;
 
+use rand::Rng;
+use subtle::ConstantTimeEq;
+
+// Rust guideline compliant 2026-03-10
+
 /// API server configuration
 #[derive(Debug, Clone)]
 pub struct ApiConfig {
@@ -61,17 +66,22 @@ impl ApiConfig {
         self
     }
 
-    /// Check if an API key is valid
+    /// Check if an API key is valid using constant-time comparison.
+    ///
+    /// This prevents timing attacks where an attacker could measure
+    /// response times to determine valid API keys character by character.
     #[must_use]
     pub fn is_valid_key(&self, key: &str) -> bool {
-        self.api_keys.iter().any(|k| k == key)
+        self.api_keys.iter().any(|k| {
+            // Use constant-time comparison to prevent timing attacks
+            k.as_bytes().ct_eq(key.as_bytes()).into()
+        })
     }
 }
 
 /// Generate a random API key
 #[must_use]
 pub fn generate_api_key() -> String {
-    use rand::Rng;
     let bytes: [u8; 32] = rand::rng().random();
     hex::encode(bytes)
 }
@@ -99,6 +109,7 @@ mod tests {
 
         assert!(config.is_valid_key("test-key"));
         assert!(!config.is_valid_key("invalid-key"));
+        assert!(!config.is_valid_key("test-keX")); // Timing attack test: similar prefix
         assert_eq!(config.max_concurrent_scans, 10);
         assert_eq!(config.listen_addr, "0.0.0.0:9090");
     }

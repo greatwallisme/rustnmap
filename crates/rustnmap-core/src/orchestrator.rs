@@ -644,6 +644,10 @@ impl ScanOrchestrator {
     /// # Errors
     ///
     /// Returns an error if any phase fails to complete.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Scan orchestration requires comprehensive phase handling"
+    )]
     #[instrument(skip(self), fields(targets = self.session.target_count()))]
     pub async fn run(&self) -> Result<ScanResult> {
         info!("Starting scan orchestration");
@@ -2388,7 +2392,6 @@ impl ScanOrchestrator {
 
     /// Runs NSE scripts on discovered services.
     #[expect(
-        clippy::unnecessary_wraps,
         clippy::too_many_lines,
         clippy::map_unwrap_or,
         reason = "NSE script execution is inherently verbose; Result return required for future extensions"
@@ -2407,7 +2410,12 @@ impl ScanOrchestrator {
         let engine = self.session.nse_registry.create_engine();
 
         // Parse script selector expression
-        let selector_expr = self.session.config.nse_selector.as_deref().unwrap_or("default");
+        let selector_expr = self
+            .session
+            .config
+            .nse_selector
+            .as_deref()
+            .unwrap_or("default");
         let selector = rustnmap_nse::ScriptSelector::parse(selector_expr).map_err(|e| {
             error!("Failed to parse script selector '{}': {}", selector_expr, e);
             CoreError::config(format!("Invalid --script argument: {e}"))

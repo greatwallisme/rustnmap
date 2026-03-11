@@ -16,6 +16,10 @@ pub fn create_router(state: ApiState) -> Router {
         .route("/api/v1/scans", post(crate::handlers::create_scan))
         .route("/api/v1/scans", get(crate::handlers::list_scans))
         .route("/api/v1/scans/:id", get(crate::handlers::get_scan))
+        .route(
+            "/api/v1/scans/:id/results",
+            get(crate::handlers::get_scan_results),
+        )
         .route("/api/v1/scans/:id", delete(crate::handlers::cancel_scan))
         // SSE streaming
         .route("/api/v1/scans/:id/stream", get(crate::sse::scan_stream))

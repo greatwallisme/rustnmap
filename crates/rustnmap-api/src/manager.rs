@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use crate::config::ApiConfig;
 use crate::error::{ApiError, ApiResult};
-use crate::{ScanProgress, ScanStatus};
+use crate::{ScanProgress, ScanResultsResponse, ScanStatus};
 
 /// In-memory scan task
 #[derive(Debug, Clone)]
@@ -48,6 +48,7 @@ impl ScanTask {
 #[derive(Debug)]
 pub struct ScanManager {
     tasks: Arc<DashMap<String, ScanTask>>,
+    results: Arc<DashMap<String, ScanResultsResponse>>,
     config: ApiConfig,
 }
 
@@ -57,6 +58,7 @@ impl ScanManager {
     pub fn new(config: ApiConfig) -> Self {
         Self {
             tasks: Arc::new(DashMap::new()),
+            results: Arc::new(DashMap::new()),
             config,
         }
     }
@@ -213,10 +215,451 @@ impl ScanManager {
         }
         self.create_scan(id, targets, scan_type)
     }
+
+    /// Get scan results
+    ///
+    /// Returns the complete scan results if available.
+    #[must_use]
+    pub fn get_scan_results(&self, id: &str) -> Option<ScanResultsResponse> {
+        self.results.get(id).map(|r| r.clone())
+    }
+
+    /// Store scan results
+    ///
+    /// # Errors
+    ///
+    /// Returns `ApiError::ScanNotFound` if no scan with the given ID exists.
+    pub fn store_results(&self, id: &str, results: ScanResultsResponse) -> ApiResult<()> {
+        if !self.tasks.contains_key(id) {
+            return Err(ApiError::ScanNotFound(id.to_string()));
+        }
+        self.results.insert(id.to_string(), results);
+        Ok(())
+    }
+
+    /// Check if results are available for a scan
+    #[must_use]
+    pub fn has_results(&self, id: &str) -> bool {
+        self.results.contains_key(id)
+    }
 }
 
 impl Default for ScanManager {
     fn default() -> Self {
         Self::new(ApiConfig::default())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn create_test_manager() -> ScanManager {
+        let config = ApiConfig::new()
+            .with_api_keys(vec!["test-api-key".to_string()])
+            .with_max_concurrent_scans(3);
+        ScanManager::new(config)
+    }
+
+    // ==================== create_scan tests ====================
+
+    #[test]
+    fn test_create_scan_success() {
+        let manager = create_test_manager();
+        let result = manager.create_scan(
+            "scan_001",
+            vec!["192.168.1.1".to_string()],
+            "syn".to_string(),
+        );
+        assert!(result.is_ok());
+
+        let task = manager.get_scan_summary("scan_001");
+        assert!(task.is_some());
+        let task = task.unwrap();
+        assert_eq!(task.id, "scan_001");
+        assert_eq!(task.status, ScanStatus::Queued);
+        assert_eq!(task.targets, vec!["192.168.1.1"]);
+        assert_eq!(task.scan_type, "syn");
+    }
+
+    #[test]
+    fn test_create_scan_duplicate_id() {
+        let manager = create_test_manager();
+        manager
+            .create_scan(
+                "scan_001",
+                vec!["192.168.1.1".to_string()],
+                "syn".to_string(),
+            )
+            .unwrap();
+
+        let result = manager.create_scan(
+            "scan_001",
+            vec!["192.168.1.2".to_string()],
+            "connect".to_string(),
+        );
+        assert!(result.is_err());
+        if let ApiError::ScanAlreadyExists(id) = result.unwrap_err() {
+            assert_eq!(id, "scan_001");
+        } else {
+            panic!("Expected ScanAlreadyExists error");
+        }
+    }
+
+    // ==================== update_status tests ====================
+
+    #[test]
+    fn test_update_status_to_running() {
+        let manager = create_test_manager();
+        manager
+            .create_scan(
+                "scan_001",
+                vec!["192.168.1.1".to_string()],
+                "syn".to_string(),
+            )
+            .unwrap();
+
+        let result = manager.update_status("scan_001", ScanStatus::Running);
+        assert!(result.is_ok());
+
+        let task = manager.get_scan_summary("scan_001").unwrap();
+        assert_eq!(task.status, ScanStatus::Running);
+        assert!(task.started_at.is_some());
+    }
+
+    #[test]
+    fn test_update_status_to_completed() {
+        let manager = create_test_manager();
+        manager
+            .create_scan(
+                "scan_001",
+                vec!["192.168.1.1".to_string()],
+                "syn".to_string(),
+            )
+            .unwrap();
+        manager
+            .update_status("scan_001", ScanStatus::Running)
+            .unwrap();
+
+        let result = manager.update_status("scan_001", ScanStatus::Completed);
+        assert!(result.is_ok());
+
+        let task = manager.get_scan_summary("scan_001").unwrap();
+        assert_eq!(task.status, ScanStatus::Completed);
+        assert!(task.completed_at.is_some());
+    }
+
+    #[test]
+    fn test_update_status_nonexistent_scan() {
+        let manager = create_test_manager();
+        let result = manager.update_status("nonexistent", ScanStatus::Running);
+        assert!(result.is_err());
+        if let ApiError::ScanNotFound(id) = result.unwrap_err() {
+            assert_eq!(id, "nonexistent");
+        } else {
+            panic!("Expected ScanNotFound error");
+        }
+    }
+
+    // ==================== update_progress tests ====================
+
+    #[test]
+    fn test_update_progress() {
+        let manager = create_test_manager();
+        manager
+            .create_scan(
+                "scan_001",
+                vec!["192.168.1.1".to_string()],
+                "syn".to_string(),
+            )
+            .unwrap();
+
+        let progress = ScanProgress {
+            total_hosts: 10,
+            completed_hosts: 5,
+            percentage: 50.0,
+            current_phase: Some("port_scanning".to_string()),
+            pps: Some(1000),
+            eta_seconds: Some(30),
+        };
+
+        let result = manager.update_progress("scan_001", progress.clone());
+        assert!(result.is_ok());
+
+        let task = manager.get_scan_summary("scan_001").unwrap();
+        assert_eq!(task.progress.total_hosts, 10);
+        assert_eq!(task.progress.completed_hosts, 5);
+        assert_eq!(task.progress.percentage, 50.0);
+    }
+
+    // ==================== cancel_scan tests ====================
+
+    #[test]
+    fn test_cancel_scan() {
+        let manager = create_test_manager();
+        manager
+            .create_scan(
+                "scan_001",
+                vec!["192.168.1.1".to_string()],
+                "syn".to_string(),
+            )
+            .unwrap();
+
+        let result = manager.cancel_scan("scan_001");
+        assert!(result.is_ok());
+
+        let task = manager.get_scan_summary("scan_001").unwrap();
+        assert_eq!(task.status, ScanStatus::Cancelled);
+        assert!(task.completed_at.is_some());
+    }
+
+    #[test]
+    fn test_cancel_scan_nonexistent() {
+        let manager = create_test_manager();
+        let result = manager.cancel_scan("nonexistent");
+        assert!(result.is_err());
+    }
+
+    // ==================== list_scans tests ====================
+
+    #[test]
+    fn test_list_scans_empty() {
+        let manager = create_test_manager();
+        let scans = manager.list_scans();
+        assert!(scans.is_empty());
+    }
+
+    #[test]
+    fn test_list_scans_multiple() {
+        let manager = create_test_manager();
+        manager
+            .create_scan(
+                "scan_001",
+                vec!["192.168.1.1".to_string()],
+                "syn".to_string(),
+            )
+            .unwrap();
+        manager
+            .create_scan(
+                "scan_002",
+                vec!["192.168.1.2".to_string()],
+                "udp".to_string(),
+            )
+            .unwrap();
+        manager
+            .update_status("scan_001", ScanStatus::Running)
+            .unwrap();
+
+        let scans = manager.list_scans();
+        assert_eq!(scans.len(), 2);
+    }
+
+    // ==================== active_count/queued_count tests ====================
+
+    #[test]
+    fn test_active_count() {
+        let manager = create_test_manager();
+        manager
+            .create_scan(
+                "scan_001",
+                vec!["192.168.1.1".to_string()],
+                "syn".to_string(),
+            )
+            .unwrap();
+        manager
+            .create_scan(
+                "scan_002",
+                vec!["192.168.1.2".to_string()],
+                "syn".to_string(),
+            )
+            .unwrap();
+        manager
+            .update_status("scan_001", ScanStatus::Running)
+            .unwrap();
+
+        assert_eq!(manager.active_count(), 1);
+        assert_eq!(manager.queued_count(), 1);
+    }
+
+    // ==================== can_start_scan tests ====================
+
+    #[test]
+    fn test_can_start_scan_under_limit() {
+        let manager = create_test_manager(); // max 3
+        manager
+            .create_scan(
+                "scan_001",
+                vec!["192.168.1.1".to_string()],
+                "syn".to_string(),
+            )
+            .unwrap();
+        manager
+            .update_status("scan_001", ScanStatus::Running)
+            .unwrap();
+
+        assert!(manager.can_start_scan());
+    }
+
+    #[test]
+    fn test_can_start_scan_at_limit() {
+        let manager = create_test_manager(); // max 3
+        for i in 0..3 {
+            let id = format!("scan_{i:03}");
+            manager
+                .create_scan(&id, vec!["192.168.1.1".to_string()], "syn".to_string())
+                .unwrap();
+            manager.update_status(&id, ScanStatus::Running).unwrap();
+        }
+
+        assert!(!manager.can_start_scan());
+    }
+
+    // ==================== create_scan_if_allowed tests ====================
+
+    #[test]
+    fn test_create_scan_if_allowed_under_limit() {
+        let manager = create_test_manager();
+        let result = manager.create_scan_if_allowed(
+            "scan_001",
+            vec!["192.168.1.1".to_string()],
+            "syn".to_string(),
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_create_scan_if_allowed_at_limit() {
+        let manager = create_test_manager(); // max 3
+        for i in 0..3 {
+            let id = format!("scan_{i:03}");
+            manager
+                .create_scan(&id, vec!["192.168.1.1".to_string()], "syn".to_string())
+                .unwrap();
+            manager.update_status(&id, ScanStatus::Running).unwrap();
+        }
+
+        let result = manager.create_scan_if_allowed(
+            "scan_003",
+            vec!["192.168.1.1".to_string()],
+            "syn".to_string(),
+        );
+        assert!(result.is_err());
+        if let ApiError::ScanLimitReached(max) = result.unwrap_err() {
+            assert_eq!(max, 3);
+        } else {
+            panic!("Expected ScanLimitReached error");
+        }
+    }
+
+    // ==================== results storage tests ====================
+
+    #[test]
+    fn test_store_and_get_results() {
+        let manager = create_test_manager();
+        manager
+            .create_scan(
+                "scan_001",
+                vec!["192.168.1.1".to_string()],
+                "syn".to_string(),
+            )
+            .unwrap();
+
+        let results = ScanResultsResponse {
+            scan_id: "scan_001".to_string(),
+            status: ScanStatus::Completed,
+            completed_at: Some(Utc::now()),
+            hosts: vec![],
+            statistics: rustnmap_output::models::ScanStatistics::default(),
+        };
+
+        let store_result = manager.store_results("scan_001", results.clone());
+        assert!(store_result.is_ok());
+
+        let retrieved = manager.get_scan_results("scan_001");
+        assert!(retrieved.is_some());
+        let retrieved = retrieved.unwrap();
+        assert_eq!(retrieved.scan_id, "scan_001");
+        assert_eq!(retrieved.status, ScanStatus::Completed);
+    }
+
+    #[test]
+    fn test_store_results_nonexistent_scan() {
+        let manager = create_test_manager();
+
+        let results = ScanResultsResponse {
+            scan_id: "nonexistent".to_string(),
+            status: ScanStatus::Completed,
+            completed_at: Some(Utc::now()),
+            hosts: vec![],
+            statistics: rustnmap_output::models::ScanStatistics::default(),
+        };
+
+        let store_result = manager.store_results("nonexistent", results);
+        assert!(store_result.is_err());
+        if let ApiError::ScanNotFound(id) = store_result.unwrap_err() {
+            assert_eq!(id, "nonexistent");
+        } else {
+            panic!("Expected ScanNotFound error");
+        }
+    }
+
+    #[test]
+    fn test_has_results() {
+        let manager = create_test_manager();
+        manager
+            .create_scan(
+                "scan_001",
+                vec!["192.168.1.1".to_string()],
+                "syn".to_string(),
+            )
+            .unwrap();
+
+        assert!(!manager.has_results("scan_001"));
+
+        let results = ScanResultsResponse {
+            scan_id: "scan_001".to_string(),
+            status: ScanStatus::Completed,
+            completed_at: Some(Utc::now()),
+            hosts: vec![],
+            statistics: rustnmap_output::models::ScanStatistics::default(),
+        };
+        manager.store_results("scan_001", results).unwrap();
+
+        assert!(manager.has_results("scan_001"));
+    }
+
+    // ==================== api key validation tests ====================
+
+    #[test]
+    fn test_validate_api_key_valid() {
+        let manager = create_test_manager();
+        assert!(manager.validate_api_key("test-api-key"));
+    }
+
+    #[test]
+    fn test_validate_api_key_invalid() {
+        let manager = create_test_manager();
+        assert!(!manager.validate_api_key("wrong-key"));
+    }
+
+    // ==================== available_slots tests ====================
+
+    #[test]
+    fn test_available_slots() {
+        let manager = create_test_manager(); // max 3
+        assert_eq!(manager.available_slots(), 3);
+
+        manager
+            .create_scan(
+                "scan_001",
+                vec!["192.168.1.1".to_string()],
+                "syn".to_string(),
+            )
+            .unwrap();
+        manager
+            .update_status("scan_001", ScanStatus::Running)
+            .unwrap();
+
+        assert_eq!(manager.available_slots(), 2);
     }
 }

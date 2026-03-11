@@ -377,11 +377,7 @@ impl Args {
                             "X" => args.output = Some(OutputFormat::Xml(path)),
                             "G" => args.output = Some(OutputFormat::Grepable(path)),
                             "A" => args.output = Some(OutputFormat::All(path)),
-                            _ => {
-                                return Err(ParseError::UnknownOption(format!(
-                                    "-o{format_char}"
-                                )))
-                            }
+                            _ => return Err(ParseError::UnknownOption(format!("-o{format_char}"))),
                         }
                     } else {
                         // --output long form
@@ -395,9 +391,7 @@ impl Args {
                                 "X" => args.output = Some(OutputFormat::Xml(path)),
                                 "G" => args.output = Some(OutputFormat::Grepable(path)),
                                 "A" => args.output = Some(OutputFormat::All(path)),
-                                _ => {
-                                    return Err(ParseError::UnknownOption(format!("-o{format}")))
-                                }
+                                _ => return Err(ParseError::UnknownOption(format!("-o{format}"))),
                             }
                         } else {
                             return Err(ParseError::InvalidValue("-o".to_string(), value_str));
@@ -415,10 +409,16 @@ impl Args {
                             if timing <= 5 {
                                 args.timing = Some(timing);
                             } else {
-                                return Err(ParseError::InvalidValue("-T".to_string(), timing_str.to_string()));
+                                return Err(ParseError::InvalidValue(
+                                    "-T".to_string(),
+                                    timing_str.to_string(),
+                                ));
                             }
                         } else {
-                            return Err(ParseError::InvalidValue("-T".to_string(), timing_str.to_string()));
+                            return Err(ParseError::InvalidValue(
+                                "-T".to_string(),
+                                timing_str.to_string(),
+                            ));
                         }
                     } else {
                         // Separate value
@@ -497,10 +497,16 @@ impl Args {
                         if val <= 9 {
                             args.version_intensity = Some(val);
                         } else {
-                            return Err(ParseError::InvalidValue("--version-intensity".to_string(), intensity));
+                            return Err(ParseError::InvalidValue(
+                                "--version-intensity".to_string(),
+                                intensity,
+                            ));
                         }
                     } else {
-                        return Err(ParseError::InvalidValue("--version-intensity".to_string(), intensity));
+                        return Err(ParseError::InvalidValue(
+                            "--version-intensity".to_string(),
+                            intensity,
+                        ));
                     }
                 }
 
@@ -619,7 +625,10 @@ impl Args {
                     if let Ok(parsed) = val.parse::<usize>() {
                         args.min_parallelism = Some(parsed);
                     } else {
-                        return Err(ParseError::InvalidValue("--min-parallelism".to_string(), val));
+                        return Err(ParseError::InvalidValue(
+                            "--min-parallelism".to_string(),
+                            val,
+                        ));
                     }
                 }
 
@@ -629,7 +638,10 @@ impl Args {
                     if let Ok(parsed) = val.parse::<usize>() {
                         args.max_parallelism = Some(parsed);
                     } else {
-                        return Err(ParseError::InvalidValue("--max-parallelism".to_string(), val));
+                        return Err(ParseError::InvalidValue(
+                            "--max-parallelism".to_string(),
+                            val,
+                        ));
                     }
                 }
 
@@ -769,7 +781,10 @@ impl Args {
                     if let Ok(val) = hops.parse::<u8>() {
                         args.traceroute_hops = Some(val);
                     } else {
-                        return Err(ParseError::InvalidValue("--traceroute-hops".to_string(), hops));
+                        return Err(ParseError::InvalidValue(
+                            "--traceroute-hops".to_string(),
+                            hops,
+                        ));
                     }
                 }
 
@@ -792,7 +807,10 @@ impl Args {
                     if let Ok(val) = size.parse::<usize>() {
                         args.host_group_size = Some(val);
                     } else {
-                        return Err(ParseError::InvalidValue("--host-group-size".to_string(), size));
+                        return Err(ParseError::InvalidValue(
+                            "--host-group-size".to_string(),
+                            size,
+                        ));
                     }
                 }
 
@@ -827,7 +845,10 @@ impl Args {
                     if let Ok(val) = timeout.parse::<u64>() {
                         args.host_timeout = Some(val);
                     } else {
-                        return Err(ParseError::InvalidValue("--host-timeout".to_string(), timeout));
+                        return Err(ParseError::InvalidValue(
+                            "--host-timeout".to_string(),
+                            timeout,
+                        ));
                     }
                 }
 

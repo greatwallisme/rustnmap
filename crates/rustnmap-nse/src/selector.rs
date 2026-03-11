@@ -203,7 +203,7 @@ impl ScriptSelector {
         }
 
         match &tokens[0] {
-            Token::Identifier(id) => Self::parse_identifier(id),
+            Token::Identifier(id) => Ok(Self::parse_identifier(id)),
             _ => Err(SelectorError::InvalidSyntax(
                 "Expected identifier".to_string(),
             )),
@@ -211,14 +211,14 @@ impl ScriptSelector {
     }
 
     /// Parse an identifier (category or pattern).
-    fn parse_identifier(id: &str) -> Result<Self, SelectorError> {
+    fn parse_identifier(id: &str) -> Self {
         // Check if it's a known category
         if let Ok(category) = Self::parse_category(id) {
-            return Ok(Self::Category(vec![category]));
+            return Self::Category(vec![category]);
         }
 
         // Otherwise treat as pattern
-        Ok(Self::Pattern(id.to_string()))
+        Self::Pattern(id.to_string())
     }
 
     /// Parse a category name.
@@ -273,9 +273,8 @@ impl ScriptSelector {
 
         // Second pass: identify operators
         let mut result = Vec::new();
-        let mut iter = tokens.into_iter().peekable();
 
-        while let Some(token) = iter.next() {
+        for token in tokens {
             match token {
                 Token::Identifier(ref id) if id.eq_ignore_ascii_case("and") => {
                     result.push(Token::And);
@@ -337,8 +336,11 @@ impl ScriptSelector {
                     .collect()
             }
             Self::Not(operand) => {
-                let excluded: std::collections::HashSet<_> =
-                    operand.select(db).into_iter().map(|s| s.id.clone()).collect();
+                let excluded: std::collections::HashSet<_> = operand
+                    .select(db)
+                    .into_iter()
+                    .map(|s| s.id.clone())
+                    .collect();
 
                 db.all_scripts()
                     .into_iter()

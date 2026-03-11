@@ -85,3 +85,103 @@ pub async fn list_scans(
 
     Ok(Json(crate::ApiResponse::success(response)))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_list_scans_query_default() {
+        let query = ListScansQuery::default();
+        assert!(query.status.is_none());
+        assert!(query.limit.is_none());
+        assert!(query.offset.is_none());
+    }
+
+    #[test]
+    fn test_list_scans_query_deserialize() {
+        let query: ListScansQuery =
+            serde_urlencoded::from_str("status=running&limit=10&offset=5").unwrap();
+        assert_eq!(query.status, Some("running".to_string()));
+        assert_eq!(query.limit, Some(10));
+        assert_eq!(query.offset, Some(5));
+    }
+
+    #[test]
+    fn test_list_scans_query_partial() {
+        let query: ListScansQuery = serde_urlencoded::from_str("limit=50").unwrap();
+        assert!(query.status.is_none());
+        assert_eq!(query.limit, Some(50));
+        assert!(query.offset.is_none());
+    }
+
+    #[test]
+    fn test_scan_summary_item_serialization() {
+        let item = ScanSummaryItem {
+            id: "scan_001".to_string(),
+            status: ScanStatus::Running,
+            created_at: chrono::Utc::now(),
+            targets: vec!["192.168.1.1".to_string()],
+            progress: ScanProgress {
+                total_hosts: 10,
+                completed_hosts: 5,
+                percentage: 50.0,
+                current_phase: Some("port_scanning".to_string()),
+                pps: Some(1000),
+                eta_seconds: Some(30),
+            },
+        };
+
+        let json = serde_json::to_string(&item).unwrap();
+        assert!(json.contains("scan_001"));
+        assert!(json.contains("running"));
+        assert!(json.contains("port_scanning"));
+    }
+
+    #[test]
+    fn test_list_scans_response_serialization() {
+        let response = ListScansResponse {
+            scans: vec![],
+            total: 0,
+            limit: 20,
+            offset: 0,
+        };
+
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains("\"scans\":[]"));
+        assert!(json.contains("\"total\":0"));
+        assert!(json.contains("\"limit\":20"));
+        assert!(json.contains("\"offset\":0"));
+    }
+
+    #[test]
+    fn test_list_scans_response_with_items() {
+        let item = ScanSummaryItem {
+            id: "scan_001".to_string(),
+            status: ScanStatus::Completed,
+            created_at: chrono::Utc::now(),
+            targets: vec!["10.0.0.1".to_string(), "10.0.0.2".to_string()],
+            progress: ScanProgress {
+                total_hosts: 2,
+                completed_hosts: 2,
+                percentage: 100.0,
+                current_phase: None,
+                pps: None,
+                eta_seconds: None,
+            },
+        };
+
+        let response = ListScansResponse {
+            scans: vec![item],
+            total: 1,
+            limit: 10,
+            offset: 0,
+        };
+
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains("scan_001"));
+        assert!(json.contains("completed"));
+        assert!(json.contains("10.0.0.1"));
+        assert!(json.contains("100.0"));
+    }
+}
