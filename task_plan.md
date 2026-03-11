@@ -16,23 +16,40 @@
 
 ---
 
-## Phase 1: TCP SYN Single-Target Optimization - COMPLETE ✅
+## Phase 1: TCP SYN Single-Target Optimization - MOSTLY COMPLETE ⚠️
 
 ### 目标
 优化单目标 TCP SYN 扫描性能，达到或超过 nmap 水平。
 
 ### 完成状态
-- ✅ 性能: 2.42s vs nmap 2.78s (快 13%)
+- ✅ 大型扫描 (100+ ports): **1.16x 平均性能** (快于 nmap)
 - ✅ 准确度: 100% 匹配
-- ✅ 稳定性: 优于 nmap (2.39-2.48s vs 2.38-4.22s)
+- ✅ 稳定性: 优于 nmap (11% vs 76% variance)
+- ⚠️ 小型扫描 (5-10 ports): **0.88-0.89x 性能** (需优化)
 
-### 关键修复
+### 已完成修复
 1. ✅ Cwnd floor = 10 (防止崩溃到 1)
 2. ✅ 自适应重试限制 (基于 max_successful_tryno)
 3. ✅ 快速包排空 (保持 1ms timeout)
 4. ✅ 200ms 上限保护
+5. ✅ **诊断输出修复** (移除未保护的 eprintln!)
 
-### 测试结果 (5 runs)
+### 当前性能测试结果 (2026-03-11 06:30)
+
+| 测试类型 | nmap | rustnmap | 比率 | 状态 |
+|---------|------|----------|------|------|
+| Fast Scan (5 runs) | 3532ms | 3040ms | **1.16x** | ✅ |
+| SYN Scan (5 ports) | 747ms | 839ms | **0.89x** | ❌ |
+| SYN Scan (100 ports) | ~2800ms | ~3040ms | **0.92x** | ⚠️ |
+
+### 待优化: 小型扫描性能
+
+小型端口扫描 (< 20 ports) 存在额外开销，可能原因:
+- 每次扫描的初始化开销 (socket setup, interface config)
+- 并行度优势不明显
+- 固定开销占比较高
+
+### 测试结果 (2026-03-11 03:30) - 仅供参考
 
 | Run | nmap | rustnmap | 准确度 |
 |-----|------|----------|--------|

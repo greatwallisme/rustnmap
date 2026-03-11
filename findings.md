@@ -161,6 +161,63 @@ Add more detailed instrumentation:
 | `ultrascan.rs:454` | Cwnd floor = 10 | Committed |
 | `ultrascan.rs:893-898` | Adaptive retry | Committed |
 | `ultrascan.rs:195` | Remove 200ms clamp | Committed |
+| `ultrascan.rs:925-935, 1179-1188` | Fix diagnostic behind feature flag | Pending commit |
 | `task_plan.md` | Updated status | Updated |
 | `progress.md` | Updated log | Updated |
 | `findings.md` | This file | Updated |
+
+---
+
+## Session 2026-03-11: Diagnostic Output Fix
+
+### Problem Discovered
+
+During verification testing, rustnmap was performing **below expectations** (0.86x instead of expected 1.00x). Investigation revealed that **diagnostic output code was NOT behind the `#[cfg(feature = "diagnostic")]` feature flag**.
+
+### Root Cause
+
+The following diagnostic code was **always executing**:
+- `eprintln!("[DIAG] iter=...")` - Every 5 or 100 iterations (hundreds per scan)
+- `eprintln!("=== SCAN TIMING DIAGNOSTIC ===")` - At end of scan
+- All timing variables (`diag_send_total`, `diag_wait_total`, etc.)
+
+**Impact**: Each `eprintln!` call involves:
+1. Formatted string creation
+2. System call to write to stderr
+3. Potential I/O waiting
+
+This added significant overhead, especially for scans with many iterations.
+
+### Fix Applied
+
+Wrapped all diagnostic code with `#[cfg(feature = "diagnostic")]`:
+- Line 925-935: Iteration progress output
+- Lines 910-916: Diagnostic variable declarations
+- Lines 996-997, 1027, 1030, 1043: Send timing
+- Lines 1081, 1149: Wait timing
+- Lines 1154-1159: Timeout timing
+- Lines 1171-1190: Retry timing
+- Lines 1179-1188: Summary output
+
+### Test Results After Fix
+
+| Test Type | nmap avg | rustnmap avg | Ratio | Status |
+|-----------|----------|--------------|-------|--------|
+| Fast Scan (5 runs) | 3532ms | 3040ms | **1.16x** | ✅ Faster |
+| SYN Scan (5 ports) | 747ms | 839ms | **0.89x** | ⚠️ 11% slower |
+| SYN Scan (100 ports) | ~2800ms | ~3040ms | **0.92x** | ⚠️ 8% slower |
+
+### Key Findings
+
+1. **rustnmap is more consistent**: 11% variance vs 76% for nmap
+2. **Fast Scan meets target**: 1.16x average (but individual runs vary 0.86x - 1.52x)
+3. **Small port count scans have higher relative overhead**: SYN scan with 5 ports shows 0.88x
+
+### Remaining Gap
+
+**Small port count scans** (e.g., 5 ports) still show 0.88-0.89x performance. Possible causes:
+- Per-scan initialization overhead
+- Socket setup/teardown cost
+- Less opportunity for parallelism to show benefit
+
+**Next investigation**: Profile per-scan overhead vs per-probe cost.

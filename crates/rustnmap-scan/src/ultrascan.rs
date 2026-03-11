@@ -906,13 +906,20 @@ impl ParallelScanEngine {
         #[cfg(feature = "diagnostic")]
         let mut packets_received = 0;
 
-        // Temporary timing instrumentation
+        // Temporary timing instrumentation (only when diagnostic feature is enabled)
+        #[cfg(feature = "diagnostic")]
         let mut diag_send_total = Duration::ZERO;
+        #[cfg(feature = "diagnostic")]
         let mut diag_wait_total = Duration::ZERO;
+        #[cfg(feature = "diagnostic")]
         let mut diag_timeout_total = Duration::ZERO;
+        #[cfg(feature = "diagnostic")]
         let mut diag_retry_total = Duration::ZERO;
+        #[cfg(feature = "diagnostic")]
         let mut diag_total_sent: usize = 0;
+        #[cfg(feature = "diagnostic")]
         let mut diag_total_retries: usize = 0;
+        #[cfg(feature = "diagnostic")]
         let mut diag_total_timeouts: usize = 0;
 
         // Main scan loop
@@ -922,6 +929,7 @@ impl ParallelScanEngine {
             // Get adaptive parallelism from congestion controller
             let current_cwnd = self.congestion.cwnd();
 
+            #[cfg(feature = "diagnostic")]
             if loop_iterations <= 5 || loop_iterations % 100 == 0 {
                 let timeout = self.congestion.recommended_timeout();
                 eprintln!(
@@ -985,7 +993,9 @@ impl ParallelScanEngine {
             #[cfg(feature = "diagnostic")]
             let send_start = Instant::now();
 
+            #[cfg(feature = "diagnostic")]
             let diag_send_start = Instant::now();
+            #[cfg(feature = "diagnostic")]
             let diag_sent_before = diag_total_sent;
 
             // Send more probes if we haven't reached congestion window
@@ -1016,7 +1026,10 @@ impl ParallelScanEngine {
                     self.congestion.on_packet_sent();
                     self.rate_limiter.record_sent();
                     probes_sent_this_batch += 1;
-                    diag_total_sent += 1;
+                    #[cfg(feature = "diagnostic")]
+                    {
+                        diag_total_sent += 1;
+                    }
                 } else {
                     break;
                 }
@@ -1025,9 +1038,8 @@ impl ParallelScanEngine {
             #[cfg(feature = "diagnostic")]
             {
                 total_send_time += send_start.elapsed();
+                diag_send_total += diag_send_start.elapsed();
             }
-
-            diag_send_total += diag_send_start.elapsed();
 
             // Wait for packets and drain all available responses (nmap waitForResponses pattern)
             // Calculate optimal wait time:
@@ -1065,8 +1077,9 @@ impl ParallelScanEngine {
 
             #[cfg(feature = "diagnostic")]
             let wait_start = Instant::now();
-
+            #[cfg(feature = "diagnostic")]
             let diag_wait_start = Instant::now();
+
             let wait_phase_start = Instant::now(); // Track total time in this wait phase
 
             loop {
@@ -1134,17 +1147,21 @@ impl ParallelScanEngine {
             #[cfg(feature = "diagnostic")]
             {
                 total_wait_time += wait_start.elapsed();
+                diag_wait_total += diag_wait_start.elapsed();
             }
 
-            diag_wait_total += diag_wait_start.elapsed();
-
             // Check for probe timeouts and handle retries
+            #[cfg(feature = "diagnostic")]
             let diag_timeout_start = Instant::now();
+            #[cfg(feature = "diagnostic")]
             let diag_outstanding_before = outstanding.len();
             self.check_timeouts(&mut outstanding, &mut retry_probes, &mut results, loop_iterations, max_successful_tryno);
-            let diag_timed_out = diag_outstanding_before - outstanding.len();
-            diag_total_timeouts += diag_timed_out;
-            diag_timeout_total += diag_timeout_start.elapsed();
+            #[cfg(feature = "diagnostic")]
+            {
+                let diag_timed_out = diag_outstanding_before - outstanding.len();
+                diag_total_timeouts += diag_timed_out;
+                diag_timeout_total += diag_timeout_start.elapsed();
+            }
 
             // Reset batch counter only after sending a full batch and draining responses
             // This matches nmap's behavior: reset after waitForResponses() when batch is complete
@@ -1156,6 +1173,7 @@ impl ParallelScanEngine {
             // Note: Retry probes are NOT limited by cwnd because they already timed out
             // and need to be retried to reach max_retries. This matches nmap's behavior.
             // Only max_parallelism limits retry probes to prevent resource exhaustion.
+            #[cfg(feature = "diagnostic")]
             let diag_retry_start = Instant::now();
             for probe in retry_probes.drain(..) {
                 if outstanding.len() < self.max_parallelism {
@@ -1165,26 +1183,35 @@ impl ParallelScanEngine {
                     }
                     self.resend_probe(probe, &mut outstanding)?;
                     self.rate_limiter.record_sent();
-                    diag_total_retries += 1;
+                    #[cfg(feature = "diagnostic")]
+                    {
+                        diag_total_retries += 1;
+                    }
                 } else {
                     // Can't resend due to parallelism limit, mark as filtered
                     results.entry(probe.port).or_insert(PortState::Filtered);
                 }
             }
-            diag_retry_total += diag_retry_start.elapsed();
+            #[cfg(feature = "diagnostic")]
+            {
+                diag_retry_total += diag_retry_start.elapsed();
+            }
         }
 
         // Print diagnostic summary
-        let total_time = start_time.elapsed();
-        eprintln!("\n=== SCAN TIMING DIAGNOSTIC ===");
-        eprintln!("Total: {total_time:?}");
-        eprintln!("Send:    {diag_send_total:?} (sent {diag_total_sent} probes)");
-        eprintln!("Wait:    {diag_wait_total:?}");
-        eprintln!("Timeout: {diag_timeout_total:?} ({diag_total_timeouts} timed out)");
-        eprintln!("Retry:   {diag_retry_total:?} ({diag_total_retries} retries)");
-        eprintln!("Iterations: {loop_iterations}");
-        eprintln!("Results: {} ports", results.len());
-        eprintln!("==============================\n");
+        #[cfg(feature = "diagnostic")]
+        {
+            let total_time = start_time.elapsed();
+            eprintln!("\n=== SCAN TIMING DIAGNOSTIC ===");
+            eprintln!("Total: {total_time:?}");
+            eprintln!("Send:    {diag_send_total:?} (sent {diag_total_sent} probes)");
+            eprintln!("Wait:    {diag_wait_total:?}");
+            eprintln!("Timeout: {diag_timeout_total:?} ({diag_total_timeouts} timed out)");
+            eprintln!("Retry:   {diag_retry_total:?} ({diag_total_retries} retries)");
+            eprintln!("Iterations: {loop_iterations}");
+            eprintln!("Results: {} ports", results.len());
+            eprintln!("==============================\n");
+        }
 
         // Explicitly drop the sender to signal the receiver task to stop
         drop(packet_tx);
