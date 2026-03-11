@@ -1,64 +1,94 @@
 # Progress Log: RustNmap Development
 
-> **Updated**: 2026-03-10 23:58
-> **Status**: Root Cause FOUND - Ready to Implement Fix
+> **Updated**: 2026-03-11 00:30
+> **Status**: Phase 2 Partial Progress - NOT COMPLETE
 
 ---
 
-## Session: Post-Refactoring Performance Analysis (2026-03-10)
+## Current State Summary
 
-### Root Cause Analysis - COMPLETE
-**Problem**: Fast Scan 6.0s vs nmap 2.4s (2.5x slower)
-**Diagnostic**: 96.6% wait time, 373 iterations for 100 ports
-**Root Cause**: Initial probe timeout too long (1000ms)
+**用户要求**:
+1. 速度必须比nmap快 (ratio >= 0.95x)
+2. 准确度必须与nmap完全相同
 
-### Evidence Trail
-1. **Memory Search (#3084-3086, #3088, #3089)**
-   - Previous optimization removed per-probe scan_delay
-   - But performance regression persists
-   - Congestion control fix attempted but didn't help
+**当前状态**:
+- Fast Scan: 4728ms vs nmap 4000ms (0.84x) - ❌ 未达标
+- Fast + Top Ports: 5078ms vs nmap 2171ms (0.42x) - ❌ 严重未达标
+- Top Ports: 2130ms vs nmap 2567ms (1.20x) - ✅ 达标
+- 准确度: 未验证
 
-2. **Code Analysis (ultrascan.rs:189-209)**
-   ```rust
-   fn recommended_timeout(&self) -> Duration {
-       if self.first_measurement.load(Ordering::Relaxed) {
-           // First probe: use initial_rtt directly (1000ms for T3)
-           self.initial_rtt.min(self.max_rtt)
-       }
-   }
-   ```
-   - For T3 Fast Scan: `initial_rtt = 1000ms`
-   - nmap uses `MIN(initial_rtt, 1000)` but our code uses full value
+---
 
-3. **Cascading Effect**
-   - First probe times out after 1000ms
-   - `on_packet_lost()` → cwnd halves
-   - Subsequent probes also time out (timeout still 1000ms)
-   - cwnd drops to 1 and stays for 150 iterations
-   - Each iteration: send 1 probe, wait 10ms, check timeout
-   - Result: 373 iterations, 6.0s total time
+## Session: 2026-03-10 to 2026-03-11
 
-### Solution Design
-Clamp initial RTT timeout to max 200ms for Fast Scan
+### Root Cause Analysis Completed
 
+**问题**: Fast Scan慢 (6404ms vs nmap 3913ms)
+
+**分析方法**:
+1. Memory search - 找到之前的优化记录
+2. 代码分析 - 检查congestion control和timeout逻辑
+3. 诊断运行 - 收集timing数据
+
+**发现的根因**:
+- 初始RTT timeout (1000ms) 过长
+- 导致cwnd cascade collapse
+- 诊断显示: 96.6%等待时间, 373次迭代
+
+### Fix Applied
+
+**修改**: `crates/rustnmap-scan/src/ultrascan.rs:195`
 ```rust
-fn recommended_timeout(&self) -> Duration {
-    if self.first_measurement.load(Ordering::Relaxed) {
-        // First probe: clamp to reasonable max for Fast Scan
-        self.initial_rtt.min(self.max_rtt).min(Duration::from_millis(200))
-    }
-}
+// Before:
+self.initial_rtt.min(self.max_rtt)
+
+// After:
+self.initial_rtt.min(self.max_rtt).min(Duration::from_millis(200))
 ```
 
-### Implementation Plan
-- [ ] Modify `recommended_timeout()` in ultrascan.rs
-- [ ] Build with diagnostic feature
-- [ ] Run Fast Scan test
-- [ ] Verify iterations drop to ~50
-- [ ] Run full benchmark
-- [ ] Commit if successful
+### Results After Fix
 
-### Expected Outcome
-- Fast Scan: 6.0s → ~2.5s (match nmap)
-- Iterations: 373 → ~50
-- cwnd: No collapse to 1
+| Test | Before | After | nmap | Ratio | Status |
+|------|--------|-------|------|-------|--------|
+| Fast Scan | 6404ms | 4728ms | 4000ms | 0.84x | ❌ 未达标 |
+| Top Ports | 5525ms | 2130ms | 2567ms | 1.20x | ✅ 达标 |
+| Fast + Top Ports | 5405ms | 5078ms | 2171ms | 0.42x | ❌ 严重未达标 |
+
+**结论**:
+- 有改进但未达标
+- Fast Scan仍慢18%
+- Fast + Top Ports严重问题未解决
+- 准确度尚未验证
+
+---
+
+## Remaining Work
+
+### P0 - 必须完成
+
+1. **准确度验证** - 未开始
+   - 逐端口对比rustnmap vs nmap结果
+   - 确保每个端口状态完全一致
+
+2. **Fast Scan优化** - 未完成
+   - 当前0.84x，需要达到>=0.95x
+   - 差距18%，需要进一步优化
+
+3. **Fast + Top Ports调查** - 未开始
+   - 当前0.42x，严重问题
+   - 需要深入分析为什么这么慢
+
+### P1 - 后续工作
+
+4. **IPv6性能** (0.18x) - 待处理
+5. **多目标优化** (0.47x) - 待处理
+
+---
+
+## Files Modified This Session
+
+- `crates/rustnmap-scan/src/ultrascan.rs` - Initial RTT clamp
+- `benchmarks/comparison_test.sh` - Fixed CLI options
+- `task_plan.md` - Updated status
+- `progress.md` - This file
+- `findings.md` - Updated findings
