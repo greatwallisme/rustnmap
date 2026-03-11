@@ -333,13 +333,10 @@ impl Args {
 
                 // Compound scan options (-sS, -sT, -sU, -sV, -sC, -sF, -sN, -sX, -sM, -sA, -sW)
                 Arg::Short('s') => {
-                    // Use raw_args to get compound option
-                    let mut raw = parser.raw_args()?;
-                    if let Some(next_arg) = raw.next() {
-                        let next_str = next_arg.to_string_lossy();
-
-                        // Handle compound scan types
-                        for ch in next_str.chars() {
+                    // Check for attached value first (e.g., -sT where T is attached to -s)
+                    if let Some(attached) = parser.optional_value() {
+                        let scan_chars = attached.to_string_lossy();
+                        for ch in scan_chars.chars() {
                             match ch {
                                 'S' => args.scan_syn = true,
                                 'T' => args.scan_connect = true,
@@ -366,10 +363,9 @@ impl Args {
 
                 // Compound output options (-oN file, -oX file, -oG file, -oA file)
                 Arg::Short('o') => {
-                    // Use raw_args to get compound option
-                    let mut raw = parser.raw_args()?;
-                    if let Some(next_arg) = raw.next() {
-                        let format_char = next_arg.to_string_lossy();
+                    // Check for attached format char first (e.g., -oN where N is attached)
+                    if let Some(format_os) = parser.optional_value() {
+                        let format_char = format_os.to_string_lossy();
                         let path = PathBuf::from(parser.value()?.string()?);
 
                         match format_char.as_ref() {
@@ -380,7 +376,7 @@ impl Args {
                             _ => return Err(ParseError::UnknownOption(format!("-o{format_char}"))),
                         }
                     } else {
-                        // --output long form
+                        // --output long form or -o with space
                         let value = parser.value()?;
                         // Try parsing as format:path
                         let value_str = value.string()?;
@@ -401,10 +397,9 @@ impl Args {
 
                 // Timing template (-T0 through -T5)
                 Arg::Short('T') => {
-                    // Check if next arg is attached (e.g., -T4) or separate
-                    let mut raw = parser.raw_args()?;
-                    if let Some(next_arg) = raw.next() {
-                        let timing_str = next_arg.to_string_lossy();
+                    // Check if value is attached (e.g., -T4)
+                    if let Some(timing_os) = parser.optional_value() {
+                        let timing_str = timing_os.to_string_lossy();
                         if let Ok(timing) = timing_str.parse::<u8>() {
                             if timing <= 5 {
                                 args.timing = Some(timing);
@@ -547,10 +542,9 @@ impl Args {
 
                 // Fragment MTU
                 Arg::Short('f') => {
-                    // Check if value is attached
-                    let mut raw = parser.raw_args()?;
-                    if let Some(next_arg) = raw.next() {
-                        let mtu_str = next_arg.to_string_lossy();
+                    // Check if value is attached (e.g., -f16)
+                    if let Some(mtu_os) = parser.optional_value() {
+                        let mtu_str = mtu_os.to_string_lossy();
                         if let Ok(mtu) = mtu_str.parse::<u16>() {
                             args.fragment_mtu = Some(mtu);
                         } else {
@@ -822,9 +816,8 @@ impl Args {
                 // Disable ping (skip host discovery)
                 Arg::Short('P') => {
                     // Check if it's compound like -Pn
-                    let mut raw = parser.raw_args()?;
-                    if let Some(next_arg) = raw.next() {
-                        let next_str = next_arg.to_string_lossy();
+                    if let Some(next_os) = parser.optional_value() {
+                        let next_str = next_os.to_string_lossy();
                         if next_str == "n" {
                             args.disable_ping = true;
                         } else {

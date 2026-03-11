@@ -18,6 +18,8 @@
 //! This is the binary entry point that parses command-line arguments
 //! and coordinates the scanning workflow using the orchestrator library.
 
+use std::io::Write;
+
 use rustnmap_cli::args::Args;
 use rustnmap_common::Result;
 use tracing::info;
@@ -28,7 +30,8 @@ use rustnmap_cli::cli::run_scan;
 async fn main() -> Result<()> {
     // Parse command-line arguments
     let args = Args::parse().unwrap_or_else(|e| {
-        tracing::error!("Failed to parse arguments: {e}");
+        let mut stderr = std::io::stderr().lock();
+        writeln!(stderr, "Failed to parse arguments: {e}").ok();
         std::process::exit(1);
     });
 

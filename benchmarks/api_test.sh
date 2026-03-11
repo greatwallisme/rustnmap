@@ -31,7 +31,7 @@ API_KEY=""
 START_SERVER=true
 TEST_TARGET="${API_TEST_TARGET:-127.0.0.1}"
 TIMEOUT=30
-RESULTS_DIR="$SCRIPT_DIR/test_outputs/api"
+RESULTS_DIR="$SCRIPT_DIR/logs"
 LOG_FILE="$RESULTS_DIR/api_test_$(date +%Y%m%d_%H%M%S).log"
 
 # Colors for output

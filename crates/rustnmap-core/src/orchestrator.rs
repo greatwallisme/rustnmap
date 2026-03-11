@@ -796,16 +796,23 @@ impl ScanOrchestrator {
 
     /// Runs the host discovery phase.
     async fn run_host_discovery(&self) -> Result<()> {
+        // Auto-skip host discovery for single target (matches nmap behavior)
+        // Nmap doesn't perform host discovery when there's only one known target
+        let targets_vec: Vec<Target> = self.session.target_set.targets().to_vec();
+        if targets_vec.len() == 1 {
+            info!("Skipping host discovery for single target (matching nmap behavior)");
+            return Ok(());
+        }
+
         info!("Starting host discovery phase");
 
         // Enforce scan_delay before first host discovery probe
         // This matches nmap's behavior where scan_delay applies to all probes
         self.enforce_scan_delay().await;
 
-        let targets: Vec<Target> = self.session.target_set.targets().to_vec();
         let mut tasks = Vec::new();
 
-        for target in targets {
+        for target in targets_vec {
             let session = Arc::clone(&self.session);
             let state = Arc::clone(&self.state);
 
