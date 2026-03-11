@@ -788,31 +788,6 @@ impl Drop for MmapPacketEngine {
 | `cwnd_max` | 10 | 10 | 10 | dynamic | dynamic | dynamic |
 
 
-### 2.3.7 性能优化实践 (2026-03-11)
-
-#### 2.3.7.1 优化成果
-
-经过系统性分析和优化，rustnmap 已达到并超越 nmap 的性能水平：
-
-| 指标 | 初始状态 | 优化后 | nmap | 状态 |
-|------|---------|--------|------|------|
-| Fast Scan | 6.40s | 2.42s | 2.78s | ✅ 快 13% |
-| 改进幅度 | - | 62% | - | ✅ 显著 |
-| 准确度 | - | 100% | 100% | ✅ 完美 |
-| 稳定性 | - | 2.39-2.48s | 2.38-4.22s | ✅ 更稳定 |
-
-#### 2.3.7.2 关键优化措施
-
-**优化 1: 拥塞窗口最小值保护** - 设置 cwnd 最小值为 10，防止崩溃到 1
-
-**优化 2: 自适应重试限制** - 基于 max_successful_tryno 动态调整重试次数
-
-**优化 3: 快速数据包排空** - 收到包后保持 1ms 超时，不增加到 10ms
-
-**优化 4: 200ms 上限保护** - 添加等待阶段的 200ms 上限
-
-详细信息见：`doc/modules/port-scanning.md` 第 3.2.6 节
-
 ### 2.3.6 文件结构规划
 
 ```
@@ -1069,11 +1044,11 @@ mod tests {
 ```bash
 $ nmap -sS -p 22 127.0.0.1
 PORT   STATE SERVICE
-22/tcp open   ssh          # ✅ 正确
+22/tcp open   ssh
 
 $ rustnmap --scan-syn -p 22 127.0.0.1
 PORT     STATE SERVICE
-22/tcp  filtered ssh       # ❌ 错误
+22/tcp  filtered ssh
 ```
 
 ### 2.5.2 根本原因
@@ -1198,8 +1173,8 @@ impl RawSocket {
 
 | 场景 | PACKET_MMAP | 原因 |
 |------|------------|------|
-| 远程 IP 扫描 | ✅ 正常 | 路由对称 |
-| Localhost 扫描 | ❌ 受限 | 响应路由到外部接口 |
+| 远程 IP 扫描 | 支持 | 路由对称 |
+| Localhost 扫描 | 受限 | 响应路由到外部接口 |
 
 #### 参考实现
 
