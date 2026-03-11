@@ -1,0 +1,21 @@
+RustNmap API Test Log - Tue Mar 10 02:01:46 AM PDT 2026
+Server: 127.0.0.1:8080
+Target: 127.0.0.1
+=============================================
+2026-03-10 02:01:46 [INFO] [0;34m=============================================[0m
+2026-03-10 02:01:46 [INFO] [0;34m   RustNmap API Integration Tests[0m
+2026-03-10 02:01:46 [INFO] [0;34m=============================================[0m
+2026-03-10 02:01:46 [INFO] [0;34mServer address: http://127.0.0.1:8080[0m
+2026-03-10 02:01:46 [INFO] [0;34mTest target: 127.0.0.1[0m
+2026-03-10 02:01:46 [INFO] [0;34mResults directory: /root/project/rust-nmap/benchmarks/test_outputs/api[0m
+2026-03-10 02:01:46 [INFO] [0;34m[0m
+2026-03-10 02:01:46 [INFO] [0;34mUsing existing server at: 127.0.0.1:8080[0m
+2026-03-10 02:01:46 [WARN] [1;33mUsing provided/generated API key (may not match server)[0m
+2026-03-10 02:01:46 [INFO] [0;34mUsing API key: a97a02c031a48147...[0m
+2026-03-10 02:01:46 [INFO] [0;34m[0m
+2026-03-10 02:01:46 [INFO] [0;34m=============================================[0m
+2026-03-10 02:01:46 [INFO] [0;34m   Running Tests[0m
+2026-03-10 02:01:46 [INFO] [0;34m=============================================[0m
+2026-03-10 02:01:46 [INFO] [0;34m[0m
+2026-03-10 02:01:46 [INFO] [0;34mRunning: Health Check[0m
+2026-03-10 02:01:46 [FAIL] [0;31mHealth Check - Unexpected status: [0m

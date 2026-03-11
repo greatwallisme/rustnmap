@@ -90,12 +90,12 @@ mod tests {
             }
         }"#;
 
-        let detail: ScanDetail = serde_json::from_str(&json).unwrap();
+        let detail: ScanDetail = serde_json::from_str(json).unwrap();
         assert_eq!(detail.id, "scan_002");
         assert_eq!(detail.status, ScanStatus::Completed);
         assert_eq!(detail.targets, vec!["10.0.0.1"]);
         assert_eq!(detail.scan_type, "connect");
-        assert_eq!(detail.progress.percentage, 100.0);
+        assert!((detail.progress.percentage - 100.0).abs() < f64::EPSILON);
     }
 
     #[test]

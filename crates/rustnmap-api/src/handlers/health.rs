@@ -60,8 +60,8 @@ mod tests {
         assert!(json.contains("healthy"));
         assert!(json.contains("1.0.0"));
         assert!(json.contains("3600"));
-        assert!(json.contains("5"));
-        assert!(json.contains("2"));
+        assert!(json.contains('5'));
+        assert!(json.contains('2'));
     }
 
     #[test]

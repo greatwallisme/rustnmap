@@ -1,6 +1,6 @@
 //! API Server example - Start the REST API server
 //!
-//! This example demonstrates how to start the RustNmap REST API server.
+//! This example demonstrates how to start the `RustNmap` REST API server.
 //!
 //! # Usage
 //!

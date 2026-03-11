@@ -155,9 +155,15 @@ impl ScanManager {
     }
 
     /// Check if a new scan can be started based on max concurrent limit.
+    /// Counts both queued and running scans against the limit.
     #[must_use]
     pub fn can_start_scan(&self) -> bool {
-        self.active_count() < self.config.max_concurrent_scans
+        let active_and_queued = self
+            .tasks
+            .iter()
+            .filter(|r| matches!(r.status, ScanStatus::Queued | ScanStatus::Running))
+            .count();
+        active_and_queued < self.config.max_concurrent_scans
     }
 
     /// Validate an API key against the configured keys.
@@ -271,7 +277,7 @@ mod tests {
             vec!["192.168.1.1".to_string()],
             "syn".to_string(),
         );
-        assert!(result.is_ok());
+        result.unwrap();
 
         let task = manager.get_scan_summary("scan_001");
         assert!(task.is_some());
@@ -320,7 +326,7 @@ mod tests {
             .unwrap();
 
         let result = manager.update_status("scan_001", ScanStatus::Running);
-        assert!(result.is_ok());
+        result.unwrap();
 
         let task = manager.get_scan_summary("scan_001").unwrap();
         assert_eq!(task.status, ScanStatus::Running);
@@ -342,7 +348,7 @@ mod tests {
             .unwrap();
 
         let result = manager.update_status("scan_001", ScanStatus::Completed);
-        assert!(result.is_ok());
+        result.unwrap();
 
         let task = manager.get_scan_summary("scan_001").unwrap();
         assert_eq!(task.status, ScanStatus::Completed);
@@ -384,12 +390,12 @@ mod tests {
         };
 
         let result = manager.update_progress("scan_001", progress.clone());
-        assert!(result.is_ok());
+        result.unwrap();
 
         let task = manager.get_scan_summary("scan_001").unwrap();
         assert_eq!(task.progress.total_hosts, 10);
         assert_eq!(task.progress.completed_hosts, 5);
-        assert_eq!(task.progress.percentage, 50.0);
+        assert!((task.progress.percentage - 50.0).abs() < f64::EPSILON);
     }
 
     // ==================== cancel_scan tests ====================
@@ -406,7 +412,7 @@ mod tests {
             .unwrap();
 
         let result = manager.cancel_scan("scan_001");
-        assert!(result.is_ok());
+        result.unwrap();
 
         let task = manager.get_scan_summary("scan_001").unwrap();
         assert_eq!(task.status, ScanStatus::Cancelled);
@@ -524,7 +530,7 @@ mod tests {
             vec!["192.168.1.1".to_string()],
             "syn".to_string(),
         );
-        assert!(result.is_ok());
+        result.unwrap();
     }
 
     #[test]
@@ -573,7 +579,7 @@ mod tests {
         };
 
         let store_result = manager.store_results("scan_001", results.clone());
-        assert!(store_result.is_ok());
+        store_result.unwrap();
 
         let retrieved = manager.get_scan_results("scan_001");
         assert!(retrieved.is_some());

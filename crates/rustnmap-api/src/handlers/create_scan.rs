@@ -197,11 +197,12 @@ pub async fn create_scan(
     // Create scan task
     let scan_id = format!("scan_{}", Uuid::new_v4().as_simple());
 
-    // Submit scan to manager
-    state
-        .scan_manager
-        .create_scan(&scan_id, request.targets.clone(), request.scan_type.clone())
-        .map_err(|e| ApiError::InternalError(e.into()))?;
+    // Submit scan to manager (with concurrency limit check)
+    state.scan_manager.create_scan_if_allowed(
+        &scan_id,
+        request.targets.clone(),
+        request.scan_type.clone(),
+    )?;
 
     let response = CreateScanResponse {
         id: scan_id.clone(),
@@ -266,7 +267,7 @@ mod tests {
     fn test_validate_request_valid_targets() {
         let request = make_request(vec!["192.168.1.1", "scanme.nmap.org"]);
         let result = validate_request(&request);
-        assert!(result.is_ok());
+        result.unwrap();
     }
 
     #[test]
@@ -297,7 +298,7 @@ mod tests {
             },
         };
         let result = validate_request(&request);
-        assert!(result.is_ok());
+        result.unwrap();
     }
 
     #[test]
@@ -324,9 +325,9 @@ mod tests {
 
     #[test]
     fn test_validate_target_ipv4_valid() {
-        assert!(validate_target_format("192.168.1.1").is_ok());
-        assert!(validate_target_format("8.8.8.8").is_ok());
-        assert!(validate_target_format("45.33.32.156").is_ok());
+        validate_target_format("192.168.1.1").unwrap();
+        validate_target_format("8.8.8.8").unwrap();
+        validate_target_format("45.33.32.156").unwrap();
     }
 
     #[test]
@@ -355,8 +356,8 @@ mod tests {
 
     #[test]
     fn test_validate_target_ipv6_valid() {
-        assert!(validate_target_format("2001:4860:4860::8888").is_ok());
-        assert!(validate_target_format("2607:f8b0:4004:800::200e").is_ok());
+        validate_target_format("2001:4860:4860::8888").unwrap();
+        validate_target_format("2607:f8b0:4004:800::200e").unwrap();
     }
 
     #[test]
@@ -373,10 +374,10 @@ mod tests {
 
     #[test]
     fn test_validate_target_cidr_ipv4_valid() {
-        assert!(validate_target_format("192.168.1.0/24").is_ok());
-        assert!(validate_target_format("10.0.0.0/8").is_ok());
-        assert!(validate_target_format("0.0.0.0/0").is_ok());
-        assert!(validate_target_format("192.168.1.1/32").is_ok());
+        validate_target_format("192.168.1.0/24").unwrap();
+        validate_target_format("10.0.0.0/8").unwrap();
+        validate_target_format("0.0.0.0/0").unwrap();
+        validate_target_format("192.168.1.1/32").unwrap();
     }
 
     #[test]
@@ -405,8 +406,8 @@ mod tests {
 
     #[test]
     fn test_validate_target_cidr_ipv6_valid() {
-        assert!(validate_target_format("2001:db8::/32").is_ok());
-        assert!(validate_target_format("fe80::/10").is_ok());
+        validate_target_format("2001:db8::/32").unwrap();
+        validate_target_format("fe80::/10").unwrap();
     }
 
     #[test]
@@ -419,13 +420,13 @@ mod tests {
 
     #[test]
     fn test_validate_hostname_valid() {
-        assert!(validate_hostname("localhost").is_ok());
-        assert!(validate_hostname("scanme.nmap.org").is_ok());
-        assert!(validate_hostname("example.com").is_ok());
-        assert!(validate_hostname("sub.domain.example.com").is_ok());
-        assert!(validate_hostname("my-host").is_ok());
-        assert!(validate_hostname("my_host").is_ok());
-        assert!(validate_hostname("a").is_ok()); // Single char
+        validate_hostname("localhost").unwrap();
+        validate_hostname("scanme.nmap.org").unwrap();
+        validate_hostname("example.com").unwrap();
+        validate_hostname("sub.domain.example.com").unwrap();
+        validate_hostname("my-host").unwrap();
+        validate_hostname("my_host").unwrap();
+        validate_hostname("a").unwrap(); // Single char
     }
 
     #[test]
