@@ -173,7 +173,8 @@ EOF
     }
 
     local scan_id
-    scan_id=$(echo "$response" | jq -r '.id // empty' 2>/dev/null) || {
+    # API wraps response in "data" object
+    scan_id=$(echo "$response" | jq -r '.data.id // empty' 2>/dev/null) || {
         log_error "$name - Invalid JSON response: $response"
         TESTS_FAILED=$((TESTS_FAILED + 1))
         return 1
@@ -206,10 +207,10 @@ test_list_scans() {
         return 1
     }
 
-    # Check if response is valid JSON (could be empty array)
-    if echo "$response" | jq -e '.scans or .id' >/dev/null 2>&1; then
+    # Check if response is valid JSON (API wraps in "data" object)
+    if echo "$response" | jq -e '.data.scans or .data.id' >/dev/null 2>&1; then
         local count
-        count=$(echo "$response" | jq 'if .scans then .scans | length elif .id then 1 else 0 end' 2>/dev/null)
+        count=$(echo "$response" | jq '.data.scans | length // 0' 2>/dev/null)
         log_success "$name - Listed $count scan(s)"
         TESTS_PASSED=$((TESTS_PASSED + 1))
         return 0
@@ -246,7 +247,8 @@ test_get_scan_status() {
     }
 
     local status
-    status=$(echo "$response" | jq -r '.status // empty' 2>/dev/null) || {
+    # API wraps response in "data" object
+    status=$(echo "$response" | jq -r '.data.status // empty' 2>/dev/null) || {
         log_error "$name - Invalid JSON response: $response"
         TESTS_FAILED=$((TESTS_FAILED + 1))
         return 1
@@ -289,7 +291,8 @@ test_cancel_scan() {
     }
 
     local status
-    status=$(echo "$response" | jq -r '.status // empty' 2>/dev/null) || {
+    # API wraps response in "data" object
+    status=$(echo "$response" | jq -r '.data.status // empty' 2>/dev/null) || {
         log_error "$name - Invalid JSON response: $response"
         TESTS_FAILED=$((TESTS_FAILED + 1))
         return 1

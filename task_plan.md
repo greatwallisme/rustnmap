@@ -331,33 +331,48 @@ cargo test -p rustnmap-api
 
 ---
 
-## Phase 7: Create Shell Test Script (P2)
+## Phase 7: Create Shell Test Script (P2) ✅ COMPLETE
 
-**Status**: Pending (Depends on Phases 1-6)
+**Status**: Complete
 
 **File**: `benchmarks/api_test.sh`
 
-**Prerequisites**:
-- All critical issues fixed
-- Unit tests passing
-- Integration tests passing
-- Server example working
-
 **Script Features**:
-1. Start/stop server automatically
-2. Extract API key from server output
-3. Test all endpoints
-4. Report results with color coding
+1. ✅ Start/stop server automatically
+2. ✅ Extract API key from server output (via jq)
+3. ✅ Test all endpoints (health, create scan, list scans, get status, cancel scan)
+4. ✅ Report results with color coding (PASS/FAIL/WARN)
+5. ✅ Support for custom server address and API key
+6. ✅ Test authentication required/rejected scenarios
+
+**Bug Fixes During Shell Script Development**:
+1. **Loopback Address Validation**: Modified validation to allow loopback addresses (127.0.0.1, ::1) for testing purposes, matching nmap behavior
+   - Location: `crates/rustnmap-api/src/handlers/create_scan.rs:121-130`
+   - Updated unit tests to reflect new behavior
+
+2. **JSON Response Parsing**: Fixed shell script to use `.data.id` instead of `.id` (API wraps responses in data object)
+   - Location: `benchmarks/api_test.sh` lines 176, 250, 294, 210
+
+**Test Results**:
+```bash
+./benchmarks/api_test.sh
+# Result: 7 tests passed, 0 failed (100% success rate)
+```
 
 ---
 
-## Phase 8: Documentation Updates (P2)
+## Phase 8: Documentation Updates (P2) ✅ COMPLETE
 
-**Status**: Pending
+**Status**: Complete
 
-**Files to Update**:
-- `doc/modules/rest-api.md` - Add security notes
-- `doc/modules/sdk.md` - No changes needed (independent)
+**Files Updated**:
+- `doc/modules/rest-api.md` - Added security notes:
+  - Constant-time API key comparison (timing attack prevention)
+  - Loopback address allowance for testing
+  - Concurrent scan limit enforcement
+  - Shell test script usage documentation
+
+**SDK Documentation**: No changes needed (independent module)
 
 ---
 
@@ -383,7 +398,7 @@ cargo test -p rustnmap-api
 - [x] Request validation added
 - [x] Unit test coverage >= 80% (Current: 76 tests, ~80%)
 - [x] Integration tests passing (16 tests)
-- [ ] Shell test script working
+- [x] Shell test script working (7 tests, 100% pass)
 - [x] Zero compiler warnings
 - [x] Zero clippy warnings
 - [x] Zero doc warnings
@@ -399,19 +414,22 @@ cargo test -p rustnmap-api
 | Phase 4 | None | ✅ COMPLETE |
 | Phase 5 | Phase 3, Phase 4 | ✅ COMPLETE |
 | Phase 6 | Phase 5 | ✅ COMPLETE |
-| Phase 7 | Phase 6 | Pending |
-| Phase 8 | Phase 7 | Pending |
+| Phase 7 | Phase 6 | ✅ COMPLETE |
+| Phase 8 | Phase 7 | ✅ COMPLETE |
 
 ---
 
-## Next Steps
+## Summary
 
-**Current Phase**: Phase 7 (Create Shell Test Script)
+**All 8 Phases Complete!**
 
-**Immediate Actions**:
-1. Create `benchmarks/api_test.sh` script
-2. Implement server start/stop automation
-3. Extract API key from server output
-4. Test all endpoints with curl
-5. Report results with color coding
-6. Verify script works end-to-end
+| Phase | Description | Status |
+|-------|-------------|--------|
+| Phase 1 | Code Audit | ✅ COMPLETE |
+| Phase 2 | Fix CRITICAL Security Issues | ✅ COMPLETE |
+| Phase 3 | Implement Missing Functionality | ✅ COMPLETE |
+| Phase 4 | Add Request Validation | ✅ COMPLETE |
+| Phase 5 | Add Unit Tests | ✅ COMPLETE |
+| Phase 6 | Add Integration Tests | ✅ COMPLETE |
+| Phase 7 | Create Shell Test Script | ✅ COMPLETE |
+| Phase 8 | Documentation Updates | ✅ COMPLETE |

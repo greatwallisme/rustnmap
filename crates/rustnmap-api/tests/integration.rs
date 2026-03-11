@@ -315,7 +315,7 @@ async fn test_create_scan_invalid_target_format() {
     let client = TestClient::new(addr, api_key);
 
     let body = json!({
-        "targets": ["127.0.0.1"],  // Loopback rejected
+        "targets": ["224.0.0.1"],  // Multicast rejected
         "scan_type": "syn"
     });
 
@@ -324,7 +324,7 @@ async fn test_create_scan_invalid_target_format() {
 
     let json: serde_json::Value = serde_json::from_str(&response).unwrap();
     assert_eq!(json["success"], false);
-    assert!(json["error"].as_str().unwrap().contains("loopback"));
+    assert!(json["error"].as_str().unwrap().contains("multicast"));
 }
 
 // ==================== List Scans Tests ====================

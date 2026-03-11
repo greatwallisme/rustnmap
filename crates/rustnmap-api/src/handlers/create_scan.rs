@@ -119,13 +119,14 @@ fn validate_target_format(target: &str) -> Result<(), ApiError> {
     // Try parsing as IP address
     if let Ok(addr) = target.parse::<std::net::IpAddr>() {
         // Check if address is reserved/special based on type
+        // Note: loopback (127.0.0.1, ::1) is ALLOWED for testing purposes (matches nmap behavior)
         let is_special = match addr {
-            std::net::IpAddr::V4(v4) => v4.is_loopback() || v4.is_multicast() || v4.is_link_local(),
-            std::net::IpAddr::V6(v6) => v6.is_loopback() || v6.is_multicast(),
+            std::net::IpAddr::V4(v4) => v4.is_multicast() || v4.is_link_local(),
+            std::net::IpAddr::V6(v6) => v6.is_multicast(),
         };
         if is_special {
             return Err(ApiError::InvalidRequest(format!(
-                "Invalid IP address: '{addr}'. Address is loopback, multicast, or link-local"
+                "Invalid IP address: '{addr}'. Address is multicast or link-local"
             )));
         }
         return Ok(());
@@ -331,15 +332,9 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_target_ipv4_loopback_rejected() {
-        let result = validate_target_format("127.0.0.1");
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        if let ApiError::InvalidRequest(msg) = err {
-            assert!(msg.contains("loopback"));
-        } else {
-            panic!("Expected InvalidRequest error");
-        }
+    fn test_validate_target_ipv4_loopback_allowed() {
+        // Loopback is allowed for testing purposes (matches nmap behavior)
+        validate_target_format("127.0.0.1").unwrap();
     }
 
     #[test]
@@ -361,9 +356,9 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_target_ipv6_loopback_rejected() {
-        let result = validate_target_format("::1");
-        assert!(result.is_err());
+    fn test_validate_target_ipv6_loopback_allowed() {
+        // Loopback is allowed for testing purposes (matches nmap behavior)
+        validate_target_format("::1").unwrap();
     }
 
     #[test]

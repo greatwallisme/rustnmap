@@ -460,16 +460,32 @@ for event in client.events():
 ### 1. API Key 保护
 
 - API Key 仅通过 HTTPS 传输
-- API Key 哈希存储（加盐）
+- **常量时间比较**: 使用 `subtle::ConstantTimeEq` 防止时序攻击 (Timing Attack)
 - 定期轮换 API Key
+
+```rust
+// 防止时序攻击的安全比较
+pub fn is_valid_key(&self, key: &str) -> bool {
+    self.api_keys.iter().any(|k| {
+        k.as_bytes().ct_eq(key.as_bytes()).into()
+    })
+}
+```
 
 ### 2. 输入验证
 
 - 目标 IP/CIDR 验证
 - 扫描选项白名单
 - 速率限制（防滥用）
+- **Loopback 地址允许**: 127.0.0.1 和 ::1 允许用于测试（与 nmap 行为一致）
+- **Multicast/Link-local 地址拒绝**: 224.x.x.x, 169.254.x.x 等保留地址被拒绝
 
-### 3. 审计日志
+### 3. 并发限制
+
+- 最大并发扫描数可配置（默认: 5）
+- 超出限制返回 HTTP 429 (TOO_MANY_REQUESTS)
+
+### 4. 审计日志
 
 ```rust
 /// 审计日志记录
@@ -487,7 +503,19 @@ pub struct AuditLog {
 
 ## 测试
 
-### API 集成测试
+### Shell 测试脚本
+
+```bash
+# Run shell test script
+./benchmarks/api_test.sh
+
+# With custom options
+./benchmarks/api_test.sh --server-addr 127.0.0.1:9090 --api-key YOUR-api-key
+```
+
+**测试结果**:
+- 7 tests executed
+- 100% pass rate expected### API 集成测试
 
 ```rust
 #[tokio::test]
