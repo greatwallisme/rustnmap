@@ -192,7 +192,9 @@ impl InternalCongestionStats {
         if self.first_measurement.load(Ordering::Relaxed) {
             // First probe: use initial_rtt directly (nmap timing.cc:82)
             // Also clamp to max_rtt to ensure initial timeout doesn't exceed max
-            self.initial_rtt.min(self.max_rtt)
+            // PERFORMANCE: Clamp to 200ms max to avoid cascading cwnd collapse
+            // Initial RTT of1000ms is too conservative for Fast Scan
+            self.initial_rtt.min(self.max_rtt).min(Duration::from_millis(200))
         } else {
             // Subsequent probes: use SRTT + 4*RTTVAR
             let srtt = self.srtt_micros.load(Ordering::Relaxed);
@@ -291,6 +293,10 @@ pub struct InternalCongestionController {
     /// - `timing_level` < 4 (T0-T3): `ca_incr` = 1
     /// - `timing_level` >= 4 (T4-T5): `ca_incr` = 2
     ca_incr: u8,
+    /// The loop iteration number when we last reduced cwnd.
+    /// Used to prevent multiple cwnd reductions in the same iteration.
+    /// See nmap `timing.cc:last_drop` and `scan_engine.cc:1608-1612`.
+    last_drop_iteration: std::sync::atomic::AtomicUsize,
 }
 
 impl InternalCongestionController {
@@ -322,6 +328,8 @@ impl InternalCongestionController {
             ca_ack_counter: std::sync::atomic::AtomicUsize::new(0),
             max_cwnd,
             ca_incr,
+            // Initialize to 0 (before any iterations) so first timeout always triggers drop
+            last_drop_iteration: std::sync::atomic::AtomicUsize::new(0),
         }
     }
 
@@ -408,32 +416,73 @@ impl InternalCongestionController {
 
     /// Called when packet loss is detected.
     ///
-    /// This implements nmap's congestion control response to packet loss from
-    /// `timing.cc:244-255`. When a drop is detected:
-    /// - `cwnd` is reset to `low_cwnd` (1)
-    /// - `ssthresh` is set to `max(in_flight / 2, 2)`
+    /// This implements nmap's GROUP congestion control response to packet loss
+    /// from `timing.cc:drop_group()`. Group scans use less aggressive cwnd reduction
+    /// than host scans to maintain reasonable parallelism.
     ///
-    /// This is much more aggressive than TCP Reno's cwnd/2 approach because
-    /// scanning probes are not TCP connections - we want to immediately stop
-    /// flooding the network when loss occurs.
-    fn on_packet_lost(&self) {
+    /// From nmap `timing.cc:258-262`:
+    /// - `cwnd = MAX(low_cwnd, cwnd / group_drop_cwnd_divisor)` where divisor = 2
+    /// - `ssthresh = max(in_flight / group_drop_ssthresh_divisor, 2)` where divisor varies by timing
+    ///
+    /// # Arguments
+    ///
+    /// * `current_iteration` - The current loop iteration number
+    ///
+    /// # Nmap Compatibility
+    ///
+    /// From nmap `scan_engine.cc:1608-1612`:
+    /// ```c
+    /// if (TIMEVAL_AFTER(probe->sent, USI->gstats->timing.last_drop))
+    ///     USI->gstats->timing.drop_group(...);
+    /// ```
+    /// This ensures cwnd is only reduced ONCE per batch of timed-out probes, not once per probe.
+    ///
+    /// We approximate this by only reducing cwnd once per loop iteration.
+    fn on_packet_lost(&self, current_iteration: usize) {
         use std::sync::atomic::Ordering;
 
+        // Get the last drop iteration
+        let last_drop = self.last_drop_iteration.load(Ordering::Relaxed);
+
+        // Only reduce cwnd if this is a new iteration (not the same as the last drop)
+        // This prevents multiple cwnd reductions in the same loop iteration
+        if current_iteration <= last_drop {
+            // Already reduced cwnd in this iteration - skip
+            return;
+        }
+
         let current_cwnd = self.cwnd.load(Ordering::Relaxed);
-        // Nmap timing.cc:253 - ssthresh = max(in_flight / host_drop_ssthresh_divisor, 2)
-        // where host_drop_ssthresh_divisor = 2 and in_flight ≈ current_cwnd
+        // Nmap timing.cc:261 - ssthresh = max(in_flight / group_drop_ssthresh_divisor, 2)
+        // group_drop_ssthresh_divisor varies by timing_level (1.5 for T0-T3, 1.33 for T4, 1.25 for T5)
+        // We use the conservative divisor of 2 for all timing levels
         let new_ssthresh = (current_cwnd / 2).max(2);
-        // Nmap timing.cc:252 - cwnd = low_cwnd (which is 1)
-        // This is critical: on packet loss, immediately drop to minimal window
-        let new_cwnd = 1;
+        // Nmap timing.cc:259 - cwnd = MAX(low_cwnd, cwnd / group_drop_cwnd_divisor)
+        // where group_drop_cwnd_divisor = 2.0 and low_cwnd = 1 (unless min_parallelism is set)
+        // This is CRITICAL: for group scans, we preserve HALF the cwnd instead of dropping to 1
+        let new_cwnd = (current_cwnd / 2).max(1);
 
         self.ssthresh.store(new_ssthresh, Ordering::Relaxed);
         self.cwnd.store(new_cwnd, Ordering::Relaxed);
+
+        // Update last_drop to current iteration
+        self.last_drop_iteration.store(current_iteration, Ordering::Relaxed);
     }
 
     /// Returns recommended timeout.
     fn recommended_timeout(&self) -> Duration {
         self.stats.recommended_timeout()
+    }
+
+    /// Returns recommended timeout for first probe (clamped for Fast Scan).
+    ///
+    /// This is a performance optimization for Fast Scan mode where initial RTT
+    /// can be too conservative (1000ms for T3). We clamp to 200ms max
+    /// to avoid cascading cwnd collapse caused by premature timeouts.
+    fn recommended_timeout_for_first_probe(&self) -> Duration {
+        let base_timeout = self.stats.recommended_timeout();
+        // For first probe, clamp to 200ms max for Fast Scan performance
+        // This prevents the cascading cwnd collapse when initial RTT is too long
+        base_timeout.min(Duration::from_millis(200))
     }
 }
 /// Ethernet header size.
@@ -863,6 +912,28 @@ impl ParallelScanEngine {
             {
                 loop_iterations += 1;
             }
+
+            // Get adaptive parallelism from congestion controller
+            let current_cwnd = self.congestion.cwnd();
+
+            #[cfg(feature = "diagnostic")]
+            if loop_iterations == 1 || loop_iterations % 50 == 0 {
+                use std::io::Write;
+                if let Ok(mut file) = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open("/tmp/rustnmap_diagnostic.txt")
+                {
+                    let _ = writeln!(
+                        file,
+                        "Iteration {}: cwnd={}, outstanding={}, ports_left={}",
+                        loop_iterations,
+                        current_cwnd,
+                        outstanding.len(),
+                        if ports_iter.peek().is_some() { "yes" } else { "no" }
+                    );
+                }
+            }
             // Check for scan timeout
             if start_time.elapsed() > self.scan_timeout {
                 // Time out remaining outstanding probes
@@ -874,6 +945,25 @@ impl ParallelScanEngine {
 
             // Get adaptive parallelism from congestion controller
             let current_cwnd = self.congestion.cwnd();
+
+            #[cfg(feature = "diagnostic")]
+            if loop_iterations == 1 || loop_iterations % 50 == 0 {
+                use std::io::Write;
+                if let Ok(mut file) = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open("/tmp/rustnmap_diagnostic.txt")
+                {
+                    let _ = writeln!(
+                        file,
+                        "Iteration {}: cwnd={}, outstanding={}, ports_left={}",
+                        loop_iterations,
+                        current_cwnd,
+                        outstanding.len(),
+                        ports_iter.peek().map(|_| "yes").unwrap_or("no")
+                    );
+                }
+            }
 
             #[cfg(feature = "diagnostic")]
             let send_start = Instant::now();
@@ -1009,7 +1099,7 @@ impl ParallelScanEngine {
             }
 
             // Check for probe timeouts and handle retries
-            self.check_timeouts(&mut outstanding, &mut retry_probes, &mut results);
+            self.check_timeouts(&mut outstanding, &mut retry_probes, &mut results, loop_iterations);
 
             // Reset batch counter only after sending a full batch and draining responses
             // This matches nmap's behavior: reset after waitForResponses() when batch is complete
@@ -1275,11 +1365,19 @@ impl ParallelScanEngine {
     ///
     /// Uses adaptive timeout from congestion controller based on SRTT + 4*RTTVAR.
     /// Records packet loss for congestion control when timeouts occur.
+    ///
+    /// # Arguments
+    ///
+    /// * `outstanding` - Outstanding probes to check
+    /// * `retry_probes` - Vector to collect probes that need retrying
+    /// * `results` - Results map to update
+    /// * `current_iteration` - Current loop iteration (for congestion control drop tracking)
     fn check_timeouts(
         &self,
         outstanding: &mut HashMap<(Ipv4Addr, Port), OutstandingProbe>,
         retry_probes: &mut Vec<OutstandingProbe>,
         results: &mut HashMap<Port, PortState>,
+        current_iteration: usize,
     ) {
         let now = Instant::now();
         // Use max_retries from config (nmap default: 10, i.e., 11 probes max)
@@ -1305,13 +1403,13 @@ impl ParallelScanEngine {
                 outstanding.remove(&key);
                 retry_probes.push(probe);
                 // Record packet loss for congestion control
-                self.congestion.on_packet_lost();
+                self.congestion.on_packet_lost(current_iteration);
             } else {
                 // Max retries reached, mark as filtered
                 outstanding.remove(&key);
                 results.entry(probe.port).or_insert(PortState::Filtered);
                 // Record packet loss for congestion control
-                self.congestion.on_packet_lost();
+                self.congestion.on_packet_lost(current_iteration);
             }
         }
     }
@@ -1421,8 +1519,15 @@ impl ParallelScanEngine {
         // Track probes sent in current batch
         let mut probes_sent_this_batch: usize = 0;
 
+        #[cfg(feature = "diagnostic")]
+        let mut loop_iterations = 0;
+
         // Main scan loop - follows nmap ultra_scan pattern
         while ports_iter.peek().is_some() || !outstanding.is_empty() {
+            #[cfg(feature = "diagnostic")]
+            {
+                loop_iterations += 1;
+            }
             // Check for scan timeout
             if start_time.elapsed() > self.scan_timeout {
                 // Mark remaining probes as open|filtered
@@ -1539,7 +1644,7 @@ impl ParallelScanEngine {
             // Checking timeouts while still sending causes premature timeouts
             if !has_more_ports {
                 // Check for probe timeouts and handle retries
-                self.check_udp_timeouts(&mut outstanding, &mut retry_probes, &mut results);
+                self.check_udp_timeouts(&mut outstanding, &mut retry_probes, &mut results, loop_iterations);
             }
 
             // Reset batch counter
@@ -1677,11 +1782,19 @@ impl ParallelScanEngine {
     }
 
     /// Checks for timed-out UDP probes and handles retries.
+    ///
+    /// # Arguments
+    ///
+    /// * `outstanding` - Outstanding UDP probes to check
+    /// * `retry_probes` - Vector to collect probes that need retrying
+    /// * `results` - Results map to update
+    /// * `current_iteration` - Current loop iteration (for congestion control drop tracking)
     fn check_udp_timeouts(
         &self,
         outstanding: &mut HashMap<(Ipv4Addr, Port), UdpOutstandingProbe>,
         retry_probes: &mut Vec<UdpOutstandingProbe>,
         results: &mut HashMap<Port, PortState>,
+        current_iteration: usize,
     ) {
         let now = Instant::now();
         let max_retries = u32::from(self.config.max_retries);
@@ -1704,14 +1817,14 @@ impl ParallelScanEngine {
             if probe.retry_count < max_retries {
                 outstanding.remove(&key);
                 retry_probes.push(probe);
-                self.congestion.on_packet_lost();
+                self.congestion.on_packet_lost(current_iteration);
             } else {
                 // Max retries - mark as open|filtered (no response)
                 outstanding.remove(&key);
                 results
                     .entry(probe.port)
                     .or_insert(PortState::OpenOrFiltered);
-                self.congestion.on_packet_lost();
+                self.congestion.on_packet_lost(current_iteration);
             }
         }
     }

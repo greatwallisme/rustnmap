@@ -1,435 +1,219 @@
-# Task Plan: rustnmap-api Module Audit & Fixes
+# Task Plan: RustNmap Performance Optimization
 
 > **Created**: 2026-03-10
-> **Status**: In Progress - Phase 5 Complete, Phase 6 Pending
-> **Context**: P0 security issues fixed, missing endpoint implemented, request validation added, unit tests complete
+> **Status**: Phase 1 Complete - Optimization Ineffective
+> **Context**: Post-refactoring performance regression - root cause analysis needed
 
 ---
 
 ## Objective
 
-修复 `rustnmap-api` 模块的关键安全问题，完成缺失功能，添加测试覆盖，然后开发 shell 测试脚本。
+系统性分析并修复 rustnmap 性能问题，确保至少达到 nmap 的 95% 性能。
 
-**Goals**:
-1. 修复关键安全漏洞
-2. 实现缺失的 API 端点
-3. 添加单元测试和集成测试
-4. 开发 shell 测试脚本
-
----
-
-## Phase 1: Code Audit ✅ COMPLETE
-
-**Status**: Complete
-
-**Actions**:
-- 使用 code-quality agent 审计整个 API 模块
-- 检查架构设计
-- 评估测试覆盖度
-- 识别安全问题
-
-**Key Findings**:
-
-### CRITICAL Issues (Blockers)
-
-| Issue | Location | Impact |
-|-------|----------|--------|
-| **Timing Attack** | `config.rs:66-67` | API key 验证使用非常量时间比较 |
-| **Plaintext Keys** | `config.rs:9` | API 密钥明文存储在内存 |
-| **Missing Endpoint** | `routes/mod.rs` | 缺少 `/api/v1/scans/{id}/results` |
-| **Status Mismatch** | `lib.rs:123-130` | `ScanStatus::Queued` 没有对应映射 |
-
-### IMPORTANT Issues (High Priority)
-
-| Issue | Location | Impact |
-|-------|----------|--------|
-| **No Scan Execution** | `manager.rs` | 扫描任务创建但不执行（无 core 集成） |
-| **Zero Handler Tests** | `handlers/` | 0% 测试覆盖 |
-| **SSE Memory Leak** | `sse/mod.rs:26-60` | 客户端断开后继续轮询 |
-| **No Validation** | `handlers/create_scan.rs` | 目标格式、扫描类型未验证 |
-
-### Test Coverage: **15%**
-
-| Component | Tests | Status |
-|-----------|-------|--------|
-| config.rs | 3 | ✅ |
-| server.rs | 2 | ✅ |
-| middleware/auth.rs | 3 | ✅ |
-| handlers/ | 0 | ❌ NEED FIX |
-| manager.rs | 0 | ❌ NEED FIX |
-| sse/mod.rs | 0 | ❌ NEED FIX |
+**用户要求**:
+- 不接受低于 95% 的性能
+- 必须系统性分析根因
+- 参考 nmap 实现方式
+- 不允许猜测和表面修改
 
 ---
 
-## Phase 2: Fix CRITICAL Security Issues (P0) ✅ COMPLETE
+## Benchmark Results Summary
 
-**Status**: Complete
+### Complete Test Results
+- **Total Tests**: 39
+- **Passed**: 38
+- **Failed**: 0
+- **Pass Rate**: 97.4%
 
-**Completed Actions**:
-1. ✅ Added `subtle = "2.5"` dependency to `Cargo.toml`
-2. ✅ Fixed timing attack vulnerability in `config.rs`
-   - Moved `use rand::Rng` to file top
-   - Implemented constant-time comparison using `subtle::ConstantTimeEq`
-3. ✅ All unit tests pass (8/8)
-4. ✅ Server example rebuilt and tested
+### Critical Performance Issues (< 0.5x) - P0
 
-**Verification**:
-```bash
-cargo test -p rustnmap-api
-# Result: 8 passed, 0 failed
-```
+| Test | rustnmap | nmap | Ratio | Issue |
+|------|----------|------|-------|-------|
+| IPv6 | 258ms | 47ms | **0.18x** | 5.5倍慢，最严重问题 |
+| Fast Scan | 6352ms | 3913ms | **0.62x** | 1.6倍慢 |
+| Fast + Top Ports | 5405ms | 2166ms | **0.40x** | 2.5倍慢 |
+| Top Ports | 5525ms | 2540ms | **0.45x** | 2.2倍慢 |
+| OS Detection | 25541ms | 11479ms | **0.44x** | 2.3倍慢 |
+| Two Targets | 1643ms | 774ms | **0.47x** | 2.1倍慢 |
 
-**Security Improvement**:
-```rust
-// Before (vulnerable to timing attacks)
-pub fn is_valid_key(&self, key: &str) -> bool {
-    self.api_keys.iter().any(|k| k == key)  // ❌ Variable-time comparison
-}
+### Good Performance (> 1.0x)
 
-// After (constant-time comparison)
-pub fn is_valid_key(&self, key: &str) -> bool {
-    self.api_keys.iter().any(|k| {
-        k.as_bytes().ct_eq(key.as_bytes()).into()  // ✅ Constant-time
-    })
-}
-```
+| Test | rustnmap | nmap | Ratio | Notes |
+|------|----------|------|-------|-------|
+| Aggressive Scan | 14055ms | 30127ms | **2.14x** | 最快测试 ✅ |
+| Version Detection | 7493ms | 9764ms | **1.30x** | ✅ |
+| Connect Scan | 553ms | 671ms | **1.21x** | ✅ |
+| Window Scan | 613ms | 733ms | **1.19x** | ✅ |
+| T1 Sneaky | 75814ms | 90725ms | **1.19x** | ✅ |
 
----
+### Acceptable Performance (0.8-1.0x)
 
-## Phase 3: Implement Missing Functionality (P0) ✅ COMPLETE
+| Test | rustnmap | nmap | Ratio |
+|------|----------|------|-------|
+| T4 Aggressive | 824ms | 830ms | **0.99x** | ✅ 接近目标 |
+| XMAS Scan | 4465ms | 4423ms | **0.99x** | ✅ |
+| NULL Scan | 4474ms | 4292ms | **0.95x** | ✅ 达标 |
 
-**Status**: Complete
+### Sub-Optimal Performance (0.5-0.8x) - P1
 
-### 3.1 Add `/api/v1/scans/{id}/results` Endpoint ✅
-
-**Design Reference**: `doc/modules/rest-api.md` lines 114-155
-
-**Completed Actions**:
-1. ✅ Created `crates/rustnmap-api/src/handlers/get_scan_results.rs`
-2. ✅ Added route to `crates/rustnmap-api/src/routes/mod.rs`
-3. ✅ Exported handler from `crates/rustnmap-api/src/handlers/mod.rs`
-4. ✅ Added `results` storage to `ScanManager`
-5. ✅ Added `get_scan_results()` and `store_results()` methods to `ScanManager`
-
-**Implementation Details**:
-- Route: `GET /api/v1/scans/{id}/results`
-- Returns: `ApiResponse<ScanResultsResponse>` with hosts and statistics
-- Storage: DashMap for concurrent access to scan results
-
-### 3.2 Fix ScanStatus Mapping ✅
-
-**Analysis**: The `ScanStatus::Queued` variant is **intentional** - it's an API-layer-only state for scans that are created but not yet started. The `rustnmap_scan_management::ScanStatus` enum doesn't have `Queued` because it tracks running/completed scans only.
-
-**Result**: No changes needed - the current design is correct:
-- API uses `Queued` for newly created scans
-- `From<rustnmap_scan_management::ScanStatus>` correctly maps all scan-management states
-- When scans transition to running, the status updates accordingly
-
-**Verification**:
-- ✅ All 8 unit tests pass
-- ✅ Clippy passes with zero warnings
-- ✅ Server example compiles and runs
+| Test | rustnmap | nmap | Ratio | Notes |
+|------|----------|------|-------|-------|
+| SYN Scan | 865ms | 761ms | **0.87x** | 接近但未达标 |
+| UDP Scan | 950ms | 732ms | **0.77x** | 需要优化 |
+| T3 Normal | 870ms | 717ms | **0.82x** | 接近目标 |
+| T4 | 862ms | 709ms | **0.82x** | 接近目标 |
+| T5 Insane | 835ms | 708ms | **0.84x** | 接近目标 |
 
 ---
 
-## Phase 4: Add Request Validation (P1) ✅ COMPLETE
+## Phase 1: Restore Single Target Optimization - ❌ INEFFECTIVE
 
-**Status**: Complete
+**Status**: Complete but ineffective
 
-**File**: `crates/rustnmap-api/src/handlers/create_scan.rs`
+**Action Taken**:
+- 恢复了 `orchestrator.rs::run_host_discovery()` 中的单目标自动跳过逻辑
 
-**Validations Implemented**:
-1. ✅ Target format validation (IP, CIDR, hostname)
-   - CIDR notation: IP/prefix format with prefix range validation (0-32 for IPv4, 0-128 for IPv6)
-   - IP address: Validates not loopback, multicast, or link-local
-   - Hostname: RFC 952/1123 compliant (1-253 chars, labels 1-63 chars, alphanumeric/hyphen/underscore)
-2. ✅ `scan_type` against allowed values (syn, connect, udp, fin, null, xmas, maimon, sctp_init, sctp_cookie, ack, window, idle)
-3. ✅ `options.timing` against T0-T5
+**Expected Results** (from historical obs #2049):
+- 之前效果：620-650ms vs nmap 802-814ms（20-23% 更快）
+- 预期消除 283ms (31%) 的主机发现开销
 
-**Implementation**:
-```rust
-fn validate_request(request: &CreateScanRequest) -> Result<(), ApiError> {
-    // Validate targets not empty
-    if request.targets.is_empty() { ... }
+**Actual Results**:
+- 优化前：~865ms
+- 优化后：~825ms
+- nmap baseline：~747ms
+- **提升：仅40ms（4.6%），效果微弱**
 
-    // Validate each target format
-    for target in &request.targets {
-        validate_target_format(target)?;
-    }
-
-    // Validate scan_type against allowed values
-    if !VALID_SCAN_TYPES.contains(&scan_type_str) { ... }
-
-    // Validate timing template if provided
-    if let Some(timing) = &request.options.timing {
-        if !VALID_TIMING.contains(&timing_str) { ... }
-    }
-    Ok(())
-}
-```
-
-**Verification**:
-- ✅ All 8 unit tests pass
-- ✅ Clippy passes with zero warnings
-- ✅ Release build succeeds
+**Root Cause Analysis**:
+- 历史优化可能是在不同测试条件下得出的
+- 当前测试显示主机发现可能不是主要瓶颈
+- 需要重新分析真正的性能瓶颈位置
 
 ---
 
-## Phase 5: Add Unit Tests (P1) ✅ COMPLETE
+## Phase 2: Fast Scan Root Cause Analysis (P0) - IN PROGRESS
 
-**Status**: Complete
+**Status**: Systematic debugging required
 
-### Test Coverage: 76 tests (Target: 80% achieved)
+**Problem**:
+- Fast Scan: 6352ms vs nmap 3913ms
+- 差距：2439ms（62%差距）
+- 两者都扫描100个端口
 
-| Handler | Tests Added | Status |
-|---------|-------------|--------|
-| create_scan.rs | 24 tests | ✅ Complete |
-| get_scan.rs | 5 tests | ✅ Complete |
-| list_scans.rs | 6 tests | ✅ Complete |
-| cancel_scan.rs | 3 tests | ✅ Complete |
-| health.rs | 4 tests | ✅ Complete |
-| manager.rs | 20 tests | ✅ Complete |
-| middleware/auth.rs | 3 tests | ✅ Complete |
-| config.rs | 3 tests | ✅ Complete |
-| server.rs | 2 tests | ✅ Complete |
+**Step 1: Verify Test Conditions** ✅
+- nmap: 100 ports in 2.42s
+- rustnmap: 100 ports in 6.11s
+- 确认端口数量相同
 
-### Test Results
+**Step 2: Check Timing Templates**
+- nmap Fast Scan 是否使用特殊 timing？
+- rustnmap Fast Scan 是否有额外延迟？
 
-**All 76 tests pass**:
-```bash
-cargo test -p rustnmap-api
-# Result: 76 passed, 0 failed
-```
+**Step 3: Analyze Scan Loop**
+- 参考 obs #2015: 63.3% 时间花在等待响应
+- 参考 obs #2020: 413ms async 开销
 
-**Test Categories**:
-1. **Validation Tests** (24 tests in create_scan.rs):
-   - Target format validation (IP, CIDR, hostname)
-   - Scan type validation (12 nmap scan types)
-   - Timing template validation (T0-T5)
-   - Request validation (empty targets, invalid types)
-
-2. **Handler Tests** (18 tests):
-   - Health check response serialization/deserialization
-   - Scan detail response handling
-   - List scans query parsing
-   - Cancel scan response handling
-
-3. **Manager Tests** (20 tests):
-   - Scan creation and lifecycle
-   - Concurrent scan limit enforcement
-   - Status updates and progress tracking
-   - Results storage and retrieval
-   - API key validation
-
-4. **Middleware Tests** (3 tests):
-   - API key extraction (Bearer, direct, missing)
-
-5. **Infrastructure Tests** (5 tests):
-   - Configuration builder and defaults
-   - Server state initialization
+**Investigation Needed**:
+1. 检查 nmap Fast Scan 的 timing 配置
+2. 对比 rustnmap 的 scan delay 设置
+3. 分析数据包发送速率差异
+4. 检查端口列表生成开销
 
 ---
 
-## Phase 6: Add Integration Tests (P1) ✅ COMPLETE
+## Phase 3: IPv6 Performance Investigation (P0)
 
-**Status**: Complete
+**Status**: Pending
 
-**File**: `crates/rustnmap-api/tests/integration.rs`
+**Problem**:
+- IPv6: 258ms vs nmap 47ms
+- **5.5倍慢**，最严重问题
 
-### Test Coverage: 16 integration tests
+**Possible Causes**:
+1. IPv6 socket 配置差异
+2. DNS 解析延迟
+3. 路由选择问题
+4. 数据包封装开销
 
-| Test Category | Tests | Status |
-|---------------|-------|--------|
-| Health Check | 2 tests | ✅ Complete |
-| Authentication | 3 tests | ✅ Complete |
-| Scan Lifecycle | 1 test | ✅ Complete |
-| Validation | 4 tests | ✅ Complete |
-| List Scans | 2 tests | ✅ Complete |
-| Error Handling | 3 tests | ✅ Complete |
-| Concurrent Limits | 1 test | ✅ Complete |
-
-### Test Scenarios Covered:
-
-1. **Health Check Tests**:
-   - Health endpoint accessible without authentication
-   - Health endpoint works with authentication
-
-2. **Authentication Tests**:
-   - Create scan requires authentication
-   - Invalid API key rejected
-   - Valid API key accepted
-
-3. **Scan Lifecycle Test**:
-   - Full lifecycle: create → status → list → cancel
-   - Verifies all endpoints work together
-
-4. **Validation Tests**:
-   - Empty targets rejected
-   - Invalid scan type rejected
-   - Invalid timing template rejected
-   - Invalid target format (loopback) rejected
-
-5. **List Scans Tests**:
-   - Pagination (limit/offset)
-   - Status filtering
-
-6. **Error Handling Tests**:
-   - Get nonexistent scan returns 404
-   - Cancel nonexistent scan returns 404
-   - Get results for nonexistent scan returns 404
-
-7. **Concurrent Limit Test**:
-   - Enforces max concurrent scans (5)
-   - 6th scan returns 429 TOO_MANY_REQUESTS
-   - Cancelling scan frees up slot
-
-### Implementation Details:
-
-**Test Client**:
-- HTTP client using hyper and hyper-util
-- Supports GET, POST, DELETE methods
-- Bearer token authentication
-- JSON request/response handling
-
-**Test Server**:
-- Starts on random port (127.0.0.1:0)
-- Returns actual bound address
-- Runs in background with tokio::spawn
-
-**Dependencies Added**:
-```toml
-[dev-dependencies]
-hyper = { version = "1.0", features = ["client", "http1"] }
-hyper-util = { version = "0.1", features = ["client-legacy", "http1", "tokio"] }
-http-body-util = "0.1"
-```
-
-### Bug Fixes During Integration Testing:
-
-1. **Concurrent Limit Not Enforced**:
-   - Problem: `can_start_scan()` only counted `Running` scans
-   - Fix: Changed to count both `Queued` and `Running` scans
-   - Location: `crates/rustnmap-api/src/manager.rs:160-167`
-
-2. **Handler Not Using Limit Check**:
-   - Problem: `create_scan` handler used `create_scan()` instead of `create_scan_if_allowed()`
-   - Fix: Updated handler to use `create_scan_if_allowed()`
-   - Location: `crates/rustnmap-api/src/handlers/create_scan.rs:201-204`
-
-### Verification:
-
-**All 93 tests pass**:
-```bash
-cargo test -p rustnmap-api
-# Result: 76 unit tests + 16 integration tests + 1 doc test = 93 passed
-```
-
-**Zero warnings**:
-- ✅ Clippy passes with -D warnings
-- ✅ Documentation builds with -D warnings
-- ✅ Code formatted per rustfmt
+**Investigation Needed**:
+1. 对比 IPv4 vs IPv6 扫描路径
+2. 检查 socket 创建和配置
+3. 分析网络层差异
 
 ---
 
-## Phase 7: Create Shell Test Script (P2) ✅ COMPLETE
+## Phase 4: Multi-Target Optimization (P1)
 
-**Status**: Complete
+**Status**: Pending
 
-**File**: `benchmarks/api_test.sh`
+**Problem**:
+- Two Targets: 1643ms vs nmap 774ms
+- 2.1倍慢
 
-**Script Features**:
-1. ✅ Start/stop server automatically
-2. ✅ Extract API key from server output (via jq)
-3. ✅ Test all endpoints (health, create scan, list scans, get status, cancel scan)
-4. ✅ Report results with color coding (PASS/FAIL/WARN)
-5. ✅ Support for custom server address and API key
-6. ✅ Test authentication required/rejected scenarios
-
-**Bug Fixes During Shell Script Development**:
-1. **Loopback Address Validation**: Modified validation to allow loopback addresses (127.0.0.1, ::1) for testing purposes, matching nmap behavior
-   - Location: `crates/rustnmap-api/src/handlers/create_scan.rs:121-130`
-   - Updated unit tests to reflect new behavior
-
-2. **JSON Response Parsing**: Fixed shell script to use `.data.id` instead of `.id` (API wraps responses in data object)
-   - Location: `benchmarks/api_test.sh` lines 176, 250, 294, 210
-
-**Test Results**:
-```bash
-./benchmarks/api_test.sh
-# Result: 7 tests passed, 0 failed (100% success rate)
-```
+**Possible Causes**:
+1. 每个目标重复初始化
+2. 串行 vs 并行处理
+3. 扫描状态共享开销
 
 ---
 
-## Phase 8: Documentation Updates (P2) ✅ COMPLETE
+## Historical Context
 
-**Status**: Complete
+### Previous Optimization (obs #2049)
+- **Date**: 2026-03-09
+- **Change**: 单目标自动跳过主机发现
+- **Effect**: 620-650ms vs nmap 802-814ms（20-23% 更快）
+- **Status**: 当前恢复后效果不明显，可能测试条件不同
 
-**Files Updated**:
-- `doc/modules/rest-api.md` - Added security notes:
-  - Constant-time API key comparison (timing attack prevention)
-  - Loopback address allowance for testing
-  - Concurrent scan limit enforcement
-  - Shell test script usage documentation
+### Known Bottlenecks
 
-**SDK Documentation**: No changes needed (independent module)
-
----
-
-## Error Log
-
-| Error | Phase | Resolution |
-|-------|-------|------------|
-| Health endpoint 401 | Phase 2 | Fixed auth middleware bypass for /health |
-| Timing attack | Phase 2 | ✅ Fixed - Added subtle dependency, implemented ConstantTimeEq |
-| Too many lines (run fn) | Phase 3 | ✅ Fixed - Added #[allow] with reason |
-| Unfulfilled lint expectation | Phase 3 | ✅ Fixed - Removed unnecessary #[expect] |
-| While let on iterator | Phase 3 | ✅ Fixed - Changed to for loop |
-| Clippy uninlined_format_args | Phase 4 | ✅ Fixed - Used inline format strings |
-| Test deserialization mismatch | Phase 5 | ✅ Fixed - Corrected test JSON values |
-| Test timing race condition | Phase 5 | ✅ Fixed - Added sleep to ensure time passes |
+| Bottleneck | Impact | Location | Status |
+|------------|-------|----------|--------|
+| Wait time | 63.3% (347ms/549ms) | Scan loop | obs #2015 |
+| Host discovery | 282ms (31.7%) | Orchestrator | obs #2044 |
+| Async overhead | 413ms | Setup/teardown | obs #2020 |
 
 ---
 
 ## Success Criteria
 
-- [x] All CRITICAL security issues fixed
-- [x] Missing endpoints implemented
-- [x] Request validation added
-- [x] Unit test coverage >= 80% (Current: 76 tests, ~80%)
-- [x] Integration tests passing (16 tests)
-- [x] Shell test script working (7 tests, 100% pass)
-- [x] Zero compiler warnings
-- [x] Zero clippy warnings
-- [x] Zero doc warnings
+- [ ] **所有测试达到 >= 0.95x 性能**
+- [ ] Fast Scan >= 0.95x
+- [ ] Top Ports >= 0.95x
+- [ ] IPv6 >= 0.95x
+- [ ] SYN Scan >= 0.95x
+- [ ] Two Targets >= 0.95x
 
 ---
 
-## Dependencies
+## Error Log
 
-| Phase | Depends On | Status |
-|-------|------------|--------|
-| Phase 2 | None | ✅ COMPLETE |
-| Phase 3 | Phase 2 | ✅ COMPLETE |
-| Phase 4 | None | ✅ COMPLETE |
-| Phase 5 | Phase 3, Phase 4 | ✅ COMPLETE |
-| Phase 6 | Phase 5 | ✅ COMPLETE |
-| Phase 7 | Phase 6 | ✅ COMPLETE |
-| Phase 8 | Phase 7 | ✅ COMPLETE |
+| Error | Phase | Attempt | Resolution |
+|-------|-------|--------|------------|
+| Single target optimization ineffective | Phase 1 | Restored optimization | Only 40ms improvement, not root cause |
+| Fast Scan 0.38x | Phase 2 | Pending | Root cause analysis needed |
+| IPv6 0.18x | Phase 4 | Pending | Investigation needed |
 
 ---
 
-## Summary
+## Next Actions
 
-**All 8 Phases Complete!**
+1. ❌ Phase 1 完成 - 但效果不佳
+2. ✅ **Phase 2 ROOT CAUSE FOUND** - 初始RTT timeout太长 (1000ms)
+3. ⏳ **Phase 2 修复进行中** - 实施修复
+4. ⏳ Phase 4 待处理 - IPv6 严重性能问题
+5. ⏳ Phase 3 待处理 - 多目标优化
 
-| Phase | Description | Status |
-|-------|-------------|--------|
-| Phase 1 | Code Audit | ✅ COMPLETE |
-| Phase 2 | Fix CRITICAL Security Issues | ✅ COMPLETE |
-| Phase 3 | Implement Missing Functionality | ✅ COMPLETE |
-| Phase 4 | Add Request Validation | ✅ COMPLETE |
-| Phase 5 | Add Unit Tests | ✅ COMPLETE |
-| Phase 6 | Add Integration Tests | ✅ COMPLETE |
-| Phase 7 | Create Shell Test Script | ✅ COMPLETE |
-| Phase 8 | Documentation Updates | ✅ COMPLETE |
+---
+
+## Implementation Log
+
+### 2026-03-10 23:58 - Root Cause Identified
+**Analysis Method**: Memory search + code analysis + diagnostic run
+**Root Cause**: Initial probe timeout too long (1000ms) causing cascading cwnd collapse
+**Evidence**:
+- Memory observations #3084-3088 confirm per-probe scan_delay was removed
+- Diagnostic: 96.6% wait time, 373 iterations, cwnd drops to 1 for 150 iterations
+- Code: `recommended_timeout()` uses full `initial_rtt` (1000ms) for first probe
+
+**Solution**: Clamp initial RTT to max 200ms for Fast Scan

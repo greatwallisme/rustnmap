@@ -157,27 +157,27 @@ run_basic_suite() {
     compare_scans \
         "SYN Scan" \
         "$NMAP_BIN -sS -p $TEST_PORTS $TARGET_IP" \
-        "$RUSTNMAP_BIN --scan-syn -p $TEST_PORTS $TARGET_IP"
+        "$RUSTNMAP_BIN -sS -p $TEST_PORTS $TARGET_IP"
 
     compare_scans \
         "Connect Scan" \
         "$NMAP_BIN -sT -p $TEST_PORTS $TARGET_IP" \
-        "$RUSTNMAP_BIN --scan-connect -p $TEST_PORTS $TARGET_IP"
+        "$RUSTNMAP_BIN -sT -p $TEST_PORTS $TARGET_IP"
 
     compare_scans \
         "UDP Scan" \
         "$NMAP_BIN -sU -p $TEST_PORTS $TARGET_IP" \
-        "$RUSTNMAP_BIN --scan-udp -p $TEST_PORTS $TARGET_IP"
+        "$RUSTNMAP_BIN -sU -p $TEST_PORTS $TARGET_IP"
 
     compare_scans \
         "Fast Scan" \
         "$NMAP_BIN -F $TARGET_IP" \
-        "$RUSTNMAP_BIN --scan-syn -F $TARGET_IP"
+        "$RUSTNMAP_BIN -sS -F $TARGET_IP"
 
     compare_scans \
         "Top Ports" \
         "$NMAP_BIN --top-ports 10 $TARGET_IP" \
-        "$RUSTNMAP_BIN --scan-syn --top-ports 10 $TARGET_IP"
+        "$RUSTNMAP_BIN -sS --top-ports 10 $TARGET_IP"
 }
 
 # Test Suite: Extended Stealth Scans (7 tests)
@@ -190,37 +190,37 @@ run_stealth_suite() {
     compare_scans \
         "FIN Scan" \
         "$NMAP_BIN -sF -p $TEST_PORTS $TARGET_IP" \
-        "$RUSTNMAP_BIN --scan-fin -p $TEST_PORTS $TARGET_IP"
+        "$RUSTNMAP_BIN -sF -p $TEST_PORTS $TARGET_IP"
 
     compare_scans \
         "NULL Scan" \
         "$NMAP_BIN -sN -p $TEST_PORTS $TARGET_IP" \
-        "$RUSTNMAP_BIN --scan-null -p $TEST_PORTS $TARGET_IP"
+        "$RUSTNMAP_BIN -sN -p $TEST_PORTS $TARGET_IP"
 
     compare_scans \
         "XMAS Scan" \
         "$NMAP_BIN -sX -p $TEST_PORTS $TARGET_IP" \
-        "$RUSTNMAP_BIN --scan-xmas -p $TEST_PORTS $TARGET_IP"
+        "$RUSTNMAP_BIN -sX -p $TEST_PORTS $TARGET_IP"
 
     compare_scans \
         "MAIMON Scan" \
         "$NMAP_BIN -sM -p $TEST_PORTS $TARGET_IP" \
-        "$RUSTNMAP_BIN --scan-maimon -p $TEST_PORTS $TARGET_IP"
+        "$RUSTNMAP_BIN -sM -p $TEST_PORTS $TARGET_IP"
 
     compare_scans \
         "ACK Scan" \
         "$NMAP_BIN -sA -p $TEST_PORTS $TARGET_IP" \
-        "$RUSTNMAP_BIN --scan-ack -p $TEST_PORTS $TARGET_IP"
+        "$RUSTNMAP_BIN -sA -p $TEST_PORTS $TARGET_IP"
 
     compare_scans \
         "Window Scan" \
         "$NMAP_BIN -sW -p $TEST_PORTS $TARGET_IP" \
-        "$RUSTNMAP_BIN --scan-window -p $TEST_PORTS $TARGET_IP"
+        "$RUSTNMAP_BIN -sW -p $TEST_PORTS $TARGET_IP"
 
     compare_scans \
         "Decoys Scan" \
         "$NMAP_BIN -sS -D RND:10 -p $TEST_PORTS $TARGET_IP" \
-        "$RUSTNMAP_BIN --scan-syn -D RND:10 -p $TEST_PORTS $TARGET_IP"
+        "$RUSTNMAP_BIN -sS -D RND:10 -p $TEST_PORTS $TARGET_IP"
 }
 
 # Test Suite: Advanced Scans (6 tests)
@@ -233,32 +233,32 @@ run_advanced_suite() {
     compare_scans \
         "FIN Scan (Advanced)" \
         "$NMAP_BIN -sF -p $TEST_PORTS $TARGET_IP" \
-        "$RUSTNMAP_BIN --scan-fin -p $TEST_PORTS $TARGET_IP"
+        "$RUSTNMAP_BIN -sF -p $TEST_PORTS $TARGET_IP"
 
     compare_scans \
         "NULL Scan (Advanced)" \
         "$NMAP_BIN -sN -p $TEST_PORTS $TARGET_IP" \
-        "$RUSTNMAP_BIN --scan-null -p $TEST_PORTS $TARGET_IP"
+        "$RUSTNMAP_BIN -sN -p $TEST_PORTS $TARGET_IP"
 
     compare_scans \
         "XMAS Scan (Advanced)" \
         "$NMAP_BIN -sX -p $TEST_PORTS $TARGET_IP" \
-        "$RUSTNMAP_BIN --scan-xmas -p $TEST_PORTS $TARGET_IP"
+        "$RUSTNMAP_BIN -sX -p $TEST_PORTS $TARGET_IP"
 
     compare_scans \
         "MAIMON Scan (Advanced)" \
         "$NMAP_BIN -sM -p $TEST_PORTS $TARGET_IP" \
-        "$RUSTNMAP_BIN --scan-maimon -p $TEST_PORTS $TARGET_IP"
+        "$RUSTNMAP_BIN -sM -p $TEST_PORTS $TARGET_IP"
 
     compare_scans \
         "Timing Template T4" \
         "$NMAP_BIN -sS -T4 -p $TEST_PORTS $TARGET_IP" \
-        "$RUSTNMAP_BIN --scan-syn -T4 -p $TEST_PORTS $TARGET_IP"
+        "$RUSTNMAP_BIN -sS -T4 -p $TEST_PORTS $TARGET_IP"
 
     compare_scans \
         "Min/Max Rate" \
         "$NMAP_BIN -sS --min-rate 100 --max-rate 500 -p $TEST_PORTS $TARGET_IP" \
-        "$RUSTNMAP_BIN --scan-syn --min-rate 100 --max-rate 500 -p $TEST_PORTS $TARGET_IP"
+        "$RUSTNMAP_BIN -sS --min-rate 100 --max-rate 500 -p $TEST_PORTS $TARGET_IP"
 }
 
 # Test Suite: Timing Templates (7 tests - T0 Paranoid skipped)
@@ -276,37 +276,37 @@ run_timing_suite() {
     compare_scans \
         "T1 Sneaky" \
         "$NMAP_BIN -sS -T1 -p $TEST_PORTS $TARGET_IP" \
-        "$RUSTNMAP_BIN --scan-syn -T1 -p $TEST_PORTS $TARGET_IP"
+        "$RUSTNMAP_BIN -sS -T1 -p $TEST_PORTS $TARGET_IP"
 
     compare_scans \
         "T2 Polite" \
         "$NMAP_BIN -sS -T2 -p $TEST_PORTS $TARGET_IP" \
-        "$RUSTNMAP_BIN --scan-syn -T2 -p $TEST_PORTS $TARGET_IP"
+        "$RUSTNMAP_BIN -sS -T2 -p $TEST_PORTS $TARGET_IP"
 
     compare_scans \
         "T3 Normal" \
         "$NMAP_BIN -sS -T3 -p $TEST_PORTS $TARGET_IP" \
-        "$RUSTNMAP_BIN --scan-syn -T3 -p $TEST_PORTS $TARGET_IP"
+        "$RUSTNMAP_BIN -sS -T3 -p $TEST_PORTS $TARGET_IP"
 
     compare_scans \
         "T4 Aggressive" \
         "$NMAP_BIN -sS -T4 -p $TEST_PORTS $TARGET_IP" \
-        "$RUSTNMAP_BIN --scan-syn -T4 -p $TEST_PORTS $TARGET_IP"
+        "$RUSTNMAP_BIN -sS -T4 -p $TEST_PORTS $TARGET_IP"
 
     compare_scans \
         "T5 Insane" \
         "$NMAP_BIN -sS -T5 -p $TEST_PORTS $TARGET_IP" \
-        "$RUSTNMAP_BIN --scan-syn -T5 -p $TEST_PORTS $TARGET_IP"
+        "$RUSTNMAP_BIN -sS -T5 -p $TEST_PORTS $TARGET_IP"
 
     compare_scans \
         "Min/Max Rate Limiting" \
         "$NMAP_BIN -sS --min-rate 50 --max-rate 200 -p $TEST_PORTS $TARGET_IP" \
-        "$RUSTNMAP_BIN --scan-syn --min-rate 50 --max-rate 200 -p $TEST_PORTS $TARGET_IP"
+        "$RUSTNMAP_BIN -sS --min-rate 50 --max-rate 200 -p $TEST_PORTS $TARGET_IP"
 
     compare_scans \
         "Host Timeout" \
         "$NMAP_BIN -sS --host-timeout 30000 -p $TEST_PORTS $TARGET_IP" \
-        "$RUSTNMAP_BIN --scan-syn --host-timeout 30000 -p $TEST_PORTS $TARGET_IP" \
+        "$RUSTNMAP_BIN -sS --host-timeout 30000 -p $TEST_PORTS $TARGET_IP" \
         "true"  # Allow nmap failure
 }
 
@@ -320,12 +320,12 @@ run_output_suite() {
     compare_scans \
         "Normal Output" \
         "$NMAP_BIN -sS -p $TEST_PORTS $TARGET_IP" \
-        "$RUSTNMAP_BIN --scan-syn -p $TEST_PORTS $TARGET_IP"
+        "$RUSTNMAP_BIN -sS -p $TEST_PORTS $TARGET_IP"
 
     compare_scans \
         "XML Output" \
         "$NMAP_BIN -sS -p $TEST_PORTS $TARGET_IP -oX /tmp/rustnmap_test_nmap.xml" \
-        "$RUSTNMAP_BIN --scan-syn -p $TEST_PORTS $TARGET_IP --output-xml /tmp/rustnmap_test_rustnmap.xml"
+        "$RUSTNMAP_BIN -sS -p $TEST_PORTS $TARGET_IP -oX /tmp/rustnmap_test_rustnmap.xml"
 
     # JSON is rustnmap-only, skip comparison
     echo "[SKIP] JSON Output (rustnmap extension)" | tee -a "$LOG_FILE"
@@ -335,7 +335,7 @@ run_output_suite() {
     compare_scans \
         "Grepable Output" \
         "$NMAP_BIN -sS -p $TEST_PORTS $TARGET_IP -oG /tmp/rustnmap_test_nmap.gnmap" \
-        "$RUSTNMAP_BIN --scan-syn -p $TEST_PORTS $TARGET_IP --output-grepable /tmp/rustnmap_test_rustnmap.gnmap"
+        "$RUSTNMAP_BIN -sS -p $TEST_PORTS $TARGET_IP -oG /tmp/rustnmap_test_rustnmap.gnmap"
 }
 
 # Test Suite: Multi-Target Scans (5 tests)
@@ -348,29 +348,29 @@ run_multi_target_suite() {
     compare_scans \
         "Two Targets" \
         "$NMAP_BIN -sS -p $TEST_PORTS $TARGET_IP $ALT_TARGET" \
-        "$RUSTNMAP_BIN --scan-syn -p $TEST_PORTS $TARGET_IP $ALT_TARGET"
+        "$RUSTNMAP_BIN -sS -p $TEST_PORTS $TARGET_IP $ALT_TARGET"
 
     compare_scans \
         "Port Range" \
         "$NMAP_BIN -sS -p 1-100 $TARGET_IP" \
-        "$RUSTNMAP_BIN --scan-syn -p 1-100 $TARGET_IP"
+        "$RUSTNMAP_BIN -sS -p 1-100 $TARGET_IP"
 
     compare_scans \
         "Exclude Port" \
-        "$NMAP_BIN -sS -p $TEST_PORTS --exclude-port 22 $TARGET_IP" \
-        "$RUSTNMAP_BIN --scan-syn -p $TEST_PORTS --exclude-port 22 $TARGET_IP"
+        "$NMAP_BIN -sS -p $TEST_PORTS --exclude-ports 22 $TARGET_IP" \
+        "$RUSTNMAP_BIN -sS -p $TEST_PORTS --exclude-ports 22 $TARGET_IP"
 
     compare_scans \
         "Fast Scan + Top Ports" \
         "$NMAP_BIN -sS -F --top-ports 50 $TARGET_IP" \
-        "$RUSTNMAP_BIN --scan-syn -F --top-ports 50 $TARGET_IP"
+        "$RUSTNMAP_BIN -sS -F --top-ports 50 $TARGET_IP"
 
     # IPv6 test - skip if not supported
     if ping6 -c 1 ::1 >/dev/null 2>&1; then
         compare_scans \
             "IPv6 Target" \
             "$NMAP_BIN -sS -p $TEST_PORTS ::1" \
-            "$RUSTNMAP_BIN --scan-syn -p $TEST_PORTS ::1"
+            "$RUSTNMAP_BIN -sS -p $TEST_PORTS ::1"
     else
         echo "[SKIP] IPv6 Target (not supported)" | tee -a "$LOG_FILE"
         SKIPPED_TESTS=$((SKIPPED_TESTS + 1))
@@ -388,17 +388,17 @@ run_service_detection_suite() {
     compare_scans \
         "Version Detection" \
         "$NMAP_BIN -sV -p $TEST_PORTS $TARGET_IP" \
-        "$RUSTNMAP_BIN --service-detection -p $TEST_PORTS $TARGET_IP"
+        "$RUSTNMAP_BIN -sV -p $TEST_PORTS $TARGET_IP"
 
     compare_scans \
         "Version Detection Intensity" \
         "$NMAP_BIN -sV --version-intensity 5 -p $TEST_PORTS $TARGET_IP" \
-        "$RUSTNMAP_BIN --service-detection --version-intensity 5 -p $TEST_PORTS $TARGET_IP"
+        "$RUSTNMAP_BIN -sV --version-intensity 5 -p $TEST_PORTS $TARGET_IP"
 
     compare_scans \
         "Aggressive Scan" \
         "$NMAP_BIN -A -p $TEST_PORTS $TARGET_IP" \
-        "$RUSTNMAP_BIN --aggressive-scan -p $TEST_PORTS $TARGET_IP"
+        "$RUSTNMAP_BIN -A -p $TEST_PORTS $TARGET_IP"
 }
 
 # Test Suite: OS Detection (3 tests)
@@ -411,17 +411,17 @@ run_os_detection_suite() {
     compare_scans \
         "OS Detection" \
         "$NMAP_BIN -O $TARGET_IP" \
-        "$RUSTNMAP_BIN --os-detection $TARGET_IP"
+        "$RUSTNMAP_BIN -O $TARGET_IP"
 
     compare_scans \
         "OS Detection Limit" \
         "$NMAP_BIN -O --osscan-limit $TARGET_IP" \
-        "$RUSTNMAP_BIN --os-detection --osscan-limit $TARGET_IP"
+        "$RUSTNMAP_BIN -O --osscan-limit $TARGET_IP"
 
     compare_scans \
         "OS Detection Guess" \
         "$NMAP_BIN -O --osscan-guess $TARGET_IP" \
-        "$RUSTNMAP_BIN --os-detection --osscan-guess $TARGET_IP"
+        "$RUSTNMAP_BIN -O --osscan-guess $TARGET_IP"
 }
 
 # Main function
