@@ -1,6 +1,6 @@
 # NSE Protocol Libraries - Technical Design
 
-> **Version**: 1.0.1
+> **Version**: 1.0.2
 > **Target**: Nmap 7.95
 > **Status**: Phase 11.1 - High Priority Libraries (http, ssh2, sslcert, dns)
 > **Last Updated**: 2026-03-11
