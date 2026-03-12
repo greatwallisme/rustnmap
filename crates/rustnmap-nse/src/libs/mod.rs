@@ -10,14 +10,17 @@
 //! These libraries are registered with the Lua runtime and provide
 //! Nmap-compatible APIs for script authors.
 
+pub mod brute;
 pub mod comm;
 pub mod dns;
+pub mod ftp;
 pub mod http;
 pub mod nmap;
 pub mod shortport;
-pub mod ssh;
+pub mod ssh2;
 pub mod ssl;
 pub mod stdnse;
+pub mod unpwdb;
 
 use crate::error::Result;
 use crate::lua::NseLua;
@@ -25,8 +28,8 @@ use crate::lua::NseLua;
 /// Register all NSE standard libraries with the Lua runtime.
 ///
 /// This function registers the core NSE libraries (nmap, stdnse, comm, shortport)
-/// and protocol libraries (http, ssh, ssl, dns) with the given Lua instance,
-/// making them available to NSE scripts.
+/// and protocol libraries (http, ssh, ssl, dns, ftp, unpwdb) and the brute force
+/// framework (brute) with the given Lua instance, making them available to NSE scripts.
 ///
 /// # Arguments
 ///
@@ -57,9 +60,14 @@ pub fn register_all(lua: &mut NseLua) -> Result<()> {
 
     // Protocol libraries
     http::register(lua)?;
-    ssh::register(lua)?;
+    ssh2::register(lua)?;
     ssl::register(lua)?;
     dns::register(lua)?;
+    ftp::register(lua)?;
+    unpwdb::register(lua)?;
+
+    // Brute force framework
+    brute::register(lua)?;
 
     Ok(())
 }

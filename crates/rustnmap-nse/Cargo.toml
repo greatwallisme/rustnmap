@@ -41,12 +41,15 @@ tracing = { workspace = true }
 bytes = { workspace = true }
 regex = { workspace = true }
 rand = "0.8"
+flate2 = "1.0"
+lazy_static = "1.5"
 
 # Cryptography for SSH/SSL libraries
 md-5 = "0.10"
 sha1 = "0.10"
 sha2 = "0.10"
-num-bigint = "0.4"
+num-bigint = { version = "0.4", features = ["rand"] }
+num-traits = "0.2"
 
 # Process-based execution dependencies
 wait-timeout = "0.2"

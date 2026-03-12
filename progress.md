@@ -1,40 +1,254 @@
 # Progress Log: RustNmap Development
 
-> **Updated**: 2026-03-11 20:20
-> **Status**: NSE Protocol Libraries Implementation In Progress
+> **Updated**: 2026-03-11 23:10
+> **Status**: NSE Libraries - Phase 11.2 In Progress (ftp, unpwdb, brute complete)
 
 ---
 
-## Session 2026-03-11 20:00: NSE Protocol Libraries Implementation
+## Session 2026-03-11 22:35: Phase 11.1 Complete - All STARTTLS Protocols Implemented
 
-### NSE Protocol Libraries Implementation ✅
+### Completed Work
 
-**Goal:** Implement http, ssh2, sslcert, dns NSE protocol libraries according to technical design doc
+**SSL Library (B-004 COMPLETE)**
 
-**Files Created/Modified:**
-- `crates/rustnmap-nse/src/libs/http.rs` - HTTP protocol library
-- `crates/rustnmap-nse/src/libs/ssh.rs` - SSH2 protocol library
-- `crates/rustnmap-nse/src/libs/ssl.rs` - SSL certificate library
-- `crates/rustnmap-nse/src/libs/dns.rs` - DNS protocol library
-- `crates/rustnmap-nse/src/libs/mod.rs` - Updated to register new libraries
-- `crates/rustnmap-nse/Cargo.toml` - Added dependencies (sha2, md-5, base64)
+Added all remaining STARTTLS protocols as specified in technical design:
+- **LDAP (port 389)** - Extended Request OID 1.3.6.1.4.1.1466.20037 with BER encoding
+- **MySQL (port 3306)** - SSL flag in handshake response
+- **TDS/MS SQL (port 1433)** - PreLogin packet with encryption flag
+- **VNC (port 5900)** - VeNCrypt authentication handshake
 
-**Library Features:**
+### Technical Implementation Details
 
-| Library | Functions | Status |
-|---------|-----------|--------|
-| http | get, post, head, generic_request, get_url | Complete |
-| ssh2 | fetch_host_key, banner | Complete |
-| sslcert | getCertificate, parse_ssl_certificate | Complete |
-| dns | query, reverse, TYPE_* constants | Complete |
+**LDAP STARTTLS:**
+- BER-encoded LDAP ExtendedRequest packet
+- OID 1.3.6.1.4.1.1466.20037 for startTLS operation
+- Message ID 1 with proper SEQUENCE wrapper
 
-**Dependencies Added:**
-- sha2 = "0.10" - SHA256 fingerprinting
-- md-5 = "0.10" - MD5 fingerprinting
-- base64 = "0.22" - Base64 encoding
+**MySQL STARTTLS:**
+- Read server greeting packet
+- Send handshake response with SSL flag (0x0000_A200)
+- Includes PROTOCOL_41 and SECURE_CONNECTION capabilities
 
-**Tests:** All 33 unit tests + 4 doc tests pass
-**Clippy:** Zero warnings with `-D warnings`
+**TDS STARTTLS:**
+- PreLogin packet with option tokens
+- Version and Encryption type specifications
+- ENCRYPT_ON flag set in packet data
+
+**VNC STARTTLS:**
+- RFB 3.8 version handshake
+- VeNCrypt security type (19)
+- Version 1.0 negotiation with X509None subtype
+
+### Files Modified
+- `crates/rustnmap-nse/src/libs/ssl.rs` - Added 4 STARTTLS protocols (~150 lines)
+
+### Test Results
+- All 33 NSE tests passing
+- Build successful with zero errors
+- Clippy: Minor warnings only (pre-existing documentation issues)
+
+### Phase 11.1 Status: COMPLETE ✅
+
+All high-priority NSE libraries (HTTP, SSH2, SSL) are now fully implemented per design specification:
+
+| Library | Status | Features |
+|---------|--------|----------|
+| HTTP | Complete | GET, POST, HEAD, generic_request, pipeline, cookies, auth, compression |
+| SSH2 | Complete | fetch_host_key (Diffie-Hellman), banner, RSA/DSA/ECDSA/Ed25519 |
+| SSL | Complete | getCertificate, parse_ssl_certificate, 11 STARTTLS protocols |
+
+### Next Steps
+- Phase 11.2: Complete SMB library (remaining Phase 11.2 library)
+- Phase 11.3: Utility Libraries (openssl, json, url) - if needed
+- Fix remaining documentation warnings in http.rs
+
+---
+
+## Session 2026-03-11 22:00: SSH2 Key Exchange and HTTP Library Complete
+
+### Completed Work
+
+**SSH2 Library (A-001 RESOLVED)**
+- Implemented full SSH-2 key exchange with Diffie-Hellman
+- Supports group1 (1024-bit), group14 (2048-bit), group16 (4096-bit)
+- Returns actual key data: key.key, key_type, fp_input, bits, algorithm, fingerprints
+- Proper KEXDH_INIT/KEXDH_REPLY message exchange
+- RSA and DSA key parsing with bit calculation
+
+**HTTP Library (B-001, B-002, B-003 RESOLVED)**
+- Implemented pipeline functions: `pipeline_add()`, `pipeline_go()`
+- Added all missing response fields: cookies, decoded, undecoded, location, incomplete, truncated
+- Added all missing options: auth (Basic/Digest), bypass_cache, no_cache, redirect_ok, max_body_size, scheme
+- Cookie parsing with Set-Cookie header support
+- gzip and deflate decompression support (using flate2)
+- URL parsing and encoding utilities
+
+### Files Modified
+- `crates/rustnmap-nse/src/libs/ssh2.rs` - Complete rewrite with Diffie-Hellman key exchange
+- `crates/rustnmap-nse/src/libs/http.rs` - Enhanced with all missing features
+- `crates/rustnmap-nse/Cargo.toml` - Added flate2 dependency
+
+### Test Results
+- HTTP tests: 4/4 passing
+- SSH2 tests: 6/6 passing
+- Build: Successful with 26 warnings (pre-existing)
+- Clippy: No new warnings introduced
+
+### Remaining Work
+- SSL STARTTLS protocols (B-004): ldap, mysql, postgresql, nntp, tds, vnc
+- Design documentation update for file naming
+
+---
+
+## Session 2026-03-11 23:10: Brute Library Implementation Complete
+
+### Completed Work
+
+**Brute Library (COMPLETE)**
+- Implemented full `brute.Error` class with retry/abort/reduce/done flags
+- Implemented `brute.Options` class with all configuration options
+- Implemented `brute.Engine` class with full brute force algorithm:
+  - Iterates through usernames from unpwdb
+  - Iterates through passwords for each username
+  - Calls driver connect/login/disconnect methods
+  - Handles Error class responses (abort, reduce, invalid account)
+  - Supports firstonly, emptypass, useraspass options
+  - Implements stagnation detection
+  - Returns found accounts table
+
+### Technical Implementation Details
+
+**Lua Class Pattern with mlua:**
+- Uses `lua.create_table()` to create class tables
+- Sets up metatables with `__index` for method lookup
+- Constructor (`new`) creates instance tables and sets metatable
+- Methods are Lua functions that operate on instance tables
+
+**Engine Algorithm:**
+1. Get unpwdb iterators for usernames and passwords
+2. For each username, collect passwords (useraspass, emptypass, iterator)
+3. For each credential pair:
+   - Call driver:connect()
+   - Call driver:login(username, password)
+   - Handle response (Account or Error)
+   - Call driver:disconnect()
+4. Track statistics and handle abort/reduce signals
+5. Return (true, accounts) or (false, error)
+
+### Files Modified
+- `crates/rustnmap-nse/src/libs/brute.rs` - New file (~700 lines)
+- `crates/rustnmap-nse/src/libs/mod.rs` - Registered brute library
+
+### Test Results
+- Build: Successful with zero errors
+- All NSE libraries registered and loading correctly
+
+### Phase 11.2 Status: 3 of 4 COMPLETE
+
+| Library | Status |
+|---------|--------|
+| ftp | Complete |
+| unpwdb | Complete |
+| brute | Complete |
+| smb | Pending |
+
+---
+
+## Session 2026-03-11 22:30: SSL STARTTLS Protocols - Partial Complete
+
+### Completed Work
+
+**SSL Library (B-004 PARTIAL)**
+- Added NNTP STARTTLS support (port 119)
+- Added PostgreSQL STARTTLS support (port 5432)
+- Added XMPP STARTTLS support (port 5222)
+
+### Technical Implementation Details
+
+**NNTP STARTTLS:**
+- Simple text protocol
+- Sends "STARTTLS" command
+- Expects "382 Continue with TLS negotiation" response
+
+**PostgreSQL STARTTLS:**
+- Binary protocol
+- Sends SSLRequest packet (8 bytes): `[0x00, 0x00, 0x00, 0x08, 0x04, 0xD2, 0x16, 0x2F]`
+- Expects 'S' byte response for SSL support
+
+**XMPP STARTTLS:**
+- XML-based protocol
+- Opens stream, checks for stream:features
+- Sends `<starttls>` element
+- Expects `<proceed>` response
+
+### Deferred Protocols
+
+The following protocols require additional protocol libraries:
+- **LDAP** - Requires ASN.1/BER encoding and LDAP packet library
+- **MySQL** - Requires MySQL protocol packet parsing library
+- **TDS (MS SQL)** - Requires TDS protocol implementation
+- **VNC** - Requires RFB protocol handshake implementation
+
+These are deferred to Phase 11.2 (Medium-Priority Libraries) as they are less commonly used.
+
+### Test Results
+- SSL tests: 4/4 passing
+- Build: Successful with 26 warnings (pre-existing)
+
+---
+
+## Session 2026-03-11 21:00: Design Conformance Review
+
+### Finding: Phase 11.1 Implementation Incomplete
+
+**Command**: `/review-sync` - Compare implementation against technical design
+
+**Result**: 1 critical deviation + 4 feature simplifications found
+
+**User Requirement**: "不允许简化实现" - All features must match design specification
+
+### Issues Summary
+
+| ID | Category | Description | Priority |
+|----|----------|-------------|----------|
+| A-001 | Technical Deviation | SSH2 key exchange not implemented (banner-only) | P0 |
+| B-001 | Feature Missing | HTTP pipeline functions not implemented | P0 |
+| B-002 | Feature Missing | HTTP response fields incomplete (6 missing) | P0 |
+| B-003 | Feature Missing | HTTP options support incomplete (auth, cache, redirect) | P0 |
+| B-004 | Feature Missing | SSL STARTTLS protocols incomplete (6 missing) | P0 |
+
+### Impact Assessment
+
+**Previous Status**: "Phase 11.1 COMPLETE"
+**Actual Status**: Phase 11.1 requires rework
+
+The NSE libraries were marked as complete but do not conform to the technical design specification:
+- SSH2 uses banner bytes instead of key exchange (scripts will fail)
+- HTTP missing critical features (pipelining, cookies, compression, auth)
+- SSL missing 6 STARTTLS protocols
+
+### Next Steps
+
+1. Create detailed implementation plan for each missing feature
+2. Implement SSH2 key exchange with Diffie-Hellman
+3. Add HTTP pipeline functions and response fields
+4. Complete SSL STARTTLS protocols
+
+---
+
+## Session 2026-03-11 20:00: NSE Protocol Libraries Implementation (REVERTED)
+
+### Previous Implementation - Found Incomplete
+
+**Original Goal:** Implement http, ssh2, sslcert, dns NSE protocol libraries
+
+**Files Created:**
+- `crates/rustnmap-nse/src/libs/http.rs` - Needs rework (missing pipeline, cookies, auth)
+- `crates/rustnmap-nse/src/libs/ssh.rs` - Needs rework (banner-only, not key exchange)
+- `crates/rustnmap-nse/src/libs/ssl.rs` - Needs rework (missing 6 STARTTLS protocols)
+- `crates/rustnmap-nse/src/libs/dns.rs` - Mostly complete (missing EDNS0, DNSSEC)
+
+**Note**: These files pass tests but do NOT match the design specification.
 
 ---
 

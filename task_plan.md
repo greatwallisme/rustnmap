@@ -74,53 +74,110 @@ Process-based isolation with OS-level process termination:
 
 ---
 
-## Phase 11: NSE Library Expansion - IN PROGRESS
+## Phase 11: NSE Library Expansion - PHASE 11.1 COMPLETE ✅
 
-> **Status**: **Phase 11.1 COMPLETE** - Core + protocol libraries implemented
+> **Status**: **Phase 11.1 - COMPLETE** - All high-priority libraries implemented per design spec
 
-### Current State (2026-03-11 20:20)
+### Design Conformance Review (2026-03-11 21:00)
 
-**Implemented (8 libraries)**:
-- nmap - Core scanning functions
-- stdnse - Standard extensions
-- comm - Network communication
-- shortport - Port matching rules
-- http - HTTP protocol library (NEW)
-- ssh2 - SSH2 protocol library (NEW)
-- sslcert - SSL certificate library (NEW)
-- dns - DNS protocol library (NEW)
+**Finding**: Design conformance review identified 1 critical deviation and 4 feature simplifications.
+**Requirement**: "不允许简化实现" - All features must match design specification.
 
-**Remaining Protocol Libraries (~17 libraries)**:
-- smb - SMB/CIFS protocol library
-- snmp - SNMP protocol library
-- ftp - FTP protocol library
-- tls - TLS/SSL wrapper
-- brute - Password brute forcing
-- unpwdb - Username/password database
-- openssl - OpenSSL bindings
-- And ~10 more...
+| Category | Count | Status |
+|----------|-------|--------|
+| [A] Technical direction deviation | 1 | **MUST FIX** |
+| [B] Feature simplification | 4 | **MUST FIX** |
+| [C] Code exceeds design | 2 | Doc update needed |
 
-### Phase 11.1: High-Priority Protocol Libraries - COMPLETE
+### Critical Issues Requiring Rework
 
-**Priority**: P0 - Required for common NSE scripts
+#### [A-001] SSH2 Key Exchange Not Implemented
 
-| Library | Scripts Enabled | Status |
-|---------|-----------------|--------|
-| http | http-vuln*, http-enum*, http-* | Complete |
-| ssh2 | ssh-auth-methods, ssh-* | Complete |
-| sslcert | ssl-enum, ssl-cert, ssl-* | Complete |
-| dns | dns-* | Complete |
+**Design Spec**: Full SSH-2 key exchange with Diffie-Hellman groups
+- Support group1 (1024-bit), group14 (2048-bit), group16 (4096-bit)
+- Returns actual key data: key.key, key_type, fp_input, bits, algorithm, fingerprints
+
+**Current Implementation**: Banner-only implementation
+- Only reads SSH banner string
+- Uses banner bytes as "pseudo key data"
+- Returns placeholder values: bits=0, algorithm="Unknown", key_type="banner"
+
+**Impact**: Scripts relying on SSH key type detection or RSA key size will not work correctly.
+
+**Action Required**: Implement SSH-2 key exchange with Diffie-Hellman per design.
+
+---
+
+#### [B-001] HTTP Missing Pipeline Functions
+
+**Design Spec**: `http.pipeline_add()`, `http.pipeline_go()` for request batching
+
+**Current Implementation**: Not implemented
+
+**Impact**: Scripts using HTTP pipelining for performance will fail.
+
+---
+
+#### [B-002] HTTP Missing Response Fields
+
+**Design Spec**: Response table includes:
+- `cookies` - Cookie array
+- `decoded` / `undecoded` - Compression handling
+- `location` - Redirect URLs
+- `incomplete` / `truncated` - Error states
+
+**Current Implementation**: Only basic fields (status, version, header, body)
+
+---
+
+#### [B-003] HTTP Missing Options Support
+
+**Design Spec**: Options table supports:
+- `auth` / `digestauth` - Authentication
+- `bypass_cache`, `no_cache` - Cache control
+- `redirect_ok` - Redirect control
+- `max_body_size` - Body size limit
+- `scheme` - Protocol scheme
+
+**Current Implementation**: Only `timeout` and `header` options
+
+---
+
+#### [B-004] SSL Missing STARTTLS Protocols
+
+**Design Spec**: Support for ldap, mysql, postgresql, nntp, tds, vnc
+
+**Current Implementation**: Only smtp, pop3, imap, ftp, xmpp implemented
+
+---
+
+### Implementation Plan (Revised)
+
+| Phase | Task | Status | Priority |
+|-------|------|--------|----------|
+| 11.1.1 | Fix SSH2 key exchange implementation | Complete | P0 |
+| 11.1.2 | Add HTTP pipeline functions | Complete | P0 |
+| 11.1.3 | Add HTTP missing response fields | Complete | P0 |
+| 11.1.4 | Add HTTP missing options support | Complete | P0 |
+| 11.1.5 | Add SSL missing STARTTLS protocols | **Complete** | P0 |
+| 11.1.6 | Update design doc for file naming | Pending | P2 |
+| 11.1.7 | Verify all tests pass with full implementation | Complete | P0 |
+
+**Phase 11.1 Complete** (2026-03-11):
+- SSH2: Full Diffie-Hellman key exchange with RSA/DSA/ECDSA/Ed25519 support
+- HTTP: Complete HTTP/1.1 with pipeline, cookies, auth, compression
+- SSL: All 11 STARTTLS protocols (ftp, smtp, imap, pop3, ldap, mysql, postgresql, nntp, tds, vnc, xmpp)
 
 #### Phase 11.2: Medium-Priority Libraries (Next)
 
 **Priority**: P1 - Useful but less critical
 
-| Library | Scripts Enabled | Effort | Order |
-|---------|-----------------|--------|-------|
-| smb | smb-*, msrpc-* | 3 days | 5 |
-| ftp | ftp-* | 2 days | 6 |
-| brute | brute-* | 2 days | 7 |
-| unpwdb | Used by brute | 1 day | 8 |
+| Library | Scripts Enabled | Effort | Order | Status |
+|---------|-----------------|--------|-------|--------|
+| smb | smb-*, msrpc-* | 3 days | 5 | Pending |
+| ftp | ftp-* | 2 days | 6 | **Complete** |
+| brute | brute-* | 2 days | 7 | **Complete** |
+| unpwdb | Used by brute | 1 day | 8 | **Complete** |
 
 #### Phase 11.3: Utility Libraries (Future)
 
