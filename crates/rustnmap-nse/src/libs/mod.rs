@@ -11,8 +11,12 @@
 //! Nmap-compatible APIs for script authors.
 
 pub mod comm;
+pub mod dns;
+pub mod http;
 pub mod nmap;
 pub mod shortport;
+pub mod ssh;
+pub mod ssl;
 pub mod stdnse;
 
 use crate::error::Result;
