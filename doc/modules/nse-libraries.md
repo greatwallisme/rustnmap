@@ -1,6 +1,7 @@
 # NSE Protocol Libraries - Technical Design
 
-> **Version**: 1.0.0
+> **Version**: 1.0.1
+> **Target**: Nmap 7.95
 > **Status**: Phase 11.1 - High Priority Libraries (http, ssh2, sslcert, dns)
 > **Last Updated**: 2026-03-11
 
@@ -273,16 +274,23 @@ url = "2.5"
 
 ### Key Functions
 
-#### `ssh2.fetch_host_key(host, port)`
+#### `ssh2.fetch_host_key(host, port, key_type)`
 
 ```lua
 -- Get SSH host key fingerprint
-local key = ssh2.fetch_host_key(host, port)
--- Returns table with:
--- key.algorithm: "ssh-rsa", "ssh-ed25519", "ecdsa-sha2-nistp256"
--- key.fingerprint: "MD5:aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99:aa:bb:cc"
--- key.fp: "SHA256:Base64EncodedFingerprint=="
--- key.bits: 2048 or 256 or other
+-- key_type (optional): "ssh-rsa", "ssh-dss", "ecdsa-sha2-nistp256",
+--                      "ecdsa-sha2-nistp384", "ecdsa-sha2-nistp521", "ssh-ed25519"
+local key = ssh2.fetch_host_key(host, port, "ssh-rsa")
+
+-- Returns table with these exact fields (Nmap compatibility required):
+-- key.key: Base64-encoded public host key
+-- key.key_type: "ssh-rsa", "ssh-ed25519", "ecdsa-sha2-nistp256", etc.
+-- key.fp_input: Raw public key bytes (for fingerprint calculation)
+-- key.bits: 2048, 256, 384, 521, etc. (key size in bits)
+-- key.full_key: "ssh-rsa AAAAB3NzaC1yc2E..." (key_type + space + base64 key)
+-- key.algorithm: "RSA", "DSA", "ECDSA", "ED25519"
+-- key.fingerprint: "aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99" (MD5 hex)
+-- key.fp_sha256: Base64-encoded SHA256 fingerprint
 ```
 
 #### `ssh2.banner(host, port)`
@@ -296,17 +304,26 @@ local banner = ssh2.banner(host, port)
 ### Implementation Notes
 
 1. **Protocol**: SSH-2 only (SSH-1.x is deprecated and insecure)
-2. **Key Types**: Support RSA, ECDSA (nistp256, nistp384, nistp521), ED25519
+2. **Key Types**: Support RSA, DSA, ECDSA (nistp256, nistp384, nistp521), ED25519
 3. **Fingerprinting**: Both MD5 (legacy) and SHA256 formats
 4. **Timeout**: Default 10 seconds
-5. **No encryption needed**: Key exchange is done in clear
+5. **No encryption needed**: Key exchange is done in clear before encryption starts
+6. **Diffie-Hellman groups**: Support group1 (1024-bit), group14 (2048-bit),
+   group16 (4096-bit), and group-exchange (variable)
 
 ### Dependencies
 
 ```toml
 [dependencies]
-russh = "0.44"
-# OR custom minimal implementation
+# Custom minimal SSH-2 key exchange implementation recommended
+# Nmap implements only the key exchange portion, not full SSH protocol
+# Using full russh library may cause compatibility issues with NSE scripts
+sha1 = "0.10"
+sha2 = "0.10"
+md-5 = "0.10"
+base64 = "0.22"
+num-bigint = "0.4"  # For Diffie-Hellman calculations
+# Alternative: russh = "0.44" (full SSH client, may be overkill)
 ```
 
 ---
@@ -353,30 +370,59 @@ local cert = sslcert.parse_ssl_certificate(der_string)
 
 ### STARTTLS Support
 
-The library supports STARTTLS for multiple protocols:
+    library supports STARTTLS for multiple protocols:
 
 ```lua
--- FTP
+-- FTP (port 21)
 local cert = sslcert.getCertificate(host, port, {protocol = "ftp"})
 
--- SMTP
+-- SMTP (ports 25, 587)
 local cert = sslcert.getCertificate(host, port, {protocol = "smtp"})
 
--- IMAP
+-- IMAP (port 143)
 local cert = sslcert.getCertificate(host, port, {protocol = "imap"})
 
--- POP3
+-- POP3 (port 110)
 local cert = sslcert.getCertificate(host, port, {protocol = "pop3"})
 
--- LDAP
+-- LDAP (port 389)
 local cert = sslcert.getCertificate(host, port, {protocol = "ldap"})
 
--- MySQL
+-- MySQL (port 3306)
 local cert = sslcert.getCertificate(host, port, {protocol = "mysql"})
 
--- PostgreSQL
+-- PostgreSQL (port 5432)
 local cert = sslcert.getCertificate(host, port, {protocol = "postgresql"})
+
+-- NNTP (port 119)
+local cert = sslcert.getCertificate(host, port, {protocol = "nntp"})
+
+-- TDS/MS SQL Server (port 1433)
+-- Note: TDS uses wrapped handshake, may not support full SSL reconnect
+local cert = sslcert.getCertificate(host, port, {protocol = "tds"})
+
+-- VNC/VeNCrypt (port 5900)
+local cert = sslcert.getCertificate(host, port, {protocol = "vnc"})
+
+-- XMPP (ports 5222, 5269)
+local cert = sslcert.getCertificate(host, port, {protocol = "xmpp"})
 ```
+
+### Supported STARTTLS Protocols
+
+| Protocol | Default Port | Notes |
+|----------|---------------|-------|
+| ftp | 21 | AUTH TLS command |
+| smtp | 25, 587 | STARTTLS command |
+| imap | 143 | STARTTLS after CAPABILITY |
+| pop3 | 110 | STLS command |
+| ldap | 389 | Extended Request OID 1.3.6.1.4.1.1466.20037 |
+| mysql | 3306 | SSL switch during handshake |
+| postgresql | 5432 | SSLRequest message 80877103 |
+| nntp | 119 | STARTTLS command |
+| tds | 1433 | PreLogin packet encryption (wrapped) |
+| vnc | 5900 | VeNCrypt auth subtypes |
+| xmpp | 5222, 5269 | XMPP TLS proceed |
 
 ### Implementation Notes
 
