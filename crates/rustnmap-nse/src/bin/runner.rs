@@ -159,7 +159,7 @@ fn execute_script(source: &str, script_id: &str, target_ip: IpAddr) -> Result<St
         .map_err(|e| format!("Failed to load script: {e}"))?;
 
     // Create host table
-    let host_table = create_host_table(&lua, target_ip)?;
+    let host_table = create_host_table(lua, target_ip)?;
     lua.globals()
         .set("host", host_table)
         .map_err(|e| format!("Failed to set host table: {e}"))?;

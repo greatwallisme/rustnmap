@@ -25,7 +25,8 @@ use crate::lua::NseLua;
 /// Register all NSE standard libraries with the Lua runtime.
 ///
 /// This function registers the core NSE libraries (nmap, stdnse, comm, shortport)
-/// with the given Lua instance, making them available to NSE scripts.
+/// and protocol libraries (http, ssh, ssl, dns) with the given Lua instance,
+/// making them available to NSE scripts.
 ///
 /// # Arguments
 ///
@@ -48,10 +49,18 @@ use crate::lua::NseLua;
 /// # }
 /// ```
 pub fn register_all(lua: &mut NseLua) -> Result<()> {
+    // Core libraries
     nmap::register(lua)?;
     stdnse::register(lua)?;
     comm::register(lua)?;
     shortport::register(lua)?;
+
+    // Protocol libraries
+    http::register(lua)?;
+    ssh::register(lua)?;
+    ssl::register(lua)?;
+    dns::register(lua)?;
+
     Ok(())
 }
 
