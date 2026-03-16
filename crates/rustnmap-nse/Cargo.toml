@@ -51,6 +51,12 @@ sha2 = "0.10"
 num-bigint = { version = "0.4", features = ["rand"] }
 num-traits = "0.2"
 
+# Cryptography for SMB/NTLM authentication
+des = "0.8"
+hmac = "0.12"
+md4 = "0.10"
+ripemd = "0.1"
+
 # Process-based execution dependencies
 wait-timeout = "0.2"
 which = { version = "7.0", default-features = false }

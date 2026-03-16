@@ -83,38 +83,37 @@ const DEFAULT_TIMEOUT_MS: u64 = 30_000;
 
 /// Default maximum body size (2MB).
 const DEFAULT_MAX_BODY_SIZE: usize = 2_097_152;
-
 /// Default maximum redirect count.
 const MAX_REDIRECT_COUNT: u32 = 5;
 
 /// HTTP response structure.
 #[derive(Debug, Clone)]
 pub struct HttpResponse {
-    /// HTTP status code.
+    /// HTTP status code (e.g., 200, 404).
     pub status: u16,
-    /// HTTP version.
+    /// HTTP version (e.g., "1.1").
     pub version: String,
-    /// Status line.
+    /// Full status line (e.g., "HTTP/1.1 200 OK").
     pub status_line: String,
-    /// Response headers.
+    /// Response headers (lowercase keys).
     pub header: HashMap<String, String>,
-    /// Raw headers.
+    /// Raw header lines.
     pub rawheader: Vec<String>,
-    /// Response body (after decoding).
+    /// Response body (after Content-Encoding decoding).
     pub body: Vec<u8>,
-    /// Raw body (before decoding).
+    /// Raw response body (before Content-Encoding decoding).
     pub rawbody: Vec<u8>,
     /// Cookies from Set-Cookie headers.
     pub cookies: Vec<Cookie>,
-    /// Successfully processed encodings.
+    /// Successfully processed encodings (e.g., `["gzip"]`).
     pub decoded: Vec<String>,
-    /// Unsupported encodings.
+    /// Unsupported/undecoded encodings.
     pub undecoded: Vec<String>,
     /// Redirect URLs followed.
     pub location: Vec<String>,
-    /// Partial response indicator.
+    /// True if response is incomplete.
     pub incomplete: bool,
-    /// Truncated body indicator.
+    /// True if body was truncated due to size limit.
     pub truncated: bool,
 }
 
@@ -136,34 +135,70 @@ pub struct Cookie {
 /// Pipeline request structure.
 #[derive(Debug, Clone)]
 pub struct PipelineRequest {
+    /// HTTP method.
     pub method: String,
+    /// Request path.
     pub path: String,
+    /// Request headers.
     pub headers: HashMap<String, String>,
+    /// Request body.
     pub body: Option<Vec<u8>>,
+    /// Request options.
     pub options: RequestOptions,
 }
 
 /// Request options.
 #[derive(Debug, Clone)]
 pub struct RequestOptions {
+    /// Request timeout in milliseconds.
     pub timeout: u64,
+    /// Request headers.
     pub headers: HashMap<String, String>,
+    /// Request cookies as structured objects.
     pub cookies: Option<Vec<Cookie>>,
+    /// Request cookies as raw string.
     pub cookies_raw: Option<String>,
+    /// Authentication information.
     pub auth: Option<AuthInfo>,
+    /// Bypass cache flag.
     pub bypass_cache: bool,
+    /// Disable cache storage flag.
     pub no_cache: bool,
+    /// Redirect handling policy.
     pub redirect_ok: Option<RedirectOk>,
+    /// Maximum response body size.
     pub max_body_size: usize,
+    /// Allow truncated responses flag.
     pub truncated_ok: bool,
+    /// URL scheme override.
     pub scheme: Option<String>,
 }
 
 /// Authentication information.
 #[derive(Debug, Clone)]
 pub enum AuthInfo {
-    Basic { username: String, password: String },
-    Digest { username: String, password: String, realm: String, nonce: String, uri: String, response: String },
+    /// Basic authentication.
+    Basic {
+        /// Username.
+        username: String,
+        /// Password.
+        password: String,
+    },
+    /// Digest authentication.
+    Digest {
+        /// Username.
+        username: String,
+        /// Password.
+        password: String,
+        /// Authentication realm.
+        realm: String,
+        /// Server nonce.
+        nonce: String,
+        /// Request URI.
+        uri: String,
+        /// Computed response hash.
+        response: String,
+    },
 }
 
 /// Redirect behavior.
@@ -196,8 +231,18 @@ impl Default for RequestOptions {
 }
 
 /// Build HTTP request.
-#[expect(clippy::format_push_string, reason = "HTTP request building is not performance-critical")]
-fn build_request(method: &str, host: &str, port: u16, path: &str, options: &RequestOptions, body: Option<&[u8]>) -> Vec<u8> {
+#[expect(
+    clippy::format_push_string,
+    reason = "HTTP request building is not performance-critical"
+)]
+fn build_request(
+    method: &str,
+    host: &str,
+    port: u16,
+    path: &str,
+    options: &RequestOptions,
+    body: Option<&[u8]>,
+) -> Vec<u8> {
     let mut request = format!("{method} {path} HTTP/1.1\r\n");
     request.push_str(&format!("Host: {host}:{port}\r\n"));
     request.push_str("Connection: close\r\n");
@@ -235,8 +280,18 @@ fn build_request(method: &str, host: &str, port: u16, path: &str, options: &Requ
                 let encoded = base64_encode(creds.as_bytes());
                 request.push_str(&format!("Authorization: Basic {encoded}\r\n"));
             }
-            AuthInfo::Digest { username, realm, nonce, uri, response, .. } => {
-                request.push_str(&format!("Authorization: Digest username=\"{username}\", realm=\"{realm}\", nonce=\"{nonce}\", uri=\"{uri}\", response=\"{response}\"\r\n"));
+            AuthInfo::Digest {
+                username,
+                realm,
+                nonce,
+                uri,
+                response,
+                ..
+            } => {
+                request.push_str(&format!(
+                    "Authorization: Digest username=\"{username}\", realm=\"{realm}\", \
+                     nonce=\"{nonce}\", uri=\"{uri}\", response=\"{response}\"\r\n"
+                ));
             }
         }
     }
@@ -260,7 +315,11 @@ fn build_request(method: &str, host: &str, port: u16, path: &str, options: &Requ
 }
 
 /// Parse HTTP response.
-fn parse_response(response_bytes: &[u8], max_body_size: usize, truncated_ok: bool) -> mlua::Result<HttpResponse> {
+fn parse_response(
+    response_bytes: &[u8],
+    max_body_size: usize,
+    truncated_ok: bool,
+) -> mlua::Result<HttpResponse> {
     let header_end = response_bytes
         .windows(4)
         .position(|w| w == b"\r\n\r\n")
@@ -274,7 +333,9 @@ fn parse_response(response_bytes: &[u8], max_body_size: usize, truncated_ok: boo
         if truncated_ok {
             (full_body[..max_body_size].to_vec(), true)
         } else {
-            return Err(mlua::Error::RuntimeError("response body too large".to_string()));
+            return Err(mlua::Error::RuntimeError(
+                "response body too large".to_string(),
+            ));
         }
     } else {
         (full_body, false)
@@ -291,7 +352,11 @@ fn parse_response(response_bytes: &[u8], max_body_size: usize, truncated_ok: boo
         .to_string();
 
     let parts: Vec<&str> = status_line.splitn(3, ' ').collect();
-    let version = parts.first().and_then(|s| s.strip_prefix("HTTP/")).unwrap_or("1.1").to_string();
+    let version = parts
+        .first()
+        .and_then(|s| s.strip_prefix("HTTP/"))
+        .unwrap_or("1.1")
+        .to_string();
     let status: u16 = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
 
     let mut header = HashMap::new();
@@ -327,18 +392,14 @@ fn parse_response(response_bytes: &[u8], max_body_size: usize, truncated_ok: boo
     // Process body according to Content-Encoding
     let (decoded, undecoded, body) = if let Some(encoding) = content_encoding {
         match encoding.as_str() {
-            "gzip" | "x-gzip" => {
-                match decompress_gzip(&rawbody) {
-                    Ok(decompressed) => (vec!["gzip".to_string()], Vec::new(), decompressed),
-                    Err(_) => (Vec::new(), vec![encoding], rawbody.clone()),
-                }
-            }
-            "deflate" => {
-                match decompress_deflate(&rawbody) {
-                    Ok(decompressed) => (vec!["deflate".to_string()], Vec::new(), decompressed),
-                    Err(_) => (Vec::new(), vec![encoding], rawbody.clone()),
-                }
-            }
+            "gzip" | "x-gzip" => match decompress_gzip(&rawbody) {
+                Ok(decompressed) => (vec!["gzip".to_string()], Vec::new(), decompressed),
+                Err(_) => (Vec::new(), vec![encoding], rawbody.clone()),
+            },
+            "deflate" => match decompress_deflate(&rawbody) {
+                Ok(decompressed) => (vec!["deflate".to_string()], Vec::new(), decompressed),
+                Err(_) => (Vec::new(), vec![encoding], rawbody.clone()),
+            },
             "identity" | "" => (Vec::new(), Vec::new(), rawbody.clone()),
             _ => (Vec::new(), vec![encoding], rawbody.clone()),
         }
@@ -391,16 +452,17 @@ fn decompress_deflate(data: &[u8]) -> mlua::Result<Vec<u8>> {
 fn parse_set_cookie(value: &str) -> mlua::Result<Cookie> {
     let mut parts = value.split(';');
 
-    let name_value = parts.next()
+    let name_value = parts
+        .next()
         .ok_or_else(|| mlua::Error::RuntimeError("Empty cookie".to_string()))?;
 
-    let (name, value) = name_value
+    let (name, cookie_val) = name_value
         .split_once('=')
         .ok_or_else(|| mlua::Error::RuntimeError("Invalid cookie format".to_string()))?;
 
     let mut cookie = Cookie {
         name: name.trim().to_string(),
-        value: value.trim().to_string(),
+        value: cookie_val.trim().to_string(),
         path: None,
         domain: None,
         expires: None,
@@ -427,7 +489,12 @@ fn parse_set_cookie(value: &str) -> mlua::Result<Cookie> {
 }
 
 /// Perform HTTP request over TCP.
-fn perform_request(host: &str, port: u16, request: &[u8], options: &RequestOptions) -> mlua::Result<HttpResponse> {
+fn perform_request(
+    host: &str,
+    port: u16,
+    request: &[u8],
+    options: &RequestOptions,
+) -> mlua::Result<HttpResponse> {
     let addr = format!("{host}:{port}");
 
     let stream = TcpStream::connect(&addr)
@@ -580,95 +647,96 @@ fn extract_host_port(host: Value, port: Value) -> (String, u16) {
 fn parse_options(options: Option<Table>) -> RequestOptions {
     let mut opts = RequestOptions::default();
 
-    if let Some(table) = options {
-        // Timeout
-        if let Ok(Some(timeout)) = table.get::<Option<u64>>("timeout") {
-            opts.timeout = timeout;
-        }
+    let Some(table) = options else {
+        return opts;
+    };
 
-        // Headers
-        if let Ok(Some(ht)) = table.get::<Option<Table>>("header") {
-            for pair in ht.pairs::<String, String>() {
-                if let Ok((key, value)) = pair {
-                    opts.headers.insert(key.to_lowercase(), value);
+    // Timeout
+    if let Ok(Some(timeout)) = table.get::<Option<u64>>("timeout") {
+        opts.timeout = timeout;
+    }
+
+    // Headers
+    if let Ok(Some(ht)) = table.get::<Option<Table>>("header") {
+        for (key, value) in ht.pairs::<String, String>().flatten() {
+            opts.headers.insert(key.to_lowercase(), value);
+        }
+    }
+
+    // Cookies (as table)
+    if let Ok(Some(cookie_tbl)) = table.get::<Option<Table>>("cookies") {
+        let mut cookies_vec = Vec::new();
+        for (_, cookie_value) in cookie_tbl.pairs::<Value, Value>().flatten() {
+            if let Value::Table(cookie) = cookie_value {
+                let Some(name) = cookie.get::<Option<String>>("name").ok().flatten() else {
+                    continue;
+                };
+                let Some(value) = cookie.get::<Option<String>>("value").ok().flatten() else {
+                    continue;
+                };
+                let c = Cookie {
+                    name,
+                    value,
+                    path: None,
+                    domain: None,
+                    expires: None,
+                };
+                cookies_vec.push(c);
+            }
+        }
+        if !cookies_vec.is_empty() {
+            opts.cookies = Some(cookies_vec);
+        }
+    } else if let Ok(Some(cookie_str)) = table.get::<Option<String>>("cookies") {
+        opts.cookies_raw = Some(cookie_str);
+    }
+
+    // Auth (Basic)
+    if let Ok(Some(auth_tbl)) = table.get::<Option<Table>>("auth") {
+        if let (Ok(Some(username)), Ok(Some(password))) = (
+            auth_tbl.get::<Option<String>>("username"),
+            auth_tbl.get::<Option<String>>("password"),
+        ) {
+            opts.auth = Some(AuthInfo::Basic { username, password });
+        }
+    }
+
+    // Bypass cache
+    if let Ok(Some(bypass)) = table.get::<Option<bool>>("bypass_cache") {
+        opts.bypass_cache = bypass;
+    }
+
+    // No cache
+    if let Ok(Some(no_cache)) = table.get::<Option<bool>>("no_cache") {
+        opts.no_cache = no_cache;
+    }
+
+    // Redirect OK
+    if let Ok(Some(redirect_ok)) = table.get::<Option<Value>>("redirect_ok") {
+        match redirect_ok {
+            Value::Boolean(false) => opts.redirect_ok = Some(RedirectOk::Disabled),
+            Value::Integer(n) => {
+                if let Ok(count) = u32::try_from(n) {
+                    opts.redirect_ok = Some(RedirectOk::Count(count));
                 }
             }
+            _ => {}
         }
+    }
 
-        // Cookies (as table)
-        if let Ok(Some(cookie_tbl)) = table.get::<Option<Table>>("cookies") {
-            let mut cookies_vec = Vec::new();
-            for pair in cookie_tbl.pairs::<Value, Value>() {
-                if let Ok((_, cookie_value)) = pair {
-                    if let Value::Table(cookie) = cookie_value {
-                        if let Ok(Some(name)) = cookie.get::<Option<String>>("name") {
-                            if let Ok(Some(value)) = cookie.get::<Option<String>>("value") {
-                                let c = Cookie {
-                                    name,
-                                    value,
-                                    path: None,
-                                    domain: None,
-                                    expires: None,
-                                };
-                                cookies_vec.push(c);
-                            }
-                        }
-                    }
-                }
-            }
-            if !cookies_vec.is_empty() {
-                opts.cookies = Some(cookies_vec);
-            }
-        } else if let Ok(Some(cookie_str)) = table.get::<Option<String>>("cookies") {
-            opts.cookies_raw = Some(cookie_str);
-        }
+    // Max body size
+    if let Ok(Some(size)) = table.get::<Option<usize>>("max_body_size") {
+        opts.max_body_size = size;
+    }
 
-        // Auth (Basic)
-        if let Ok(Some(auth_tbl)) = table.get::<Option<Table>>("auth") {
-            if let Ok(Some(username)) = auth_tbl.get::<Option<String>>("username") {
-                if let Ok(Some(password)) = auth_tbl.get::<Option<String>>("password") {
-                    opts.auth = Some(AuthInfo::Basic { username, password });
-                }
-            }
-        }
+    // Truncated OK
+    if let Ok(Some(truncated)) = table.get::<Option<bool>>("truncated_ok") {
+        opts.truncated_ok = truncated;
+    }
 
-        // Bypass cache
-        if let Ok(Some(bypass)) = table.get::<Option<bool>>("bypass_cache") {
-            opts.bypass_cache = bypass;
-        }
-
-        // No cache
-        if let Ok(Some(no_cache)) = table.get::<Option<bool>>("no_cache") {
-            opts.no_cache = no_cache;
-        }
-
-        // Redirect OK
-        if let Ok(Some(redirect_ok)) = table.get::<Option<Value>>("redirect_ok") {
-            match redirect_ok {
-                Value::Boolean(false) => opts.redirect_ok = Some(RedirectOk::Disabled),
-                Value::Integer(n) => {
-                    if let Ok(count) = u32::try_from(n) {
-                        opts.redirect_ok = Some(RedirectOk::Count(count));
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        // Max body size
-        if let Ok(Some(size)) = table.get::<Option<usize>>("max_body_size") {
-            opts.max_body_size = size;
-        }
-
-        // Truncated OK
-        if let Ok(Some(truncated)) = table.get::<Option<bool>>("truncated_ok") {
-            opts.truncated_ok = truncated;
-        }
-
-        // Scheme
-        if let Ok(Some(scheme)) = table.get::<Option<String>>("scheme") {
-            opts.scheme = Some(scheme);
-        }
+    // Scheme
+    if let Ok(Some(scheme)) = table.get::<Option<String>>("scheme") {
+        opts.scheme = Some(scheme);
     }
 
     opts
@@ -679,6 +747,12 @@ fn parse_options(options: Option<Table>) -> RequestOptions {
 /// # Errors
 ///
 /// Returns an error if library registration fails.
+// HTTP library registration requires registering many Lua functions for full nmap compatibility.
+// Splitting would require passing complex state through multiple functions.
+#[expect(
+    clippy::too_many_lines,
+    reason = "HTTP library requires many function registrations"
+)]
 pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     let lua = nse_lua.lua_mut();
 
@@ -686,89 +760,125 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     let http_table = lua.create_table()?;
 
     // Register GET function
-    let get_fn = lua.create_function(|lua, (host, port, path, options): (Value, Value, String, Option<Table>)| {
-        let (host_str, port_num) = extract_host_port(host, port);
-        let opts = parse_options(options);
+    let get_fn = lua.create_function(
+        |lua, (host, port, path, options): (Value, Value, String, Option<Table>)| {
+            let (host_str, port_num) = extract_host_port(host, port);
+            let opts = parse_options(options);
 
-        debug!("http.get({}, {}, {})", host_str, port_num, path);
+            debug!("http.get({}, {}, {})", host_str, port_num, path);
 
-        let request = build_request("GET", &host_str, port_num, &path, &opts, None);
+            let request = build_request("GET", &host_str, port_num, &path, &opts, None);
 
-        match perform_request(&host_str, port_num, &request, &opts) {
-            Ok(response) => response_to_table(lua, &response).map(Value::Table),
-            Err(e) => {
-                debug!("http.get failed: {}", e);
-                Ok(Value::Nil)
+            match perform_request(&host_str, port_num, &request, &opts) {
+                Ok(response) => response_to_table(lua, &response).map(Value::Table),
+                Err(e) => {
+                    debug!("http.get failed: {}", e);
+                    Ok(Value::Nil)
+                }
             }
-        }
-    })?;
+        },
+    )?;
     http_table.set("get", get_fn)?;
 
     // Register POST function
-    let post_fn = lua.create_function(|lua, (host, port, path, options, _ignored, postdata): (Value, Value, String, Option<Table>, Option<Value>, Option<Value>)| {
-        let (host_str, port_num) = extract_host_port(host, port);
-        let mut opts = parse_options(options.clone());
+    let post_fn = lua.create_function(
+        |lua,
+         (host, port, path, options, _ignored, postdata): (
+            Value,
+            Value,
+            String,
+            Option<Table>,
+            Option<Value>,
+            Option<Value>,
+        )| {
+            let (host_str, port_num) = extract_host_port(host, port);
+            let mut opts = parse_options(options.clone());
 
-        let body = match postdata {
-            Some(Value::String(s)) => s.as_bytes().to_vec(),
-            Some(Value::Table(t)) => {
-                let mut pairs = Vec::new();
-                for pair in t.pairs::<String, String>() {
-                    if let Ok((key, value)) = pair {
+            let body = match postdata {
+                Some(Value::String(s)) => s.as_bytes().to_vec(),
+                Some(Value::Table(t)) => {
+                    let mut pairs = Vec::new();
+                    for (key, value) in t.pairs::<String, String>().flatten() {
                         pairs.push(format!("{}={}", url_encode(&key), url_encode(&value)));
                     }
+                    pairs.join("&").into_bytes()
                 }
-                pairs.join("&").into_bytes()
+                _ => Vec::new(),
+            };
+
+            debug!("http.post({}, {}, {})", host_str, port_num, path);
+
+            if !opts.headers.contains_key("content-type") {
+                opts.headers.insert(
+                    "content-type".to_string(),
+                    "application/x-www-form-urlencoded".to_string(),
+                );
             }
-            _ => Vec::new(),
-        };
 
-        debug!("http.post({}, {}, {})", host_str, port_num, path);
+            let request = build_request("POST", &host_str, port_num, &path, &opts, Some(&body));
 
-        if !opts.headers.contains_key("content-type") {
-            opts.headers.insert("content-type".to_string(), "application/x-www-form-urlencoded".to_string());
-        }
-
-        let request = build_request("POST", &host_str, port_num, &path, &opts, Some(&body));
-
-        match perform_request(&host_str, port_num, &request, &opts) {
-            Ok(response) => response_to_table(lua, &response).map(Value::Table),
-            Err(_) => Ok(Value::Nil),
-        }
-    })?;
+            match perform_request(&host_str, port_num, &request, &opts) {
+                Ok(response) => response_to_table(lua, &response).map(Value::Table),
+                Err(_) => Ok(Value::Nil),
+            }
+        },
+    )?;
     http_table.set("post", post_fn)?;
 
     // Register HEAD function
-    let head_fn = lua.create_function(|lua, (host, port, path, options): (Value, Value, String, Option<Table>)| {
-        let (host_str, port_num) = extract_host_port(host, port);
-        let opts = parse_options(options);
+    let head_fn = lua.create_function(
+        |lua, (host, port, path, options): (Value, Value, String, Option<Table>)| {
+            let (host_str, port_num) = extract_host_port(host, port);
+            let opts = parse_options(options);
 
-        debug!("http.head({}, {}, {})", host_str, port_num, path);
+            debug!("http.head({}, {}, {})", host_str, port_num, path);
 
-        let request = build_request("HEAD", &host_str, port_num, &path, &opts, None);
+            let request = build_request("HEAD", &host_str, port_num, &path, &opts, None);
 
-        match perform_request(&host_str, port_num, &request, &opts) {
-            Ok(response) => response_to_table(lua, &response).map(Value::Table),
-            Err(_) => Ok(Value::Nil),
-        }
-    })?;
+            match perform_request(&host_str, port_num, &request, &opts) {
+                Ok(response) => response_to_table(lua, &response).map(Value::Table),
+                Err(_) => Ok(Value::Nil),
+            }
+        },
+    )?;
     http_table.set("head", head_fn)?;
 
     // Register generic_request function
-    let generic_fn = lua.create_function(|lua, (host, port, method, path, options, _ignored, body): (Value, Value, String, String, Option<Table>, Option<Value>, Option<String>)| {
-        let (host_str, port_num) = extract_host_port(host, port);
-        let opts = parse_options(options);
+    let generic_fn = lua.create_function(
+        |lua,
+         (host, port, method, path, options, _ignored, body): (
+            Value,
+            Value,
+            String,
+            String,
+            Option<Table>,
+            Option<Value>,
+            Option<String>,
+        )| {
+            let (host_str, port_num) = extract_host_port(host, port);
+            let opts = parse_options(options);
 
-        debug!("http.generic_request({}, {}, {}, {})", host_str, port_num, method, path);
+            debug!(
+                "http.generic_request({}, {}, {}, {})",
+                host_str, port_num, method, path
+            );
 
-        let body_bytes = body.as_deref().map(|s| s.as_bytes().to_vec());
-        let request = build_request(&method, &host_str, port_num, &path, &opts, body_bytes.as_deref());
+            let body_bytes = body.as_deref().map(|s| s.as_bytes().to_vec());
+            let request = build_request(
+                &method,
+                &host_str,
+                port_num,
+                &path,
+                &opts,
+                body_bytes.as_deref(),
+            );
 
-        match perform_request(&host_str, port_num, &request, &opts) {
-            Ok(response) => response_to_table(lua, &response).map(Value::Table),
-            Err(_) => Ok(Value::Nil),
-        }
-    })?;
+            match perform_request(&host_str, port_num, &request, &opts) {
+                Ok(response) => response_to_table(lua, &response).map(Value::Table),
+                Err(_) => Ok(Value::Nil),
+            }
+        },
+    )?;
     http_table.set("generic_request", generic_fn)?;
 
     // Register get_url function
@@ -788,82 +898,99 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     http_table.set("get_url", get_url_fn)?;
 
     // Register pipeline_add function
-    let pipeline_add_fn = lua.create_function(|lua, (path, options, all_requests, method): (String, Option<Table>, Option<Table>, Option<String>)| {
-        debug!("http.pipeline_add({})", path);
+    let pipeline_add_fn = lua.create_function(
+        |lua,
+         (path, options, all_requests, method): (
+            String,
+            Option<Table>,
+            Option<Table>,
+            Option<String>,
+        )| {
+            debug!("http.pipeline_add({})", path);
 
-        let opts = parse_options(options);
-        let method_ref = method.as_deref().unwrap_or("GET");
+            let opts = parse_options(options);
+            let method_ref = method.as_deref().unwrap_or("GET");
 
-        // Create or get pipeline table
-        let pipeline = match all_requests {
-            Some(t) => t,
-            None => lua.create_table()?,
-        };
+            // Create or get pipeline table
+            let pipeline = match all_requests {
+                Some(t) => t,
+                None => lua.create_table()?,
+            };
 
-        // Add request to pipeline
-        let len = pipeline.len().map(|n: i64| n as usize + 1).unwrap_or(1) as i64;
+            // Add request to pipeline
+            let len = pipeline
+                .len()
+                .map(|n: i64| usize::try_from(n).unwrap_or(0) + 1)
+                .unwrap_or(1);
+            let len_idx = i64::try_from(len).unwrap_or(1);
 
-        let request = lua.create_table()?;
-        request.set("method", method_ref)?;
-        request.set("path", path.as_str())?;
+            let request = lua.create_table()?;
+            request.set("method", method_ref)?;
+            request.set("path", path.as_str())?;
 
-        if !opts.headers.is_empty() {
-            let headers = lua.create_table()?;
-            for (key, value) in &opts.headers {
-                headers.set(key.as_str(), value.as_str())?;
+            if !opts.headers.is_empty() {
+                let headers = lua.create_table()?;
+                for (key, value) in &opts.headers {
+                    headers.set(key.as_str(), value.as_str())?;
+                }
+                request.set("headers", headers)?;
             }
-            request.set("headers", headers)?;
-        }
 
-        pipeline.set(len, request)?;
+            pipeline.set(len_idx, request)?;
 
-        Ok(Value::Table(pipeline))
-    })?;
+            Ok(Value::Table(pipeline))
+        },
+    )?;
     http_table.set("pipeline_add", pipeline_add_fn)?;
 
     // Register pipeline_go function
-    let pipeline_go_fn = lua.create_function(|lua, (host, port, all_requests): (Value, Value, Option<Table>)| {
-        let (host_str, port_num) = extract_host_port(host, port);
+    let pipeline_go_fn = lua.create_function(
+        |lua, (host, port, all_requests): (Value, Value, Option<Table>)| {
+            let (host_str, port_num) = extract_host_port(host, port);
 
-        let pipeline = match all_requests {
-            Some(t) => t,
-            None => return Ok(Value::Nil),
-        };
-
-        let pipeline_len = pipeline.len().unwrap_or(0);
-        debug!("http.pipeline_go({}, {}, {})", host_str, port_num, pipeline_len);
-
-        let results = lua.create_table()?;
-
-        // Execute each request in pipeline
-        for i in 1..=pipeline_len {
-            let request_opt: Option<Table> = pipeline.get(i).ok();
-            let request = match request_opt {
-                Some(t) => t,
-                None => continue,
+            let Some(pipeline) = all_requests else {
+                return Ok(Value::Nil);
             };
 
-            let method: String = request.get("method").ok().flatten().unwrap_or_else(|| "GET".to_string());
-            let path: String = request.get("path").ok().flatten().unwrap_or_else(|| "/".to_string());
-            let opts = parse_options(request.get("options").ok());
+            let pipeline_len = pipeline.len().unwrap_or(0);
+            debug!(
+                "http.pipeline_go({}, {}, {})",
+                host_str, port_num, pipeline_len
+            );
 
-            let req = build_request(&method, &host_str, port_num, &path, &opts, None);
+            let results = lua.create_table()?;
 
-            match perform_request(&host_str, port_num, &req, &opts) {
-                Ok(response) => {
-                    match response_to_table(lua, &response) {
-                        Ok(tbl) => {
-                            results.set(i64::from(i), tbl)?;
-                        }
-                        Err(_) => {}
+            // Execute each request in pipeline
+            for i in 1..=pipeline_len {
+                let request_opt: Option<Table> = pipeline.get(i).ok();
+                let Some(request) = request_opt else {
+                    continue;
+                };
+
+                let method: String = request
+                    .get("method")
+                    .ok()
+                    .flatten()
+                    .unwrap_or_else(|| "GET".to_string());
+                let path: String = request
+                    .get("path")
+                    .ok()
+                    .flatten()
+                    .unwrap_or_else(|| "/".to_string());
+                let opts = parse_options(request.get("options").ok());
+
+                let req = build_request(&method, &host_str, port_num, &path, &opts, None);
+
+                if let Ok(response) = perform_request(&host_str, port_num, &req, &opts) {
+                    if let Ok(tbl) = response_to_table(lua, &response) {
+                        let _ = results.set(i, tbl);
                     }
                 }
-                Err(_) => {}
             }
-        }
 
-        Ok(Value::Table(results))
-    })?;
+            Ok(Value::Table(results))
+        },
+    )?;
     http_table.set("pipeline_go", pipeline_go_fn)?;
 
     // Register the http library globally
@@ -925,21 +1052,21 @@ fn base64_encode(input: &[u8]) -> String {
     let mut result = String::new();
 
     for chunk in input.chunks(3) {
-        let b0 = chunk[0] as usize;
-        let b1 = chunk.get(1).copied().unwrap_or(0) as usize;
-        let b2 = chunk.get(2).copied().unwrap_or(0) as usize;
+        let b0 = usize::from(chunk[0]);
+        let b1 = chunk.get(1).copied().map_or(0, usize::from);
+        let b2 = chunk.get(2).copied().map_or(0, usize::from);
 
-        result.push(ALPHABET[b0 >> 2] as char);
-        result.push(ALPHABET[((b0 & 0x03) << 4) | (b1 >> 4)] as char);
+        result.push(char::from(ALPHABET[b0 >> 2]));
+        result.push(char::from(ALPHABET[((b0 & 0x03) << 4) | (b1 >> 4)]));
 
         if chunk.len() > 1 {
-            result.push(ALPHABET[((b1 & 0x0f) << 2) | (b2 >> 6)] as char);
+            result.push(char::from(ALPHABET[((b1 & 0x0f) << 2) | (b2 >> 6)]));
         } else {
             result.push('=');
         }
 
         if chunk.len() > 2 {
-            result.push(ALPHABET[b2 & 0x3f] as char);
+            result.push(char::from(ALPHABET[b2 & 0x3f]));
         } else {
             result.push('=');
         }

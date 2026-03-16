@@ -51,7 +51,7 @@ use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::time::Duration;
 
-use md5::{Md5, Digest as Md5Digest};
+use md5::{Digest as Md5Digest, Md5};
 use mlua::Value;
 use num_bigint::{BigUint, RandBigInt};
 use rand::Rng;
@@ -259,7 +259,7 @@ fn pack_mpint(bn: &BigUint) -> Vec<u8> {
 
     // SSH-2 mpint format requires that the high bit be zero for positive numbers
     // If the high bit is set, we need to prepend a zero byte
-    let data = if bytes.first().map_or(false, |b| *b & 0x80 != 0) {
+    let data = if bytes.first().is_some_and(|b| *b & 0x80 != 0) {
         let mut padded = Vec::with_capacity(bytes.len() + 1);
         padded.push(0);
         padded.extend_from_slice(&bytes);
@@ -268,9 +268,9 @@ fn pack_mpint(bn: &BigUint) -> Vec<u8> {
         bytes
     };
 
-    let len = data.len();
+    let len = u32::try_from(data.len()).unwrap_or(u32::MAX);
     let mut result = Vec::with_capacity(4 + data.len());
-    result.extend_from_slice(&u32::to_be_bytes(len as u32));
+    result.extend_from_slice(&u32::to_be_bytes(len));
     result.extend_from_slice(&data);
     result
 }
@@ -278,12 +278,17 @@ fn pack_mpint(bn: &BigUint) -> Vec<u8> {
 /// Build SSH-2 packet with payload and padding.
 fn build_ssh2_packet(payload: &[u8]) -> Vec<u8> {
     // Padding length must be at least 4 bytes and total packet size must be multiple of 8
-    let padding_length = (8 - ((payload.len() + 1 + 4) % 8)) + 4;
-    let packet_length = payload.len() + padding_length + 1;
+    // SSH2 packets are limited to 256KB, so padding_length fits in u8
+    let remainder = (payload.len() + 5) % 8;
+    let padding_length: u8 =
+        u8::try_from(if remainder == 0 { 4 } else { 8 - remainder + 4 }).unwrap_or(4);
+    let packet_length = payload.len() + usize::from(padding_length) + 1;
 
     let mut packet = Vec::with_capacity(4 + packet_length);
-    packet.extend_from_slice(&u32::to_be_bytes(packet_length as u32));
-    packet.push(padding_length as u8);
+    packet.extend_from_slice(&u32::to_be_bytes(
+        u32::try_from(packet_length).unwrap_or(u32::MAX),
+    ));
+    packet.push(padding_length);
     packet.extend_from_slice(payload);
 
     // Add random padding
@@ -310,39 +315,55 @@ fn build_kex_init(key_type: &str) -> Vec<u8> {
     let kex_algorithms = "diffie-hellman-group1-sha1,diffie-hellman-group14-sha1,\
         diffie-hellman-group14-sha256,diffie-hellman-group16-sha512,\
         diffie-hellman-group-exchange-sha1,diffie-hellman-group-exchange-sha256";
-    payload.extend_from_slice(&u32::to_be_bytes(kex_algorithms.len() as u32));
+    payload.extend_from_slice(&u32::to_be_bytes(
+        u32::try_from(kex_algorithms.len()).unwrap_or(u32::MAX),
+    ));
     payload.extend_from_slice(kex_algorithms.as_bytes());
 
     // Server host key algorithms
-    payload.extend_from_slice(&u32::to_be_bytes(key_type.len() as u32));
+    payload.extend_from_slice(&u32::to_be_bytes(
+        u32::try_from(key_type.len()).unwrap_or(u32::MAX),
+    ));
     payload.extend_from_slice(key_type.as_bytes());
 
     // Encryption algorithms (client->server)
     let enc_algos = "aes128-cbc,3des-cbc,blowfish-cbc,aes192-cbc,aes256-cbc,\
         aes128-ctr,aes192-ctr,aes256-ctr";
-    payload.extend_from_slice(&u32::to_be_bytes(enc_algos.len() as u32));
+    payload.extend_from_slice(&u32::to_be_bytes(
+        u32::try_from(enc_algos.len()).unwrap_or(u32::MAX),
+    ));
     payload.extend_from_slice(enc_algos.as_bytes());
 
     // Encryption algorithms (server->client)
-    payload.extend_from_slice(&u32::to_be_bytes(enc_algos.len() as u32));
+    payload.extend_from_slice(&u32::to_be_bytes(
+        u32::try_from(enc_algos.len()).unwrap_or(u32::MAX),
+    ));
     payload.extend_from_slice(enc_algos.as_bytes());
 
     // MAC algorithms (client->server)
     let mac_algos = "hmac-md5,hmac-sha1,hmac-ripemd160";
-    payload.extend_from_slice(&u32::to_be_bytes(mac_algos.len() as u32));
+    payload.extend_from_slice(&u32::to_be_bytes(
+        u32::try_from(mac_algos.len()).unwrap_or(u32::MAX),
+    ));
     payload.extend_from_slice(mac_algos.as_bytes());
 
     // MAC algorithms (server->client)
-    payload.extend_from_slice(&u32::to_be_bytes(mac_algos.len() as u32));
+    payload.extend_from_slice(&u32::to_be_bytes(
+        u32::try_from(mac_algos.len()).unwrap_or(u32::MAX),
+    ));
     payload.extend_from_slice(mac_algos.as_bytes());
 
     // Compression algorithms (client->server)
     let comp_algos = "none";
-    payload.extend_from_slice(&u32::to_be_bytes(comp_algos.len() as u32));
+    payload.extend_from_slice(&u32::to_be_bytes(
+        u32::try_from(comp_algos.len()).unwrap_or(u32::MAX),
+    ));
     payload.extend_from_slice(comp_algos.as_bytes());
 
     // Compression algorithms (server->client)
-    payload.extend_from_slice(&u32::to_be_bytes(comp_algos.len() as u32));
+    payload.extend_from_slice(&u32::to_be_bytes(
+        u32::try_from(comp_algos.len()).unwrap_or(u32::MAX),
+    ));
     payload.extend_from_slice(comp_algos.as_bytes());
 
     // Languages (client->server)
@@ -390,25 +411,36 @@ fn extract_payload(packet: &[u8]) -> mlua::Result<Vec<u8>> {
 
     // Check for overflow: padding_length + 1 must not exceed packet length
     if padding_length + 1 > packet.len() {
-        return Err(mlua::Error::RuntimeError("Invalid padding length".to_string()));
+        return Err(mlua::Error::RuntimeError(
+            "Invalid padding length".to_string(),
+        ));
     }
 
     let payload_length = packet.len() - padding_length - 1;
 
-    Ok(packet[1..1 + payload_length].to_vec())
+    Ok(packet[1..=payload_length].to_vec())
 }
 
 /// Parse mpint from SSH packet data.
 fn parse_mpint(data: &[u8], offset: usize) -> mlua::Result<(BigUint, usize)> {
     if data.len() < offset + 4 {
-        return Err(mlua::Error::RuntimeError("Data too short for mpint".to_string()));
+        return Err(mlua::Error::RuntimeError(
+            "Data too short for mpint".to_string(),
+        ));
     }
 
-    let len = u32::from_be_bytes([data[offset], data[offset + 1], data[offset + 2], data[offset + 3]]) as usize;
+    let len = u32::from_be_bytes([
+        data[offset],
+        data[offset + 1],
+        data[offset + 2],
+        data[offset + 3],
+    ]) as usize;
     let new_offset = offset + 4;
 
     if data.len() < new_offset + len {
-        return Err(mlua::Error::RuntimeError("Data too short for mpint value".to_string()));
+        return Err(mlua::Error::RuntimeError(
+            "Data too short for mpint value".to_string(),
+        ));
     }
 
     let value_bytes = &data[new_offset..new_offset + len];
@@ -420,14 +452,23 @@ fn parse_mpint(data: &[u8], offset: usize) -> mlua::Result<(BigUint, usize)> {
 /// Parse string from SSH packet data.
 fn parse_string(data: &[u8], offset: usize) -> mlua::Result<(String, usize)> {
     if data.len() < offset + 4 {
-        return Err(mlua::Error::RuntimeError("Data too short for string".to_string()));
+        return Err(mlua::Error::RuntimeError(
+            "Data too short for string".to_string(),
+        ));
     }
 
-    let len = u32::from_be_bytes([data[offset], data[offset + 1], data[offset + 2], data[offset + 3]]) as usize;
+    let len = u32::from_be_bytes([
+        data[offset],
+        data[offset + 1],
+        data[offset + 2],
+        data[offset + 3],
+    ]) as usize;
     let new_offset = offset + 4;
 
     if data.len() < new_offset + len {
-        return Err(mlua::Error::RuntimeError("Data too short for string value".to_string()));
+        return Err(mlua::Error::RuntimeError(
+            "Data too short for string value".to_string(),
+        ));
     }
 
     let value = String::from_utf8_lossy(&data[new_offset..new_offset + len]).to_string();
@@ -459,13 +500,16 @@ fn fetch_host_key_impl(host: &str, port: u16, key_type: &str) -> mlua::Result<Ho
         .write_all(&kex_init_packet)
         .map_err(|e| mlua::Error::RuntimeError(format!("Failed to send KEXINIT: {e}")))?;
 
-    // Receive server KEXINIT
-    let _server_kex_packet = receive_ssh_packet(&mut stream)?;
-    let _server_kex_payload = extract_payload(&_server_kex_packet)?;
+    // Receive server KEXINIT (packet and payload validated for protocol compliance)
+    let server_kex_packet = receive_ssh_packet(&mut stream)?;
+    let server_kex_payload = extract_payload(&server_kex_packet)?;
+    // Algorithm selection uses fixed group14-sha1; payload received for protocol handshake completion
+    let _ = server_kex_payload;
 
     // Determine which Diffie-Hellman group to use
     // For simplicity, we'll try group14 first (2048-bit), then group1 (1024-bit)
-    let (prime_hex, group_bits) = ("FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD1\
+    let (prime_hex, group_bits) = (
+        "FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD1\
         29024E088A67CC74020BBEA63B139B22514A08798E3404DD\
         EF9519B3CD3A431B302B0A6DF25F14374FE1356D6D51C245\
         E485B576625E7EC6F44C42E9A637ED6B0BFF5CB6F406B7ED\
@@ -475,7 +519,9 @@ fn fetch_host_key_impl(host: &str, port: u16, key_type: &str) -> mlua::Result<Ho
         670C354E4ABC9804F1746C08CA18217C32905E462E36CE3B\
         E39E772C180E86039B2783A2EC07A28FB5C55DF06F4C52C9\
         DE2BCBF6955817183995497CEA956AE515D2261898FA0510\
-        15728E5A8AACAA68FFFFFFFFFFFFFFFF", 2048);
+        15728E5A8AACAA68FFFFFFFFFFFFFFFF",
+        2048,
+    );
 
     // Parse prime and create DH values
     let p = BigUint::parse_bytes(prime_hex.as_bytes(), 16)
@@ -517,7 +563,7 @@ fn fetch_host_key_impl(host: &str, port: u16, key_type: &str) -> mlua::Result<Ho
     // The host key is in SSH format: type + key data
     // For ssh-rsa: string "ssh-rsa" + mpint e + mpint n
     // For ssh-dss: string "ssh-dss" + mpint p + mpint q + mpint g + mpint y
-    let parsed_key = parse_ssh_host_key(&host_key.as_bytes())?;
+    let parsed_key = parse_ssh_host_key(host_key.as_bytes())?;
 
     Ok(parsed_key)
 }
@@ -550,7 +596,8 @@ fn parse_ssh_host_key(data: &[u8]) -> mlua::Result<HostKeyInfo> {
             let n_bytes = n.to_bytes_be();
             // Remove leading zero bytes for bit count
             let leading_zeros = n_bytes.iter().take_while(|&&b| b == 0).count();
-            let actual_bits = ((n_bytes.len() - leading_zeros) * 8) as u32;
+            let actual_bits =
+                u32::try_from((n_bytes.len() - leading_zeros) * 8).unwrap_or(u32::MAX);
 
             (actual_bits, "RSA".to_string())
         }
@@ -558,7 +605,7 @@ fn parse_ssh_host_key(data: &[u8]) -> mlua::Result<HostKeyInfo> {
             // DSA: p (mpint) + q (mpint) + g (mpint) + y (mpint)
             let (p, new_off) = parse_mpint(data, offset)?;
             let _q = parse_mpint(data, new_off)?.0;
-            let bits = p.bits() as u32;
+            let bits = u32::try_from(p.bits()).unwrap_or(u32::MAX);
             (bits, "DSA".to_string())
         }
         "ecdsa-sha2-nistp256" => (256, "ECDSA".to_string()),
@@ -598,33 +645,41 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     let ssh2_table = lua.create_table()?;
 
     // Register fetch_host_key function
-    let fetch_host_key_fn = lua.create_function(|lua, (host, port, key_type): (Value, Value, Option<String>)| {
-        let (host_str, port_num) = extract_host_port(host, port);
-        let key_type_str = key_type.as_deref().unwrap_or("ssh-rsa");
+    let fetch_host_key_fn = lua.create_function(
+        |lua, (host, port, key_type): (Value, Value, Option<String>)| {
+            let (host_str, port_num) = extract_host_port(host, port);
+            let key_type_str = key_type.as_deref().unwrap_or("ssh-rsa");
 
-        debug!("ssh2.fetch_host_key({}, {}, {})", host_str, port_num, key_type_str);
+            debug!(
+                "ssh2.fetch_host_key({}, {}, {})",
+                host_str, port_num, key_type_str
+            );
 
-        match fetch_host_key_impl(&host_str, port_num, key_type_str) {
-            Ok(key_info) => {
-                // Create result table
-                let table = lua.create_table()?;
-                table.set("key_type", key_info.key_type.as_str())?;
-                table.set("key", key_info.key.as_str())?;
-                table.set("fp_input", lua.create_string(&key_info.fp_input)?)?;
-                table.set("bits", i64::from(key_info.bits))?;
-                table.set("algorithm", key_info.algorithm.as_str())?;
-                table.set("full_key", key_info.full_key.as_str())?;
-                table.set("fingerprint", calculate_md5_fingerprint(&key_info.fp_input))?;
-                table.set("fp_sha256", calculate_sha256_fingerprint(&key_info.fp_input))?;
+            match fetch_host_key_impl(&host_str, port_num, key_type_str) {
+                Ok(key_info) => {
+                    // Create result table
+                    let table = lua.create_table()?;
+                    table.set("key_type", key_info.key_type.as_str())?;
+                    table.set("key", key_info.key.as_str())?;
+                    table.set("fp_input", lua.create_string(&key_info.fp_input)?)?;
+                    table.set("bits", i64::from(key_info.bits))?;
+                    table.set("algorithm", key_info.algorithm.as_str())?;
+                    table.set("full_key", key_info.full_key.as_str())?;
+                    table.set("fingerprint", calculate_md5_fingerprint(&key_info.fp_input))?;
+                    table.set(
+                        "fp_sha256",
+                        calculate_sha256_fingerprint(&key_info.fp_input),
+                    )?;
 
-                Ok(Value::Table(table))
+                    Ok(Value::Table(table))
+                }
+                Err(e) => {
+                    debug!("ssh2.fetch_host_key failed: {}", e);
+                    Ok(Value::Nil)
+                }
             }
-            Err(e) => {
-                debug!("ssh2.fetch_host_key failed: {}", e);
-                Ok(Value::Nil)
-            }
-        }
-    })?;
+        },
+    )?;
     ssh2_table.set("fetch_host_key", fetch_host_key_fn)?;
 
     // Register banner function

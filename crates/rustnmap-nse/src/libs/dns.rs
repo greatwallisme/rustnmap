@@ -153,7 +153,12 @@ fn parse_rr(data: &[u8], offset: usize) -> std::io::Result<(String, u16, u32, Ve
 }
 
 /// Perform DNS query over UDP.
-fn dns_query_impl(domain: &str, qtype: u16, dns_server: &str, timeout_ms: u64) -> std::io::Result<Vec<u8>> {
+fn dns_query_impl(
+    domain: &str,
+    qtype: u16,
+    dns_server: &str,
+    timeout_ms: u64,
+) -> std::io::Result<Vec<u8>> {
     let txn_id = rand::random::<u16>();
     let query = build_query(domain, qtype, txn_id);
 

@@ -47,7 +47,10 @@ const DEFAULT_TIMEOUT_MS: u64 = 10_000;
 const CRLF_PATTERN: &str = "\r?\n";
 
 /// FTP connection wrapper that maintains state.
-#[expect(missing_debug_implementations, reason = "TcpStream does not implement Debug")]
+#[expect(
+    missing_debug_implementations,
+    reason = "TcpStream does not implement Debug"
+)]
 pub struct FtpConnection {
     /// The TCP stream.
     stream: TcpStream,
@@ -62,16 +65,21 @@ pub struct FtpConnection {
 impl FtpConnection {
     /// Create a new FTP connection.
     fn new(host: String, port: u16) -> mlua::Result<Self> {
-        let addr = format!("{}:{}", host, port);
+        let addr = format!("{host}:{port}");
 
-        let stream = TcpStream::connect(&addr)
-            .map_err(|e| mlua::Error::RuntimeError(format!("FTP connection failed to {}: {}", addr, e)))?;
+        let stream = TcpStream::connect(&addr).map_err(|e| {
+            mlua::Error::RuntimeError(format!("FTP connection failed to {addr}: {e}"))
+        })?;
 
-        stream.set_read_timeout(Some(Duration::from_millis(DEFAULT_TIMEOUT_MS)))
-            .map_err(|e| mlua::Error::RuntimeError(format!("Failed to set read timeout: {}", e)))?;
+        stream
+            .set_read_timeout(Some(Duration::from_millis(DEFAULT_TIMEOUT_MS)))
+            .map_err(|e| mlua::Error::RuntimeError(format!("Failed to set read timeout: {e}")))?;
 
-        let reader = BufReader::new(stream.try_clone()
-            .map_err(|e| mlua::Error::RuntimeError(format!("Failed to clone stream: {}", e)))?);
+        let reader = BufReader::new(
+            stream
+                .try_clone()
+                .map_err(|e| mlua::Error::RuntimeError(format!("Failed to clone stream: {e}")))?,
+        );
 
         Ok(Self {
             stream,
@@ -84,23 +92,29 @@ impl FtpConnection {
     /// Read a line from the server.
     fn read_line(&mut self) -> mlua::Result<String> {
         let mut line = String::new();
-        let bytes_read = self.reader.read_line(&mut line)
-            .map_err(|e| mlua::Error::RuntimeError(format!("FTP read failed: {}", e)))?;
+        let bytes_read = self
+            .reader
+            .read_line(&mut line)
+            .map_err(|e| mlua::Error::RuntimeError(format!("FTP read failed: {e}")))?;
 
         if bytes_read == 0 {
-            return Err(mlua::Error::RuntimeError("FTP connection closed".to_string()));
+            return Err(mlua::Error::RuntimeError(
+                "FTP connection closed".to_string(),
+            ));
         }
 
-        Ok(line.trim_end_matches(|c| c == '\r' || c == '\n').to_string())
+        Ok(line.trim_end_matches(['\r', '\n']).to_string())
     }
 
     /// Send a command to the server.
     fn send_command(&mut self, cmd: &str) -> mlua::Result<()> {
         debug!("FTP send: {}", cmd.trim());
-        self.stream.write_all(cmd.as_bytes())
-            .map_err(|e| mlua::Error::RuntimeError(format!("FTP send failed: {}", e)))?;
-        self.stream.flush()
-            .map_err(|e| mlua::Error::RuntimeError(format!("FTP flush failed: {}", e)))?;
+        self.stream
+            .write_all(cmd.as_bytes())
+            .map_err(|e| mlua::Error::RuntimeError(format!("FTP send failed: {e}")))?;
+        self.stream
+            .flush()
+            .map_err(|e| mlua::Error::RuntimeError(format!("FTP flush failed: {e}")))?;
         Ok(())
     }
 }
@@ -110,21 +124,22 @@ impl FtpConnection {
 fn read_reply(conn: &mut FtpConnection) -> mlua::Result<(u16, String)> {
     let line = conn.read_line()?;
 
-    let code_str = line.get(0..3).ok_or_else(|| {
-        mlua::Error::RuntimeError(format!("Unparseable FTP response: {}", line))
-    })?;
+    let code_str = line
+        .get(0..3)
+        .ok_or_else(|| mlua::Error::RuntimeError(format!("Unparseable FTP response: {line}")))?;
 
-    let code: u16 = code_str.parse().map_err(|_| {
-        mlua::Error::RuntimeError(format!("Invalid FTP response code: {}", code_str))
+    let code: u16 = code_str.parse().map_err(|parse_err| {
+        mlua::Error::RuntimeError(format!(
+            "Invalid FTP response code: {code_str} ({parse_err})"
+        ))
     })?;
 
     let sep = line.chars().nth(3);
 
     if sep == Some('-') {
         // Multi-line response (RFC 959 section 4.2)
-        let prefix = format!("{} ", code_str);
-        let mut lines = vec
-![line.get(4..).unwrap_or("").to_string()];
+        let prefix = format!("{code_str} ");
+        let mut lines = vec![line.get(4..).unwrap_or("").to_string()];
 
         loop {
             let response_line = conn.read_line()?;
@@ -146,16 +161,25 @@ fn read_reply(conn: &mut FtpConnection) -> mlua::Result<(u16, String)> {
 
 // Global registry of FTP connections (keyed by memory address for Lua).
 // In production, this would use a better mechanism.
-lazy_static::lazy_static! {
-    static ref FTP_CONNECTIONS: Mutex<HashMap<usize, FtpConnection>> = Mutex::new(HashMap::new());
-    static ref NEXT_CONN_ID: Mutex<usize> = Mutex::new(1);
-}
+use std::sync::LazyLock;
+
+static FTP_CONNECTIONS: LazyLock<Mutex<HashMap<usize, FtpConnection>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+static NEXT_CONN_ID: LazyLock<Mutex<usize>> = LazyLock::new(|| Mutex::new(1));
 
 /// Register the ftp library with the Lua runtime.
 ///
 /// # Errors
 ///
 /// Returns an error if library registration fails.
+///
+/// # Panics
+///
+/// Panics if `FTP_CONNECTIONS` or `NEXT_CONN_ID` lock is poisoned (e.g., thread panic while holding lock).
+#[expect(
+    clippy::too_many_lines,
+    reason = "Lua library registration requires separate function handlers for each FTP operation"
+)]
 pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     let lua = nse_lua.lua_mut();
 
@@ -163,73 +187,93 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     let ftp_table = lua.create_table()?;
 
     // Register connect function
-    let connect_fn = lua.create_function(move |lua, (host, port, _options): (Value, Value, Option<Table>)| {
-        let host_str = match host {
-            Value::String(s) => s.to_string_lossy().to_string(),
-            Value::Integer(n) => n.to_string(),
-            Value::Number(n) => n.to_string(),
-            _ => return Err(mlua::Error::RuntimeError("Invalid host parameter".to_string())),
-        };
-
-        let port_num = match port {
-            Value::Integer(n) => n as u16,
-            Value::Number(n) => n as u16,
-            Value::Table(t) => {
-                match t.get::<Option<i64>>("number") {
-                    Ok(Some(n)) => n as u16,
-                    _ => 21, // Default FTP port
+    let connect_fn = lua.create_function(
+        move |lua, (host, port, _options): (Value, Value, Option<Table>)| {
+            let host_str = match host {
+                Value::String(s) => s.to_string_lossy().to_string(),
+                Value::Integer(n) => n.to_string(),
+                Value::Number(n) => n.to_string(),
+                _ => {
+                    return Err(mlua::Error::RuntimeError(
+                        "Invalid host parameter".to_string(),
+                    ))
                 }
-            }
-            _ => 21,
-        };
+            };
 
-        // Create connection
-        let mut conn = FtpConnection::new(host_str, port_num)?;
+            let port_num = match port {
+                Value::Integer(n) => u16::try_from(n).unwrap_or(21),
+                Value::Number(n) => {
+                    // FTP ports are 1-65535, clamp to valid range
+                    if (0.0..=65_535.0).contains(&n) && n.is_finite() {
+                        #[expect(
+                            clippy::cast_possible_truncation,
+                            reason = "n.round() is in range 0-65535, fits in i64"
+                        )]
+                        u16::try_from(n.round() as i64).unwrap_or(21)
+                    } else {
+                        21
+                    }
+                }
+                Value::Table(t) => {
+                    match t.get::<Option<i64>>("number") {
+                        Ok(Some(n)) => u16::try_from(n).unwrap_or(21),
+                        _ => 21, // Default FTP port
+                    }
+                }
+                _ => 21,
+            };
 
-        // Read initial greeting (server should send 220 ready)
-        let (code, message) = read_reply(&mut conn)?;
+            // Create connection
+            let mut conn = FtpConnection::new(host_str, port_num)?;
 
-        // Create socket table for Lua
-        let socket_table = lua.create_table()?;
-        socket_table.set("host", conn.host.clone())?;
-        socket_table.set("port", conn.port)?;
-        socket_table.set("_code", code)?;
-        socket_table.set("_message", message.clone())?;
+            // Read initial greeting (server should send 220 ready)
+            let (code, message) = read_reply(&mut conn)?;
 
-        // Store connection in registry
-        let conn_id = {
-            let mut id = NEXT_CONN_ID.lock().unwrap();
-            let id_val = *id;
-            *id += 1;
-            id_val
-        };
+            // Create socket table for Lua
+            let socket_table = lua.create_table()?;
+            socket_table.set("host", conn.host.clone())?;
+            socket_table.set("port", conn.port)?;
+            socket_table.set("_code", code)?;
+            socket_table.set("_message", message.clone())?;
 
-        // Store connection data directly in the table as userdata
-        socket_table.set("_conn_id", conn_id)?;
+            // Store connection in registry
+            let conn_id = {
+                let mut id = NEXT_CONN_ID.lock().unwrap();
+                let id_val = *id;
+                *id += 1;
+                id_val
+            };
 
-        // Store in our connections map
-        {
-            let mut conns = FTP_CONNECTIONS.lock().unwrap();
-            conns.insert(conn_id, conn);
-        }
+            // Store connection data directly in the table as userdata
+            socket_table.set("_conn_id", conn_id)?;
 
-        // Return (socket, code, message) - socket table also serves as buffer for read_reply
-        Ok((socket_table.clone(), code, message, socket_table))
-    })?;
+            // Store in our connections map
+            {
+                let mut conns = FTP_CONNECTIONS.lock().unwrap();
+                conns.insert(conn_id, conn);
+            };
+
+            // Return (socket, code, message) - socket table also serves as buffer for read_reply
+            Ok((socket_table.clone(), code, message, socket_table))
+        },
+    )?;
     ftp_table.set("connect", connect_fn)?;
 
     // Register read_reply function
     let read_reply_fn = lua.create_function(|_lua, socket_or_buffer: Value| {
-        let table = match socket_or_buffer {
-            Value::Table(t) => t,
-            _ => return Err(mlua::Error::RuntimeError("Expected table parameter".to_string())),
+        let Value::Table(table) = socket_or_buffer else {
+            return Err(mlua::Error::RuntimeError(
+                "Expected table parameter".to_string(),
+            ));
         };
 
         let conn_id: usize = table.get("_conn_id")?;
 
         let mut conn = {
             let mut conns = FTP_CONNECTIONS.lock().unwrap();
-            conns.remove(&conn_id).ok_or_else(|| mlua::Error::RuntimeError("Invalid FTP connection".to_string()))?
+            conns
+                .remove(&conn_id)
+                .ok_or_else(|| mlua::Error::RuntimeError("Invalid FTP connection".to_string()))?
         };
 
         let (code, message) = read_reply(&mut conn)?;
@@ -238,7 +282,7 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
         {
             let mut conns = FTP_CONNECTIONS.lock().unwrap();
             conns.insert(conn_id, conn);
-        }
+        };
 
         // Return (code, message)
         Ok((code, message))
@@ -247,9 +291,8 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
 
     // Register close function
     let close_fn = lua.create_function(|_, socket: Value| {
-        let table = match socket {
-            Value::Table(t) => t,
-            _ => return Ok(true), // Already closed or invalid
+        let Value::Table(table) = socket else {
+            return Ok(true); // Already closed or invalid
         };
 
         if let Ok(conn_id) = table.get::<usize>("_conn_id") {
@@ -263,76 +306,88 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     ftp_table.set("close", close_fn)?;
 
     // Register auth function
-    let auth_fn = lua.create_function(|_lua, (socket, username, password, acct): (Value, String, String, Option<String>)| {
-        let table = match socket {
-            Value::Table(t) => t,
-            _ => return Err(mlua::Error::RuntimeError("Expected socket table".to_string())),
-        };
+    let auth_fn = lua.create_function(
+        |_lua, (socket, username, password, acct): (Value, String, String, Option<String>)| {
+            let Value::Table(table) = socket else {
+                return Err(mlua::Error::RuntimeError(
+                    "Expected socket table".to_string(),
+                ));
+            };
 
-        let conn_id: usize = table.get("_conn_id")?;
+            let conn_id: usize = table.get("_conn_id")?;
 
-        let mut conn = {
-            let mut conns = FTP_CONNECTIONS.lock().unwrap();
-            conns.remove(&conn_id).ok_or_else(|| mlua::Error::RuntimeError("Invalid FTP connection".to_string()))?
-        };
+            let mut conn = {
+                let mut conns = FTP_CONNECTIONS.lock().unwrap();
+                conns.remove(&conn_id).ok_or_else(|| {
+                    mlua::Error::RuntimeError("Invalid FTP connection".to_string())
+                })?
+            };
 
-        // Send USER command
-        conn.send_command(&format!("USER {}\r\n", username))?;
-        let (code, _) = read_reply(&mut conn)?;
+            // Send USER command
+            conn.send_command(&format!("USER {username}\r\n"))?;
+            let (code, _) = read_reply(&mut conn)?;
 
-        let final_code = if code == 331 {
-            // 331: User name okay, need password
-            conn.send_command(&format!("PASS {}\r\n", password))?;
-            let (pass_code, _pass_msg) = read_reply(&mut conn)?;
+            let final_code = if code == 331 {
+                // 331: User name okay, need password
+                conn.send_command(&format!("PASS {password}\r\n"))?;
+                let (pass_code, _pass_msg) = read_reply(&mut conn)?;
 
-            // Handle account if needed (332: Need account for login)
-            if pass_code == 332 {
-                let acct_str = acct.as_ref().unwrap_or(&username).clone();
-                conn.send_command(&format!("ACCT {}\r\n", acct_str))?;
-                let (acct_code, _acct_msg) = read_reply(&mut conn)?;
+                // Handle account if needed (332: Need account for login)
+                if pass_code == 332 {
+                    let acct_str = acct.as_ref().unwrap_or(&username).clone();
+                    conn.send_command(&format!("ACCT {acct_str}\r\n"))?;
+                    let (acct_code, _acct_msg) = read_reply(&mut conn)?;
 
-                // Check if we need password after account
-                if acct_code == 331 {
-                    conn.send_command(&format!("PASS {}\r\n", password))?;
-                    let (final_code, _) = read_reply(&mut conn)?;
-                    final_code
+                    // Check if we need password after account
+                    if acct_code == 331 {
+                        conn.send_command(&format!("PASS {password}\r\n"))?;
+                        let (final_code, _) = read_reply(&mut conn)?;
+                        final_code
+                    } else {
+                        acct_code
+                    }
                 } else {
-                    acct_code
+                    pass_code
                 }
             } else {
-                pass_code
+                code
+            };
+
+            // Store connection back
+            {
+                let mut conns = FTP_CONNECTIONS.lock().unwrap();
+                conns.insert(conn_id, conn);
+            };
+
+            // Return (status, code, message)
+            if (200..300).contains(&final_code) {
+                Ok((true, final_code, "Login successful".to_string()))
+            } else {
+                Ok((
+                    false,
+                    final_code,
+                    format!("Login failed (code {final_code})"),
+                ))
             }
-        } else {
-            code
-        };
-
-        // Store connection back
-        {
-            let mut conns = FTP_CONNECTIONS.lock().unwrap();
-            conns.insert(conn_id, conn);
-        }
-
-        // Return (status, code, message)
-        if final_code >= 200 && final_code < 300 {
-            Ok((true, final_code, "Login successful".to_string()))
-        } else {
-            Ok((false, final_code, format!("Login failed (code {})", final_code)))
-        }
-    })?;
+        },
+    )?;
     ftp_table.set("auth", auth_fn)?;
 
     // Register starttls function
     let starttls_fn = lua.create_function(|_lua, (socket, _buffer): (Value, Value)| {
-        let table = match socket {
-            Value::Table(t) => t,
-            _ => return Err(mlua::Error::RuntimeError("Expected socket table".to_string())),
+        let Value::Table(table) = socket else {
+            return Err(mlua::Error::RuntimeError(
+                "Expected socket table".to_string(),
+            ));
         };
 
         let conn_id: usize = table.get("_conn_id")?;
 
         let mut conn = {
             let mut conns = FTP_CONNECTIONS.lock().unwrap();
-            conns.remove(&conn_id).ok_or_else(|| mlua::Error::RuntimeError("Invalid FTP connection".to_string()))?
+            conns
+                .remove(&conn_id)
+                .ok_or_else(|| mlua::Error::RuntimeError("Invalid FTP connection".to_string()))?
         };
 
         // Send AUTH TLS command (RFC 4217)
@@ -343,7 +398,7 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
         {
             let mut conns = FTP_CONNECTIONS.lock().unwrap();
             conns.insert(conn_id, conn);
-        }
+        };
 
         // Return (success, message)
         // 234 = Authentication successful, proceed with TLS handshake
@@ -354,16 +409,19 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
 
     // Register pasv function
     let pasv_fn = lua.create_function(|lua, (socket, _buffer): (Value, Value)| {
-        let table = match socket {
-            Value::Table(t) => t,
-            _ => return Err(mlua::Error::RuntimeError("Expected socket table".to_string())),
+        let Value::Table(table) = socket else {
+            return Err(mlua::Error::RuntimeError(
+                "Expected socket table".to_string(),
+            ));
         };
 
         let conn_id: usize = table.get("_conn_id")?;
 
         let mut conn = {
             let mut conns = FTP_CONNECTIONS.lock().unwrap();
-            conns.remove(&conn_id).ok_or_else(|| mlua::Error::RuntimeError("Invalid FTP connection".to_string()))?
+            conns
+                .remove(&conn_id)
+                .ok_or_else(|| mlua::Error::RuntimeError("Invalid FTP connection".to_string()))?
         };
 
         // Check if IPv6
@@ -382,10 +440,12 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
                     let port: u16 = caps[1].parse().unwrap_or(20_000);
                     (port, None) // Use same host
                 } else {
-                    return Err(mlua::Error::RuntimeError(format!("Cannot parse EPSV response: {}", message)));
+                    return Err(mlua::Error::RuntimeError(format!(
+                        "Cannot parse EPSV response: {message}"
+                    )));
                 }
             } else {
-                return Err(mlua::Error::RuntimeError(format!("EPSV failed: {}", message)));
+                return Err(mlua::Error::RuntimeError(format!("EPSV failed: {message}")));
             }
         } else {
             // Use PASV (RFC 959)
@@ -404,14 +464,16 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
                     let p1: u8 = caps[5].parse().unwrap_or(0);
                     let p2: u8 = caps[6].parse().unwrap_or(0);
 
-                    let data_port = ((p1 as u16) << 8) | (p2 as u16);
-                    let data_host = format!("{}.{}.{}.{}", h1, h2, h3, h4);
+                    let data_port = (u16::from(p1) << 8) | u16::from(p2);
+                    let data_host = format!("{h1}.{h2}.{h3}.{h4}");
                     (data_port, Some(data_host))
                 } else {
-                    return Err(mlua::Error::RuntimeError(format!("Cannot parse PASV response: {}", message)));
+                    return Err(mlua::Error::RuntimeError(format!(
+                        "Cannot parse PASV response: {message}"
+                    )));
                 }
             } else {
-                return Err(mlua::Error::RuntimeError(format!("PASV failed: {}", message)));
+                return Err(mlua::Error::RuntimeError(format!("PASV failed: {message}")));
             }
         };
 
@@ -419,7 +481,7 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
         {
             let mut conns = FTP_CONNECTIONS.lock().unwrap();
             conns.insert(conn_id, conn);
-        }
+        };
 
         // Return data socket information
         let result = lua.create_table()?;
@@ -438,7 +500,6 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     Ok(())
 }
 
-// Add lazy_static dependency
 #[cfg(test)]
 mod tests {
     use super::*;

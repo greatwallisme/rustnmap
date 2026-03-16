@@ -20,7 +20,7 @@
 //! - postgres / postgresql (port 5432)
 //! - smtp (port 25, 587)
 //! - tds / ms-sql-s (port 1433)
-//! - vnc (port 5900) - VeNCrypt
+//! - vnc (port 5900) - `VeNCrypt`
 //! - xmpp (port 5222)
 //!
 //! # Example Usage in Lua
@@ -41,7 +41,7 @@ use std::net::TcpStream;
 use std::time::Duration;
 
 use mlua::{String as LuaString, Table, Value};
-use sha2::{Sha256, Digest as Sha256Digest};
+use sha2::{Digest as Sha256Digest, Sha256};
 use tracing::debug;
 
 use crate::error::Result;
@@ -147,7 +147,9 @@ fn parse_server_response(stream: &mut TcpStream) -> mlua::Result<Vec<u8>> {
     }
 
     if record_data.is_empty() {
-        return Err(mlua::Error::RuntimeError("Empty handshake message".to_string()));
+        return Err(mlua::Error::RuntimeError(
+            "Empty handshake message".to_string(),
+        ));
     }
 
     let handshake_type = record_data[0];
@@ -164,16 +166,25 @@ fn parse_server_response(stream: &mut TcpStream) -> mlua::Result<Vec<u8>> {
 /// Parse Certificate handshake message.
 fn parse_certificate_message(data: &[u8]) -> mlua::Result<Vec<u8>> {
     if data.len() < 10 {
-        return Err(mlua::Error::RuntimeError("Certificate message too short".to_string()));
+        return Err(mlua::Error::RuntimeError(
+            "Certificate message too short".to_string(),
+        ));
     }
 
     let offset = 4;
     let cert_offset = offset + 3;
-    let cert_len = u32::from_be_bytes([0, data[cert_offset], data[cert_offset + 1], data[cert_offset + 2]]) as usize;
+    let cert_len = u32::from_be_bytes([
+        0,
+        data[cert_offset],
+        data[cert_offset + 1],
+        data[cert_offset + 2],
+    ]) as usize;
     let cert_data_offset = cert_offset + 3;
 
     if cert_data_offset + cert_len > data.len() {
-        return Err(mlua::Error::RuntimeError("Certificate data exceeds message length".to_string()));
+        return Err(mlua::Error::RuntimeError(
+            "Certificate data exceeds message length".to_string(),
+        ));
     }
 
     Ok(data[cert_data_offset..cert_data_offset + cert_len].to_vec())
@@ -233,7 +244,9 @@ fn extract_dn_field(der_data: &[u8]) -> Option<String> {
         if der_data[i] == 0x55 && der_data[i + 1] == 0x04 && der_data[i + 2] == 0x03 {
             let str_len = der_data.get(i + 5).copied().unwrap_or(0) as usize;
             if i + 6 + str_len <= der_data.len() {
-                return Some(String::from_utf8_lossy(&der_data[i + 6..i + 6 + str_len]).to_string());
+                return Some(
+                    String::from_utf8_lossy(&der_data[i + 6..i + 6 + str_len]).to_string(),
+                );
             }
         }
     }
@@ -376,6 +389,10 @@ fn extract_host_port(host: Value, port: Value) -> (String, u16) {
 }
 
 /// Perform STARTTLS handshake.
+#[allow(
+    clippy::too_many_lines,
+    reason = "STARTTLS handshake protocol requires many state transitions"
+)]
 fn perform_starttls(stream: &mut TcpStream, protocol: &str) -> mlua::Result<()> {
     let mut buffer = [0u8; 1024];
 
@@ -406,7 +423,9 @@ fn perform_starttls(stream: &mut TcpStream, protocol: &str) -> mlua::Result<()> 
                 .map_err(|e| mlua::Error::RuntimeError(format!("STARTTLS response failed: {e}")))?;
             let response = String::from_utf8_lossy(&buffer[..n]);
             if !response.contains("220") {
-                return Err(mlua::Error::RuntimeError("STARTTLS command failed".to_string()));
+                return Err(mlua::Error::RuntimeError(
+                    "STARTTLS command failed".to_string(),
+                ));
             }
         }
         "pop3" => {
@@ -430,7 +449,9 @@ fn perform_starttls(stream: &mut TcpStream, protocol: &str) -> mlua::Result<()> 
                 .map_err(|e| mlua::Error::RuntimeError(format!("STARTTLS response failed: {e}")))?;
             let response = String::from_utf8_lossy(&buffer[..n]);
             if !response.contains("OK") {
-                return Err(mlua::Error::RuntimeError("STARTTLS command failed".to_string()));
+                return Err(mlua::Error::RuntimeError(
+                    "STARTTLS command failed".to_string(),
+                ));
             }
         }
         "ftp" => {
@@ -442,7 +463,9 @@ fn perform_starttls(stream: &mut TcpStream, protocol: &str) -> mlua::Result<()> 
                 .map_err(|e| mlua::Error::RuntimeError(format!("AUTH TLS response failed: {e}")))?;
             let response = String::from_utf8_lossy(&buffer[..n]);
             if !response.contains("234") {
-                return Err(mlua::Error::RuntimeError("AUTH TLS command failed".to_string()));
+                return Err(mlua::Error::RuntimeError(
+                    "AUTH TLS command failed".to_string(),
+                ));
             }
         }
         "nntp" => {
@@ -456,22 +479,26 @@ fn perform_starttls(stream: &mut TcpStream, protocol: &str) -> mlua::Result<()> 
             let response = String::from_utf8_lossy(&buffer[..n]);
             // NNTP responds with "382 Continue with TLS negotiation" on success
             if !response.contains("382") {
-                return Err(mlua::Error::RuntimeError("STARTTLS not supported or failed".to_string()));
+                return Err(mlua::Error::RuntimeError(
+                    "STARTTLS not supported or failed".to_string(),
+                ));
             }
         }
         "postgres" | "postgresql" => {
             // PostgreSQL SSLRequest: 8 bytes: [length, 80877103]
             // length = 8, SSLRequest code = 80877103 (0x04D2162F)
             let ssl_request: [u8; 8] = [0x00, 0x00, 0x00, 0x08, 0x04, 0xD2, 0x16, 0x2F];
-            stream
-                .write_all(&ssl_request)
-                .map_err(|e| mlua::Error::RuntimeError(format!("PostgreSQL SSLRequest failed: {e}")))?;
-            let n = stream
-                .read(&mut buffer)
-                .map_err(|e| mlua::Error::RuntimeError(format!("PostgreSQL SSL response failed: {e}")))?;
+            stream.write_all(&ssl_request).map_err(|e| {
+                mlua::Error::RuntimeError(format!("PostgreSQL SSLRequest failed: {e}"))
+            })?;
+            let n = stream.read(&mut buffer).map_err(|e| {
+                mlua::Error::RuntimeError(format!("PostgreSQL SSL response failed: {e}"))
+            })?;
             // Server responds with 'S' for SSL supported, 'N' for not supported
             if n == 0 || buffer[0] != b'S' {
-                return Err(mlua::Error::RuntimeError("PostgreSQL server does not support SSL".to_string()));
+                return Err(mlua::Error::RuntimeError(
+                    "PostgreSQL server does not support SSL".to_string(),
+                ));
             }
         }
         "xmpp" => {
@@ -479,22 +506,26 @@ fn perform_starttls(stream: &mut TcpStream, protocol: &str) -> mlua::Result<()> 
             stream
                 .write_all(b"<stream:stream xmlns='stream:ns' to='localhost' version='1.0'>\r\n")
                 .map_err(|e| mlua::Error::RuntimeError(format!("XMPP stream open failed: {e}")))?;
-            let n = stream
-                .read(&mut buffer)
-                .map_err(|e| mlua::Error::RuntimeError(format!("XMPP stream response failed: {e}")))?;
+            let n = stream.read(&mut buffer).map_err(|e| {
+                mlua::Error::RuntimeError(format!("XMPP stream response failed: {e}"))
+            })?;
             let response = String::from_utf8_lossy(&buffer[..n]);
             if !response.contains("stream:features") {
-                return Err(mlua::Error::RuntimeError("XMPP stream initialization failed".to_string()));
+                return Err(mlua::Error::RuntimeError(
+                    "XMPP stream initialization failed".to_string(),
+                ));
             }
             stream
                 .write_all(b"<starttls xmlns='urn:ietf:params:xml:ns:xmpp-tls'/>\r\n")
                 .map_err(|e| mlua::Error::RuntimeError(format!("XMPP STARTTLS failed: {e}")))?;
-            let n = stream
-                .read(&mut buffer)
-                .map_err(|e| mlua::Error::RuntimeError(format!("XMPP STARTTLS response failed: {e}")))?;
+            let n = stream.read(&mut buffer).map_err(|e| {
+                mlua::Error::RuntimeError(format!("XMPP STARTTLS response failed: {e}"))
+            })?;
             let response = String::from_utf8_lossy(&buffer[..n]);
             if !response.contains("proceed") {
-                return Err(mlua::Error::RuntimeError("XMPP STARTTLS negotiation failed".to_string()));
+                return Err(mlua::Error::RuntimeError(
+                    "XMPP STARTTLS negotiation failed".to_string(),
+                ));
             }
         }
         "ldap" => {
@@ -503,79 +534,86 @@ fn perform_starttls(stream: &mut TcpStream, protocol: &str) -> mlua::Result<()> 
             // Build LDAP ExtendedRequest packet for startTLS
             // BER-encoded OID for startTLS
             let oid_bytes: [u8; 14] = [
-                0x06, 0x0d,             // OID tag, length 13
-                0x2b,                   // 1*40 + 3 = 43 = 0x2b
-                0x03,                   // 3
-                0x06,                   // 6
-                0x01,                   // 1
-                0x04,                   // 4
-                0x01,                   // 1
-                0x86, 0xba, 0x72,       // 1466 (encoded)
-                0x86, 0xf5, 0x45,       // 20037 (encoded)
+                0x06, 0x0d, // OID tag, length 13
+                0x2b, // 1*40 + 3 = 43 = 0x2b
+                0x03, // 3
+                0x06, // 6
+                0x01, // 1
+                0x04, // 4
+                0x01, // 1
+                0x86, 0xba, 0x72, // 1466 (encoded)
+                0x86, 0xf5, 0x45, // 20037 (encoded)
             ];
 
             // LDAPMessage wrapper
             let mut ldap_packet = Vec::new();
-            ldap_packet.push(0x60);  // [CONTEXT 0] constructed
-            ldap_packet.push(0x0f);  // length = 15
+            ldap_packet.push(0x60); // [CONTEXT 0] constructed
+            ldap_packet.push(0x0f); // length = 15
             ldap_packet.extend_from_slice(&oid_bytes);
 
-            let mut complete_packet = Vec::new();
-            complete_packet.push(0x30);  // SEQUENCE tag
-            complete_packet.push((ldap_packet.len() + 3) as u8);  // total length
-            complete_packet.push(0x02);  // INTEGER tag
-            complete_packet.push(0x01);  // length
-            complete_packet.push(0x01);  // messageID = 1
+            let ldap_packet_len = ldap_packet.len() + 3;
+            let complete_packet = vec![
+                0x30,                                         // SEQUENCE tag
+                u8::try_from(ldap_packet_len).unwrap_or(255), // total length
+                0x02,                                         // INTEGER tag
+                0x01,                                         // length
+                0x01,                                         // messageID = 1
+            ];
+            let mut complete_packet = complete_packet;
             complete_packet.extend_from_slice(&ldap_packet);
 
-            stream
-                .write_all(&complete_packet)
-                .map_err(|e| mlua::Error::RuntimeError(format!("LDAP STARTTLS write failed: {e}")))?;
+            stream.write_all(&complete_packet).map_err(|e| {
+                mlua::Error::RuntimeError(format!("LDAP STARTTLS write failed: {e}"))
+            })?;
 
-            let n = stream
-                .read(&mut buffer)
-                .map_err(|e| mlua::Error::RuntimeError(format!("LDAP STARTTLS response failed: {e}")))?;
+            let n = stream.read(&mut buffer).map_err(|e| {
+                mlua::Error::RuntimeError(format!("LDAP STARTTLS response failed: {e}"))
+            })?;
 
             if n == 0 || buffer[0] != 0x30 {
-                return Err(mlua::Error::RuntimeError("LDAP server does not support STARTTLS".to_string()));
+                return Err(mlua::Error::RuntimeError(
+                    "LDAP server does not support STARTTLS".to_string(),
+                ));
             }
         }
         "mysql" => {
             // MySQL STARTTLS - set SSL flag in handshake response
-            let n = stream
-                .read(&mut buffer)
-                .map_err(|e| mlua::Error::RuntimeError(format!("MySQL greeting read failed: {e}")))?;
+            let n = stream.read(&mut buffer).map_err(|e| {
+                mlua::Error::RuntimeError(format!("MySQL greeting read failed: {e}"))
+            })?;
 
             if n == 0 {
-                return Err(mlua::Error::RuntimeError("MySQL server greeting failed".to_string()));
+                return Err(mlua::Error::RuntimeError(
+                    "MySQL server greeting failed".to_string(),
+                ));
             }
 
             // MySQL handshake response with SSL flag
-            let capabilities: u32 = 0x0000_A200;  // SSL + PROTOCOL_41 + SECURE_CONNECTION
+            let capabilities: u32 = 0x0000_A200; // SSL + PROTOCOL_41 + SECURE_CONNECTION
             let mut ssl_request = Vec::new();
 
             ssl_request.extend_from_slice(&[0x00, 0x00, 0x01, 0x01, 0x05]);
-            ssl_request.extend_from_slice(&[0xFF, 0xFF, 0xFF, 0xFF]);  // Max packet size
-            ssl_request.push(33);  // Charset
-            ssl_request.extend_from_slice(&[0u8; 23]);  // Reserved
+            ssl_request.extend_from_slice(&[0xFF, 0xFF, 0xFF, 0xFF]); // Max packet size
+            ssl_request.push(33); // Charset
+            ssl_request.extend_from_slice(&[0u8; 23]); // Reserved
             ssl_request.extend_from_slice(capabilities.to_le_bytes().as_ref());
 
             stream
                 .write_all(&ssl_request)
                 .map_err(|e| mlua::Error::RuntimeError(format!("MySQL SSL request failed: {e}")))?;
 
-            let _n = stream
-                .read(&mut buffer)
-                .map_err(|e| mlua::Error::RuntimeError(format!("MySQL SSL response failed: {e}")))?;
+            let _n = stream.read(&mut buffer).map_err(|e| {
+                mlua::Error::RuntimeError(format!("MySQL SSL response failed: {e}"))
+            })?;
         }
         "tds" => {
             // TDS (MS SQL Server) STARTTLS - PreLogin with encryption
             let mut packet = Vec::new();
 
             // PreLogin option tokens
-            packet.extend_from_slice(&[0x00, 0x08, 0x00, 0x06, 0x00]);  // Version
-            packet.extend_from_slice(&[0x01, 0x0E, 0x00, 0x01, 0x00]);  // Encryption
-            packet.extend_from_slice(&[0xFF]);  // Terminator
+            packet.extend_from_slice(&[0x00, 0x08, 0x00, 0x06, 0x00]); // Version
+            packet.extend_from_slice(&[0x01, 0x0E, 0x00, 0x01, 0x00]); // Encryption
+            packet.extend_from_slice(&[0xFF]); // Terminator
 
             // Header
             let mut header = Vec::new();
@@ -591,16 +629,16 @@ fn perform_starttls(stream: &mut TcpStream, protocol: &str) -> mlua::Result<()> 
             let mut full_packet = Vec::new();
             full_packet.extend_from_slice(&header);
             full_packet.extend_from_slice(&packet);
-            full_packet.extend_from_slice(&[0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);  // Version
-            full_packet.push(0x01);  // ENCRYPT_ON
+            full_packet.extend_from_slice(&[0x00, 0x00, 0x00, 0x00, 0x00, 0x00]); // Version
+            full_packet.push(0x01); // ENCRYPT_ON
 
             stream
                 .write_all(&full_packet)
                 .map_err(|e| mlua::Error::RuntimeError(format!("TDS PreLogin failed: {e}")))?;
 
-            let _n = stream
-                .read(&mut buffer)
-                .map_err(|e| mlua::Error::RuntimeError(format!("TDS PreLogin response failed: {e}")))?;
+            let _n = stream.read(&mut buffer).map_err(|e| {
+                mlua::Error::RuntimeError(format!("TDS PreLogin response failed: {e}"))
+            })?;
         }
         "vnc" => {
             // VNC VeNCrypt STARTTLS
@@ -613,30 +651,32 @@ fn perform_starttls(stream: &mut TcpStream, protocol: &str) -> mlua::Result<()> 
                 .map_err(|e| mlua::Error::RuntimeError(format!("VNC version read failed: {e}")))?;
 
             // Send security types - VeNCrypt (19)
-            stream
-                .write_all(&[1, 19])
-                .map_err(|e| mlua::Error::RuntimeError(format!("VNC security types failed: {e}")))?;
+            stream.write_all(&[1, 19]).map_err(|e| {
+                mlua::Error::RuntimeError(format!("VNC security types failed: {e}"))
+            })?;
 
-            let _n = stream
-                .read(&mut buffer)
-                .map_err(|e| mlua::Error::RuntimeError(format!("VNC security response failed: {e}")))?;
+            let _n = stream.read(&mut buffer).map_err(|e| {
+                mlua::Error::RuntimeError(format!("VNC security response failed: {e}"))
+            })?;
 
             // VeNCrypt handshake
             stream
-                .write_all(&[0x01, 0x00])  // Version 1.0
-                .map_err(|e| mlua::Error::RuntimeError(format!("VNC VeNCrypt version failed: {e}")))?;
+                .write_all(&[0x01, 0x00]) // Version 1.0
+                .map_err(|e| {
+                    mlua::Error::RuntimeError(format!("VNC VeNCrypt version failed: {e}"))
+                })?;
 
-            let _n = stream
-                .read(&mut buffer)
-                .map_err(|e| mlua::Error::RuntimeError(format!("VNC VeNCrypt version response failed: {e}")))?;
+            let _n = stream.read(&mut buffer).map_err(|e| {
+                mlua::Error::RuntimeError(format!("VNC VeNCrypt version response failed: {e}"))
+            })?;
 
             stream
-                .write_all(&[0x01, 0x01])  // 1 type, X509None (1)
+                .write_all(&[0x01, 0x01]) // 1 type, X509None (1)
                 .map_err(|e| mlua::Error::RuntimeError(format!("VNC VeNCrypt type failed: {e}")))?;
 
-            let _n = stream
-                .read(&mut buffer)
-                .map_err(|e| mlua::Error::RuntimeError(format!("VNC VeNCrypt type response failed: {e}")))?;
+            let _n = stream.read(&mut buffer).map_err(|e| {
+                mlua::Error::RuntimeError(format!("VNC VeNCrypt type response failed: {e}"))
+            })?;
         }
         _ => {}
     }
@@ -656,66 +696,72 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     let sslcert_table = lua.create_table()?;
 
     // Register getCertificate function
-    let get_cert_fn = lua.create_function(|lua, (host, port, options): (Value, Value, Option<Table>)| {
-        let (host_str, port_num) = extract_host_port(host, port);
+    let get_cert_fn = lua.create_function(
+        |lua, (host, port, options): (Value, Value, Option<Table>)| {
+            let (host_str, port_num) = extract_host_port(host, port);
 
-        let protocol = options
-            .as_ref()
-            .and_then(|t| t.get::<Option<String>>("protocol").ok().flatten());
+            let protocol = options
+                .as_ref()
+                .and_then(|t| t.get::<Option<String>>("protocol").ok().flatten());
 
-        debug!("sslcert.getCertificate({}, {}, protocol={:?})", host_str, port_num, protocol);
+            debug!(
+                "sslcert.getCertificate({}, {}, protocol={:?})",
+                host_str, port_num, protocol
+            );
 
-        let addr = format!("{host_str}:{port_num}");
-        let stream = TcpStream::connect(&addr)
-            .map_err(|e| mlua::Error::RuntimeError(format!("Connection failed to {addr}: {e}")))?;
+            let addr = format!("{host_str}:{port_num}");
+            let stream = TcpStream::connect(&addr).map_err(|e| {
+                mlua::Error::RuntimeError(format!("Connection failed to {addr}: {e}"))
+            })?;
 
-        stream
-            .set_read_timeout(Some(Duration::from_millis(DEFAULT_TIMEOUT_MS)))
-            .map_err(|e| mlua::Error::RuntimeError(format!("Failed to set timeout: {e}")))?;
+            stream
+                .set_read_timeout(Some(Duration::from_millis(DEFAULT_TIMEOUT_MS)))
+                .map_err(|e| mlua::Error::RuntimeError(format!("Failed to set timeout: {e}")))?;
 
-        let mut stream = stream;
+            let mut stream = stream;
 
-        // Perform STARTTLS if needed
-        if let Some(proto) = protocol {
-            perform_starttls(&mut stream, proto.as_str())?;
-        }
+            // Perform STARTTLS if needed
+            if let Some(proto) = protocol {
+                perform_starttls(&mut stream, proto.as_str())?;
+            }
 
-        // Send TLS ClientHello
-        let client_hello = build_client_hello(&host_str);
-        stream
-            .write_all(&client_hello)
-            .map_err(|e| mlua::Error::RuntimeError(format!("Failed to send ClientHello: {e}")))?;
+            // Send TLS ClientHello
+            let client_hello = build_client_hello(&host_str);
+            stream.write_all(&client_hello).map_err(|e| {
+                mlua::Error::RuntimeError(format!("Failed to send ClientHello: {e}"))
+            })?;
 
-        // Parse server response and extract certificate
-        let cert_der = parse_server_response(&mut stream)?;
+            // Parse server response and extract certificate
+            let cert_der = parse_server_response(&mut stream)?;
 
-        // Parse certificate
-        let pem = der_to_pem(&cert_der);
-        let subject = extract_dn_field(&cert_der).unwrap_or_else(|| "Unknown".to_string());
-        let issuer = "Unknown".to_string(); // Would need more complex parsing
-        let serial = extract_serial(&cert_der);
-        let fingerprint = calculate_fingerprint(&cert_der);
-        let (notbefore, notafter) = extract_validity(&cert_der);
+            // Parse certificate
+            let pem = der_to_pem(&cert_der);
+            let subject = extract_dn_field(&cert_der).unwrap_or_else(|| "Unknown".to_string());
+            let issuer = "Unknown".to_string(); // Would need more complex parsing
+            let serial = extract_serial(&cert_der);
+            let fingerprint = calculate_fingerprint(&cert_der);
+            let (notbefore, notafter) = extract_validity(&cert_der);
 
-        // Convert to Lua table
-        let table = lua.create_table()?;
-        table.set("pem", pem.as_str())?;
-        table.set("subject", subject.as_str())?;
-        table.set("issuer", issuer.as_str())?;
-        table.set("serial", serial.as_str())?;
-        table.set("fingerprint", fingerprint.as_str())?;
+            // Convert to Lua table
+            let table = lua.create_table()?;
+            table.set("pem", pem.as_str())?;
+            table.set("subject", subject.as_str())?;
+            table.set("issuer", issuer.as_str())?;
+            table.set("serial", serial.as_str())?;
+            table.set("fingerprint", fingerprint.as_str())?;
 
-        let pubkey_table = lua.create_table()?;
-        pubkey_table.set("type", "RSA")?;
-        pubkey_table.set("bits", 2048)?;
-        table.set("pubkey", pubkey_table)?;
+            let pubkey_table = lua.create_table()?;
+            pubkey_table.set("type", "RSA")?;
+            pubkey_table.set("bits", 2048)?;
+            table.set("pubkey", pubkey_table)?;
 
-        table.set("notbefore", notbefore.as_str())?;
-        table.set("notafter", notafter.as_str())?;
-        table.set("version", 3)?;
+            table.set("notbefore", notbefore.as_str())?;
+            table.set("notafter", notafter.as_str())?;
+            table.set("version", 3)?;
 
-        Ok(Value::Table(table))
-    })?;
+            Ok(Value::Table(table))
+        },
+    )?;
     sslcert_table.set("getCertificate", get_cert_fn)?;
 
     // Register parse_ssl_certificate function

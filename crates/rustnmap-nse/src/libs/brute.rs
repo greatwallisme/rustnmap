@@ -162,10 +162,11 @@ fn create_options_class(lua: &mlua::Lua) -> Result<Table> {
     options_table.set("setMode", set_mode_fn)?;
 
     // Add setOption method
-    let set_option_fn = lua.create_function(|_lua, (this, param, value): (Table, String, Value)| {
-        this.set(param, value)?;
-        Ok(())
-    })?;
+    let set_option_fn =
+        lua.create_function(|_lua, (this, param, value): (Table, String, Value)| {
+            this.set(param, value)?;
+            Ok(())
+        })?;
     options_table.set("setOption", set_option_fn)?;
 
     // Add setTitle method
@@ -302,6 +303,13 @@ fn create_error_class(lua: &mlua::Lua) -> Result<Table> {
 /// - Iterator management (usernames/passwords)
 /// - Statistics tracking
 /// - Result aggregation
+// Lua class factory pattern requires all method closures in same scope to share
+// table references. The 268-line function contains the core brute force algorithm
+// matching nmap's original implementation structure. Splitting would hurt readability.
+#[expect(
+    clippy::too_many_lines,
+    reason = "Lua class factory requires single scope for method closures"
+)]
 fn create_engine_class(lua: &mlua::Lua) -> Result<Table> {
     let engine_table = lua.create_table()?;
 
@@ -317,74 +325,80 @@ fn create_engine_class(lua: &mlua::Lua) -> Result<Table> {
     let engine_table_for_new = engine_table.clone();
 
     // Add the new constructor
-    let new_fn = lua.create_function(move |lua, (driver, host, port, options): (Table, Table, Table, Table)| {
-        let o = lua.create_table()?;
+    let new_fn = lua.create_function(
+        move |lua, (driver, host, port, options): (Table, Table, Table, Table)| {
+            let o = lua.create_table()?;
 
-        // Store driver and connection info
-        o.set("driver", driver)?;
-        o.set("host", host)?;
-        o.set("port", port)?;
-        o.set("driver_options", options)?;
+            // Store driver and connection info
+            o.set("driver", driver)?;
+            o.set("host", host)?;
+            o.set("port", port)?;
+            o.set("driver_options", options)?;
 
-        // Initialize engine state
-        o.set("terminate_all", Value::Boolean(false))?;
-        o.set("error", Value::Nil)?;
-        o.set("counter", Value::Integer(0))?;
-        o.set("threads", lua.create_table()?)?;
-        o.set("tps", lua.create_table()?)?; // Thread to engine mapping
-        o.set("iterator", Value::Nil)?;
-        o.set("found_accounts", lua.create_table()?)?;
-        o.set("account_guesses", lua.create_table()?)?;
-        o.set("retry_accounts", lua.create_table()?)?;
-        o.set("initial_accounts_exhausted", Value::Boolean(false))?;
-        o.set("batch", Value::Nil)?;
-        o.set("tick", Value::Integer(0))?;
+            // Initialize engine state
+            o.set("terminate_all", Value::Boolean(false))?;
+            o.set("error", Value::Nil)?;
+            o.set("counter", Value::Integer(0))?;
+            o.set("threads", lua.create_table()?)?;
+            o.set("tps", lua.create_table()?)?; // Thread to engine mapping
+            o.set("iterator", Value::Nil)?;
+            o.set("found_accounts", lua.create_table()?)?;
+            o.set("account_guesses", lua.create_table()?)?;
+            o.set("retry_accounts", lua.create_table()?)?;
+            o.set("initial_accounts_exhausted", Value::Boolean(false))?;
+            o.set("batch", Value::Nil)?;
+            o.set("tick", Value::Integer(0))?;
 
-        // Get options with defaults
-        let brute: Table = lua.globals().get("brute")?;
-        let options_class: Table = brute.get("Options")?;
-        let opts_instance: Table = options_class.call(())?;
+            // Get options with defaults
+            let brute: Table = lua.globals().get("brute")?;
+            let options_class: Table = brute.get("Options")?;
+            let opts_instance: Table = options_class.call(())?;
 
-        // Get script arguments
-        let nmap: Table = lua.globals().get("nmap")?;
-        let args: Table = nmap.get("registry_args")?;
+            // Get script arguments
+            let nmap: Table = lua.globals().get("nmap")?;
+            let args: Table = nmap.get("registry_args")?;
 
-        // Thread configuration
-        let max_threads: i64 = if let Ok(Some(Value::Integer(n))) = args.get::<Option<Value>>("brute.threads") {
-            n
-        } else {
-            20
-        };
-        o.set("max_threads", max_threads)?;
+            // Thread configuration
+            let max_threads: i64 =
+                if let Ok(Some(Value::Integer(n))) = args.get::<Option<Value>>("brute.threads") {
+                    n
+                } else {
+                    20
+                };
+            o.set("max_threads", max_threads)?;
 
-        let start_threads: i64 = if let Ok(Some(Value::Integer(n))) = args.get::<Option<Value>>("brute.start") {
-            n
-        } else {
-            5
-        };
-        o.set("start_threads", start_threads)?;
+            let start_threads: i64 =
+                if let Ok(Some(Value::Integer(n))) = args.get::<Option<Value>>("brute.start") {
+                    n
+                } else {
+                    5
+                };
+            o.set("start_threads", start_threads)?;
 
-        o.set("options", opts_instance)?;
+            o.set("options", opts_instance)?;
 
-        // Set metatable to Engine class for method lookup
-        o.set_metatable(Some(engine_table_for_new.clone()))?;
+            // Set metatable to Engine class for method lookup
+            o.set_metatable(Some(engine_table_for_new.clone()))?;
 
-        Ok(Value::Table(o))
-    })?;
+            Ok(Value::Table(o))
+        },
+    )?;
     engine_table.set("new", new_fn)?;
 
     // Add setUsernameIterator method
-    let set_user_iter_fn = lua.create_function(|_lua, (this, iterator): (Table, mlua::Function)| {
-        this.set("usernames", iterator)?;
-        Ok(())
-    })?;
+    let set_user_iter_fn =
+        lua.create_function(|_lua, (this, iterator): (Table, mlua::Function)| {
+            this.set("usernames", iterator)?;
+            Ok(())
+        })?;
     engine_table.set("setUsernameIterator", set_user_iter_fn)?;
 
     // Add setPasswordIterator method
-    let set_pass_iter_fn = lua.create_function(|_lua, (this, iterator): (Table, mlua::Function)| {
-        this.set("passwords", iterator)?;
-        Ok(())
-    })?;
+    let set_pass_iter_fn =
+        lua.create_function(|_lua, (this, iterator): (Table, mlua::Function)| {
+            this.set("passwords", iterator)?;
+            Ok(())
+        })?;
     engine_table.set("setPasswordIterator", set_pass_iter_fn)?;
 
     // Add setMaxThreads method
@@ -398,12 +412,10 @@ fn create_engine_class(lua: &mlua::Lua) -> Result<Table> {
     let thread_count_fn = lua.create_function(|_lua, this: Table| {
         let threads: Table = this.get("threads")?;
         let mut count = 0;
-        for pair in threads.pairs::<Value, Value>() {
-            if let Ok((_, _)) = pair {
-                // Check if coroutine is still alive
-                // In a real implementation, we'd track coroutine status
-                count += 1;
-            }
+        for (_, _) in threads.pairs::<Value, Value>().flatten() {
+            // Check if coroutine is still alive
+            // In a real implementation, we'd track coroutine status
+            count += 1;
         }
         Ok(count)
     })?;
@@ -413,11 +425,9 @@ fn create_engine_class(lua: &mlua::Lua) -> Result<Table> {
     let active_threads_fn = lua.create_function(|_lua, this: Table| {
         let threads: Table = this.get("threads")?;
         let mut count = 0;
-        for pair in threads.pairs::<Value, Table>() {
-            if let Ok((_, thread_data)) = pair {
-                if let Ok(Some(_)) = thread_data.get::<Option<Value>>("guesses") {
-                    count += 1;
-                }
+        for (_, thread_data) in threads.pairs::<Value, Table>().flatten() {
+            if let Ok(Some(_)) = thread_data.get::<Option<Value>>("guesses") {
+                count += 1;
             }
         }
         Ok(count)
@@ -430,32 +440,34 @@ fn create_engine_class(lua: &mlua::Lua) -> Result<Table> {
         let unpwdb: Table = lua.globals().get("unpwdb")?;
 
         // Get usernames iterator
-        let usernames_result: mlua::MultiValue = unpwdb.call((Option::<Value>::None, Option::<Value>::None))?;
-        let usernames_iter = match usernames_result.get(0) {
-            Some(Value::Boolean(true)) => {
-                usernames_result.get(1).and_then(|v| match v {
-                    Value::Function(f) => Some(f),
-                    _ => None,
-                })
-            }
+        let usernames_result: mlua::MultiValue =
+            unpwdb.call((Option::<Value>::None, Option::<Value>::None))?;
+        let usernames_iter = match usernames_result.front() {
+            Some(Value::Boolean(true)) => usernames_result.get(1).and_then(|v| match v {
+                Value::Function(f) => Some(f),
+                _ => None,
+            }),
             _ => None,
         };
 
-        let usernames_iter = usernames_iter.ok_or_else(|| mlua::Error::RuntimeError("Failed to get usernames iterator".to_string()))?;
+        let usernames_iter = usernames_iter.ok_or_else(|| {
+            mlua::Error::RuntimeError("Failed to get usernames iterator".to_string())
+        })?;
 
         // Get passwords iterator
-        let passwords_result: mlua::MultiValue = unpwdb.call((Option::<Value>::None, Option::<Value>::None))?;
-        let passwords_iter = match passwords_result.get(0) {
-            Some(Value::Boolean(true)) => {
-                passwords_result.get(1).and_then(|v| match v {
-                    Value::Function(f) => Some(f),
-                    _ => None,
-                })
-            }
+        let passwords_result: mlua::MultiValue =
+            unpwdb.call((Option::<Value>::None, Option::<Value>::None))?;
+        let passwords_iter = match passwords_result.front() {
+            Some(Value::Boolean(true)) => passwords_result.get(1).and_then(|v| match v {
+                Value::Function(f) => Some(f),
+                _ => None,
+            }),
             _ => None,
         };
 
-        let passwords_iter = passwords_iter.ok_or_else(|| mlua::Error::RuntimeError("Failed to get passwords iterator".to_string()))?;
+        let passwords_iter = passwords_iter.ok_or_else(|| {
+            mlua::Error::RuntimeError("Failed to get passwords iterator".to_string())
+        })?;
 
         this.set("usernames", usernames_iter)?;
         this.set("passwords", passwords_iter)?;
@@ -463,22 +475,23 @@ fn create_engine_class(lua: &mlua::Lua) -> Result<Table> {
         // Get options
         let options: Table = this.get("options")?;
         let firstonly: bool = options.get("firstonly").unwrap_or(false);
-        #[expect(unused_variables, reason = "Mode selection reserved for future implementation")]
         let _mode: String = options.get("mode").unwrap_or("password".to_string());
         let emptypass: bool = options.get("emptypass").unwrap_or(false);
         let useraspass: bool = options.get("useraspass").unwrap_or(true);
-        #[expect(unused_variables, reason = "Pass-only mode reserved for future implementation")]
         let _passonly: bool = options.get("passonly").unwrap_or(false);
         let max_guesses: i64 = options.get("max_guesses").unwrap_or(0);
         let delay: i64 = options.get("delay").unwrap_or(0);
-        #[expect(unused_variables, reason = "Retry logic reserved for future implementation")]
         let _max_retries: i64 = options.get("max_retries").unwrap_or(2);
 
         // Get driver
         let driver: Table = this.get("driver")?;
-        let driver_new: mlua::Function = driver.get(NEW)
-            .or_else(|_| driver.get(INDEX))
-            .map_err(|_| mlua::Error::RuntimeError("Driver must have a 'new' method".to_string()))?;
+        let driver_new: mlua::Function =
+            driver
+                .get(NEW)
+                .or_else(|_| driver.get(INDEX))
+                .map_err(|_err| {
+                    mlua::Error::RuntimeError("Driver must have a 'new' method".to_string())
+                })?;
 
         // Get host and port
         let host: Table = this.get("host")?;
@@ -497,7 +510,7 @@ fn create_engine_class(lua: &mlua::Lua) -> Result<Table> {
         // Iterate through usernames
         let mut username = match usernames_iter.call::<mlua::MultiValue>(()) {
             Ok(vals) => {
-                if let Some(Value::String(u)) = vals.get(0) {
+                if let Some(Value::String(u)) = vals.front() {
                     Some(u.to_string_lossy().to_string())
                 } else {
                     None
@@ -506,7 +519,7 @@ fn create_engine_class(lua: &mlua::Lua) -> Result<Table> {
             Err(_) => None,
         };
 
-        #[expect(unused_variables, reason = "Username-as-password values tracked inline")]
+        // Username-as-password values are now added to passwords_to_try directly
         let _useraspass_values: Vec<String> = if useraspass {
             username.clone().into_iter().collect()
         } else {
@@ -534,7 +547,7 @@ fn create_engine_class(lua: &mlua::Lua) -> Result<Table> {
             // Add passwords from iterator
             let mut password = match passwords_iter.call::<mlua::MultiValue>(()) {
                 Ok(vals) => {
-                    if let Some(Value::String(p)) = vals.get(0) {
+                    if let Some(Value::String(p)) = vals.front() {
                         Some(p.to_string_lossy().to_string())
                     } else {
                         None
@@ -551,7 +564,7 @@ fn create_engine_class(lua: &mlua::Lua) -> Result<Table> {
 
                 password = match passwords_iter.call::<mlua::MultiValue>(()) {
                     Ok(vals) => {
-                        if let Some(Value::String(p)) = vals.get(0) {
+                        if let Some(Value::String(p)) = vals.front() {
                             Some(p.to_string_lossy().to_string())
                         } else {
                             None
@@ -586,27 +599,26 @@ fn create_engine_class(lua: &mlua::Lua) -> Result<Table> {
                     if killstagnated {
                         let error_class: Table = lua.globals().get("brute")?;
                         let err_class: Table = error_class.get("Error")?;
-                        let err: Table = err_class.call("Stagnation detected - too many connection errors".to_string())?;
+                        let err: Table = err_class
+                            .call("Stagnation detected - too many connection errors".to_string())?;
                         return Ok((false, Value::Table(err)));
                     }
                 }
 
                 // Delay between attempts if configured
                 if delay > 0 {
-                    let _ = std::thread::sleep(std::time::Duration::from_millis(delay as u64));
+                    std::thread::sleep(std::time::Duration::from_millis(
+                        u64::try_from(delay).unwrap_or(0),
+                    ));
                 }
 
                 // Call driver connect
-                let connect_result: mlua::Result<Value> = driver_instance.get::<mlua::Function>("connect")
+                let connect_result: mlua::Result<Value> = driver_instance
+                    .get::<mlua::Function>("connect")
                     .or_else(|_| driver_instance.get::<mlua::Function>(INDEX))
                     .and_then(|conn_fn| conn_fn.call::<Value>(driver_instance.clone()));
 
-                let connected = match connect_result {
-                    Ok(Value::Boolean(true)) => true,
-                    Ok(Value::Nil) => true,
-                    Err(_) => false,
-                    _ => false,
-                };
+                let connected = matches!(connect_result, Ok(Value::Boolean(true) | Value::Nil));
 
                 if !connected {
                     stagnation_count = total_guesses;
@@ -615,13 +627,20 @@ fn create_engine_class(lua: &mlua::Lua) -> Result<Table> {
 
                 // Call driver login
                 let pw_str = pw.as_deref().unwrap_or("");
-                let login_result: mlua::Result<mlua::MultiValue> = driver_instance.get::<mlua::Function>("login")
+                let login_result: mlua::Result<mlua::MultiValue> = driver_instance
+                    .get::<mlua::Function>("login")
                     .or_else(|_| driver_instance.get::<mlua::Function>(INDEX))
-                    .and_then(|login_fn| login_fn.call::<mlua::MultiValue>((driver_instance.clone(), uname.clone(), pw_str)));
+                    .and_then(|login_fn| {
+                        login_fn.call::<mlua::MultiValue>((
+                            driver_instance.clone(),
+                            uname.clone(),
+                            pw_str,
+                        ))
+                    });
 
                 match login_result {
                     Ok(result) => {
-                        if let Some(Value::Boolean(true)) = result.get(0) {
+                        if let Some(Value::Boolean(true)) = result.front() {
                             // Successful login
                             account_found = true;
                             stagnation_count = 0;
@@ -642,14 +661,18 @@ fn create_engine_class(lua: &mlua::Lua) -> Result<Table> {
                                 let is_abort: bool = err.get("isAbort").unwrap_or(false);
                                 if is_abort {
                                     // Call driver disconnect
-                                    let _ = driver_instance.get::<mlua::Function>("disconnect")
-                                        .and_then(|disc_fn| disc_fn.call::<Value>(driver_instance.clone()));
+                                    let _ = driver_instance
+                                        .get::<mlua::Function>("disconnect")
+                                        .and_then(|disc_fn| {
+                                            disc_fn.call::<Value>(driver_instance.clone())
+                                        });
 
                                     return Ok((false, Value::Table(err.clone())));
                                 }
 
                                 // Check if account is invalid
-                                let is_invalid: Option<String> = err.get("isInvalidAccount").ok().flatten();
+                                let is_invalid: Option<String> =
+                                    err.get("isInvalidAccount").ok().flatten();
                                 if is_invalid.is_some() {
                                     break;
                                 }
@@ -668,14 +691,15 @@ fn create_engine_class(lua: &mlua::Lua) -> Result<Table> {
                 }
 
                 // Call driver disconnect
-                let _ = driver_instance.get::<mlua::Function>("disconnect")
+                let _ = driver_instance
+                    .get::<mlua::Function>("disconnect")
                     .and_then(|disc_fn| disc_fn.call::<Value>(driver_instance.clone()));
             }
 
             // Get next username
             username = match usernames_iter.call::<mlua::MultiValue>(()) {
                 Ok(vals) => {
-                    if let Some(Value::String(u)) = vals.get(0) {
+                    if let Some(Value::String(u)) = vals.front() {
                         Some(u.to_string_lossy().to_string())
                     } else {
                         None
