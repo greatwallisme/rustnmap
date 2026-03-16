@@ -6,15 +6,19 @@
 //! - `stdnse`: Standard utility functions
 //! - `comm`: Network communication functions
 //! - `shortport`: Port rule definitions
+//! - `json`: JSON encoding and decoding
+//! - `creds`: Credential management library
 //!
 //! These libraries are registered with the Lua runtime and provide
 //! Nmap-compatible APIs for script authors.
 
 pub mod brute;
 pub mod comm;
+pub mod creds;
 pub mod dns;
 pub mod ftp;
 pub mod http;
+pub mod json;
 pub mod netbios;
 pub mod nmap;
 pub mod openssl;
@@ -34,7 +38,7 @@ use crate::lua::NseLua;
 ///
 /// This function registers the core NSE libraries (nmap, stdnse, comm, shortport)
 /// and protocol libraries (http, ssh, ssl, dns, ftp, unpwdb, smb, netbios, smbauth, unicode)
-/// and utility libraries (openssl, brute) with the given Lua instance, making them
+/// and utility libraries (openssl, brute, creds) with the given Lua instance, making them
 /// available to NSE scripts.
 ///
 /// # Arguments
@@ -79,8 +83,10 @@ pub fn register_all(lua: &mut NseLua) -> Result<()> {
     unicode::register(lua)?;
 
     // Utility libraries
+    json::register(lua)?;
     openssl::register(lua)?;
     brute::register(lua)?;
+    creds::register(lua)?;
 
     Ok(())
 }

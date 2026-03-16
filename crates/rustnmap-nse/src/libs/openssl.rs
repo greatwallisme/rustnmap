@@ -114,8 +114,7 @@ fn lua_string_to_bytes(value: &Value) -> Option<Vec<u8>> {
 
 /// Convert bytes to a Lua string.
 fn bytes_to_lua_string(lua: &Lua, bytes: &[u8]) -> mlua::Result<Value> {
-    lua.create_string(bytes)
-        .map(Value::String)
+    lua.create_string(bytes).map(Value::String)
 }
 
 /// MD4 hash function.
@@ -286,7 +285,10 @@ fn bignum_num_bytes(bn: &BigUint) -> u64 {
 }
 
 /// Generate a random `bignum` with specified bit size.
-#[expect(clippy::cast_possible_truncation, reason = "MAX_BIGNUM_BITS (4096) is safe for usize on all platforms")]
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "MAX_BIGNUM_BITS (4096) is safe for usize on all platforms"
+)]
 fn bignum_rand(bits: u64) -> mlua::Result<BigUint> {
     if bits > MAX_BIGNUM_BITS {
         return Err(mlua::Error::RuntimeError(format!(
@@ -356,7 +358,8 @@ fn value_to_bignum(value: &Value) -> mlua::Result<BigUint> {
             let str_val: String = s.to_str().map(|s| s.to_string()).unwrap_or_default();
             // Try hex first (only if it has hex prefix or contains a-f), then decimal
             let trimmed = str_val.trim();
-            let is_hex = trimmed.starts_with("0x") || trimmed.starts_with("0X")
+            let is_hex = trimmed.starts_with("0x")
+                || trimmed.starts_with("0X")
                 || trimmed.chars().any(|c| matches!(c, 'a'..='f' | 'A'..='F'));
             if is_hex {
                 if let Ok(bn) = hex2bn(trimmed) {
@@ -376,7 +379,10 @@ fn value_to_bignum(value: &Value) -> mlua::Result<BigUint> {
         Value::Number(n) => {
             let f = *n;
             if f >= 0.0 && f.fract() == 0.0 {
-                #[expect(clippy::cast_possible_truncation, reason = "f is checked to be a non-negative integer")]
+                #[expect(
+                    clippy::cast_possible_truncation,
+                    reason = "f is checked to be a non-negative integer"
+                )]
                 #[expect(clippy::cast_sign_loss, reason = "f is checked to be non-negative")]
                 Ok(BigUint::from(f as u64))
             } else {
@@ -393,7 +399,11 @@ fn value_to_bignum(value: &Value) -> mlua::Result<BigUint> {
 
 /// DES CBC encryption.
 #[allow(dead_code, reason = "Will be used by encrypt function when registered")]
-#[expect(clippy::needless_range_loop, clippy::cast_possible_truncation, reason = "Explicit indexing is clearer for low-level crypto operations")]
+#[expect(
+    clippy::needless_range_loop,
+    clippy::cast_possible_truncation,
+    reason = "Explicit indexing is clearer for low-level crypto operations"
+)]
 fn des_cbc_encrypt(key: &[u8], iv: &[u8], data: &[u8], padding: bool) -> mlua::Result<Vec<u8>> {
     if key.len() != 8 {
         return Err(mlua::Error::RuntimeError(format!(
@@ -511,7 +521,11 @@ fn des_cbc_decrypt(key: &[u8], iv: &[u8], data: &[u8], padding: bool) -> mlua::R
 
 /// DES ECB encryption.
 #[allow(dead_code, reason = "Will be used by encrypt function when registered")]
-#[expect(clippy::needless_range_loop, clippy::cast_possible_truncation, reason = "Explicit indexing is clearer for low-level crypto operations")]
+#[expect(
+    clippy::needless_range_loop,
+    clippy::cast_possible_truncation,
+    reason = "Explicit indexing is clearer for low-level crypto operations"
+)]
 fn des_ecb_encrypt(key: &[u8], data: &[u8], padding: bool) -> mlua::Result<Vec<u8>> {
     if key.len() != 8 {
         return Err(mlua::Error::RuntimeError(format!(
@@ -596,20 +610,27 @@ fn des_ecb_decrypt(key: &[u8], data: &[u8], padding: bool) -> mlua::Result<Vec<u
 }
 
 /// Encrypt data with the specified algorithm.
-#[allow(dead_code, reason = "Will be registered when encrypt/decrypt functions are exposed")]
-fn encrypt(algorithm: &str, key: &[u8], iv: Option<&[u8]>, data: &[u8], padding: bool) -> mlua::Result<Vec<u8>> {
+#[allow(
+    dead_code,
+    reason = "Will be registered when encrypt/decrypt functions are exposed"
+)]
+fn encrypt(
+    algorithm: &str,
+    key: &[u8],
+    iv: Option<&[u8]>,
+    data: &[u8],
+    padding: bool,
+) -> mlua::Result<Vec<u8>> {
     let algo_lower = algorithm.to_lowercase().replace('_', "-");
 
     match algo_lower.as_str() {
         "des" | "des-ecb" => des_ecb_encrypt(key, data, padding),
-        "des-cbc" => {
-            match iv {
-                Some(iv_bytes) => des_cbc_encrypt(key, iv_bytes, data, padding),
-                None => Err(mlua::Error::RuntimeError(
-                    "DES CBC requires an IV".to_string(),
-                )),
-            }
-        }
+        "des-cbc" => match iv {
+            Some(iv_bytes) => des_cbc_encrypt(key, iv_bytes, data, padding),
+            None => Err(mlua::Error::RuntimeError(
+                "DES CBC requires an IV".to_string(),
+            )),
+        },
         _ => Err(mlua::Error::RuntimeError(format!(
             "Unsupported cipher algorithm: {algorithm}"
         ))),
@@ -617,20 +638,27 @@ fn encrypt(algorithm: &str, key: &[u8], iv: Option<&[u8]>, data: &[u8], padding:
 }
 
 /// Decrypt data with the specified algorithm.
-#[allow(dead_code, reason = "Will be registered when encrypt/decrypt functions are exposed")]
-fn decrypt(algorithm: &str, key: &[u8], iv: Option<&[u8]>, data: &[u8], padding: bool) -> mlua::Result<Vec<u8>> {
+#[allow(
+    dead_code,
+    reason = "Will be registered when encrypt/decrypt functions are exposed"
+)]
+fn decrypt(
+    algorithm: &str,
+    key: &[u8],
+    iv: Option<&[u8]>,
+    data: &[u8],
+    padding: bool,
+) -> mlua::Result<Vec<u8>> {
     let algo_lower = algorithm.to_lowercase().replace('_', "-");
 
     match algo_lower.as_str() {
         "des" | "des-ecb" => des_ecb_decrypt(key, data, padding),
-        "des-cbc" => {
-            match iv {
-                Some(iv_bytes) => des_cbc_decrypt(key, iv_bytes, data, padding),
-                None => Err(mlua::Error::RuntimeError(
-                    "DES CBC requires an IV".to_string(),
-                )),
-            }
-        }
+        "des-cbc" => match iv {
+            Some(iv_bytes) => des_cbc_decrypt(key, iv_bytes, data, padding),
+            None => Err(mlua::Error::RuntimeError(
+                "DES CBC requires an IV".to_string(),
+            )),
+        },
         _ => Err(mlua::Error::RuntimeError(format!(
             "Unsupported cipher algorithm: {algorithm}"
         ))),
@@ -662,7 +690,10 @@ fn decrypt(algorithm: &str, key: &[u8], iv: Option<&[u8]>, data: &[u8], padding:
 /// # Ok(())
 /// # }
 /// ```
-#[expect(clippy::too_many_lines, reason = "Registering many OpenSSL functions is necessarily long")]
+#[expect(
+    clippy::too_many_lines,
+    reason = "Registering many OpenSSL functions is necessarily long"
+)]
 pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     let lua = nse_lua.lua_mut();
 
@@ -724,19 +755,17 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     openssl_table.set("ripemd160", ripemd160_fn)?;
 
     // Register generic digest function
-    let digest_fn = lua.create_function(
-        |lua, (algorithm, message): (String, Value)| {
-            let data = lua_string_to_bytes(&message).unwrap_or_default();
-            debug!("openssl.digest: {}, {} bytes", algorithm, data.len());
-            let hash = hash_digest(&algorithm, &data)?;
-            bytes_to_lua_string(lua, &hash)
-        },
-    )?;
+    let digest_fn = lua.create_function(|lua, (algorithm, message): (String, Value)| {
+        let data = lua_string_to_bytes(&message).unwrap_or_default();
+        debug!("openssl.digest: {}, {} bytes", algorithm, data.len());
+        let hash = hash_digest(&algorithm, &data)?;
+        bytes_to_lua_string(lua, &hash)
+    })?;
     openssl_table.set("digest", digest_fn)?;
 
     // Register HMAC function
-    let hmac_fn = lua.create_function(
-        |lua, (algorithm, key, message): (String, Value, Value)| {
+    let hmac_fn =
+        lua.create_function(|lua, (algorithm, key, message): (String, Value, Value)| {
             let key_bytes = lua_string_to_bytes(&key).unwrap_or_default();
             let data = lua_string_to_bytes(&message).unwrap_or_default();
             debug!(
@@ -747,13 +776,16 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
             );
             let mac = hmac_calc(&algorithm, &key_bytes, &data)?;
             bytes_to_lua_string(lua, &mac)
-        },
-    )?;
+        })?;
     openssl_table.set("hmac", hmac_fn)?;
 
     // Register rand_bytes function
     let rand_bytes_fn = lua.create_function(
-        #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss, reason = "count is checked to be non-negative and bounded by MAX_RAND_BYTES")]
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "count is checked to be non-negative and bounded by MAX_RAND_BYTES"
+        )]
         |lua, count: i64| {
             let count_usize = if count < 0 {
                 return Err(mlua::Error::RuntimeError(
@@ -771,7 +803,11 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
 
     // Register rand_pseudo_bytes function (alias for rand_bytes)
     let rand_pseudo_bytes_fn = lua.create_function(
-        #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss, reason = "count is checked to be non-negative and bounded by MAX_RAND_BYTES")]
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "count is checked to be non-negative and bounded by MAX_RAND_BYTES"
+        )]
         |lua, count: i64| {
             let count_usize = if count < 0 {
                 return Err(mlua::Error::RuntimeError(
@@ -785,8 +821,7 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
             bytes_to_lua_string(lua, &bytes)
         },
     )?;
-    openssl_table
-        .set("rand_pseudo_bytes", rand_pseudo_bytes_fn)?;
+    openssl_table.set("rand_pseudo_bytes", rand_pseudo_bytes_fn)?;
 
     // Register bignum_bin2bn function
     let bignum_bin2bn_fn = lua.create_function(|_lua, data: Value| {
@@ -868,15 +903,14 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     openssl_table.set("bignum_rand", bignum_rand_fn)?;
 
     // Register bignum_mod_exp function
-    let bignum_mod_exp_fn =
-        lua.create_function(|_lua, (a, p, m): (Value, Value, Value)| {
-            let bn_a = value_to_bignum(&a)?;
-            let bn_p = value_to_bignum(&p)?;
-            let bn_m = value_to_bignum(&m)?;
-            debug!("openssl.bignum_mod_exp: {}^{} mod {}", bn_a, bn_p, bn_m);
-            let result = bignum_mod_exp(&bn_a, &bn_p, &bn_m);
-            Ok(format!("{result:x}"))
-        })?;
+    let bignum_mod_exp_fn = lua.create_function(|_lua, (a, p, m): (Value, Value, Value)| {
+        let bn_a = value_to_bignum(&a)?;
+        let bn_p = value_to_bignum(&p)?;
+        let bn_m = value_to_bignum(&m)?;
+        debug!("openssl.bignum_mod_exp: {}^{} mod {}", bn_a, bn_p, bn_m);
+        let result = bignum_mod_exp(&bn_a, &bn_p, &bn_m);
+        Ok(format!("{result:x}"))
+    })?;
     openssl_table.set("bignum_mod_exp", bignum_mod_exp_fn)?;
 
     // Register DES_string_to_key function
@@ -945,7 +979,7 @@ mod tests {
         let data = b"Hello World";
         let hash = md5_hash(data);
         assert_eq!(hash.len(), 16); // MD5 produces 16 bytes
-        // Known test vector
+                                    // Known test vector
         let mut hasher = md5::Md5::new();
         md5::Digest::update(&mut hasher, b"Hello World");
         let expected = md5::Digest::finalize(hasher);
@@ -1031,7 +1065,11 @@ mod tests {
 
         // Check that each byte has odd parity
         for byte in &result {
-            assert_eq!(byte.count_ones() % 2, 1, "Byte should have odd parity: {byte:02X}");
+            assert_eq!(
+                byte.count_ones() % 2,
+                1,
+                "Byte should have odd parity: {byte:02X}"
+            );
         }
     }
 
