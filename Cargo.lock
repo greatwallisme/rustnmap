@@ -2226,6 +2226,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "punycode"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e9e1dcb320d6839f6edb64f7a4a59d39b30480d4d1765b56873f7c858538a5fe"
+
+[[package]]
 name = "quick-error"
 version = "1.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2810,6 +2816,7 @@ dependencies = [
  "num-bigint",
  "num-traits",
  "proptest",
+ "punycode",
  "rand 0.8.5",
  "regex",
  "ripemd",

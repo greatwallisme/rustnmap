@@ -57,6 +57,9 @@ hmac = "0.12"
 md4 = "0.10"
 ripemd = "0.1"
 
+# URL encoding/decoding and IDNA
+punycode = "0.4"
+
 # Process-based execution dependencies
 wait-timeout = "0.2"
 which = { version = "7.0", default-features = false }

@@ -8,6 +8,7 @@
 //! - `shortport`: Port rule definitions
 //! - `json`: JSON encoding and decoding
 //! - `creds`: Credential management library
+//! - `url`: URL parsing and composition
 //!
 //! These libraries are registered with the Lua runtime and provide
 //! Nmap-compatible APIs for script authors.
@@ -30,6 +31,7 @@ pub mod ssl;
 pub mod stdnse;
 pub mod unicode;
 pub mod unpwdb;
+pub mod url;
 
 use crate::error::Result;
 use crate::lua::NseLua;
@@ -87,6 +89,7 @@ pub fn register_all(lua: &mut NseLua) -> Result<()> {
     openssl::register(lua)?;
     brute::register(lua)?;
     creds::register(lua)?;
+    url::register(lua)?;
 
     Ok(())
 }
