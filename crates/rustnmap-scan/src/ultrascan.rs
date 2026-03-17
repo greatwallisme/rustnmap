@@ -458,7 +458,8 @@ impl InternalCongestionController {
         self.cwnd.store(new_cwnd, Ordering::Relaxed);
 
         // Update last_drop to current iteration
-        self.last_drop_iteration.store(current_iteration, Ordering::Relaxed);
+        self.last_drop_iteration
+            .store(current_iteration, Ordering::Relaxed);
     }
 
     /// Returns recommended timeout.
@@ -955,7 +956,11 @@ impl ParallelScanEngine {
                         loop_iterations,
                         current_cwnd,
                         outstanding.len(),
-                        if ports_iter.peek().is_some() { "yes" } else { "no" }
+                        if ports_iter.peek().is_some() {
+                            "yes"
+                        } else {
+                            "no"
+                        }
                     );
                 }
             }
@@ -1155,7 +1160,13 @@ impl ParallelScanEngine {
             let diag_timeout_start = Instant::now();
             #[cfg(feature = "diagnostic")]
             let diag_outstanding_before = outstanding.len();
-            self.check_timeouts(&mut outstanding, &mut retry_probes, &mut results, loop_iterations, max_successful_tryno);
+            self.check_timeouts(
+                &mut outstanding,
+                &mut retry_probes,
+                &mut results,
+                loop_iterations,
+                max_successful_tryno,
+            );
             #[cfg(feature = "diagnostic")]
             {
                 let diag_timed_out = diag_outstanding_before - outstanding.len();
@@ -1733,7 +1744,12 @@ impl ParallelScanEngine {
             // Checking timeouts while still sending causes premature timeouts
             if !has_more_ports {
                 // Check for probe timeouts and handle retries
-                self.check_udp_timeouts(&mut outstanding, &mut retry_probes, &mut results, loop_iterations);
+                self.check_udp_timeouts(
+                    &mut outstanding,
+                    &mut retry_probes,
+                    &mut results,
+                    loop_iterations,
+                );
             }
 
             // Reset batch counter

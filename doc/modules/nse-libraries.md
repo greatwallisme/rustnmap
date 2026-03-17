@@ -1,9 +1,18 @@
 # NSE Protocol Libraries - Technical Design
 
-> **Version**: 1.0.2
+> **Version**: 1.1.0
 > **Target**: Nmap 7.95
-> **Status**: Phase 11.1 - High Priority Libraries (http, ssh2, sslcert, dns)
-> **Last Updated**: 2026-03-11
+> **Status**: Phase 11 COMPLETE - All protocol libraries implemented
+> **Last Updated**: 2026-03-17
+
+## Completion Status
+
+| Phase | Libraries | Status |
+|-------|-----------|--------|
+| **Phase 11.1** | http, ssh2, sslcert, dns | ✅ Complete |
+| **Phase 11.2** | smb, netbios, smbauth, unicode, unpwdb, ftp | ✅ Complete |
+| **Phase 11.3** | openssl, json, creds, url | ✅ Complete |
+| **Utilities** | brute | ✅ Complete |
 
 ---
 
@@ -521,7 +530,483 @@ trust-dns-proto = "0.23"
 
 ---
 
-## 5. Common Patterns
+## 5. SMB Library (`smb`)
+
+### Module File
+
+```rust
+// crates/rustnmap-nse/src/libs/smb.rs
+```
+
+### Key Functions
+
+#### `smb.list_shares(host, port)`
+
+```lua
+-- Enumerate SMB shares
+local shares, err = smb.list_shares(host, port)
+-- Returns array of share tables with:
+-- share.name: Share name (e.g., "C$", "IPC$")
+-- share.comment: Share description
+-- share.type: Share type (DISK, IPC, PRINTER)
+```
+
+#### `smb.connect(host, port, options)`
+
+```lua
+-- Establish SMB connection
+local conn, err = smb.connect(host, port, {
+    username = "user",
+    password = "pass",
+    domain = "WORKGROUP"
+})
+```
+
+### Implementation Notes
+
+1. **Protocol**: SMB 1.0/2.0/3.0 support
+2. **Timeout**: Default 10 seconds
+3. **Dependencies**: Uses custom SMB protocol implementation
+
+### Dependencies
+
+```toml
+[dependencies]
+# Custom SMB protocol implementation
+md-5 = "0.10"
+sha2 = "0.10"
+```
+
+---
+
+## 6. NetBIOS Library (`netbios`)
+
+### Module File
+
+```rust
+// crates/rustnmap-nse/src/libs/netbios.rs
+```
+
+### Key Functions
+
+#### `netbios.get_name(host, port)`
+
+```lua
+-- Get NetBIOS name
+local name, err = netbios.get_name(host, port)
+-- Returns NetBIOS name and workstation group
+```
+
+### Implementation Notes
+
+1. **Protocol**: NetBIOS over TCP/IP
+2. **Timeout**: Default 5 seconds
+
+---
+
+## 7. SMBAuth Library (`smbauth`)
+
+### Module File
+
+```rust
+// crates/rustnmap-nse/src/libs/smbauth.rs
+```
+
+### Key Functions
+
+#### `smbauth.password_hash(password)`
+
+```lua
+-- Compute NTLM hash of password
+local hash = smbauth.password_hash("password")
+-- Returns NTLM hash for authentication
+```
+
+---
+
+## 8. Unicode Library (`unicode`)
+
+### Module File
+
+```rust
+// crates/rustnmap-nse/src/libs/unicode.rs
+```
+
+### Key Functions
+
+#### `unicode.utf8_to_utf16(str)`
+
+```lua
+-- Convert UTF-8 string to UTF-16LE (for SMB)
+local utf16 = unicode.utf8_to_utf16("test")
+-- Returns UTF-16LE encoded bytes
+```
+
+---
+
+## 9. UNPWDB Library (`unpwdb`)
+
+### Module File
+
+```rust
+// crates/rustnmap-nse/src/libs/unpwdb.rs
+```
+
+### Key Functions
+
+#### `unpwdb.usernames()`
+
+```lua
+-- Get username iterator
+local usernames = unpwdb.usernames()
+for username in usernames do
+    -- Iterate through common usernames
+end
+```
+
+#### `unpwdb.passwords()`
+
+```lua
+-- Get password iterator
+local passwords = unpwdb.passwords()
+for password in passwords do
+    -- Iterate through common passwords
+end
+```
+
+### Implementation Notes
+
+1. **Built-in Databases**: Common usernames and passwords from Nmap
+2. **Custom Files**: Support for external wordlist files
+
+---
+
+## 10. FTP Library (`ftp`)
+
+### Module File
+
+```rust
+// crates/rustnmap-nse/src/libs/ftp.rs
+```
+
+### Key Functions
+
+#### `ftp.connect(host, port, options)`
+
+```lua
+-- Connect to FTP server
+local conn, err = ftp.connect(host, port, {
+    timeout = 10000,
+    username = "anonymous",
+    password = "anonymous@"
+})
+```
+
+#### `ftp.list(conn, path)`
+
+```lua
+-- List directory contents
+local files, err = ftp.list(conn, "/")
+-- Returns array of file tables
+```
+
+---
+
+## 11. OpenSSL Library (`openssl`)
+
+### Module File
+
+```rust
+// crates/rustnmap-nse/src/libs/openssl.rs
+```
+
+### Key Functions
+
+#### `openssl.bignum_hex_to_dec(hex)`
+
+```lua
+-- Convert hex BIGNUM to decimal
+local dec = openssl.bignum_hex_to_dec("A1B2C3")
+-- Returns decimal string representation
+```
+
+#### `openssl.md5(data)`
+
+```lua
+-- Compute MD5 hash
+local hash = openssl.md5("data")
+-- Returns MD5 digest as hex string
+```
+
+#### `openssl.sha1(data)`
+
+```lua
+-- Compute SHA1 hash
+local hash = openssl.sha1("data")
+-- Returns SHA1 digest as hex string
+```
+
+### Implementation Notes
+
+1. **Purpose**: Low-level cryptographic operations for NSE scripts
+2. **Dependencies**: Uses Rust cryptographic primitives
+
+---
+
+## 12. JSON Library (`json`)
+
+### Module File
+
+```rust
+// crates/rustnmap-nse/src/libs/json.rs
+```
+
+### Key Functions
+
+#### `json.encode(table)`
+
+```lua
+-- Encode Lua table to JSON string
+local json_str = json.encode({name = "John", age = 30})
+-- Returns '{"name":"John","age":30}'
+```
+
+#### `json.decode(json_string)`
+
+```lua
+-- Decode JSON string to Lua table
+local table = json.decode('{"name":"John","age":30}')
+-- Returns {name = "John", age = 30}
+```
+
+### Implementation Notes
+
+1. **Format**: Compatible with JSON specification (RFC 8259)
+2. **Types**: Supports null, boolean, number, string, array, object
+3. **Dependencies**: Uses `serde_json` for parsing
+
+### Dependencies
+
+```toml
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+```
+
+---
+
+## 13. Credentials Library (`creds`)
+
+### Module File
+
+```rust
+// crates/rustnmap-nse/src/libs/creds.rs
+```
+
+### Key Functions
+
+#### `creds.Credentials:new()`
+
+```lua
+-- Create new credentials object
+local c = creds.Credentials:new()
+c.username = "admin"
+c.password = "secret"
+c.state = creds.STATE.VALID
+```
+
+#### `creds.Credentials:to_table()`
+
+```lua
+-- Convert credentials to table
+local t = c:to_table()
+-- Returns {username = "...", password = "...", state = "VALID"}
+```
+
+### Implementation Notes
+
+1. **Purpose**: Standardized credential representation for NSE scripts
+2. **States**: NEW, VALID, INVALID
+
+---
+
+## 14. URL Library (`url`)
+
+### Module File
+
+```rust
+// crates/rustnmap-nse/src/libs/url.rs
+```
+
+### Key Functions
+
+#### `url.escape(str)`
+
+```lua
+-- URL encode a string
+local encoded = url.escape("hello world")
+-- Returns "hello%20world"
+```
+
+#### `url.unescape(str)`
+
+```lua
+-- URL decode a string
+local decoded = url.unescape("hello%20world")
+-- Returns "hello world"
+```
+
+#### `url.parse(url, default)`
+
+```lua
+-- Parse URL into components
+local parsed = url.parse("https://example.com:8080/path?q=value#frag")
+-- Returns table with:
+-- parsed.scheme: "https"
+-- parsed.host: "example.com"
+-- parsed.port: 8080
+-- parsed.path: "/path"
+-- parsed.query: "q=value"
+-- parsed.fragment: "frag"
+-- parsed.userinfo: nil
+-- parsed.ascii_host: "example.com" (Punycode for IDNs)
+```
+
+#### `url.build(parsed)`
+
+```lua
+-- Build URL from components table
+local url_str = url.build({
+    scheme = "https",
+    host = "example.com",
+    port = 8080,
+    path = "/api/v1",
+    query = "key=value"
+})
+-- Returns "https://example.com:8080/api/v1?key=value"
+```
+
+#### `url.absolute(base, relative)`
+
+```lua
+-- Build absolute URL from base and relative
+local abs = url.absolute("https://example.com/api/", "../v2/resource")
+-- Returns "https://example.com/v2/resource"
+```
+
+#### `url.parse_path(path)`
+
+```lua
+-- Parse path into segments
+local segments = url.parse_path("/api/v1/resource")
+-- Returns {1 = "api", 2 = "v1", 3 = "resource", is_absolute = 1, is_directory = nil}
+```
+
+#### `url.build_path(segments, unsafe)`
+
+```lua
+-- Build path from segments
+local path = url.build_path({1 = "api", 2 = "v1", is_absolute = 1}, false)
+-- Returns "/api/v1"
+```
+
+#### `url.parse_query(query)`
+
+```lua
+-- Parse query string into table
+local params = url.parse_query("name=John&age=30")
+-- Returns {name = "John", age = "30"}
+-- Handles HTML entities: &amp;, &lt;, &gt;
+```
+
+#### `url.build_query(table)`
+
+```lua
+-- Build query string from table
+local query = url.build_query({name = "John", age = "30"})
+-- Returns "name=John&age=30"
+```
+
+#### `url.get_default_port(scheme)`
+
+```lua
+-- Get default port for scheme
+local port = url.get_default_port("https")
+-- Returns 443
+```
+
+#### `url.get_default_scheme(port)`
+
+```lua
+-- Get default scheme for port
+local scheme = url.get_default_scheme(443)
+-- Returns "https"
+```
+
+#### `url.ascii_hostname(host)`
+
+```lua
+-- Convert hostname to ASCII (Punycode for IDNs)
+local ascii = url.ascii_hostname("müller.example.com")
+-- Returns "xn--mller-kva.example.com"
+```
+
+### Implementation Notes
+
+1. **RFC 3986 Compliance**: Full URL parsing and composition per RFC 3986
+2. **IDNA Support**: Punycode encoding for international domain names
+3. **HTML Entities**: Special handling in `parse_query` for `&amp;`, `&lt;`, `&gt;`
+4. **Path Resolution**: RFC 3986 Section 5.2 relative URL resolution
+5. **Default Ports**: http (80), https (443)
+
+### Dependencies
+
+```toml
+[dependencies]
+punycode = "0.1"  # IDNA/Punycode support
+```
+
+### Test Coverage
+
+All URL library functions have comprehensive unit tests including:
+- Percent encoding/decoding
+- URL parsing and building
+- Relative path resolution
+- Query string parsing
+- Nmap compatibility tests
+
+---
+
+## 15. Brute Library (`brute`)
+
+### Module File
+
+```rust
+// crates/rustnmap-nse/src/libs/brute.rs
+```
+
+### Key Functions
+
+#### `brute.new_emulator(options)`
+
+```lua
+-- Create brute force iterator
+local engine = brute.new_emulator({
+    username = "admin",
+    passwords = unpwdb.passwords(),
+    max_retries = 3,
+    delay = 2  -- seconds between attempts
+})
+```
+
+### Implementation Notes
+
+1. **Purpose**: Standardized brute-force attack framework
+2. **Rate Limiting**: Built-in delay to prevent lockouts
+
+---
+
+## 16. Common Patterns
 
 ### Error Handling Pattern
 
@@ -571,10 +1056,32 @@ local result = lib.function(host, {number = 443, protocol = "tcp"})
 
 ## Implementation Order
 
-1. **Phase 11.1.1**: http library (highest priority, 500+ scripts depend on it)
-2. **Phase 11.1.2**: sslcert library (required for HTTPS support)
-3. **Phase 11.1.3**: ssh2 library (security scanning scripts)
-4. **Phase 11.1.4**: dns library (reconnaissance scripts)
+### Phase 11.1: High Priority Protocol Libraries ✅ COMPLETE
+
+1. **Phase 11.1.1**: http library ✅ (highest priority, 500+ scripts depend on it)
+2. **Phase 11.1.2**: sslcert library ✅ (required for HTTPS support)
+3. **Phase 11.1.3**: ssh2 library ✅ (security scanning scripts)
+4. **Phase 11.1.4**: dns library ✅ (reconnaissance scripts)
+
+### Phase 11.2: Medium Priority Network Libraries ✅ COMPLETE
+
+5. **Phase 11.2.1**: smb library ✅ (SMB/CIFS protocol for Windows network scanning)
+6. **Phase 11.2.2**: netbios library ✅ (NetBIOS name service)
+7. **Phase 11.2.3**: smbauth library ✅ (SMB authentication)
+8. **Phase 11.2.4**: unicode library ✅ (Unicode string handling for SMB)
+9. **Phase 11.2.5**: unpwdb library ✅ (username/password database)
+10. **Phase 11.2.6**: ftp library ✅ (FTP protocol)
+
+### Phase 11.3: Utility and Cryptographic Libraries ✅ COMPLETE
+
+11. **Phase 11.3.1**: openssl library ✅ (OpenSSL cryptographic operations)
+12. **Phase 11.3.2**: json library ✅ (JSON encoding/decoding)
+13. **Phase 11.3.3**: creds library ✅ (credential management)
+14. **Phase 11.3.4**: url library ✅ (URL parsing and composition per RFC 3986)
+
+### Additional Libraries
+
+15. **brute library** ✅ (brute-force password cracking framework)
 
 ---
 
@@ -632,13 +1139,34 @@ end
 
 ## References
 
-- Nmap NSE Library Source: `reference/nmap/nselib/`
-  - `http.lua` - HTTP protocol implementation
-  - `ssh2.lua` - SSH-2 protocol implementation
-  - `sslcert.lua` - SSL certificate functions
-  - `dns.lua` - DNS protocol implementation
-- RFC 2616: HTTP/1.1
-- RFC 4253: SSH Protocol
-- RFC 5246: TLS 1.2
+### Nmap NSE Library Source: `reference/nmap/nselib/`
+
+- `http.lua` - HTTP protocol implementation
+- `ssh2.lua` - SSH-2 protocol implementation
+- `sslcert.lua` - SSL certificate functions
+- `dns.lua` - DNS protocol implementation
+- `smb.lua` - SMB/CIFS protocol
+- `netbios.lua` - NetBIOS protocol
+- `smbauth.lua` - SMB authentication
+- `unicode.lua` - Unicode string handling
+- `unpwdb.lua` - Username/password database
+- `ftp.lua` - FTP protocol
+- `openssl.lua` - OpenSSL bindings
+- `json.lua` - JSON encoding/decoding
+- `creds.lua` - Credential management
+- `url.lua` - URL parsing and composition
+- `brute.lua` - Brute-force framework
+
+### RFC Standards
+
+- **HTTP**: RFC 2616 (HTTP/1.1), RFC 7230-7235 (HTTP/1.1 update)
+- **SSH**: RFC 4253 (SSH Protocol), RFC 4252 (SSH Authentication)
+- **TLS**: RFC 5246 (TLS 1.2), RFC 8446 (TLS 1.3)
+- **DNS**: RFC 1035 (DNS Protocol), RFC 3596 (DNS AAAA)
+- **SMB**: [MS-SMB2] Specification
+- **JSON**: RFC 8259 (JSON specification)
+- **URL**: RFC 3986 (URI Generic Syntax), RFC 5891 (IDNA)
+- **FTP**: RFC 959 (FTP Protocol)
+- **NetBIOS**: RFC 1001/1002 (NetBIOS over TCP/IP)
 - RFC 8446: TLS 1.3
 - RFC 1035: DNS Protocol
