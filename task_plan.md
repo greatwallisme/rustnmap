@@ -1,114 +1,85 @@
-# Task Plan: RustNmap NSE Development
+# Task Plan: NSE Module Fixes
 
-> **Updated**: 2026-03-19 00:30
-> **Status**: NSE Script Output Fixes Complete
-
----
-
-## Current State
-
-### What Works
-| Script | Status | Notes |
-|--------|--------|-------|
-| http-title | PASS | Output format correct |
-| http-server-header | PASS | Output format correct |
-| http-methods | PASS | Output format correct |
-| http-git | PASS | Works on applicable targets |
-
-### What Doesn't Work
-| Script | Status | Root Cause |
-|--------|--------|------------|
-| ssh-auth-methods | WARN | SSH key exchange incomplete |
-| ssh-hostkey | FAIL | SSH key exchange incomplete |
-| http-enum | FAIL | Needs investigation |
+> **Updated**: 2026-03-19 09:10
+> **Status**: Progress Made, More Work Needed
 
 ---
 
-## Problems
+## Summary of Session Progress
 
-### Problem 1: SSH Key Exchange Incomplete
+### Fixes Applied
 
-**Symptom**: `list auth methods failed: Expected SERVICE_ACCEPT, got message type 1`
+| Fix | File | Description |
+|-----|------|-------------|
+| stdnse.mutex() | stdnse.rs | Uses block_inplace with actual mutex locking |
+| stdnse.condition_variable() | stdnse.rs | Uses block_inplace with actual cvar ops |
+| nmap.fetchfile() | nmap.rs | Searches for data files in multiple paths |
+| http.identify_404() | http.rs | Returns standard 404 detection result |
+| ssh1 library | ssh1.rs | NEW: SSH-1 protocol library with fingerprint formatting |
+| SCRIPT_TYPE global | engine.rs | Sets script type (portrule/hostrule/postrule) |
+| name_confidence | engine.rs | Sets port.version.name_confidence to 8 |
 
-**Root Cause**: `libssh2_utility.rs` only implements:
-1. Banner exchange
-2. KEXINIT exchange
+### Pass Rate Progress
 
-**Missing**: Complete DH/ECDH key exchange before sending SSH_MSG_SERVICE_REQUEST
+- Previous: 26.6% (4/15 scripts)
+- Current: 26.6% (4/15 scripts) - same count but more scripts execute
 
-**Why it matters**: SSH servers disconnect if you send SERVICE_REQUEST before completing key exchange
-
-**Solution options**:
-1. Implement full SSH2 key exchange (complex, ~500 lines)
-2. Use `ssh2` crate via FFI
-3. Accept SSH scripts won't work for now
-
-### Problem 2: HTTP Enum Failure
-
-**Symptom**: Script doesn't execute
-
-**Root Cause**: Unknown - needs debugging
-
-**Next step**: Add debug logging, trace script execution
+**Note**: ssh-hostkey now executes without Lua errors (no output yet due to SSH key fetch)
 
 ---
 
-## Fixes Applied This Session
+## Current Problems
 
-### Fix 1: Script Return Value Handling
-**File**: `engine.rs`
-**Problem**: Scripts return `(table, string)` but we processed all values together
-**Fix**: Use string for display, fall back to table only if no string
+### Problem 1: Scripts Running But No Output
 
-### Fix 2: output_table __len Metamethod
-**File**: `stdnse.rs`
-**Problem**: `#output` returned 0 for tables with string keys
-**Fix**: Added `__len` metamethod that counts all keys
+| Test | Status | Issue |
+|------|--------|-------|
+| http-title | PASS | - |
+| http-server-header | PASS | - |
+| http-methods | PASS | - |
+| ssh-hostkey | EXECUTES | Runs but no SSH key output (libssh2 not connected) |
+| http-enum | TIMEOUT | Runs but slow (120s timeout) |
 
-### Fix 3: Table tostring Support
-**File**: `engine.rs`
-**Problem**: Tables with `__tostring` metamethod weren't formatted correctly
-**Fix**: Use Lua's `tostring()` for nested table values
+### Problem 2: SSH Implementation Issues
 
----
+- `ssh-hostkey`: Needs libssh2 connection to fetch host keys
+- `ssh-auth-methods`: Key exchange incomplete, shows only banner
 
-## Files Modified
+### Problem 3: HTTP Pipeline Performance
 
-| File | Lines Changed | Purpose |
-|------|---------------|---------|
-| engine.rs | +223 | Return value handling, tostring |
-| stdnse.rs | +171 | __len metamethod, debug1-5 |
-| libssh2_utility.rs | ~50 | connect_pcall host table support |
-| comm.rs | +98 | SSL/TLS improvements |
-| mod.rs | +95 | New library registrations |
+- http-enum runs but is slow (many URLs to check)
+- May need pipeline optimization
 
 ---
 
-## Next Steps
+## Outstanding Issues
 
-### Priority 1: SSH Key Exchange (High Effort)
-Implement full SSH2 key exchange in `libssh2_utility.rs`:
-- DH group exchange
-- ECDH key exchange
-- New keys message handling
-
-### Priority 2: HTTP Enum Debug (Medium Effort)
-- Add trace logging
-- Identify why script doesn't execute
-- Check portrule matching
-
-### Priority 3: More NSE Libraries (Lower Priority)
-- snmp library
-- ldap library
-- mysql library
+1. **SSH Key Fetching**: Need to implement actual SSH key retrieval via libssh2
+2. **HTTP Pipeline Performance**: http-enum runs but is slow
+3. **ssh-auth-methods Output**: Only shows banner, needs full auth method list
 
 ---
 
-## Benchmark Pass Rate
+## Next Steps (Priority Order)
 
-| Date | Pass | Fail | Skip | Rate |
-|------|------|------|------|------|
-| 2026-03-18 | 3 | 4 | 8 | 20% |
-| 2026-03-19 | 4 | 2 | 9 | 26.6% |
+1. [ ] Implement libssh2 key fetching for ssh-hostkey
+2. [ ] Optimize http-enum pipeline performance
+3. [ ] Fix ssh-auth-methods output format
+4. [ ] Run full benchmark
+5. [ ] Commit changes
 
-Improvement: +1 pass, -2 fail (http-methods now works)
+---
+
+## Error Log
+
+| Error | Script | Status |
+|-------|--------|--------|
+| attempt to call nil 'mutex' | http-enum | FIXED |
+| attempt to call nil 'fetchfile' | http-enum | FIXED |
+| attempt to call nil 'identify_404' | http-enum | FIXED |
+| attempt to call nil 'ssh1' | ssh-hostkey | FIXED |
+| attempt to call nil '?' (SCRIPT_TYPE) | ssh-hostkey | FIXED |
+| attempt to compare nil with number | ssh-hostkey | FIXED |
+| ssh1 not found | ssh-hostkey | FIXED |
+| key exchange failed | ssh-auth-methods | OPEN |
+| http-enum timeout | http-enum | OPEN |

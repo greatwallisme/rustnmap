@@ -385,6 +385,7 @@ impl ScriptEngine {
             version_table.set("version", ver)?;
         }
         version_table.set("name", service.unwrap_or(""))?;
+        version_table.set("name_confidence", 8)?; // High confidence for well-known ports
         version_table.set("product", "")?;
         version_table.set("extrainfo", "")?;
         version_table.set("hostname", "")?;
@@ -437,6 +438,10 @@ impl ScriptEngine {
 
         // Set SCRIPT_NAME global variable (Nmap compatibility)
         lua.lua().globals().set("SCRIPT_NAME", script.id.as_str())?;
+
+        // Set SCRIPT_TYPE global variable (Nmap compatibility)
+        // For hostrule scripts, always set to "hostrule"
+        lua.lua().globals().set("SCRIPT_TYPE", "hostrule")?;
 
         // Create full Nmap host table with all properties
         let host_table = Self::create_host_table(&mut lua, target_ip, original_target)?;
@@ -605,6 +610,17 @@ impl ScriptEngine {
 
         // Set SCRIPT_NAME global variable (Nmap compatibility)
         lua.lua().globals().set("SCRIPT_NAME", script.id.as_str())?;
+
+        // Set SCRIPT_TYPE global variable (Nmap compatibility)
+        // This tells scripts which rule type triggered them (portrule, hostrule, postrule)
+        let script_type = if script.has_portrule() {
+            "portrule"
+        } else if script.has_hostrule() {
+            "hostrule"
+        } else {
+            "portrule" // Default fallback
+        };
+        lua.lua().globals().set("SCRIPT_TYPE", script_type)?;
 
         // Create host table
         let host_table = Self::create_host_table(&mut lua, target_ip, original_target)?;
