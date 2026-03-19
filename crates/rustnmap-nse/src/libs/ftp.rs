@@ -508,14 +508,10 @@ mod tests {
     fn test_ftp_connection_creation() {
         // Just test that we can create the connection structure
         let addr = "127.0.0.1:21";
-        match TcpStream::connect(addr) {
-            Ok(stream) => {
-                let _reader = BufReader::new(stream);
-                // Success
-            }
-            Err(_) => {
-                // No FTP server running, that's ok for tests
-            }
+        if let Ok(stream) = TcpStream::connect(addr) {
+            let _reader = BufReader::new(stream);
+            // Success
         }
+        // No FTP server running is ok for tests
     }
 }

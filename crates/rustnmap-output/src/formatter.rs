@@ -565,11 +565,29 @@ impl OutputFormatter for NormalFormatter {
 
     fn format_script(&self, script: &ScriptResult) -> Result<String> {
         let mut output = String::new();
-        let _ = writeln!(output, "| {}", script.id);
 
-        // Format multi-line output with pipe prefix
-        for line in script.output.lines() {
-            let _ = writeln!(output, "|_ {line}");
+        // Check if output is single-line or multi-line
+        let lines: Vec<&str> = script.output.lines().collect();
+
+        if lines.len() == 1 {
+            // Single-line output: |_script-id: output
+            let _ = writeln!(output, "|_{}: {}", script.id, lines[0]);
+        } else if lines.is_empty() {
+            // Empty output: just show script id
+            let _ = writeln!(output, "| {}", script.id);
+        } else {
+            // Multi-line output:
+            // | script-id
+            // |   line1
+            // |_  last_line
+            let _ = writeln!(output, "| {}", script.id);
+            for (i, line) in lines.iter().enumerate() {
+                if i == lines.len() - 1 {
+                    let _ = writeln!(output, "|_  {line}");
+                } else {
+                    let _ = writeln!(output, "|   {line}");
+                }
+            }
         }
 
         Ok(output)

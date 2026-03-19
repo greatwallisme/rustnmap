@@ -6,12 +6,30 @@
 //! - `stdnse`: Standard utility functions
 //! - `comm`: Network communication functions
 //! - `shortport`: Port rule definitions
+//! - `http`: HTTP protocol library
+//! - `ssh2`: SSH protocol library
+//! - `ssl`: TLS/SSL protocol library
+//! - `dns`: DNS protocol library
+//! - `ftp`: FTP protocol library
+//! - `unpwdb`: Username/password database
+//! - `smb`: SMB/CIFS protocol library
+//! - `netbios`: `NetBIOS` name service
+//! - `smbauth`: NTLM authentication
+//! - `unicode`: UTF-8/UTF-16 conversions
+//! - `openssl`: Cryptographic operations
+//! - `brute`: Brute force engine
+//! - `creds`: Credential management
 //! - `json`: JSON encoding and decoding
-//! - `creds`: Credential management library
 //! - `url`: URL parsing and composition
+//! - `rand`: Random data generation
 //!
-//! These libraries are registered with the Lua runtime and provide
-//! Nmap-compatible APIs for script authors.
+//! These libraries are registered with the Lua runtime in two places:
+//! 1. Global namespace (e.g., `http` table accessible directly)
+//! 2. package.preload (so `require("http")` works)
+//!
+//! This dual registration ensures compatibility with both:
+//! - Direct global access: `local http = http`
+//! - Standard require: `local http = require "http"`
 
 pub mod brute;
 pub mod comm;
@@ -20,15 +38,20 @@ pub mod dns;
 pub mod ftp;
 pub mod http;
 pub mod json;
+pub mod libssh2_utility;
+pub mod lpeg_utility;
 pub mod netbios;
 pub mod nmap;
 pub mod openssl;
+pub mod rand;
 pub mod shortport;
 pub mod smb;
 pub mod smbauth;
 pub mod ssh2;
 pub mod ssl;
 pub mod stdnse;
+pub mod stringaux;
+pub mod tableaux;
 pub mod unicode;
 pub mod unpwdb;
 pub mod url;
@@ -64,7 +87,7 @@ use crate::lua::NseLua;
 /// # }
 /// ```
 pub fn register_all(lua: &mut NseLua) -> Result<()> {
-    // Core libraries
+    // Core libraries - these are registered in both global namespace and package.preload
     nmap::register(lua)?;
     stdnse::register(lua)?;
     comm::register(lua)?;
@@ -90,6 +113,70 @@ pub fn register_all(lua: &mut NseLua) -> Result<()> {
     brute::register(lua)?;
     creds::register(lua)?;
     url::register(lua)?;
+    rand::register(lua)?;
+    stringaux::register(lua)?;
+    tableaux::register(lua)?;
+    libssh2_utility::register(lua)?;
+    lpeg_utility::register(lua)?;
+
+    // After registering all libraries in global namespace,
+    // also register them in package.preload so require() works
+    register_package_preload(lua)?;
+
+    Ok(())
+}
+
+/// Register all NSE libraries in package.preload for `require()` support.
+///
+/// This function copies the globally registered libraries into package.preload
+/// so that scripts can use `require("http")` instead of just `http`.
+///
+/// In Lua, package.preload[`modname`] should contain a loader function that
+/// returns the module. We create loader functions that return the globally
+/// registered library tables.
+fn register_package_preload(lua: &mut NseLua) -> Result<()> {
+    let lua_state = lua.lua_mut();
+
+    // Get or create package.preload table
+    let package: mlua::Table = if let Ok(t) = lua_state.globals().get("package") {
+        t
+    } else {
+        let t = lua_state.create_table()?;
+        lua_state.globals().set("package", t.clone())?;
+        t
+    };
+
+    let preload: mlua::Table = if let Ok(t) = package.get("preload") {
+        t
+    } else {
+        let t = lua_state.create_table()?;
+        package.set("preload", t.clone())?;
+        t
+    };
+
+    // List of all library names to register in preload
+    let library_names = [
+        "nmap", "stdnse", "comm", "shortport",
+        "http", "ssh2", "ssl", "dns", "ftp", "unpwdb",
+        "smb", "netbios", "smbauth", "unicode",
+        "json", "openssl", "brute", "creds", "url", "rand",
+        "stringaux", "tableaux", "libssh2-utility", "lpeg-utility",
+    ];
+
+    for name in library_names {
+        // Clone the name for the loader function
+        let name_owned = name.to_string();
+
+        // Create a loader function that returns the library table from globals
+        let loader = lua_state.create_function(move |lua, (): ()| {
+            // Get the library table from globals and return it
+            let lib_table: mlua::Table = lua.globals().get(name_owned.as_str())?;
+            Ok(lib_table)
+        })?;
+
+        // Store the loader function in package.preload
+        preload.set(name, loader)?;
+    }
 
     Ok(())
 }

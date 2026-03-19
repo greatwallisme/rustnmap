@@ -60,6 +60,9 @@ ripemd = "0.1"
 # URL encoding/decoding and IDNA
 punycode = "0.4"
 
+# Base64 encoding/decoding
+base64 = "0.22"
+
 # Process-based execution dependencies
 wait-timeout = "0.2"
 which = { version = "7.0", default-features = false }
@@ -70,6 +73,7 @@ libc = { workspace = true }
 [dev-dependencies]
 proptest = { workspace = true }
 mockall = { workspace = true }
+uuid = { version = "1.0", features = ["v4"] }
 
 [[bin]]
 name = "rustnmap-nse-runner"

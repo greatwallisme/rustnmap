@@ -30,7 +30,7 @@
 //!
 //! // Execute a script
 //! let script = engine.database().get("script-id").unwrap();
-//! let result = engine.execute_script(script, "127.0.0.1".parse().unwrap());
+//! let result = engine.execute_script(script, "127.0.0.1".parse().unwrap(), None);
 //! # Ok(())
 //! # }
 //! ```

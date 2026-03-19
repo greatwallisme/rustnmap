@@ -1076,10 +1076,10 @@ mod tests {
     #[test]
     fn test_des_string_to_key_invalid_length() {
         let input = [0u8; 6]; // Only 6 bytes
-        assert!(des_string_to_key(&input).is_err());
+        des_string_to_key(&input).unwrap_err();
 
         let input = [0u8; 8]; // 8 bytes
-        assert!(des_string_to_key(&input).is_err());
+        des_string_to_key(&input).unwrap_err();
     }
 
     #[test]

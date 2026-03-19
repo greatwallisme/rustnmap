@@ -2412,6 +2412,12 @@ impl ScanOrchestrator {
             return Ok(());
         }
 
+        // Set default verbosity level for NSE scripts
+        // Many scripts check nmap.verbosity() > 0 before outputting results
+        // Set to 1 to enable standard script output
+        rustnmap_nse::libs::nmap::set_verbosity(1);
+        rustnmap_nse::libs::nmap::set_debugging(0);
+
         // Create script engine - get the database from registry
         // Since ScriptDatabase doesn't implement Clone, we need to create engine differently
         let engine = self.session.nse_registry.create_engine();
@@ -2449,6 +2455,9 @@ impl ScanOrchestrator {
         }
 
         for host_result in host_results.iter_mut() {
+            // Define original target at host level (used for HTTP Host header)
+            let original_target = host_result.hostname.as_deref();
+
             for port_result in &mut host_result.ports {
                 if port_result.state == PortState::Open {
                     let protocol = match port_result.protocol {
@@ -2466,9 +2475,11 @@ impl ScanOrchestrator {
                     // Execute scripts for this port
                     for script in &scripts {
                         // Check if portrule matches
+                        // Pass hostname as original target for proper HTTP Host header
                         match engine.evaluate_portrule(
                             script,
                             host_result.ip,
+                            original_target,
                             port_result.number,
                             protocol,
                             "open",
@@ -2479,6 +2490,7 @@ impl ScanOrchestrator {
                                 match engine.execute_port_script(
                                     script,
                                     host_result.ip,
+                                    original_target,
                                     port_result.number,
                                     protocol,
                                     "open",
@@ -2486,13 +2498,6 @@ impl ScanOrchestrator {
                                 ) {
                                     Ok(result) => {
                                         if result.is_success() && !result.output.is_empty() {
-                                            debug!(
-                                                ip = %host_result.ip,
-                                                port = port_result.number,
-                                                script = %result.script_id,
-                                                "NSE script executed successfully"
-                                            );
-
                                             port_result.scripts.push(
                                                 rustnmap_output::models::ScriptResult {
                                                     id: result.script_id,
@@ -2532,8 +2537,8 @@ impl ScanOrchestrator {
 
             // Also execute host scripts against the host
             for script in &scripts {
-                match engine.evaluate_hostrule(script, host_result.ip) {
-                    Ok(true) => match engine.execute_script(script, host_result.ip) {
+                match engine.evaluate_hostrule(script, host_result.ip, original_target) {
+                    Ok(true) => match engine.execute_script(script, host_result.ip, original_target) {
                         Ok(result) => {
                             if result.is_success() && !result.output.is_empty() {
                                 host_result

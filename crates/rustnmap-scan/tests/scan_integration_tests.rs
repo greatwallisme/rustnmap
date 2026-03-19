@@ -392,7 +392,7 @@ async fn test_scan_timeout() {
 async fn test_stealth_scanners_creation() {
     let config = test_config();
     // Use loopback address to avoid creating additional localhost socket in SYN scanner
-    let local_addr = Ipv4Addr::new(127, 0, 0, 1);
+    let local_addr = Ipv4Addr::LOCALHOST;
 
     // Try to create each scanner
     let syn_result = rustnmap_scan::syn_scan::TcpSynScanner::new(local_addr, config.clone());

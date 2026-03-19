@@ -47,6 +47,7 @@
 
 use std::collections::HashMap;
 use std::hash::BuildHasher;
+use std::io::Write;
 use std::sync::{Arc, Condvar, Mutex};
 
 use mlua::{MultiValue, Value};
@@ -152,6 +153,16 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     })?;
     stdnse_table.set("debug", debug_fn)?;
 
+    // Register debug1, debug2, debug3 convenience functions (Nmap compatibility)
+    // These are shorthand for debug(1, ...), debug(2, ...), etc.
+    for level in 1..=5 {
+        let debug_level_fn = lua.create_function(move |_, message: String| {
+            debug_impl(level, &message);
+            Ok(())
+        })?;
+        stdnse_table.set(format!("debug{level}"), debug_level_fn)?;
+    }
+
     // Register verbose(level, message) function
     let verbose_fn = lua.create_function(|_, (level, message): (i64, String)| {
         verbose_impl(level, &message);
@@ -169,7 +180,6 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
         if level <= nmap_level {
             // Write to stdout for print_debug - this is intentional behavior
             // as the function name suggests (print vs log)
-            use std::io::Write;
             let _ = std::io::stdout().write_all(message.as_bytes());
             let _ = std::io::stdout().write_all(b"\n");
         }
@@ -178,16 +188,19 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     stdnse_table.set("print_debug", print_debug_fn)?;
 
     // Register get_script_args(...) function
+    // Nmap compatibility: Returns multiple values, not a table
+    // - get_script_args() -> table with all args
+    // - get_script_args("key") -> value or nil (allows "or" pattern)
+    // - get_script_args("k1", "k2") -> value1, value2 (multiple returns)
     let get_script_args_fn = lua.create_function(|lua, args: MultiValue| {
-        let result = lua.create_table()?;
-
         // Get storage and handle
         let storage = get_script_args_storage();
         let handle = tokio::runtime::Handle::try_current()
             .map_err(|_e| mlua::Error::RuntimeError("No tokio runtime available".to_string()))?;
 
-        // If no arguments, return all script args
+        // If no arguments, return all script args as a table
         if args.is_empty() {
+            let result = lua.create_table()?;
             let data: Vec<(String, String)> = tokio::task::block_in_place(|| {
                 handle.block_on(async {
                     let guard = storage.read().await;
@@ -198,31 +211,38 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
             for (key, value) in data {
                 result.set(key, value)?;
             }
-            return Ok(Value::Table(result));
+            // Return table as single Value in MultiValue
+            return Ok(MultiValue::from_vec(vec![Value::Table(result)]));
         }
 
-        // Otherwise, get specific arguments
-        for arg in args {
-            if let Value::String(s) = arg {
-                if let Ok(key) = s.to_str() {
-                    let key_string = key.to_string();
-                    let key_for_closure = key_string.clone();
+        // Otherwise, return multiple values (one per requested arg)
+        let results: Vec<Value> = args
+            .into_iter()
+            .map(|arg| {
+                if let Value::String(s) = arg {
+                    if let Ok(key) = s.to_str() {
+                        let key_for_closure = key.to_string();
 
-                    let value: Option<String> = tokio::task::block_in_place(|| {
-                        handle.block_on(async {
-                            let guard = storage.read().await;
-                            guard.get(&key_for_closure).cloned()
-                        })
-                    });
+                        let value: Option<String> = tokio::task::block_in_place(|| {
+                            handle.block_on(async {
+                                let guard = storage.read().await;
+                                guard.get(&key_for_closure).cloned()
+                            })
+                        });
 
-                    if let Some(v) = value {
-                        result.set(key_string, v)?;
+                        // Return the value as a Lua string, or nil if not found
+                        value.map_or(Value::Nil, |v| Value::String(lua.create_string(&v).unwrap()))
+                    } else {
+                        Value::Nil
                     }
+                } else {
+                    Value::Nil
                 }
-            }
-        }
+            })
+            .collect();
 
-        Ok(Value::Table(result))
+        // Return multiple values
+        Ok(MultiValue::from_vec(results))
     })?;
     stdnse_table.set("get_script_args", get_script_args_fn)?;
 
@@ -312,6 +332,79 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
         Ok(output)
     })?;
     stdnse_table.set("format_output", format_output_fn)?;
+
+    // Register output_table() function - creates a table for structured script output
+    //
+    // In Nmap, this creates an ordered table that preserves key insertion order.
+    // For our implementation, we provide a standard Lua table with a metatable
+    // that provides Nmap-compatible behavior:
+    // - t[key] = value - standard assignment
+    // - t() - returns true if table has elements (truthiness check via __call)
+    // - #t - returns number of keys via __len metamethod (for non-empty check)
+    let output_table_fn = lua.create_function(|lua, ()| {
+        // Create a new table
+        let table = lua.create_table()?;
+        // Set a metatable that makes it callable to check if empty
+        let mt = lua.create_table()?;
+
+        // __call metamethod: returns true if table has any keys
+        mt.set("__call", lua.create_function(|_, this: mlua::Value| {
+            if let mlua::Value::Table(t) = this {
+                // Check if table has any keys by checking if next() returns a value
+                Ok(t.pairs::<mlua::Value, mlua::Value>().next().is_some())
+            } else {
+                Ok(false)
+            }
+        })?)?;
+
+        // __len metamethod: returns the count of all keys (not just array part)
+        // This is needed because scripts check `if #output > 0 then return output`
+        mt.set("__len", lua.create_function(|_, this: mlua::Value| {
+            if let mlua::Value::Table(t) = this {
+                // Count all keys in the table
+                let count = t.pairs::<mlua::Value, mlua::Value>().count();
+                Ok(i64::try_from(count).unwrap_or(0))
+            } else {
+                Ok(0i64)
+            }
+        })?)?;
+
+        table.set_metatable(Some(mt))?;
+        Ok(mlua::Value::Table(table))
+    })?;
+    stdnse_table.set("output_table", output_table_fn)?;
+
+    // Register get_hostname(host) function
+    // Returns the best possible hostname for a host table
+    // If host is a table: returns host.targetname or host.name (if non-empty) or host.ip
+    // If host is a string: returns the string directly
+    let get_hostname_fn = lua.create_function(|lua, host: mlua::Value| {
+        match host {
+            mlua::Value::Table(t) => {
+                // Try targetname first
+                if let Ok(Some(targetname)) = t.get::<Option<String>>("targetname") {
+                    if !targetname.is_empty() {
+                        return Ok(mlua::Value::String(lua.create_string(&targetname)?));
+                    }
+                }
+                // Try name (if non-empty)
+                if let Ok(Some(name)) = t.get::<Option<String>>("name") {
+                    if !name.is_empty() {
+                        return Ok(mlua::Value::String(lua.create_string(&name)?));
+                    }
+                }
+                // Fall back to ip
+                if let Ok(Some(ip)) = t.get::<Option<String>>("ip") {
+                    return Ok(mlua::Value::String(lua.create_string(&ip)?));
+                }
+                // No hostname available
+                Ok(mlua::Value::Nil)
+            }
+            mlua::Value::String(s) => Ok(mlua::Value::String(s)),
+            _ => Ok(mlua::Value::Nil),
+        }
+    })?;
+    stdnse_table.set("get_hostname", get_hostname_fn)?;
 
     // Register mutex(name) function - returns a mutex function
     let mutex_fn = lua.create_function(|lua, name: String| {
@@ -710,31 +803,31 @@ mod tests {
         let mut lua = NseLua::new_default().unwrap();
         register(&mut lua).unwrap();
 
-        // Set some script args (use unique keys to avoid conflicts with other tests)
+        // Use unique keys with UUID to avoid race conditions with parallel tests
+        let uuid = uuid::Uuid::new_v4();
+        let key1 = format!("test.{uuid}.http.useragent");
+        let key2 = format!("test.{uuid}.timeout");
+
         let mut args = HashMap::new();
-        args.insert("test.http.useragent".to_string(), "Mozilla/5.0".to_string());
-        args.insert("test.timeout".to_string(), "30".to_string());
+        args.insert(key1.clone(), "Mozilla/5.0".to_string());
+        args.insert(key2.clone(), "30".to_string());
         set_script_args(args).await;
 
-        // Get specific arg
-        let value: mlua::Table = lua
-            .lua()
-            .load("return stdnse.get_script_args('test.http.useragent')")
-            .eval()
-            .unwrap();
-        let ua: String = value.get("test.http.useragent").unwrap();
-        assert_eq!(ua, "Mozilla/5.0");
+        // Get specific arg - returns the value directly (not a table)
+        // This matches Nmap's behavior for the "or" pattern: local ua = stdnse.get_script_args("key") or "default"
+        let lua_code1 = format!("return stdnse.get_script_args('{key1}')");
+        let ua: Option<String> = lua.lua().load(&lua_code1).eval().unwrap();
+        assert_eq!(ua, Some("Mozilla/5.0".to_string()));
 
-        // Get all args - note: table.len() returns sequential array length,
-        // but our table is a hash map with string keys
+        // Get all args - returns a table with all args
         let all: mlua::Table = lua
             .lua()
             .load("return stdnse.get_script_args()")
             .eval()
             .unwrap();
         // Check that both keys exist
-        let ua_val: String = all.get("test.http.useragent").unwrap();
-        let timeout_val: String = all.get("test.timeout").unwrap();
+        let ua_val: String = all.get(key1.as_str()).unwrap();
+        let timeout_val: String = all.get(key2.as_str()).unwrap();
         assert_eq!(ua_val, "Mozilla/5.0");
         assert_eq!(timeout_val, "30");
     }

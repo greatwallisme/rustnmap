@@ -436,6 +436,11 @@ impl InternalCongestionController {
     fn on_packet_lost(&self, current_iteration: usize) {
         use std::sync::atomic::Ordering;
 
+        /// Nmap `scan_engine.cc:393` - for single-host scans, group congestion
+        /// control is bypassed. Since `scan_ports` targets one host, enforce a
+        /// minimum cwnd of `GROUP_INITIAL_CWND` (10) to prevent serialization.
+        const GROUP_INITIAL_CWND: usize = 10;
+
         // Get the last drop iteration
         let last_drop = self.last_drop_iteration.load(Ordering::Relaxed);
 
@@ -448,10 +453,6 @@ impl InternalCongestionController {
 
         let current_cwnd = self.cwnd.load(Ordering::Relaxed);
         let new_ssthresh = (current_cwnd / 2).max(2);
-        // Nmap scan_engine.cc:393 - for single-host scans, group congestion
-        // control is bypassed. Since scan_ports targets one host, enforce a
-        // minimum cwnd of GROUP_INITIAL_CWND (10) to prevent serialization.
-        const GROUP_INITIAL_CWND: usize = 10;
         let new_cwnd = (current_cwnd / 2).max(GROUP_INITIAL_CWND);
 
         self.ssthresh.store(new_ssthresh, Ordering::Relaxed);
@@ -467,17 +468,6 @@ impl InternalCongestionController {
         self.stats.recommended_timeout()
     }
 
-    /// Returns recommended timeout for first probe (clamped for Fast Scan).
-    ///
-    /// This is a performance optimization for Fast Scan mode where initial RTT
-    /// can be too conservative (1000ms for T3). We clamp to 200ms max
-    /// to avoid cascading cwnd collapse caused by premature timeouts.
-    fn recommended_timeout_for_first_probe(&self) -> Duration {
-        let base_timeout = self.stats.recommended_timeout();
-        // For first probe, clamp to 200ms max for Fast Scan performance
-        // This prevents the cascading cwnd collapse when initial RTT is too long
-        base_timeout.min(Duration::from_millis(200))
-    }
 }
 /// Ethernet header size.
 const ETH_HDR_SIZE: usize = 14;
@@ -927,11 +917,12 @@ impl ParallelScanEngine {
         while ports_iter.peek().is_some() || !outstanding.is_empty() {
             loop_iterations += 1;
 
-            // Get adaptive parallelism from congestion controller
+            #[cfg(feature = "diagnostic")]
+            // Get adaptive parallelism from congestion controller (diagnostic only)
             let current_cwnd = self.congestion.cwnd();
 
             #[cfg(feature = "diagnostic")]
-            if loop_iterations <= 5 || loop_iterations % 100 == 0 {
+            if loop_iterations <= 5 || loop_iterations.is_multiple_of(100) {
                 let timeout = self.congestion.recommended_timeout();
                 eprintln!(
                     "[DIAG] iter={loop_iterations} cwnd={current_cwnd} outstanding={} ports_left={} timeout={}ms elapsed={}ms",
@@ -943,7 +934,7 @@ impl ParallelScanEngine {
             }
 
             #[cfg(feature = "diagnostic")]
-            if loop_iterations == 1 || loop_iterations % 50 == 0 {
+            if loop_iterations == 1 || loop_iterations.is_multiple_of(50) {
                 use std::io::Write;
                 if let Ok(mut file) = std::fs::OpenOptions::new()
                     .create(true)
@@ -977,7 +968,7 @@ impl ParallelScanEngine {
             let current_cwnd = self.congestion.cwnd();
 
             #[cfg(feature = "diagnostic")]
-            if loop_iterations == 1 || loop_iterations % 50 == 0 {
+            if loop_iterations == 1 || loop_iterations.is_multiple_of(50) {
                 use std::io::Write;
                 if let Ok(mut file) = std::fs::OpenOptions::new()
                     .create(true)
@@ -986,11 +977,9 @@ impl ParallelScanEngine {
                 {
                     let _ = writeln!(
                         file,
-                        "Iteration {}: cwnd={}, outstanding={}, ports_left={}",
-                        loop_iterations,
-                        current_cwnd,
+                        "Iteration {loop_iterations}: cwnd={current_cwnd}, outstanding={}, ports_left={}",
                         outstanding.len(),
-                        ports_iter.peek().map(|_| "yes").unwrap_or("no")
+                        ports_iter.peek().map_or("no", |_| "yes")
                     );
                 }
             }
@@ -1000,8 +989,6 @@ impl ParallelScanEngine {
 
             #[cfg(feature = "diagnostic")]
             let diag_send_start = Instant::now();
-            #[cfg(feature = "diagnostic")]
-            let diag_sent_before = diag_total_sent;
 
             // Send more probes if we haven't reached congestion window
             // AND we haven't reached the batch limit (nmap: 50 probes per batch)
@@ -1044,7 +1031,7 @@ impl ParallelScanEngine {
             {
                 total_send_time += send_start.elapsed();
                 diag_send_total += diag_send_start.elapsed();
-            }
+            };
 
             // Wait for packets and drain all available responses (nmap waitForResponses pattern)
             // Calculate optimal wait time:
@@ -1096,7 +1083,9 @@ impl ParallelScanEngine {
 
                 match tokio_timeout(wait_duration, packet_rx.recv()).await {
                     Ok(Some(packet)) => {
+                        // Track packets received for diagnostics
                         #[cfg(feature = "diagnostic")]
+                        #[expect(clippy::semicolon_outside_block, reason = "cfg-guarded diagnostic statement")]
                         {
                             packets_received += 1;
                         }
@@ -1153,7 +1142,7 @@ impl ParallelScanEngine {
             {
                 total_wait_time += wait_start.elapsed();
                 diag_wait_total += diag_wait_start.elapsed();
-            }
+            };
 
             // Check for probe timeouts and handle retries
             #[cfg(feature = "diagnostic")]
@@ -1172,7 +1161,7 @@ impl ParallelScanEngine {
                 let diag_timed_out = diag_outstanding_before - outstanding.len();
                 diag_total_timeouts += diag_timed_out;
                 diag_timeout_total += diag_timeout_start.elapsed();
-            }
+            };
 
             // Reset batch counter only after sending a full batch and draining responses
             // This matches nmap's behavior: reset after waitForResponses() when batch is complete
@@ -1222,7 +1211,7 @@ impl ParallelScanEngine {
             eprintln!("Iterations: {loop_iterations}");
             eprintln!("Results: {} ports", results.len());
             eprintln!("==============================\n");
-        }
+        };
 
         // Explicitly drop the sender to signal the receiver task to stop
         drop(packet_tx);
@@ -1241,7 +1230,7 @@ impl ParallelScanEngine {
                 .open("/tmp/rustnmap_diagnostic.txt")
             {
                 let _ = writeln!(file, "\n=== TCP SYN Scan Timing ===");
-                let _ = writeln!(file, "Total: {:?}", total_time);
+                let _ = writeln!(file, "Total: {total_time:?}");
                 let _ = writeln!(
                     file,
                     "Send: {:?} ({:.1}%)",
@@ -1254,8 +1243,8 @@ impl ParallelScanEngine {
                     total_wait_time,
                     (total_wait_time.as_secs_f64() / total_time.as_secs_f64()) * 100.0
                 );
-                let _ = writeln!(file, "Iterations: {}", loop_iterations);
-                let _ = writeln!(file, "Packets: {}", packets_received);
+                let _ = writeln!(file, "Iterations: {loop_iterations}");
+                let _ = writeln!(file, "Packets: {packets_received}");
             }
         }
 

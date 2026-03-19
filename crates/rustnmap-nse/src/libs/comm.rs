@@ -6,7 +6,7 @@
 //! # Available Functions
 //!
 //! - `comm.opencon(host, port, [opts])` - Open a TCP connection to host:port
-//! - `comm.tryssl(host, port, [opts])` - Try to connect with SSL/TLS
+//! - `comm.tryssl(host, port, [data], [opts])` - Try to connect with SSL/TLS, optionally send data
 //! - `comm.read_response(socket, [opts])` - Read banner/response from socket
 //! - `comm.exchange(socket, data, [opts])` - Send data and receive response
 //! - `comm.get_banner(host, port, [opts])` - Get service banner
@@ -346,6 +346,7 @@ fn read_response_impl(socket: &mut NseSocket, opts: &ConnectionOpts) -> std::io:
 /// # Errors
 ///
 /// Returns an error if registration fails.
+#[expect(clippy::too_many_lines, reason = "Register function contains multiple Lua bindings")]
 pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     let lua = nse_lua.lua_mut();
 
@@ -364,18 +365,101 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
         })?;
     comm_table.set("opencon", opencon_fn)?;
 
-    // Register tryssl(host, port, [opts]) function
-    let tryssl_fn =
-        lua.create_function(|lua, (host, port, opts): (String, u16, Option<Table>)| {
+    // Register tryssl(host, port, [data], [opts]) function
+    // Accepts host as string or table (with host.ip), port as number or table (with port.number),
+    // optional data string to send after connection, and optional opts table
+    let tryssl_fn = lua.create_function(
+        |lua, (host_param, port_param, data_param, opts): (Value, Value, Option<mlua::String>, Option<Table>)| {
+            // Extract host string from either string or host table
+            let host = match &host_param {
+                Value::String(s) => s.to_str()?.to_string(),
+                Value::Table(t) => {
+                    let ip: Value = t.get("ip").map_err(|e| {
+                        mlua::Error::RuntimeError(format!("host table missing 'ip' field: {e}"))
+                    })?;
+                    match ip {
+                        Value::String(s) => s.to_str()?.to_string(),
+                        other => {
+                            return Err(mlua::Error::RuntimeError(format!(
+                                "host.ip must be a string, got: {:?}",
+                                other.type_name()
+                            )));
+                        }
+                    }
+                }
+                other => {
+                    return Err(mlua::Error::RuntimeError(format!(
+                        "host must be a string or table, got: {:?}",
+                        other.type_name()
+                    )));
+                }
+            };
+
+            // Extract port number from either integer or port table
+            let port = match port_param {
+                Value::Integer(n) => u16::try_from(n).map_err(|e| {
+                    mlua::Error::RuntimeError(format!("port number out of range: {e}"))
+                })?,
+                Value::Table(ref t) => {
+                    let number: i64 = t.get("number").map_err(|e| {
+                        mlua::Error::RuntimeError(format!("port table missing 'number' field: {e}"))
+                    })?;
+                    u16::try_from(number).map_err(|e| {
+                        mlua::Error::RuntimeError(format!("port.number out of range: {e}"))
+                    })?
+                }
+                other => {
+                    return Err(mlua::Error::RuntimeError(format!(
+                        "port must be a number or table, got: {:?}",
+                        other.type_name()
+                    )));
+                }
+            };
+
             let mut options =
                 parse_opts(opts).map_err(|e| mlua::Error::RuntimeError(e.to_string()))?;
             options.ssl = true;
 
             match opencon_impl(&host, port, &options) {
-                Ok(socket) => Ok(Value::UserData(lua.create_userdata(socket)?)),
-                Err(_) => Ok(Value::Nil),
+                Ok(mut socket) => {
+                    // Determine protocol string
+                    let proto = if socket.is_ssl { "ssl" } else { "tcp" };
+
+                    // If data is provided, send it and read response
+                    // Nmap's tryssl returns: socket, response, proto, early_response
+                    let response: Option<Vec<u8>> = if let Some(ref data) = data_param {
+                        if socket.send(&data.as_bytes()).is_err() {
+                            return Ok(mlua::MultiValue::new()); // Return empty on error
+                        }
+                        // Read response after sending data
+                        read_response_impl(&mut socket, &options).ok()
+                    } else {
+                        None
+                    };
+
+                    // Return multiple values: socket, response, proto, early_response (nil)
+                    // Nmap scripts expect: local socket, response = comm.tryssl(...)
+                    let socket_val = Value::UserData(lua.create_userdata(socket)?);
+                    let response_val = match response {
+                        Some(ref r) => {
+                            let s = String::from_utf8_lossy(r).into_owned();
+                            Value::String(lua.create_string(&s)?)
+                        }
+                        None => Value::Nil,
+                    };
+                    let proto_val = Value::String(lua.create_string(proto)?);
+
+                    Ok(mlua::MultiValue::from_vec(vec![
+                        socket_val,
+                        response_val,
+                        proto_val,
+                        Value::Nil, // early_response not implemented
+                    ]))
+                }
+                Err(_) => Ok(mlua::MultiValue::new()), // Return empty MultiValue on error
             }
-        })?;
+        },
+    )?;
     comm_table.set("tryssl", tryssl_fn)?;
 
     // Register get_banner(host, port, [opts]) function

@@ -1009,7 +1009,6 @@ async fn run_normal_scan(args: &Args) -> Result<()> {
 
     #[cfg(feature = "diagnostic")]
     {
-        use std::io::Write;
         if let Ok(mut file) = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -1472,7 +1471,7 @@ fn parse_data_payload(args: &Args) -> Result<Option<Vec<u8>>> {
         Ok(Some(string_data.as_bytes().to_vec()))
     } else if let Some(length) = args.data_length {
         // Generate random padding of specified length
-        #[allow(clippy::cast_possible_truncation)]
+        #[expect(clippy::cast_possible_truncation, reason = "i % 256 always fits in u8")]
         let padding: Vec<u8> = (0..length).map(|i| (i % 256) as u8).collect();
         Ok(Some(padding))
     } else {
@@ -1710,6 +1709,19 @@ fn print_host_normal<W: Write>(handle: &mut W, args: &Args, host: &HostResult) {
         let _ = writeln!(handle, "PORT     STATE SERVICE");
         for port in &host.ports {
             print_port_normal(handle, args, port);
+        }
+
+        // Print scripts for open ports
+        use rustnmap_output::NormalFormatter;
+        let formatter = NormalFormatter::new();
+        for port in &host.ports {
+            if matches!(port.state, PortState::Open) {
+                for script in &port.scripts {
+                    if let Ok(output) = formatter.format_script(script) {
+                        let _ = write!(handle, "{}", output);
+                    }
+                }
+            }
         }
     }
 

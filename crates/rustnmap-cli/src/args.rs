@@ -307,6 +307,7 @@ impl Args {
     ///
     /// Returns an error if argument parsing fails or help/version was requested
     /// (in which case the function prints and exits).
+    #[expect(clippy::too_many_lines, reason = "Argument parsing requires handling all CLI options")]
     pub fn parse() -> Result<Self, ParseError> {
         let mut args = Self::default();
         let mut parser = Parser::from_env();
@@ -436,10 +437,7 @@ impl Args {
                 }
 
                 // Verbosity
-                Arg::Short('v') => {
-                    args.verbose += 1;
-                }
-                Arg::Long("verbose") => {
+                Arg::Short('v') | Arg::Long("verbose") => {
                     args.verbose += 1;
                 }
 
@@ -449,39 +447,27 @@ impl Args {
                 }
 
                 // Debug
-                Arg::Short('d') => {
-                    args.debug += 1;
-                }
-                Arg::Long("debug") => {
+                Arg::Short('d') | Arg::Long("debug") => {
                     args.debug += 1;
                 }
 
                 // Port specification
-                Arg::Short('p') => {
-                    args.ports = Some(parser.value()?.string()?);
-                }
-                Arg::Long("ports") => {
+                Arg::Short('p') | Arg::Long("ports") => {
                     args.ports = Some(parser.value()?.string()?);
                 }
 
                 // Fast scan
-                Arg::Short('F') => {
-                    args.fast_scan = true;
-                }
-                Arg::Long("fast-scan") => {
+                Arg::Short('F') | Arg::Long("fast-scan") => {
                     args.fast_scan = true;
                 }
 
                 // Sequential ports
-                Arg::Short('r') => {
-                    args.sequential_ports = true;
-                }
-                Arg::Long("sequential-ports") => {
+                Arg::Short('r') | Arg::Long("sequential-ports") => {
                     args.sequential_ports = true;
                 }
 
                 // Service detection (-sV is handled above)
-                Arg::Long("service-detection") | Arg::Long("version-detection") => {
+                Arg::Long("service-detection" | "version-detection") => {
                     args.service_detection = true;
                 }
 
@@ -517,26 +503,17 @@ impl Args {
                 }
 
                 // Decoys
-                Arg::Short('D') => {
-                    args.decoys = Some(parser.value()?.string()?);
-                }
-                Arg::Long("decoys") => {
+                Arg::Short('D') | Arg::Long("decoys") => {
                     args.decoys = Some(parser.value()?.string()?);
                 }
 
                 // Spoof IP
-                Arg::Short('S') => {
-                    args.spoof_ip = Some(parser.value()?.string()?);
-                }
-                Arg::Long("spoof-ip") => {
+                Arg::Short('S') | Arg::Long("spoof-ip") => {
                     args.spoof_ip = Some(parser.value()?.string()?);
                 }
 
                 // Interface
-                Arg::Short('e') => {
-                    args.interface = Some(parser.value()?.string()?);
-                }
-                Arg::Long("interface") => {
+                Arg::Short('e') | Arg::Long("interface") => {
                     args.interface = Some(parser.value()?.string()?);
                 }
 
@@ -556,7 +533,7 @@ impl Args {
                         args.fragment_mtu = Some(16); // default MTU
                     }
                 }
-                Arg::Long("fragment-mtu") | Arg::Long("mtu") => {
+                Arg::Long("fragment-mtu" | "mtu") => {
                     let mtu = parser.value()?.string()?;
                     if let Ok(val) = mtu.parse::<u16>() {
                         args.fragment_mtu = Some(val);
@@ -720,7 +697,7 @@ impl Args {
                 }
 
                 // Reasons
-                Arg::Long("reason") | Arg::Long("reasons") => {
+                Arg::Long("reason" | "reasons") => {
                     args.reasons = true;
                 }
 
@@ -783,10 +760,7 @@ impl Args {
                 }
 
                 // Input file
-                Arg::Short('i') => {
-                    args.input_file = Some(PathBuf::from(parser.value()?.string()?));
-                }
-                Arg::Long("input-file") => {
+                Arg::Short('i') | Arg::Long("input-file") => {
                     args.input_file = Some(PathBuf::from(parser.value()?.string()?));
                 }
 
@@ -851,18 +825,12 @@ impl Args {
                 }
 
                 // No DNS
-                Arg::Short('n') => {
-                    args.no_dns = true;
-                }
-                Arg::Long("no-dns") => {
+                Arg::Short('n') | Arg::Long("no-dns") => {
                     args.no_dns = true;
                 }
 
                 // Always DNS
-                Arg::Short('R') => {
-                    args.always_dns = true;
-                }
-                Arg::Long("always-dns") => {
+                Arg::Short('R') | Arg::Long("always-dns") => {
                     args.always_dns = true;
                 }
 

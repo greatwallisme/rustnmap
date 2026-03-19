@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::sync::Semaphore;
+use tracing::debug;
 
 use crate::error::Result;
 use crate::lua::NseLua;
@@ -162,6 +163,61 @@ impl ScriptEngine {
         &self.scheduler
     }
 
+    /// Format a Lua table as Nmap-style output lines.
+    ///
+    /// This handles tables returned by `stdnse.output_table()` when no string
+    /// output is provided by the script. Uses Lua's `tostring()` function to
+    /// properly handle tables with `__tostring` metamethods.
+    ///
+    /// # Arguments
+    ///
+    /// * `lua` - The Lua state (needed for tostring)
+    /// * `table` - The Lua table to format
+    ///
+    /// # Returns
+    ///
+    /// A vector of formatted output lines.
+    fn format_table_output(lua: &mlua::Lua, table: &mlua::Table) -> Vec<String> {
+        let mut output_lines: Vec<String> = Vec::new();
+
+        // Get the Lua `tostring` function for converting values with __tostring metamethods
+        let tostring_fn: mlua::Function = match lua.globals().get("tostring") {
+            Ok(f) => f,
+            Err(_) => return output_lines,
+        };
+
+        for (key, val) in table.pairs::<mlua::Value, mlua::Value>().flatten() {
+            let key_str = match &key {
+                mlua::Value::String(s) => {
+                    s.to_str().ok().map(|s| s.to_string()).unwrap_or_default()
+                }
+                mlua::Value::Integer(n) => n.to_string(),
+                _ => continue,
+            };
+
+            // Use Lua's tostring() to convert value, which respects __tostring metamethod
+            let val_str: String = match &val {
+                mlua::Value::String(s) => {
+                    s.to_str().ok().map(|s| s.to_string()).unwrap_or_default()
+                }
+                mlua::Value::Integer(n) => n.to_string(),
+                mlua::Value::Number(n) => n.to_string(),
+                mlua::Value::Boolean(b) => b.to_string(),
+                mlua::Value::Table(_) => {
+                    // Call Lua's tostring() to respect __tostring metamethod
+                    tostring_fn.call::<String>(val.clone()).unwrap_or_default()
+                }
+                _ => String::new(),
+            };
+
+            if !val_str.is_empty() {
+                output_lines.push(format!("{key_str}: {val_str}"));
+            }
+        }
+
+        output_lines
+    }
+
     /// Create a full Nmap host table with all properties.
     ///
     /// # Arguments
@@ -179,6 +235,7 @@ impl ScriptEngine {
     fn create_host_table(
         lua: &mut crate::lua::NseLua,
         target_ip: std::net::IpAddr,
+        original_target: Option<&str>,
     ) -> Result<mlua::Table> {
         let host_table = lua.create_table()?;
 
@@ -189,8 +246,13 @@ impl ScriptEngine {
         let hostname = Self::resolve_hostname(target_ip);
         host_table.set("name", hostname.as_deref().unwrap_or(""))?;
 
-        // host.targetname - The original target specification
-        host_table.set("targetname", target_ip.to_string())?;
+        // host.targetname - The original target specification (e.g., "example.com")
+        // This is crucial for HTTP Host header - must be the original hostname, not IP
+        let targetname = match original_target {
+            Some(t) => t.to_string(),
+            None => target_ip.to_string(),
+        };
+        host_table.set("targetname", targetname)?;
 
         // host.directly_connected - Whether target is on same subnet
         host_table.set("directly_connected", false)?;
@@ -347,6 +409,7 @@ impl ScriptEngine {
     ///
     /// * `script` - Script to execute
     /// * `target_ip` - Target IP address
+    /// * `original_target` - Original target specification (e.g., "example.com")
     ///
     /// # Returns
     ///
@@ -359,6 +422,7 @@ impl ScriptEngine {
         &self,
         script: &NseScript,
         target_ip: std::net::IpAddr,
+        original_target: Option<&str>,
     ) -> Result<ScriptResult> {
         let start = std::time::Instant::now();
         let mut lua = NseLua::new_default()?;
@@ -371,8 +435,11 @@ impl ScriptEngine {
         // Load the script
         lua.load_script(&script.source, &script.id)?;
 
+        // Set SCRIPT_NAME global variable (Nmap compatibility)
+        lua.lua().globals().set("SCRIPT_NAME", script.id.as_str())?;
+
         // Create full Nmap host table with all properties
-        let host_table = Self::create_host_table(&mut lua, target_ip)?;
+        let host_table = Self::create_host_table(&mut lua, target_ip, original_target)?;
 
         lua.set_global("host", mlua::Value::Table(host_table))?;
 
@@ -502,6 +569,7 @@ impl ScriptEngine {
     ///
     /// * `script` - Script to execute
     /// * `target_ip` - Target IP address
+    /// * `original_target` - Original target specification (e.g., "example.com")
     /// * `port` - Target port number
     /// * `protocol` - Protocol (tcp/udp)
     /// * `port_state` - Port state
@@ -514,10 +582,12 @@ impl ScriptEngine {
     /// # Errors
     ///
     /// Returns an error if script execution fails.
+    #[expect(clippy::too_many_arguments, reason = "NSE port script requires all host/port context")]
     pub fn execute_port_script(
         &self,
         script: &NseScript,
         target_ip: std::net::IpAddr,
+        original_target: Option<&str>,
         port: u16,
         protocol: &str,
         port_state: &str,
@@ -526,11 +596,18 @@ impl ScriptEngine {
         let start = std::time::Instant::now();
         let mut lua = NseLua::new_default()?;
 
+        // Register NSE standard libraries (nmap, stdnse, comm, shortport, http, ssh2, ssl, etc.)
+        // This MUST be done before loading the script, as scripts use require() to access them
+        crate::libs::register_all(&mut lua)?;
+
         // Load the script
         lua.load_script(&script.source, &script.id)?;
 
+        // Set SCRIPT_NAME global variable (Nmap compatibility)
+        lua.lua().globals().set("SCRIPT_NAME", script.id.as_str())?;
+
         // Create host table
-        let host_table = Self::create_host_table(&mut lua, target_ip)?;
+        let host_table = Self::create_host_table(&mut lua, target_ip, original_target)?;
         lua.set_global("host", mlua::Value::Table(host_table))?;
 
         // Create port table
@@ -540,25 +617,78 @@ impl ScriptEngine {
 
         // Execute the action function if it exists
         let output = if script.has_action() {
+            // Check verbosity setting
+            let verbosity: i64 = lua
+                .lua()
+                .load("return nmap.verbosity()")
+                .eval()
+                .unwrap_or(0);
+            debug!("Executing script {} with verbosity={}", script.id, verbosity);
+
             // Load and call the action function with host and port
             let func = lua.load_function("return action(host, port)", "action_wrapper")?;
 
             // Call the function and get the result
             let result: mlua::MultiValue = lua.call_function(&func, ())?;
+            debug!("Script {} returned {} values", script.id, result.len());
 
-            // Convert result to string output
-            let output_parts: Vec<String> = result
-                .iter()
-                .filter_map(|v| match v {
-                    mlua::Value::String(s) => s.to_str().ok().map(|s| s.to_string()),
-                    mlua::Value::Integer(n) => Some(n.to_string()),
-                    mlua::Value::Number(n) => Some(n.to_string()),
-                    mlua::Value::Boolean(b) => Some(b.to_string()),
-                    _ => None,
-                })
-                .collect();
+            // Convert result to output
+            // Nmap convention: scripts return (table, string) where:
+            // - table is for structured output (XML/JSON)
+            // - string is for display (normal output)
+            // We prioritize string output if available, otherwise format the table.
 
-            ScriptOutput::Plain(output_parts.join(" "))
+            // First pass: look for a string return value (display output)
+            let mut display_string: Option<String> = None;
+            let mut table_value: Option<mlua::Table> = None;
+
+            for value in &result {
+                match value {
+                    mlua::Value::String(s) => {
+                        if let Ok(s) = s.to_str() {
+                            if !s.is_empty() && display_string.is_none() {
+                                display_string = Some(s.to_string());
+                            }
+                        }
+                    }
+                    mlua::Value::Table(t) => {
+                        if table_value.is_none() {
+                            table_value = Some(t.clone());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            let output_lines = if let Some(display) = display_string {
+                // Use the string output directly (Nmap convention)
+                debug!("Script {} using string output", script.id);
+                display.lines().map(String::from).collect()
+            } else if let Some(table) = table_value {
+                // No string, format the table
+                debug!("Script {} formatting table output", script.id);
+                Self::format_table_output(lua.lua(), &table)
+            } else {
+                // Check for other simple return types
+                let mut lines: Vec<String> = Vec::new();
+                for value in &result {
+                    match value {
+                        mlua::Value::Integer(n) => lines.push(n.to_string()),
+                        mlua::Value::Number(n) => lines.push(n.to_string()),
+                        mlua::Value::Boolean(b) => lines.push(b.to_string()),
+                        _ => {}
+                    }
+                }
+                lines
+            };
+
+            if output_lines.is_empty() {
+                debug!("Script {} returned empty output", script.id);
+                ScriptOutput::Empty
+            } else {
+                debug!("Script {} returned {} output lines", script.id, output_lines.len());
+                ScriptOutput::Plain(output_lines.join("\n"))
+            }
         } else {
             ScriptOutput::Empty
         };
@@ -581,6 +711,7 @@ impl ScriptEngine {
     ///
     /// * `script` - Script to evaluate
     /// * `target_ip` - Target IP address
+    /// * `original_target` - Original target specification (e.g., "example.com")
     ///
     /// # Returns
     ///
@@ -593,6 +724,7 @@ impl ScriptEngine {
         &self,
         script: &NseScript,
         target_ip: std::net::IpAddr,
+        original_target: Option<&str>,
     ) -> Result<bool> {
         if !script.has_hostrule() {
             // No hostrule means it doesn't match (port scripts need portrule)
@@ -601,11 +733,15 @@ impl ScriptEngine {
 
         let mut lua = NseLua::new_default()?;
 
+        // Register NSE standard libraries (nmap, stdnse, comm, shortport, http, ssh2, ssl, etc.)
+        // This MUST be done before loading the script, as scripts use require() to access them
+        crate::libs::register_all(&mut lua)?;
+
         // Load the script
         lua.load_script(&script.source, &script.id)?;
 
         // Create host table
-        let host_table = Self::create_host_table(&mut lua, target_ip)?;
+        let host_table = Self::create_host_table(&mut lua, target_ip, original_target)?;
         lua.set_global("host", mlua::Value::Table(host_table.clone()))?;
 
         // Evaluate the hostrule
@@ -621,6 +757,7 @@ impl ScriptEngine {
     ///
     /// * `script` - Script to evaluate
     /// * `target_ip` - Target IP address
+    /// * `original_target` - Original target specification (e.g., "example.com")
     /// * `port` - Target port number
     /// * `protocol` - Protocol (tcp/udp)
     /// * `port_state` - Port state
@@ -633,10 +770,12 @@ impl ScriptEngine {
     /// # Errors
     ///
     /// Returns an error if rule evaluation fails.
+    #[expect(clippy::too_many_arguments, reason = "NSE portrule evaluation requires all host/port context")]
     pub fn evaluate_portrule(
         &self,
         script: &NseScript,
         target_ip: std::net::IpAddr,
+        original_target: Option<&str>,
         port: u16,
         protocol: &str,
         port_state: &str,
@@ -649,11 +788,15 @@ impl ScriptEngine {
 
         let mut lua = NseLua::new_default()?;
 
+        // Register NSE standard libraries (nmap, stdnse, comm, shortport, http, ssh2, ssl, etc.)
+        // This MUST be done before loading the script, as scripts use require() to access them
+        crate::libs::register_all(&mut lua)?;
+
         // Load the script
         lua.load_script(&script.source, &script.id)?;
 
         // Create host table
-        let host_table = Self::create_host_table(&mut lua, target_ip)?;
+        let host_table = Self::create_host_table(&mut lua, target_ip, original_target)?;
         lua.set_global("host", mlua::Value::Table(host_table.clone()))?;
 
         // Create port table
@@ -738,6 +881,7 @@ end
         let result = engine.execute_script(
             engine.database().get("test-script").unwrap(),
             std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+            None,
         );
 
         assert!(result.is_ok());
@@ -765,6 +909,7 @@ end
         let result = engine.execute_script(
             engine.database().get("test-return").unwrap(),
             std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+            None,
         );
 
         assert!(result.is_ok());
@@ -794,6 +939,7 @@ end
             .execute_script(
                 engine.database().get("test-number").unwrap(),
                 std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+                None,
             )
             .unwrap();
 
@@ -824,6 +970,7 @@ end
             .execute_script(
                 engine.database().get("test-bool-true").unwrap(),
                 std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+                None,
             )
             .unwrap();
 
@@ -854,6 +1001,7 @@ end
             .execute_script(
                 engine.database().get("test-bool-false").unwrap(),
                 std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+                None,
             )
             .unwrap();
 
@@ -880,6 +1028,7 @@ end
             .execute_script(
                 engine.database().get("test-nil").unwrap(),
                 std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+                None,
             )
             .unwrap();
 
@@ -907,6 +1056,7 @@ end
             .execute_script(
                 engine.database().get("test-mixed").unwrap(),
                 std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+                None,
             )
             .unwrap();
 
@@ -923,7 +1073,7 @@ end
             0x2001, 0x0db8, 0x85a3, 0x0000, 0x0000, 0x8a2e, 0x0370, 0x7334,
         ));
 
-        let host_table = ScriptEngine::create_host_table(&mut lua, ipv6_addr).unwrap();
+        let host_table = ScriptEngine::create_host_table(&mut lua, ipv6_addr, None).unwrap();
 
         assert_eq!(
             host_table.get::<String>("ip").unwrap(),
@@ -946,7 +1096,7 @@ end
         let mut lua = NseLua::new_default().unwrap();
         let ipv6_addr = std::net::IpAddr::V6(std::net::Ipv6Addr::LOCALHOST);
 
-        let host_table = ScriptEngine::create_host_table(&mut lua, ipv6_addr).unwrap();
+        let host_table = ScriptEngine::create_host_table(&mut lua, ipv6_addr, None).unwrap();
 
         assert_eq!(host_table.get::<String>("ip").unwrap(), "::1");
 
@@ -1195,8 +1345,18 @@ end
             .await;
 
         assert_eq!(results.len(), 2);
-        assert!(results[0].as_ref().unwrap().is_success());
-        assert!(results[1].as_ref().unwrap().is_timeout());
+        // Results may complete in any order due to async execution
+        // Check that we have exactly one success and one timeout
+        let success_count = results
+            .iter()
+            .filter(|r| r.as_ref().unwrap().is_success())
+            .count();
+        let timeout_count = results
+            .iter()
+            .filter(|r| r.as_ref().unwrap().is_timeout())
+            .count();
+        assert_eq!(success_count, 1);
+        assert_eq!(timeout_count, 1);
     }
 
     // Tests for execute_port_script
@@ -1224,6 +1384,7 @@ end
             .execute_port_script(
                 engine.database().get("test-port-script").unwrap(),
                 std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+                None,
                 80,
                 "tcp",
                 "open",
@@ -1260,6 +1421,7 @@ end
             .execute_port_script(
                 engine.database().get("test-version").unwrap(),
                 std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+                None,
                 443,
                 "tcp",
                 "open",
@@ -1291,6 +1453,7 @@ end
             .execute_port_script(
                 engine.database().get("test-udp").unwrap(),
                 std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+                None,
                 53,
                 "udp",
                 "open",
@@ -1325,6 +1488,7 @@ end
             .execute_port_script(
                 engine.database().get("test-no-service").unwrap(),
                 std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+                None,
                 12345,
                 "tcp",
                 "filtered",
@@ -1362,6 +1526,7 @@ end
             .execute_port_script(
                 engine.database().get("test-filtered").unwrap(),
                 std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+                None,
                 445,
                 "tcp",
                 "filtered",
@@ -1402,6 +1567,7 @@ end
             .evaluate_hostrule(
                 engine.database().get("test-hostrule-false").unwrap(),
                 std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+                None,
             )
             .unwrap();
 
@@ -1435,6 +1601,7 @@ end
             .evaluate_hostrule(
                 engine.database().get("test-hostrule-true").unwrap(),
                 std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+                None,
             )
             .unwrap();
 
@@ -1464,6 +1631,7 @@ end
             .evaluate_hostrule(
                 engine.database().get("test-no-hostrule").unwrap(),
                 std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+                None,
             )
             .unwrap();
 
@@ -1494,6 +1662,7 @@ end
             .evaluate_hostrule(
                 engine.database().get("test-hostrule-ip").unwrap(),
                 std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+                None,
             )
             .unwrap();
         assert!(result_localhost);
@@ -1502,6 +1671,7 @@ end
             .evaluate_hostrule(
                 engine.database().get("test-hostrule-ip").unwrap(),
                 std::net::IpAddr::V4(std::net::Ipv4Addr::new(192, 168, 1, 1)),
+                None,
             )
             .unwrap();
         assert!(!result_other);
@@ -1536,6 +1706,7 @@ end
             .evaluate_portrule(
                 engine.database().get("test-portrule-false").unwrap(),
                 std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+                None,
                 80,
                 "tcp",
                 "open",
@@ -1573,6 +1744,7 @@ end
             .evaluate_portrule(
                 engine.database().get("test-portrule-true").unwrap(),
                 std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+                None,
                 443,
                 "tcp",
                 "open",
@@ -1606,6 +1778,7 @@ end
             .evaluate_portrule(
                 engine.database().get("test-no-portrule").unwrap(),
                 std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+                None,
                 80,
                 "tcp",
                 "open",
@@ -1640,6 +1813,7 @@ end
             .evaluate_portrule(
                 engine.database().get("test-portrule-port").unwrap(),
                 std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+                None,
                 80,
                 "tcp",
                 "open",
@@ -1652,6 +1826,7 @@ end
             .evaluate_portrule(
                 engine.database().get("test-portrule-port").unwrap(),
                 std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+                None,
                 443,
                 "tcp",
                 "open",
@@ -1685,6 +1860,7 @@ end
             .evaluate_portrule(
                 engine.database().get("test-portrule-state").unwrap(),
                 std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+                None,
                 80,
                 "tcp",
                 "open",
@@ -1697,6 +1873,7 @@ end
             .evaluate_portrule(
                 engine.database().get("test-portrule-state").unwrap(),
                 std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+                None,
                 80,
                 "tcp",
                 "closed",

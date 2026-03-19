@@ -608,6 +608,7 @@ impl ScriptDatabase {
     /// * `state` - Port state (open, closed, filtered, etc.)
     /// * `service` - Service name (optional)
     /// * `target_ip` - Target IP address for host table construction
+    /// * `original_target` - Original target specification (e.g., "example.com")
     ///
     /// # Returns
     ///
@@ -616,6 +617,7 @@ impl ScriptDatabase {
     /// # Note
     ///
     /// Falls back to heuristic matching if Lua evaluation fails for a script.
+    #[expect(clippy::too_many_arguments, reason = "Port script filtering requires all host/port context")]
     #[must_use]
     pub fn scripts_for_port_with_engine(
         &self,
@@ -625,13 +627,14 @@ impl ScriptDatabase {
         state: &str,
         service: Option<&str>,
         target_ip: std::net::IpAddr,
+        original_target: Option<&str>,
     ) -> Vec<&NseScript> {
         self.scripts
             .values()
             .filter(|s| s.has_portrule())
             .filter(|script| {
                 // Attempt Lua evaluation first
-                match engine.evaluate_portrule(script, target_ip, port, protocol, state, service) {
+                match engine.evaluate_portrule(script, target_ip, original_target, port, protocol, state, service) {
                     Ok(result) => result,
                     Err(_) => {
                         // Fall back to heuristic matching on Lua evaluation failure

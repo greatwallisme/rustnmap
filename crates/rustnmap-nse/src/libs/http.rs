@@ -617,14 +617,28 @@ fn response_to_table(lua: &Lua, response: &HttpResponse) -> mlua::Result<Table> 
 }
 
 /// Extract host and port from Lua values.
+///
+/// For HTTP requests, we use the hostname (not IP) for the Host header.
+/// Priority order:
+/// 1. `targetname` - Original target specification (e.g., "example.com")
+/// 2. `name` - Hostname from DNS reverse lookup
+/// 3. `ip` - IP address (fallback)
 fn extract_host_port(host: Value, port: Value) -> (String, u16) {
     let host_str = match host {
         Value::String(s) => s.to_str().map(|s| s.to_string()).unwrap_or_default(),
         Value::Table(t) => t
-            .get::<Option<String>>("ip")
+            // Use targetname first for HTTP Host header (critical for virtual hosting)
+            .get::<Option<String>>("targetname")
             .ok()
             .flatten()
-            .or_else(|| t.get::<Option<String>>("name").ok().flatten())
+            .filter(|s| !s.is_empty())
+            .or_else(|| {
+                t.get::<Option<String>>("name")
+                    .ok()
+                    .flatten()
+                    .filter(|s| !s.is_empty())
+            })
+            .or_else(|| t.get::<Option<String>>("ip").ok().flatten())
             .unwrap_or_default(),
         _ => String::new(),
     };
