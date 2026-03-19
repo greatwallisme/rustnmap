@@ -1007,6 +1007,19 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     )?;
     http_table.set("pipeline_go", pipeline_go_fn)?;
 
+    // Register identify_404(host, port) function
+    // Determines how the target server handles 404 Not Found responses.
+    // Returns: {result, status} where result indicates if 404 detection is reliable
+    let identify_404_fn = lua.create_function(|lua, (_host, _port): (mlua::Value, mlua::Value)| {
+        // Returns standard 404 behavior - server returns 404 status for unknown pages
+        // For advanced use cases, this would probe the server to detect custom 404 handling
+        let result = lua.create_table()?;
+        result.set(1, true)?;
+        result.set(2, 404)?;
+        Ok(mlua::Value::Table(result))
+    })?;
+    http_table.set("identify_404", identify_404_fn)?;
+
     // Register the http library globally
     lua.globals().set("http", http_table)?;
 

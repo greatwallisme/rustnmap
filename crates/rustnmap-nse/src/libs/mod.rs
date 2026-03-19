@@ -22,6 +22,7 @@
 //! - `json`: JSON encoding and decoding
 //! - `url`: URL parsing and composition
 //! - `rand`: Random data generation
+//! - `ipOps`: IP address operations
 //!
 //! These libraries are registered with the Lua runtime in two places:
 //! 1. Global namespace (e.g., `http` table accessible directly)
@@ -31,12 +32,14 @@
 //! - Direct global access: `local http = http`
 //! - Standard require: `local http = require "http"`
 
+pub mod base64;
 pub mod brute;
 pub mod comm;
 pub mod creds;
 pub mod dns;
 pub mod ftp;
 pub mod http;
+pub mod ip_ops;
 pub mod json;
 pub mod libssh2_utility;
 pub mod lpeg_utility;
@@ -118,6 +121,8 @@ pub fn register_all(lua: &mut NseLua) -> Result<()> {
     tableaux::register(lua)?;
     libssh2_utility::register(lua)?;
     lpeg_utility::register(lua)?;
+    ip_ops::register(lua)?;
+    base64::register(lua)?;
 
     // After registering all libraries in global namespace,
     // also register them in package.preload so require() works
@@ -161,6 +166,7 @@ fn register_package_preload(lua: &mut NseLua) -> Result<()> {
         "smb", "netbios", "smbauth", "unicode",
         "json", "openssl", "brute", "creds", "url", "rand",
         "stringaux", "tableaux", "libssh2-utility", "lpeg-utility",
+        "ipOps", "base64",
     ];
 
     for name in library_names {

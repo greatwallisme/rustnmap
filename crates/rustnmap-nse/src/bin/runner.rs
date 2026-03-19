@@ -32,6 +32,8 @@ enum RunnerStatus {
     Failed,
     /// Script timed out.
     Timeout,
+    /// Script skipped (e.g., missing required library).
+    Skipped,
 }
 
 /// Runner process output.
@@ -46,7 +48,7 @@ struct RunnerOutput {
 }
 
 /// Parse command line arguments.
-#[allow(clippy::print_stderr, reason = "command-line tool help output")]
+#[expect(clippy::print_stderr, reason = "command-line tool help output")]
 fn parse_args() -> Option<(IpAddr, Option<u64>, Option<String>)> {
     let args: Vec<String> = std::env::args().collect();
 
@@ -135,6 +137,11 @@ fn output_result(result: &RunnerOutput) {
             eprintln!("Failed to serialize result: {e}");
         }
     }
+}
+
+/// Check if an error is a `silent_require` error (script should be skipped).
+fn is_silent_require_error(error: &str) -> bool {
+    error.contains("NSE_REQUIRE_ERROR:")
 }
 
 /// Execute an NSE script and Returns output string on success.
@@ -269,12 +276,22 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Err(e) => {
-            output_result(&RunnerOutput {
-                status: RunnerStatus::Failed,
-                output: None,
-                error: Some(e),
-            });
-            ExitCode::from(1)
+            // Check if this is a silent_require error (script should be skipped)
+            if is_silent_require_error(&e) {
+                output_result(&RunnerOutput {
+                    status: RunnerStatus::Skipped,
+                    output: None,
+                    error: Some(e),
+                });
+                ExitCode::from(2) // Exit code 2 indicates skipped
+            } else {
+                output_result(&RunnerOutput {
+                    status: RunnerStatus::Failed,
+                    output: None,
+                    error: Some(e),
+                });
+                ExitCode::from(1)
+            }
         }
     }
 }

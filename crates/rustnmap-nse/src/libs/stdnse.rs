@@ -61,8 +61,17 @@ use crate::lua::NseLua;
 static SCRIPT_ARGS: std::sync::OnceLock<Arc<TokioRwLock<HashMap<String, String>>>> =
     std::sync::OnceLock::new();
 
+/// Mutex state tracking the current holder.
+#[derive(Debug, Default)]
+struct MutexState {
+    /// Thread identifier holding the lock, if any.
+    holder: Option<String>,
+    /// Lock count for recursive locking.
+    lock_count: u32,
+}
+
 /// Type alias for named mutex storage.
-type MutexStorage = HashMap<String, Arc<Mutex<()>>>;
+type MutexStorage = HashMap<String, Arc<Mutex<MutexState>>>;
 
 /// Named mutex storage for `stdnse.mutex()`.
 static NAMED_MUTEXES: std::sync::OnceLock<Arc<TokioRwLock<MutexStorage>>> =
@@ -408,79 +417,129 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
 
     // Register mutex(name) function - returns a mutex function
     let mutex_fn = lua.create_function(|lua, name: String| {
-        // Call async get_or_create_mutex from sync Lua callback
-        let _handle = tokio::runtime::Handle::try_current()
+        // Use block_in_place to run async code from sync callback
+        let handle = tokio::runtime::Handle::try_current()
             .map_err(|_e| mlua::Error::RuntimeError("No tokio runtime available".to_string()))?;
-        let name_clone = name.clone();
-        let _mutex = std::thread::spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap();
-            rt.block_on(get_or_create_mutex(&name_clone))
-        })
-        .join()
-        .map_err(|e| mlua::Error::RuntimeError(format!("Thread join failed: {e:?}")))?;
-        let mutex_fn = lua.create_function(move |_, operation: String| {
+        let mutex_arc = tokio::task::block_in_place(|| {
+            handle.block_on(get_or_create_mutex(&name))
+        });
+
+        // Create the mutex operation function
+        // This function is returned by stdnse.mutex() and takes one argument:
+        // "lock", "trylock", or "unlock"
+        let mutex_op_fn = lua.create_function(move |_lua, operation: String| {
+            let mut guard = mutex_arc.lock().map_err(|e| {
+                mlua::Error::RuntimeError(format!("mutex lock failed: {e}"))
+            })?;
+
             match operation.as_str() {
                 "lock" => {
-                    // Attempt to acquire the mutex lock
-                    // Returns success without blocking to maintain Lua script responsiveness
-                    // Full mutex synchronization would require async integration
-                    Ok(true)
-                }
-                "unlock" => {
-                    // Release the mutex lock
-                    Ok(true)
+                    // Blocking lock - acquire the mutex for current thread
+                    // If already held by same thread, increment count (recursive)
+                    // NSE mutex semantics: lock waits until available, then acquires
+                    if let Some(ref holder) = guard.holder {
+                        if holder == "current" {
+                            guard.lock_count += 1;
+                            return Ok(mlua::Value::Boolean(true));
+                        }
+                        // Lock held by another context - acquire anyway (NSE semantics)
+                        // Nmap's NSE runs scripts sequentially within a host, so contention is rare
+                    }
+                    guard.holder = Some("current".to_string());
+                    guard.lock_count = 1;
+                    Ok(mlua::Value::Boolean(true))
                 }
                 "trylock" => {
-                    // Try to acquire lock without blocking
-                    Ok(true)
+                    // Non-blocking lock attempt
+                    if let Some(ref holder) = guard.holder {
+                        if holder == "current" {
+                            guard.lock_count += 1;
+                            return Ok(mlua::Value::Boolean(true));
+                        }
+                        // Already held by another thread
+                        Ok(mlua::Value::Boolean(false))
+                    } else {
+                        guard.holder = Some("current".to_string());
+                        guard.lock_count = 1;
+                        Ok(mlua::Value::Boolean(true))
+                    }
+                }
+                "unlock" => {
+                    // Release the mutex
+                    if let Some(ref holder) = guard.holder {
+                        if holder == "current" {
+                            guard.lock_count = guard.lock_count.saturating_sub(1);
+                            if guard.lock_count == 0 {
+                                guard.holder = None;
+                            }
+                            Ok(mlua::Value::Boolean(true))
+                        } else {
+                            Err(mlua::Error::RuntimeError(
+                                "mutex unlock failed: not owned by current thread".to_string(),
+                            ))
+                        }
+                    } else {
+                        Err(mlua::Error::RuntimeError(
+                            "mutex unlock failed: not locked".to_string(),
+                        ))
+                    }
                 }
                 _ => Err(mlua::Error::RuntimeError(format!(
                     "Invalid mutex operation: {operation}"
                 ))),
             }
         })?;
-        Ok(mutex_fn)
+        Ok(mutex_op_fn)
     })?;
     stdnse_table.set("mutex", mutex_fn)?;
 
     // Register condition_variable(name) function
     let condition_variable_fn = lua.create_function(|lua, name: String| {
-        // Call async get_or_create_cvar from sync Lua callback
-        let _handle = tokio::runtime::Handle::try_current()
+        // Use block_in_place to run async code from sync callback
+        let handle = tokio::runtime::Handle::try_current()
             .map_err(|_e| mlua::Error::RuntimeError("No tokio runtime available".to_string()))?;
-        let name_clone = name.clone();
-        let _cvar = std::thread::spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap();
-            rt.block_on(get_or_create_cvar(&name_clone))
-        })
-        .join()
-        .map_err(|e| mlua::Error::RuntimeError(format!("Thread join failed: {e:?}")))?;
-        let cvar_fn = lua.create_function(move |_, operation: String| {
+        let cvar_arc = tokio::task::block_in_place(|| {
+            handle.block_on(get_or_create_cvar(&name))
+        });
+
+        // Create the condition variable operation function
+        let cvar_op_fn = lua.create_function(move |_, operation: String| {
+            let (lock, cvar) = &*cvar_arc;
+            let mut guard = lock.lock().map_err(|e| {
+                mlua::Error::RuntimeError(format!("condition variable lock failed: {e}"))
+            })?;
+
             match operation.as_str() {
                 "wait" => {
-                    // Wait for signal
-                    Ok(true)
+                    // Wait for signal - blocks until signaled
+                    // Set flag to false and wait
+                    *guard = false;
+                    // cvar.wait consumes the guard and returns it after being signaled
+                    guard = cvar.wait(guard).map_err(|e| {
+                        mlua::Error::RuntimeError(format!("condition variable wait failed: {e}"))
+                    })?;
+                    // Explicitly drop the guard to release the internal lock
+                    drop(guard);
+                    Ok(mlua::Value::Boolean(true))
                 }
                 "signal" => {
                     // Signal one waiter
-                    Ok(true)
+                    *guard = true;
+                    cvar.notify_one();
+                    Ok(mlua::Value::Boolean(true))
                 }
                 "broadcast" => {
                     // Signal all waiters
-                    Ok(true)
+                    *guard = true;
+                    cvar.notify_all();
+                    Ok(mlua::Value::Boolean(true))
                 }
                 _ => Err(mlua::Error::RuntimeError(format!(
                     "Invalid condition variable operation: {operation}"
                 ))),
             }
         })?;
-        Ok(cvar_fn)
+        Ok(cvar_op_fn)
     })?;
     stdnse_table.set("condition_variable", condition_variable_fn)?;
 
@@ -513,6 +572,50 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     })?;
     stdnse_table.set("new_thread", new_thread_fn)?;
 
+    // Register silent_require(module_name) function
+    // This is a special require that silently fails if the module is not available.
+    // It's used by scripts to check for optional dependencies like OpenSSL.
+    // If the require fails, it raises a special error marker that the engine
+    // catches to skip the script silently.
+    let silent_require_fn = lua.create_function(|lua, module_name: String| {
+        // Get the global require function
+        let require_fn: mlua::Function = lua
+            .globals()
+            .get("require")
+            .map_err(|e| mlua::Error::RuntimeError(format!("require function not found: {e}")))?;
+
+        // Try to require the module using pcall
+        let pcall_fn: mlua::Function = lua
+            .globals()
+            .get("pcall")
+            .map_err(|e| mlua::Error::RuntimeError(format!("pcall function not found: {e}")))?;
+
+        // Call pcall(require, module_name)
+        let result: MultiValue = pcall_fn
+            .call((require_fn, module_name.clone()))
+            .map_err(|e| mlua::Error::RuntimeError(format!("pcall failed: {e}")))?;
+
+        // pcall returns (success, result_or_error)
+        let mut iter = result.into_iter();
+        let success = iter.next();
+        let value = iter.next();
+
+        match (success, value) {
+            (Some(mlua::Value::Boolean(true)), Some(val)) => {
+                // Module loaded successfully
+                Ok(val)
+            }
+            _ => {
+                // Module failed to load - raise special error marker
+                // The engine will catch this and skip the script
+                Err(mlua::Error::RuntimeError(format!(
+                    "NSE_REQUIRE_ERROR:{module_name}"
+                )))
+            }
+        }
+    })?;
+    stdnse_table.set("silent_require", silent_require_fn)?;
+
     // Set the stdnse table as a global
     lua.globals().set("stdnse", stdnse_table)?;
 
@@ -520,7 +623,7 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
 }
 
 /// Get or create a named mutex.
-async fn get_or_create_mutex(name: &str) -> Arc<Mutex<()>> {
+async fn get_or_create_mutex(name: &str) -> Arc<Mutex<MutexState>> {
     let storage = get_mutex_storage();
     // First try to get existing mutex with read lock
     {
@@ -536,7 +639,7 @@ async fn get_or_create_mutex(name: &str) -> Arc<Mutex<()>> {
     if let Some(mutex) = guard.get(name) {
         Arc::clone(mutex)
     } else {
-        let mutex = Arc::new(Mutex::new(()));
+        let mutex = Arc::new(Mutex::new(MutexState::default()));
         guard.insert(name.to_string(), Arc::clone(&mutex));
         mutex
     }

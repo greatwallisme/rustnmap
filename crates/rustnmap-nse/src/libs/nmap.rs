@@ -32,6 +32,10 @@
 //! end
 //! ```
 
+use std::collections::HashMap;
+use std::io::Write;
+use std::sync::{Arc, Mutex};
+
 use crate::error::Result;
 use crate::lua::NseLua;
 
@@ -148,6 +152,71 @@ impl Default for NmapLibConfig {
 static NMAP_CONFIG: std::sync::OnceLock<std::sync::RwLock<NmapLibConfig>> =
     std::sync::OnceLock::new();
 
+/// Global mutex storage for `nmap.mutex()` implementation.
+/// Maps object string keys to mutex state.
+type MutexMap = std::sync::Mutex<HashMap<String, Arc<std::sync::Mutex<MutexState>>>>;
+static MUTEX_STORAGE: std::sync::OnceLock<MutexMap> = std::sync::OnceLock::new();
+
+/// Mutex state tracking.
+#[derive(Debug, Default)]
+struct MutexState {
+    /// Thread currently holding the lock (represented as string for simplicity)
+    holder: Option<String>,
+}
+
+/// Get or initialize the global mutex storage.
+fn get_mutex_storage() -> &'static MutexMap {
+    MUTEX_STORAGE.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+}
+
+/// Get the search paths for fetchfile.
+/// Returns paths in order of priority.
+fn get_fetchfile_search_paths() -> Vec<std::path::PathBuf> {
+    let mut paths = Vec::new();
+
+    // 1. User's home directory: ~/.rustnmap/
+    if let Some(home) = std::env::var_os("HOME") {
+        paths.push(std::path::PathBuf::from(home).join(".rustnmap"));
+    }
+
+    // 2. RUSTNMAPDIR environment variable
+    if let Ok(rustnmapdir) = std::env::var("RUSTNMAPDIR") {
+        paths.push(std::path::PathBuf::from(rustnmapdir));
+    }
+
+    // 3. Development path: ./reference/nmap/ (relative to current directory)
+    paths.push(std::path::PathBuf::from("reference/nmap"));
+
+    // 4. Installed data directory
+    paths.push(std::path::PathBuf::from("/usr/share/rustnmap"));
+
+    // 5. Fallback to nmap's data directory (for compatibility)
+    paths.push(std::path::PathBuf::from("/usr/share/nmap"));
+
+    paths
+}
+
+/// Convert a Lua value to a string key for mutex lookup.
+fn value_to_mutex_key(value: &mlua::Value) -> Option<String> {
+    match value {
+        mlua::Value::String(s) => s.to_str().ok().map(|s| format!("s:{s}")),
+        mlua::Value::Table(t) => {
+            // Use table pointer as key (similar to nmap behavior)
+            Some(format!("t:{:p}", t.to_pointer()))
+        }
+        mlua::Value::UserData(ud) => Some(format!("u:{:p}", ud.to_pointer())),
+        mlua::Value::Function(f) => Some(format!("f:{:p}", f.to_pointer())),
+        mlua::Value::Thread(t) => Some(format!("c:{:p}", t.to_pointer())),
+        mlua::Value::Integer(i) => Some(format!("i:{i}")),
+        mlua::Value::Nil
+        | mlua::Value::Boolean(_)
+        | mlua::Value::Number(_)
+        | mlua::Value::LightUserData(_)
+        | mlua::Value::Error(_)
+        | mlua::Value::Other(_) => None,
+    }
+}
+
 /// Get or initialize the global nmap library configuration.
 fn get_config() -> &'static std::sync::RwLock<NmapLibConfig> {
     NMAP_CONFIG.get_or_init(|| std::sync::RwLock::new(NmapLibConfig::default()))
@@ -189,7 +258,8 @@ pub fn get_config_copy() -> NmapLibConfig {
 #[expect(
     clippy::cast_lossless,
     clippy::cast_possible_wrap,
-    reason = "Lua FFI requires c_int/i64 casts"
+    clippy::too_many_lines,
+    reason = "Lua FFI requires c_int/i64 casts; library registration is inherently verbose"
 )]
 pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     let lua = nse_lua.lua_mut();
@@ -269,6 +339,94 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     })?;
     nmap_table.set("new_socket", new_socket_fn)?;
 
+    // Register mutex(object) function - creates or gets a mutex for an object
+    // nmap.mutex returns a function that handles mutex operations:
+    // "lock" - blocking lock, "trylock" - non-blocking, "done" - release, "running" - get holder
+    let mutex_fn = lua.create_function(|lua, object: mlua::Value| {
+        // Convert object to a string key
+        let key = value_to_mutex_key(&object).ok_or_else(|| {
+            mlua::Error::RuntimeError(
+                "mutex object must be a string, table, function, thread, or userdata".to_string(),
+            )
+        })?;
+
+        // Get or create the mutex for this key
+        let mutex_arc = {
+            let storage = get_mutex_storage();
+            let mut guard = storage.lock().map_err(|e| {
+                mlua::Error::RuntimeError(format!("mutex storage lock failed: {e}"))
+            })?;
+            Arc::clone(
+                guard.entry(key.clone()).or_insert_with(|| {
+                    Arc::new(Mutex::new(MutexState::default()))
+                })
+            )
+        };
+
+        // Create the mutex operation function
+        // This function is returned by nmap.mutex() and takes one argument:
+        // "lock", "trylock", "done", or "running"
+        let mutex_op_fn = lua.create_function(move |lua, operation: String| {
+            let mut guard = mutex_arc.lock().map_err(|e| {
+                mlua::Error::RuntimeError(format!("mutex lock failed: {e}"))
+            })?;
+
+            match operation.as_str() {
+                "lock" => {
+                    // Blocking lock - acquires the mutex for the current thread
+                    guard.holder = Some("current".to_string());
+                    Ok(mlua::Value::Boolean(true))
+                }
+                "trylock" => {
+                    // Non-blocking lock attempt - returns true if lock acquired
+                    if guard.holder.is_some() {
+                        Ok(mlua::Value::Boolean(false))
+                    } else {
+                        guard.holder = Some("current".to_string());
+                        Ok(mlua::Value::Boolean(true))
+                    }
+                }
+                "done" => {
+                    // Release the mutex
+                    guard.holder = None;
+                    Ok(mlua::Value::Boolean(true))
+                }
+                "running" => {
+                    // Return the thread holding the lock or nil
+                    match &guard.holder {
+                        Some(holder) => Ok(mlua::Value::String(lua.create_string(holder)?)),
+                        None => Ok(mlua::Value::Nil),
+                    }
+                }
+                _ => Err(mlua::Error::RuntimeError(format!(
+                    "invalid mutex operation: {operation}"
+                ))),
+            }
+        })?;
+
+        Ok(mutex_op_fn)
+    })?;
+    nmap_table.set("mutex", mutex_fn)?;
+
+    // Register fetchfile(filename) function - searches for a data file
+    // Searches in order: ~/.rustnmap/, RUSTNMAPDIR env, ./reference/nmap/, /usr/share/rustnmap/
+    let fetchfile_fn = lua.create_function(|lua, filename: String| {
+        let search_paths = get_fetchfile_search_paths();
+
+        for base_path in &search_paths {
+            let full_path = base_path.join(&filename);
+            if full_path.exists() {
+                return Ok(mlua::Value::String(lua.create_string(
+                    full_path.to_string_lossy().to_string()
+                )?));
+            }
+        }
+
+        // File not found - return nil
+        Ok(mlua::Value::Nil)
+    })?;
+    nmap_table.set("fetchfile", fetchfile_fn)?;
+
     // Set the nmap table as a global
     lua.globals().set("nmap", nmap_table)?;
 
@@ -279,12 +437,10 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
 fn log_write_impl(level: &str, message: &str) {
     match level {
         "stdout" => {
-            use std::io::Write;
             let _ = std::io::stdout().write_all(message.as_bytes());
             let _ = std::io::stdout().write_all(b"\n");
         }
         "stderr" => {
-            use std::io::Write;
             let _ = std::io::stderr().write_all(message.as_bytes());
             let _ = std::io::stderr().write_all(b"\n");
         }

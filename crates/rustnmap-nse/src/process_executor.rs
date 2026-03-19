@@ -23,6 +23,8 @@ enum RunnerStatus {
     Failed,
     /// Script timed out.
     Timeout,
+    /// Script skipped (e.g., missing required library).
+    Skipped,
 }
 
 /// Runner process output.
@@ -273,6 +275,16 @@ impl ProcessExecutor {
                 output: ScriptOutput::Empty,
                 duration: start.elapsed(),
                 debug_log: vec!["Script execution timed out".to_string()],
+            },
+            RunnerStatus::Skipped => ScriptResult {
+                script_id: script_id.to_string(),
+                target_ip,
+                port: None,
+                protocol: None,
+                status: ExecutionStatus::Skipped,
+                output: ScriptOutput::Empty,
+                duration: start.elapsed(),
+                debug_log: vec![output.error.unwrap_or_else(|| "Script skipped".to_string())],
             },
         }
     }
