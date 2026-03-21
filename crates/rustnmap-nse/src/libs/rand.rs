@@ -97,11 +97,9 @@ fn random_string_impl(
             }
             Ok(result)
         }
-        Some(_) => {
-            Err(mlua::Error::RuntimeError(
-                "Charset must be a string or table".to_string(),
-            ))
-        }
+        Some(_) => Err(mlua::Error::RuntimeError(
+            "Charset must be a string or table".to_string(),
+        )),
     }
 }
 
@@ -173,7 +171,8 @@ fn charset_impl(
     let mut seq_idx = 1;
     for byte in left..=right {
         let ch = u8::try_from(byte)
-            .map_err(|e| mlua::Error::RuntimeError(format!("Byte value out of range: {e}")))? as char;
+            .map_err(|e| mlua::Error::RuntimeError(format!("Byte value out of range: {e}")))?
+            as char;
         table.set(seq_idx, ch.to_string())?;
         seq_idx += 1;
     }
@@ -222,8 +221,7 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
 
     // Register charset function
     let charset_fn = lua.create_function(
-        |lua,
-         (left_bound, right_bound, charset_table): (Value, Value, Option<Value>)| {
+        |lua, (left_bound, right_bound, charset_table): (Value, Value, Option<Value>)| {
             charset_impl(lua, left_bound, right_bound, charset_table)
         },
     )?;
@@ -244,7 +242,11 @@ mod tests {
     #[test]
     fn test_random_string_with_charset() {
         let lua = mlua::Lua::new();
-        let result = random_string_impl(&lua, 10, Some(Value::String(lua.create_string("abc").unwrap())));
+        let result = random_string_impl(
+            &lua,
+            10,
+            Some(Value::String(lua.create_string("abc").unwrap())),
+        );
         assert!(result.is_ok());
         let s = result.unwrap();
         assert_eq!(s.len(), 10);
@@ -264,8 +266,13 @@ mod tests {
     #[test]
     fn test_random_alpha() {
         let lua = mlua::Lua::new();
-        let result =
-            random_string_impl(&lua, 8, Some(Value::String(lua.create_string("abcdefghijklmnopqrstuvwxyz").unwrap())));
+        let result = random_string_impl(
+            &lua,
+            8,
+            Some(Value::String(
+                lua.create_string("abcdefghijklmnopqrstuvwxyz").unwrap(),
+            )),
+        );
         assert!(result.is_ok());
         let s = result.unwrap();
         assert_eq!(s.len(), 8);

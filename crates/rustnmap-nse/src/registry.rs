@@ -617,7 +617,10 @@ impl ScriptDatabase {
     /// # Note
     ///
     /// Falls back to heuristic matching if Lua evaluation fails for a script.
-    #[expect(clippy::too_many_arguments, reason = "Port script filtering requires all host/port context")]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Port script filtering requires all host/port context"
+    )]
     #[must_use]
     pub fn scripts_for_port_with_engine(
         &self,
@@ -634,7 +637,15 @@ impl ScriptDatabase {
             .filter(|s| s.has_portrule())
             .filter(|script| {
                 // Attempt Lua evaluation first
-                match engine.evaluate_portrule(script, target_ip, original_target, port, protocol, state, service) {
+                match engine.evaluate_portrule(
+                    script,
+                    target_ip,
+                    original_target,
+                    port,
+                    protocol,
+                    state,
+                    service,
+                ) {
                     Ok(result) => result,
                     Err(_) => {
                         // Fall back to heuristic matching on Lua evaluation failure

@@ -272,6 +272,12 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
 
     // Create registry table (empty table that scripts can use)
     let registry = lua.create_table()?;
+
+    // Create args table inside registry (for --script-args, empty by default)
+    // Scripts access this via nmap.registry.args.scriptname
+    let args = lua.create_table()?;
+    registry.set("args", args)?;
+
     nmap_table.set("registry", registry)?;
 
     // Set scan_start_time
@@ -357,9 +363,9 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
                 mlua::Error::RuntimeError(format!("mutex storage lock failed: {e}"))
             })?;
             Arc::clone(
-                guard.entry(key.clone()).or_insert_with(|| {
-                    Arc::new(Mutex::new(MutexState::default()))
-                })
+                guard
+                    .entry(key.clone())
+                    .or_insert_with(|| Arc::new(Mutex::new(MutexState::default()))),
             )
         };
 
@@ -367,9 +373,9 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
         // This function is returned by nmap.mutex() and takes one argument:
         // "lock", "trylock", "done", or "running"
         let mutex_op_fn = lua.create_function(move |lua, operation: String| {
-            let mut guard = mutex_arc.lock().map_err(|e| {
-                mlua::Error::RuntimeError(format!("mutex lock failed: {e}"))
-            })?;
+            let mut guard = mutex_arc
+                .lock()
+                .map_err(|e| mlua::Error::RuntimeError(format!("mutex lock failed: {e}")))?;
 
             match operation.as_str() {
                 "lock" => {
@@ -416,9 +422,9 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
         for base_path in &search_paths {
             let full_path = base_path.join(&filename);
             if full_path.exists() {
-                return Ok(mlua::Value::String(lua.create_string(
-                    full_path.to_string_lossy().to_string()
-                )?));
+                return Ok(mlua::Value::String(
+                    lua.create_string(full_path.to_string_lossy().to_string())?,
+                ));
             }
         }
 

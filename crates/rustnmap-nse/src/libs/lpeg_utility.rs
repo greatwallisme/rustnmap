@@ -168,7 +168,9 @@ fn get_response_impl(fp: &str, probe: &str) -> Option<String> {
     let entry_start = start_idx;
     let entry_end = fp_normalized[entry_start + search_pattern.len()..]
         .find("SF:")
-        .map_or(fp_normalized.len(), |next_sf| entry_start + search_pattern.len() + next_sf);
+        .map_or(fp_normalized.len(), |next_sf| {
+            entry_start + search_pattern.len() + next_sf
+        });
 
     let entry = &fp_normalized[entry_start..entry_end];
 
@@ -201,7 +203,9 @@ fn parse_fp_impl(fp: &str) -> HashMap<String, String> {
     let mut result = HashMap::new();
 
     // Normalize: remove newlines between SF entries
-    let fp_normalized = fp.replace("\nSF:", "|||SF:").replace("\nSF-SSL:", "|||SF-SSL:");
+    let fp_normalized = fp
+        .replace("\nSF:", "|||SF:")
+        .replace("\nSF-SSL:", "|||SF-SSL:");
 
     // Split by our marker
     for entry in fp_normalized.split("|||") {

@@ -163,12 +163,33 @@ fn register_package_preload(lua: &mut NseLua) -> Result<()> {
 
     // List of all library names to register in preload
     let library_names = [
-        "nmap", "stdnse", "comm", "shortport",
-        "http", "ssh2", "ssl", "dns", "ftp", "unpwdb",
-        "smb", "netbios", "smbauth", "unicode",
-        "json", "openssl", "brute", "creds", "url", "rand",
-        "stringaux", "tableaux", "libssh2-utility", "lpeg-utility",
-        "ipOps", "base64", "ssh1"
+        "nmap",
+        "stdnse",
+        "comm",
+        "shortport",
+        "http",
+        "ssh2",
+        "ssl",
+        "dns",
+        "ftp",
+        "unpwdb",
+        "smb",
+        "netbios",
+        "smbauth",
+        "unicode",
+        "json",
+        "openssl",
+        "brute",
+        "creds",
+        "url",
+        "rand",
+        "stringaux",
+        "tableaux",
+        "libssh2-utility",
+        "lpeg-utility",
+        "ipOps",
+        "base64",
+        "ssh1",
     ];
 
     for name in library_names {

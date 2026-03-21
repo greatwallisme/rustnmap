@@ -253,7 +253,9 @@ fn send_service_request(stream: &mut TcpStream) -> mlua::Result<()> {
     let resp_payload = extract_payload(&resp)?;
 
     if resp_payload.is_empty() {
-        return Err(mlua::Error::RuntimeError("Empty service response".to_string()));
+        return Err(mlua::Error::RuntimeError(
+            "Empty service response".to_string(),
+        ));
     }
 
     if resp_payload[0] != SSH_MSG_SERVICE_ACCEPT {
@@ -267,10 +269,7 @@ fn send_service_request(stream: &mut TcpStream) -> mlua::Result<()> {
 }
 
 /// List authentication methods for a user.
-fn list_auth_methods_impl(
-    stream: &mut TcpStream,
-    username: &str,
-) -> mlua::Result<Vec<String>> {
+fn list_auth_methods_impl(stream: &mut TcpStream, username: &str) -> mlua::Result<Vec<String>> {
     send_service_request(stream)?;
 
     // Send USERAUTH_REQUEST with "none" method to get available methods
@@ -324,15 +323,17 @@ fn list_auth_methods_impl(
             } else {
                 Err(mlua::Error::RuntimeError(format!(
                     "Expected USERAUTH_FAILURE after banner, got message type {}",
-                    if next_payload.is_empty() { 0 } else { next_payload[0] }
+                    if next_payload.is_empty() {
+                        0
+                    } else {
+                        next_payload[0]
+                    }
                 )))
             }
         }
-        msg_type => {
-            Err(mlua::Error::RuntimeError(format!(
-                "Expected USERAUTH_FAILURE/SUCCESS/BANNER, got message type {msg_type}"
-            )))
-        }
+        msg_type => Err(mlua::Error::RuntimeError(format!(
+            "Expected USERAUTH_FAILURE/SUCCESS/BANNER, got message type {msg_type}"
+        ))),
     }
 }
 
@@ -476,20 +477,17 @@ impl UserData for SSHConnection {
         methods.add_function("new", |_, ()| Ok(Self::new()));
 
         // Connect to SSH server
-        methods.add_method_mut(
-            "connect",
-            |_, this, (host, port): (String, u16)| {
-                debug!("libssh2-utility.SSHConnection:connect({}, {})", host, port);
+        methods.add_method_mut("connect", |_, this, (host, port): (String, u16)| {
+            debug!("libssh2-utility.SSHConnection:connect({}, {})", host, port);
 
-                match this.connect(&host, port) {
-                    Ok(_) => Ok(true),
-                    Err(e) => {
-                        debug!("connect failed: {}", e);
-                        Ok(false)
-                    }
+            match this.connect(&host, port) {
+                Ok(_) => Ok(true),
+                Err(e) => {
+                    debug!("connect failed: {}", e);
+                    Ok(false)
                 }
-            },
-        );
+            }
+        });
 
         // Connect with pcall wrapper (returns (true, nil) or (false, error))
         // Accepts either (host_table, port_number) or (host_table, port_table)
@@ -582,47 +580,38 @@ impl UserData for SSHConnection {
         });
 
         // List authentication methods
-        methods.add_method_mut(
-            "list",
-            |lua, this, username: String| {
-                debug!("libssh2-utility.SSHConnection:list({})", username);
+        methods.add_method_mut("list", |lua, this, username: String| {
+            debug!("libssh2-utility.SSHConnection:list({})", username);
 
-                let (_host, _port) = this.get_connection_info()?;
-                let stream = this.get_stream()?;
+            let (_host, _port) = this.get_connection_info()?;
+            let stream = this.get_stream()?;
 
-                match list_auth_methods_impl(stream, &username) {
-                    Ok(methods) => {
-                        let table = lua.create_table()?;
-                        for (i, method) in methods.iter().enumerate() {
-                            table.set(i + 1, method.as_str())?;
-                        }
-                        Ok(Value::Table(table))
+            match list_auth_methods_impl(stream, &username) {
+                Ok(methods) => {
+                    let table = lua.create_table()?;
+                    for (i, method) in methods.iter().enumerate() {
+                        table.set(i + 1, method.as_str())?;
                     }
-                    Err(e) => {
-                        debug!("list auth methods failed: {}", e);
-                        Ok(Value::Nil)
-                    }
+                    Ok(Value::Table(table))
                 }
-            },
-        );
-
-        // Get server banner
-        methods.add_method("banner", |_, this, ()| {
-            match &this.state {
-                ConnectionState::Connected { banner, .. } => Ok(banner.clone()),
-                ConnectionState::Disconnected => Ok(String::new()),
+                Err(e) => {
+                    debug!("list auth methods failed: {}", e);
+                    Ok(Value::Nil)
+                }
             }
         });
 
-        // Get authentication status
-        methods.add_method("authenticated", |_, this, ()| {
-            Ok(this.authenticated)
+        // Get server banner
+        methods.add_method("banner", |_, this, ()| match &this.state {
+            ConnectionState::Connected { banner, .. } => Ok(banner.clone()),
+            ConnectionState::Disconnected => Ok(String::new()),
         });
 
+        // Get authentication status
+        methods.add_method("authenticated", |_, this, ()| Ok(this.authenticated));
+
         // Set session (no-op for compatibility)
-        methods.add_method("set_timeout", |_, _this, _timeout_ms: u64| {
-            Ok(())
-        });
+        methods.add_method("set_timeout", |_, _this, _timeout_ms: u64| Ok(()));
 
         // Login with username/password
         methods.add_method_mut(
@@ -714,9 +703,9 @@ impl UserData for SSHConnection {
 
                 // Send auth request
                 let auth_packet = build_ssh2_packet(&auth_req);
-                stream
-                    .write_all(&auth_packet)
-                    .map_err(|e| mlua::Error::RuntimeError(format!("Failed to send password auth: {e}")))?;
+                stream.write_all(&auth_packet).map_err(|e| {
+                    mlua::Error::RuntimeError(format!("Failed to send password auth: {e}"))
+                })?;
 
                 // Receive response
                 let auth_resp = receive_ssh_packet(stream)?;
@@ -731,14 +720,9 @@ impl UserData for SSHConnection {
                         this.authenticated = true;
                         Ok(true)
                     }
-                    SSH_MSG_USERAUTH_FAILURE => {
-                        Ok(false)
-                    }
+                    SSH_MSG_USERAUTH_FAILURE => Ok(false),
                     msg_type => {
-                        debug!(
-                            "Unexpected auth response message type: {}",
-                            msg_type
-                        );
+                        debug!("Unexpected auth response message type: {}", msg_type);
                         Ok(false)
                     }
                 }
@@ -785,9 +769,9 @@ impl UserData for SSHConnection {
 
                 // Send auth request
                 let auth_packet = build_ssh2_packet(&auth_req);
-                stream
-                    .write_all(&auth_packet)
-                    .map_err(|e| mlua::Error::RuntimeError(format!("Failed to send kbd-int auth: {e}")))?;
+                stream.write_all(&auth_packet).map_err(|e| {
+                    mlua::Error::RuntimeError(format!("Failed to send kbd-int auth: {e}"))
+                })?;
 
                 // Receive response
                 let auth_resp = receive_ssh_packet(stream)?;
@@ -878,9 +862,9 @@ impl UserData for SSHConnection {
 
                         // Send info response
                         let info_packet = build_ssh2_packet(&info_resp);
-                        stream
-                            .write_all(&info_packet)
-                            .map_err(|e| mlua::Error::RuntimeError(format!("Failed to send info response: {e}")))?;
+                        stream.write_all(&info_packet).map_err(|e| {
+                            mlua::Error::RuntimeError(format!("Failed to send info response: {e}"))
+                        })?;
 
                         // Receive final response
                         let final_resp = receive_ssh_packet(stream)?;
@@ -895,20 +879,11 @@ impl UserData for SSHConnection {
                                 this.authenticated = true;
                                 Ok(true)
                             }
-                            SSH_MSG_USERAUTH_FAILURE => {
-                                Ok(false)
-                            }
                             _ => Ok(false),
                         }
                     }
-                    SSH_MSG_USERAUTH_FAILURE => {
-                        Ok(false)
-                    }
                     msg_type => {
-                        debug!(
-                            "Unexpected kbd-int response message type: {}",
-                            msg_type
-                        );
+                        debug!("Unexpected kbd-int response message type: {}", msg_type);
                         Ok(false)
                     }
                 }
@@ -916,40 +891,37 @@ impl UserData for SSHConnection {
         );
 
         // Read public key file
-        methods.add_function(
-            "read_publickey",
-            |lua, publickey_path: String| {
-                debug!(
-                    "libssh2-utility.SSHConnection:read_publickey({})",
-                    publickey_path
-                );
+        methods.add_function("read_publickey", |lua, publickey_path: String| {
+            debug!(
+                "libssh2-utility.SSHConnection:read_publickey({})",
+                publickey_path
+            );
 
-                match std::fs::read_to_string(&publickey_path) {
-                    Ok(contents) => {
-                        // Parse OpenSSH public key format
-                        // Format: "key-type base64-encoded-data comment"
-                        let parts: Vec<&str> = contents.split_whitespace().collect();
-                        if parts.len() < 2 {
-                            let table = lua.create_table()?;
-                            table.set(1, false)?;
-                            table.set(2, "Invalid public key file format")?;
-                            return Ok(Value::Table(table));
-                        }
-
-                        let table = lua.create_table()?;
-                        table.set(1, true)?;
-                        table.set(2, parts[1])?;
-                        Ok(Value::Table(table))
-                    }
-                    Err(e) => {
+            match std::fs::read_to_string(&publickey_path) {
+                Ok(contents) => {
+                    // Parse OpenSSH public key format
+                    // Format: "key-type base64-encoded-data comment"
+                    let parts: Vec<&str> = contents.split_whitespace().collect();
+                    if parts.len() < 2 {
                         let table = lua.create_table()?;
                         table.set(1, false)?;
-                        table.set(2, e.to_string())?;
-                        Ok(Value::Table(table))
+                        table.set(2, "Invalid public key file format")?;
+                        return Ok(Value::Table(table));
                     }
+
+                    let table = lua.create_table()?;
+                    table.set(1, true)?;
+                    table.set(2, parts[1])?;
+                    Ok(Value::Table(table))
                 }
-            },
-        );
+                Err(e) => {
+                    let table = lua.create_table()?;
+                    table.set(1, false)?;
+                    table.set(2, e.to_string())?;
+                    Ok(Value::Table(table))
+                }
+            }
+        });
 
         // Check if public key can authenticate - not supported without full SSH signature implementation
         methods.add_function(
@@ -959,7 +931,10 @@ impl UserData for SSHConnection {
 
         // Set __metatable to prevent access
         methods.add_meta_method(MetaMethod::ToString, |_lua, this, ()| {
-            Ok(format!("SSHConnection{{ authenticated: {} }}", this.authenticated))
+            Ok(format!(
+                "SSHConnection{{ authenticated: {} }}",
+                this.authenticated
+            ))
         });
     }
 }

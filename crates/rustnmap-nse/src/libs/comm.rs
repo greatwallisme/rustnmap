@@ -346,7 +346,10 @@ fn read_response_impl(socket: &mut NseSocket, opts: &ConnectionOpts) -> std::io:
 /// # Errors
 ///
 /// Returns an error if registration fails.
-#[expect(clippy::too_many_lines, reason = "Register function contains multiple Lua bindings")]
+#[expect(
+    clippy::too_many_lines,
+    reason = "Register function contains multiple Lua bindings"
+)]
 pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     let lua = nse_lua.lua_mut();
 
@@ -369,7 +372,13 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     // Accepts host as string or table (with host.ip), port as number or table (with port.number),
     // optional data string to send after connection, and optional opts table
     let tryssl_fn = lua.create_function(
-        |lua, (host_param, port_param, data_param, opts): (Value, Value, Option<mlua::String>, Option<Table>)| {
+        |lua,
+         (host_param, port_param, data_param, opts): (
+            Value,
+            Value,
+            Option<mlua::String>,
+            Option<Table>,
+        )| {
             // Extract host string from either string or host table
             let host = match &host_param {
                 Value::String(s) => s.to_str()?.to_string(),

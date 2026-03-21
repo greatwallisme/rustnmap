@@ -240,7 +240,9 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
                         });
 
                         // Return the value as a Lua string, or nil if not found
-                        value.map_or(Value::Nil, |v| Value::String(lua.create_string(&v).unwrap()))
+                        value.map_or(Value::Nil, |v| {
+                            Value::String(lua.create_string(&v).unwrap())
+                        })
                     } else {
                         Value::Nil
                     }
@@ -357,26 +359,32 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
         let mt = lua.create_table()?;
 
         // __call metamethod: returns true if table has any keys
-        mt.set("__call", lua.create_function(|_, this: mlua::Value| {
-            if let mlua::Value::Table(t) = this {
-                // Check if table has any keys by checking if next() returns a value
-                Ok(t.pairs::<mlua::Value, mlua::Value>().next().is_some())
-            } else {
-                Ok(false)
-            }
-        })?)?;
+        mt.set(
+            "__call",
+            lua.create_function(|_, this: mlua::Value| {
+                if let mlua::Value::Table(t) = this {
+                    // Check if table has any keys by checking if next() returns a value
+                    Ok(t.pairs::<mlua::Value, mlua::Value>().next().is_some())
+                } else {
+                    Ok(false)
+                }
+            })?,
+        )?;
 
         // __len metamethod: returns the count of all keys (not just array part)
         // This is needed because scripts check `if #output > 0 then return output`
-        mt.set("__len", lua.create_function(|_, this: mlua::Value| {
-            if let mlua::Value::Table(t) = this {
-                // Count all keys in the table
-                let count = t.pairs::<mlua::Value, mlua::Value>().count();
-                Ok(i64::try_from(count).unwrap_or(0))
-            } else {
-                Ok(0i64)
-            }
-        })?)?;
+        mt.set(
+            "__len",
+            lua.create_function(|_, this: mlua::Value| {
+                if let mlua::Value::Table(t) = this {
+                    // Count all keys in the table
+                    let count = t.pairs::<mlua::Value, mlua::Value>().count();
+                    Ok(i64::try_from(count).unwrap_or(0))
+                } else {
+                    Ok(0i64)
+                }
+            })?,
+        )?;
 
         table.set_metatable(Some(mt))?;
         Ok(mlua::Value::Table(table))
@@ -420,17 +428,15 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
         // Use block_in_place to run async code from sync callback
         let handle = tokio::runtime::Handle::try_current()
             .map_err(|_e| mlua::Error::RuntimeError("No tokio runtime available".to_string()))?;
-        let mutex_arc = tokio::task::block_in_place(|| {
-            handle.block_on(get_or_create_mutex(&name))
-        });
+        let mutex_arc = tokio::task::block_in_place(|| handle.block_on(get_or_create_mutex(&name)));
 
         // Create the mutex operation function
         // This function is returned by stdnse.mutex() and takes one argument:
         // "lock", "trylock", or "unlock"
         let mutex_op_fn = lua.create_function(move |_lua, operation: String| {
-            let mut guard = mutex_arc.lock().map_err(|e| {
-                mlua::Error::RuntimeError(format!("mutex lock failed: {e}"))
-            })?;
+            let mut guard = mutex_arc
+                .lock()
+                .map_err(|e| mlua::Error::RuntimeError(format!("mutex lock failed: {e}")))?;
 
             match operation.as_str() {
                 "lock" => {
@@ -498,9 +504,7 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
         // Use block_in_place to run async code from sync callback
         let handle = tokio::runtime::Handle::try_current()
             .map_err(|_e| mlua::Error::RuntimeError("No tokio runtime available".to_string()))?;
-        let cvar_arc = tokio::task::block_in_place(|| {
-            handle.block_on(get_or_create_cvar(&name))
-        });
+        let cvar_arc = tokio::task::block_in_place(|| handle.block_on(get_or_create_cvar(&name)));
 
         // Create the condition variable operation function
         let cvar_op_fn = lua.create_function(move |_, operation: String| {

@@ -148,8 +148,11 @@ end
         let target_ip = std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST);
 
         b.iter(|| {
-            let result =
-                engine.execute_script(engine.database().get("simple-script").unwrap(), target_ip);
+            let result = engine.execute_script(
+                engine.database().get("simple-script").unwrap(),
+                target_ip,
+                None,
+            );
             let _ = black_box(result);
         });
     });
@@ -174,8 +177,11 @@ end
         let target_ip = std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST);
 
         b.iter(|| {
-            let result =
-                engine.execute_script(engine.database().get("math-script").unwrap(), target_ip);
+            let result = engine.execute_script(
+                engine.database().get("math-script").unwrap(),
+                target_ip,
+                None,
+            );
             let _ = black_box(result);
         });
     });
@@ -200,8 +206,11 @@ end
         let target_ip = std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST);
 
         b.iter(|| {
-            let result =
-                engine.execute_script(engine.database().get("string-script").unwrap(), target_ip);
+            let result = engine.execute_script(
+                engine.database().get("string-script").unwrap(),
+                target_ip,
+                None,
+            );
             let _ = black_box(result);
         });
     });

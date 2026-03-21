@@ -467,7 +467,6 @@ impl InternalCongestionController {
     fn recommended_timeout(&self) -> Duration {
         self.stats.recommended_timeout()
     }
-
 }
 /// Ethernet header size.
 const ETH_HDR_SIZE: usize = 14;
@@ -1085,7 +1084,10 @@ impl ParallelScanEngine {
                     Ok(Some(packet)) => {
                         // Track packets received for diagnostics
                         #[cfg(feature = "diagnostic")]
-                        #[expect(clippy::semicolon_outside_block, reason = "cfg-guarded diagnostic statement")]
+                        #[expect(
+                            clippy::semicolon_outside_block,
+                            reason = "cfg-guarded diagnostic statement"
+                        )]
                         {
                             packets_received += 1;
                         }

@@ -123,7 +123,12 @@ fn invert_impl(lua: &Lua, t: &Table) -> mlua::Result<Table> {
 /// A tuple of:
 /// - Boolean `true` if the item was found, `false` if not
 /// - The index or key where the value was found, or `nil`
-fn contains_impl(_lua: &Lua, t: &Table, item: &Value, array: Option<bool>) -> mlua::Result<(bool, Value)> {
+fn contains_impl(
+    _lua: &Lua,
+    t: &Table,
+    item: &Value,
+    array: Option<bool>,
+) -> mlua::Result<(bool, Value)> {
     let use_ipairs = array.unwrap_or(false);
 
     if use_ipairs {
@@ -187,33 +192,26 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     let tableaux_table = lua.create_table()?;
 
     // Register tcopy function
-    let tcopy_fn = lua.create_function(|lua, t: Table| {
-        tcopy_impl(lua, &t)
-    })?;
+    let tcopy_fn = lua.create_function(|lua, t: Table| tcopy_impl(lua, &t))?;
     tableaux_table.set("tcopy", tcopy_fn)?;
 
     // Register shallow_tcopy function
-    let shallow_tcopy_fn = lua.create_function(|lua, t: Table| {
-        shallow_tcopy_impl(lua, &t)
-    })?;
+    let shallow_tcopy_fn = lua.create_function(|lua, t: Table| shallow_tcopy_impl(lua, &t))?;
     tableaux_table.set("shallow_tcopy", shallow_tcopy_fn)?;
 
     // Register invert function
-    let invert_fn = lua.create_function(|lua, t: Table| {
-        invert_impl(lua, &t)
-    })?;
+    let invert_fn = lua.create_function(|lua, t: Table| invert_impl(lua, &t))?;
     tableaux_table.set("invert", invert_fn)?;
 
     // Register contains function
-    let contains_fn = lua.create_function(|lua, (t, item, array): (Table, Value, Option<bool>)| {
-        contains_impl(lua, &t, &item, array)
-    })?;
+    let contains_fn =
+        lua.create_function(|lua, (t, item, array): (Table, Value, Option<bool>)| {
+            contains_impl(lua, &t, &item, array)
+        })?;
     tableaux_table.set("contains", contains_fn)?;
 
     // Register keys function
-    let keys_fn = lua.create_function(|lua, t: Table| {
-        keys_impl(lua, &t)
-    })?;
+    let keys_fn = lua.create_function(|lua, t: Table| keys_impl(lua, &t))?;
     tableaux_table.set("keys", keys_fn)?;
 
     // Register the library globally as "tableaux"

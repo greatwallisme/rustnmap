@@ -34,7 +34,9 @@ fn format_fingerprint_base64(data: &[u8], hash: &str, algorithm: &str, bits: i64
 /// Format fingerprint as bubble babble.
 fn format_fingerprint_bubblebabble(data: &[u8], algorithm: &str, bits: i64) -> String {
     let vowels = ['a', 'e', 'i', 'o', 'u', 'y'];
-    let consonants = ['b', 'c', 'd', 'f', 'g', 'h', 'k', 'l', 'm', 'n', 'p', 'r', 's', 't', 'v', 'z', 'x'];
+    let consonants = [
+        'b', 'c', 'd', 'f', 'g', 'h', 'k', 'l', 'm', 'n', 'p', 'r', 's', 't', 'v', 'z', 'x',
+    ];
 
     let mut s = String::from("x");
     let mut seed: usize = 1;
@@ -81,7 +83,9 @@ fn format_fingerprint_bubblebabble(data: &[u8], algorithm: &str, bits: i64) -> S
 
 /// Format fingerprint as visual ASCII art.
 fn format_fingerprint_visual(data: &[u8], algorithm: &str, bits: i64) -> String {
-    let characters = [' ', '.', 'o', '+', '=', '*', 'B', 'O', 'X', '@', '%', '&', '#', '/', '^', 'S', 'E'];
+    let characters = [
+        ' ', '.', 'o', '+', '=', '*', 'B', 'O', 'X', '@', '%', '&', '#', '/', '^', 'S', 'E',
+    ];
 
     let fieldsize_x = 17;
     let fieldsize_y = 9;
@@ -140,7 +144,10 @@ fn format_fingerprint_visual(data: &[u8], algorithm: &str, bits: i64) -> String 
 /// # Errors
 ///
 /// Returns an error if library registration fails.
-#[allow(clippy::too_many_lines, reason = "Library registration has many similar function registrations")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Library registration has many similar function registrations"
+)]
 pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     let lua = nse_lua.lua_mut();
 
@@ -170,41 +177,48 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     ssh1_table.set("check_packet_length", check_packet_length_fn)?;
 
     // Register fetch_host_key(host, port) - SSH-1 deprecated
-    let fetch_host_key_fn = lua.create_function(|_lua, (_host, _port): (mlua::Value, mlua::Value)| {
-        Ok(mlua::Value::Nil)
-    })?;
+    let fetch_host_key_fn = lua
+        .create_function(|_lua, (_host, _port): (mlua::Value, mlua::Value)| Ok(mlua::Value::Nil))?;
     ssh1_table.set("fetch_host_key", fetch_host_key_fn)?;
 
     // Register fingerprint_hex
-    let fingerprint_hex_fn = lua.create_function(|lua, (fingerprint, algorithm, bits): (mlua::String, String, i64)| {
-        let data = fingerprint.as_bytes();
-        let result = format_fingerprint_hex(&data, &algorithm, bits);
-        lua.create_string(&result)
-    })?;
+    let fingerprint_hex_fn = lua.create_function(
+        |lua, (fingerprint, algorithm, bits): (mlua::String, String, i64)| {
+            let data = fingerprint.as_bytes();
+            let result = format_fingerprint_hex(&data, &algorithm, bits);
+            lua.create_string(&result)
+        },
+    )?;
     ssh1_table.set("fingerprint_hex", fingerprint_hex_fn)?;
 
     // Register fingerprint_base64
-    let fingerprint_base64_fn = lua.create_function(|lua, (fingerprint, hash, algorithm, bits): (mlua::String, String, String, i64)| {
-        let data = fingerprint.as_bytes();
-        let result = format_fingerprint_base64(&data, &hash, &algorithm, bits);
-        lua.create_string(&result)
-    })?;
+    let fingerprint_base64_fn = lua.create_function(
+        |lua, (fingerprint, hash, algorithm, bits): (mlua::String, String, String, i64)| {
+            let data = fingerprint.as_bytes();
+            let result = format_fingerprint_base64(&data, &hash, &algorithm, bits);
+            lua.create_string(&result)
+        },
+    )?;
     ssh1_table.set("fingerprint_base64", fingerprint_base64_fn)?;
 
     // Register fingerprint_bubblebabble
-    let fingerprint_bubblebabble_fn = lua.create_function(|lua, (fingerprint, algorithm, bits): (mlua::String, String, i64)| {
-        let data = fingerprint.as_bytes();
-        let result = format_fingerprint_bubblebabble(&data, &algorithm, bits);
-        lua.create_string(&result)
-    })?;
+    let fingerprint_bubblebabble_fn = lua.create_function(
+        |lua, (fingerprint, algorithm, bits): (mlua::String, String, i64)| {
+            let data = fingerprint.as_bytes();
+            let result = format_fingerprint_bubblebabble(&data, &algorithm, bits);
+            lua.create_string(&result)
+        },
+    )?;
     ssh1_table.set("fingerprint_bubblebabble", fingerprint_bubblebabble_fn)?;
 
     // Register fingerprint_visual
-    let fingerprint_visual_fn = lua.create_function(|lua, (fingerprint, algorithm, bits): (mlua::String, String, i64)| {
-        let data = fingerprint.as_bytes();
-        let result = format_fingerprint_visual(&data, &algorithm, bits);
-        lua.create_string(&result)
-    })?;
+    let fingerprint_visual_fn = lua.create_function(
+        |lua, (fingerprint, algorithm, bits): (mlua::String, String, i64)| {
+            let data = fingerprint.as_bytes();
+            let result = format_fingerprint_visual(&data, &algorithm, bits);
+            lua.create_string(&result)
+        },
+    )?;
     ssh1_table.set("fingerprint_visual", fingerprint_visual_fn)?;
 
     // Register parse_known_hosts_file
@@ -256,7 +270,8 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     lua.globals().set("ssh1", ssh1_table.clone())?;
 
     // Also register in package.preload
-    let preload: mlua::Table = lua.globals()
+    let preload: mlua::Table = lua
+        .globals()
         .get::<mlua::Table>("package")?
         .get("preload")?;
     preload.set("ssh1", ssh1_table)?;

@@ -307,7 +307,10 @@ impl Args {
     ///
     /// Returns an error if argument parsing fails or help/version was requested
     /// (in which case the function prints and exits).
-    #[expect(clippy::too_many_lines, reason = "Argument parsing requires handling all CLI options")]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "Argument parsing requires handling all CLI options"
+    )]
     pub fn parse() -> Result<Self, ParseError> {
         let mut args = Self::default();
         let mut parser = Parser::from_env();

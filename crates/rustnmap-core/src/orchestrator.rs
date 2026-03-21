@@ -2538,27 +2538,29 @@ impl ScanOrchestrator {
             // Also execute host scripts against the host
             for script in &scripts {
                 match engine.evaluate_hostrule(script, host_result.ip, original_target) {
-                    Ok(true) => match engine.execute_script(script, host_result.ip, original_target) {
-                        Ok(result) => {
-                            if result.is_success() && !result.output.is_empty() {
-                                host_result
-                                    .scripts
-                                    .push(rustnmap_output::models::ScriptResult {
-                                        id: result.script_id,
-                                        output: result.output.to_display(),
-                                        elements: Vec::new(),
-                                    });
+                    Ok(true) => {
+                        match engine.execute_script(script, host_result.ip, original_target) {
+                            Ok(result) => {
+                                if result.is_success() && !result.output.is_empty() {
+                                    host_result.scripts.push(
+                                        rustnmap_output::models::ScriptResult {
+                                            id: result.script_id,
+                                            output: result.output.to_display(),
+                                            elements: Vec::new(),
+                                        },
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                debug!(
+                                    ip = %host_result.ip,
+                                    script = %script.id,
+                                    error = %e,
+                                    "Host script execution failed"
+                                );
                             }
                         }
-                        Err(e) => {
-                            debug!(
-                                ip = %host_result.ip,
-                                script = %script.id,
-                                error = %e,
-                                "Host script execution failed"
-                            );
-                        }
-                    },
+                    }
                     Ok(false) => {}
                     Err(e) => {
                         debug!(

@@ -348,7 +348,11 @@ mod tests {
         list.set(2, "Bob").unwrap();
         list.set(3, "Charlie").unwrap();
 
-        let result = strjoin_impl(&lua, Some(Value::String(lua.create_string(", ").unwrap())), &list);
+        let result = strjoin_impl(
+            &lua,
+            Some(Value::String(lua.create_string(", ").unwrap())),
+            &list,
+        );
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), "Anna, Bob, Charlie");
     }

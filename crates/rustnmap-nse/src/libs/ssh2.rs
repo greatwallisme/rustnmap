@@ -75,7 +75,6 @@ const SSH_MSG_KEXDH_REPLY: u8 = 31;
 const SSH_BANNER_PREFIX: &[u8] = b"SSH-2.0-";
 
 /// Oakley group 2 prime (1024-bit) from RFC 2409.
-#[expect(dead_code, reason = "Available for future group1 support")]
 const PRIME_GROUP1: &str = "FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD1\
     29024E088A67CC74020BBEA63B139B22514A08798E3404DD\
     EF9519B3CD3A431B302B0A6DF25F14374FE1356D6D51C245\
@@ -84,7 +83,6 @@ const PRIME_GROUP1: &str = "FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD1\
     FFFFFFFFFFFFFFFF";
 
 /// Oakley group 14 prime (2048-bit) from RFC 3526.
-#[expect(dead_code, reason = "Used for group14 selection")]
 const PRIME_GROUP14: &str = "FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD1\
     29024E088A67CC74020BBEA63B139B22514A08798E3404DD\
     EF9519B3CD3A431B302B0A6DF25F14374FE1356D6D51C245\
@@ -98,7 +96,6 @@ const PRIME_GROUP14: &str = "FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD1\
     15728E5A8AACAA68FFFFFFFFFFFFFFFF";
 
 /// Oakley group 16 prime (4096-bit) from RFC 3526.
-#[expect(dead_code, reason = "Available for future group16 support")]
 const PRIME_GROUP16: &str = "FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD1\
     29024E088A67CC74020BBEA63B139B22514A08798E3404DD\
     EF9519B3CD3A431B302B0A6DF25F14374FE1356D6D51C245\
@@ -125,24 +122,9 @@ const PRIME_GROUP16: &str = "FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD1\
 /// Diffie-Hellman generator.
 const DH_GENERATOR: u32 = 2;
 
-/// Read SSH banner from server.
-fn read_ssh_banner(host: &str, port: u16, timeout_ms: u64) -> mlua::Result<String> {
-    let addr = format!("{host}:{port}");
-
-    let mut stream = TcpStream::connect(&addr)
-        .map_err(|e| mlua::Error::RuntimeError(format!("Connection failed to {addr}: {e}")))?;
-
-    stream
-        .set_read_timeout(Some(Duration::from_millis(timeout_ms)))
-        .map_err(|e| mlua::Error::RuntimeError(format!("Failed to set timeout: {e}")))?;
-
-    // Send client banner
-    let client_banner = "SSH-2.0-rustnmap_1.0\r\n";
-    stream
-        .write_all(client_banner.as_bytes())
-        .map_err(|e| mlua::Error::RuntimeError(format!("Failed to send banner: {e}")))?;
-
-    // Read server banner
+/// Read SSH banner from an existing stream.
+fn read_banner_from_stream(stream: &mut TcpStream) -> mlua::Result<String> {
+    // Read server banner line (until \n)
     let mut line = Vec::new();
     let mut byte = [0u8; 1];
 
@@ -173,6 +155,27 @@ fn read_ssh_banner(host: &str, port: u16, timeout_ms: u64) -> mlua::Result<Strin
     Ok(String::from_utf8_lossy(&line).to_string())
 }
 
+/// Read SSH banner from server (standalone function for banner-only queries).
+fn read_ssh_banner(host: &str, port: u16, timeout_ms: u64) -> mlua::Result<String> {
+    let addr = format!("{host}:{port}");
+
+    let mut stream = TcpStream::connect(&addr)
+        .map_err(|e| mlua::Error::RuntimeError(format!("Connection failed to {addr}: {e}")))?;
+
+    stream
+        .set_read_timeout(Some(Duration::from_millis(timeout_ms)))
+        .map_err(|e| mlua::Error::RuntimeError(format!("Failed to set timeout: {e}")))?;
+
+    // Send client banner
+    let client_banner = "SSH-2.0-rustnmap_1.0\r\n";
+    stream
+        .write_all(client_banner.as_bytes())
+        .map_err(|e| mlua::Error::RuntimeError(format!("Failed to send banner: {e}")))?;
+
+    // Read server banner using the shared function
+    read_banner_from_stream(&mut stream)
+}
+
 /// Extract host and port from Lua values.
 fn extract_host_port(host: Value, port: Value) -> (String, u16) {
     let host_str = match host {
@@ -200,17 +203,15 @@ fn extract_host_port(host: Value, port: Value) -> (String, u16) {
     (host_str, port_num)
 }
 
-/// Calculate MD5 fingerprint.
-fn calculate_md5_fingerprint(data: &[u8]) -> String {
+/// Calculate MD5 fingerprint (raw bytes).
+fn calculate_md5_fingerprint(data: &[u8]) -> [u8; 16] {
     let mut hasher = Md5::new();
     hasher.update(data);
     let result = hasher.finalize();
 
-    result
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect::<Vec<_>>()
-        .join(":")
+    let mut fp = [0u8; 16];
+    fp.copy_from_slice(&result);
+    fp
 }
 
 /// Calculate SHA256 fingerprint (Base64 format).
@@ -255,11 +256,12 @@ fn base64_encode(input: &[u8]) -> String {
 
 /// Pack a multiprecision integer (mpint) as SSH-2 binary format.
 fn pack_mpint(bn: &BigUint) -> Vec<u8> {
+    let bits = bn.bits();
     let bytes = bn.to_bytes_be();
 
-    // SSH-2 mpint format requires that the high bit be zero for positive numbers
-    // If the high bit is set, we need to prepend a zero byte
-    let data = if bytes.first().is_some_and(|b| *b & 0x80 != 0) {
+    // SSH-2 mpint format: prepend zero byte if number uses exact multiple of 8 bits
+    // This matches Nmap's: if bytes > 0 and bn:num_bits() % 8 == 0
+    let data = if bits > 0 && bits.is_multiple_of(8) {
         let mut padded = Vec::with_capacity(bytes.len() + 1);
         padded.push(0);
         padded.extend_from_slice(&bytes);
@@ -276,12 +278,17 @@ fn pack_mpint(bn: &BigUint) -> Vec<u8> {
 }
 
 /// Build SSH-2 packet with payload and padding.
+/// Per RFC 4253 Section 6: the concatenation of `packet_length`, `padding_length`, `payload`, and `random padding`
+/// MUST be a multiple of the cipher block size or 8, whichever is larger.
 fn build_ssh2_packet(payload: &[u8]) -> Vec<u8> {
-    // Padding length must be at least 4 bytes and total packet size must be multiple of 8
-    // SSH2 packets are limited to 256KB, so padding_length fits in u8
-    let remainder = (payload.len() + 5) % 8;
-    let padding_length: u8 =
-        u8::try_from(if remainder == 0 { 4 } else { 8 - remainder + 4 }).unwrap_or(4);
+    // Calculate padding: 8 - ((payload + padding_length_byte + packet_length_field) % 8)
+    // Per RFC 4253 Section 6, packet_length field IS included in the alignment calculation
+    let mut padding_length = 8 - ((payload.len() + 1 + 4) % 8);
+    // Minimum padding is 4 bytes
+    if padding_length < 4 {
+        padding_length += 8;
+    }
+    let padding_length: u8 = u8::try_from(padding_length).unwrap_or(4);
     let packet_length = payload.len() + usize::from(padding_length) + 1;
 
     let mut packet = Vec::with_capacity(4 + packet_length);
@@ -421,6 +428,76 @@ fn extract_payload(packet: &[u8]) -> mlua::Result<Vec<u8>> {
     Ok(packet[1..=payload_length].to_vec())
 }
 
+/// Parse name-list from KEXINIT payload at given offset.
+/// Returns (list of algorithm names, new offset).
+fn parse_name_list(data: &[u8], offset: usize) -> mlua::Result<(Vec<String>, usize)> {
+    if data.len() < offset + 4 {
+        return Err(mlua::Error::RuntimeError(
+            "Data too short for name-list length".to_string(),
+        ));
+    }
+
+    let len = u32::from_be_bytes([
+        data[offset],
+        data[offset + 1],
+        data[offset + 2],
+        data[offset + 3],
+    ]) as usize;
+    let new_offset = offset + 4;
+
+    if data.len() < new_offset + len {
+        return Err(mlua::Error::RuntimeError(
+            "Data too short for name-list value".to_string(),
+        ));
+    }
+
+    let list_str = String::from_utf8_lossy(&data[new_offset..new_offset + len]).to_string();
+    let algorithms: Vec<String> = list_str
+        .split(',')
+        .map(std::string::ToString::to_string)
+        .collect();
+
+    Ok((algorithms, new_offset + len))
+}
+
+/// Select a matching key exchange algorithm.
+/// Per RFC 4253: server chooses the FIRST algorithm in CLIENT's list that it supports.
+/// Returns (`algorithm_name`, `prime_hex`, `group_bits`) as owned String.
+fn select_kex_algorithm(server_kex_algorithms: &[String]) -> mlua::Result<(String, String, usize)> {
+    // Our client's algorithms in order of preference (what we send in KEXINIT)
+    // Server will choose the FIRST one it supports from this list
+    let our_algorithms: [(&str, &str, usize); 6] = [
+        ("diffie-hellman-group1-sha1", PRIME_GROUP1, 1024),
+        ("diffie-hellman-group14-sha1", PRIME_GROUP14, 2048),
+        ("diffie-hellman-group14-sha256", PRIME_GROUP14, 2048),
+        ("diffie-hellman-group16-sha512", PRIME_GROUP16, 4096),
+        ("diffie-hellman-group-exchange-sha1", PRIME_GROUP14, 2048),
+        ("diffie-hellman-group-exchange-sha256", PRIME_GROUP14, 2048),
+    ];
+
+    // Convert server algorithms to a set for fast lookup
+    let server_set: std::collections::HashSet<&str> =
+        server_kex_algorithms.iter().map(String::as_str).collect();
+
+    // Find first algorithm in OUR list that server supports
+    // This matches SSH protocol: server picks first client algorithm it supports
+    for (name, prime, bits) in &our_algorithms {
+        if server_set.contains(*name) {
+            debug!(
+                "ssh2: selected kex algorithm: {} (server supports it)",
+                name
+            );
+            return Ok(((*name).to_string(), (*prime).to_string(), *bits));
+        }
+    }
+
+    // No matching algorithm found
+    let server_algos = server_kex_algorithms.join(", ");
+    Err(mlua::Error::RuntimeError(format!(
+        "No compatible key exchange algorithm. Server offers: {server_algos}"
+    )))
+}
+
 /// Parse mpint from SSH packet data.
 fn parse_mpint(data: &[u8], offset: usize) -> mlua::Result<(BigUint, usize)> {
     if data.len() < offset + 4 {
@@ -438,9 +515,10 @@ fn parse_mpint(data: &[u8], offset: usize) -> mlua::Result<(BigUint, usize)> {
     let new_offset = offset + 4;
 
     if data.len() < new_offset + len {
-        return Err(mlua::Error::RuntimeError(
-            "Data too short for mpint value".to_string(),
-        ));
+        return Err(mlua::Error::RuntimeError(format!(
+            "Data too short for mpint value: need {} bytes at offset {}, have {}",
+            len, new_offset, data.len()
+        )));
     }
 
     let value_bytes = &data[new_offset..new_offset + len];
@@ -449,7 +527,36 @@ fn parse_mpint(data: &[u8], offset: usize) -> mlua::Result<(BigUint, usize)> {
     Ok((value, new_offset + len))
 }
 
+/// Parse bytes from SSH packet data (for binary data like host keys).
+fn parse_bytes(data: &[u8], offset: usize) -> mlua::Result<(Vec<u8>, usize)> {
+    if data.len() < offset + 4 {
+        return Err(mlua::Error::RuntimeError(
+            "Data too short for bytes".to_string(),
+        ));
+    }
+
+    let len = u32::from_be_bytes([
+        data[offset],
+        data[offset + 1],
+        data[offset + 2],
+        data[offset + 3],
+    ]) as usize;
+    let new_offset = offset + 4;
+
+    // Check if length points to valid data within bounds
+    if data.len() < new_offset + len {
+        return Err(mlua::Error::RuntimeError(format!(
+            "Data too short for bytes value: need {} bytes at offset {}, have {}",
+            len, new_offset, data.len()
+        )));
+    }
+
+    let value = data[new_offset..new_offset + len].to_vec();
+    Ok((value, new_offset + len))
+}
+
 /// Parse string from SSH packet data.
+/// Note: For binary data like host keys, use `parse_bytes` instead.
 fn parse_string(data: &[u8], offset: usize) -> mlua::Result<(String, usize)> {
     if data.len() < offset + 4 {
         return Err(mlua::Error::RuntimeError(
@@ -465,14 +572,198 @@ fn parse_string(data: &[u8], offset: usize) -> mlua::Result<(String, usize)> {
     ]) as usize;
     let new_offset = offset + 4;
 
+    // Check if length points to valid data within bounds
     if data.len() < new_offset + len {
-        return Err(mlua::Error::RuntimeError(
-            "Data too short for string value".to_string(),
-        ));
+        return Err(mlua::Error::RuntimeError(format!(
+            "Data too short for string value: need {} bytes at offset {}, have {}",
+            len, new_offset, data.len()
+        )));
     }
 
     let value = String::from_utf8_lossy(&data[new_offset..new_offset + len]).to_string();
     Ok((value, new_offset + len))
+}
+
+/// Parse SSH DISCONNECT message from payload.
+/// Returns `Ok(reason_code, description)` if payload is a valid DISCONNECT message.
+fn parse_disconnect_message(payload: &[u8]) -> mlua::Result<(u32, String)> {
+    // DISCONNECT format: reason_code(4) + description(string) + language(string)
+    if payload.len() <= 4 {
+        return Err(mlua::Error::RuntimeError(
+            "DISCONNECT payload too short".to_string(),
+        ));
+    }
+
+    let reason_code = u32::from_be_bytes([payload[1], payload[2], payload[3], payload[4]]);
+
+    if payload.len() > 8 {
+        let desc_len =
+            u32::from_be_bytes([payload[5], payload[6], payload[7], payload[8]]) as usize;
+        if payload.len() > 9 + desc_len {
+            let desc = String::from_utf8_lossy(&payload[9..9 + desc_len]).to_string();
+            return Ok((reason_code, desc));
+        }
+    }
+
+    Ok((reason_code, String::new()))
+}
+
+/// Parse server KEXINIT and verify key type is supported.
+/// Returns the selected KEX algorithm name, prime hex, and group bits.
+fn parse_server_kexinit_and_check_key_type(
+    server_kex_payload: &[u8],
+    key_type: &str,
+) -> mlua::Result<(String, String, usize)> {
+    // Format: MSG_KEXINIT(1) + cookie(16) + kex_algorithms(name-list) + ...
+    if server_kex_payload.len() < 17 {
+        return Err(mlua::Error::RuntimeError(
+            "Server KEXINIT payload too short".to_string(),
+        ));
+    }
+
+    // Skip MSG_KEXINIT (1 byte) and cookie (16 bytes)
+    let (server_kex_algorithms, offset_after_kex) = parse_name_list(server_kex_payload, 17)?;
+
+    // Parse server's host key algorithms to check if requested key type is supported
+    let (server_host_key_algorithms, _) = parse_name_list(server_kex_payload, offset_after_kex)?;
+
+    // Check if server supports the requested key type
+    let server_supports_key_type = server_host_key_algorithms
+        .iter()
+        .any(|algo| algo == key_type);
+
+    if !server_supports_key_type {
+        debug!(
+            "ssh2.fetch_host_key: server does not support requested key type '{}'. Supported: {:?}",
+            key_type, server_host_key_algorithms
+        );
+        return Err(mlua::Error::RuntimeError(format!(
+            "Server does not support key type: {key_type}"
+        )));
+    }
+
+    // Select matching algorithm
+    select_kex_algorithm(&server_kex_algorithms)
+}
+
+/// Validate `KEXDH_REPLY` message type and extract the host key.
+/// Returns the parsed host key bytes.
+fn validate_kexdh_reply_and_extract_host_key(
+    kexdh_reply_payload: &[u8],
+    key_type: &str,
+) -> mlua::Result<Vec<u8>> {
+    // Check message type - log actual type for debugging
+    if kexdh_reply_payload.is_empty() {
+        return Err(mlua::Error::RuntimeError(
+            "Empty KEXDH_REPLY payload".to_string(),
+        ));
+    }
+    let msg_type = kexdh_reply_payload[0];
+    if msg_type != SSH_MSG_KEXDH_REPLY {
+        // SSH message types: 1=DISCONNECT, 2=IGNORE, 3=UNIMPLEMENTED, 4=DEBUG, 20=KEXINIT, 31=KEXDH_REPLY
+        let msg_name = match msg_type {
+            1 => "DISCONNECT",
+            2 => "IGNORE",
+            3 => "UNIMPLEMENTED",
+            4 => "DEBUG",
+            20 => "KEXINIT",
+            31 => "KEXDH_REPLY",
+            _ => "UNKNOWN",
+        };
+
+        // If DISCONNECT, try to parse the error message
+        if msg_type == 1 {
+            if let Ok((reason_code, desc)) = parse_disconnect_message(kexdh_reply_payload) {
+                debug!(
+                    "ssh2.fetch_host_key: server DISCONNECT - reason={reason_code}, description={desc}"
+                );
+                return Err(mlua::Error::RuntimeError(format!(
+                    "Server disconnected (reason {reason_code}): {desc}"
+                )));
+            }
+        }
+
+        debug!(
+            "ssh2.fetch_host_key: received message type {} ({}) instead of KEXDH_REPLY (31)",
+            msg_type, msg_name
+        );
+        return Err(mlua::Error::RuntimeError(format!(
+            "Expected KEXDH_REPLY (31), got message type {msg_type} ({msg_name})"
+        )));
+    }
+
+    // Parse KEXDH_REPLY: host key (string), f (mpint), signature (string)
+    let offset = 1;
+
+    // Debug: show raw bytes at offset to see length field
+    if kexdh_reply_payload.len() > 10 {
+        debug!(
+            "ssh2.fetch_host_key: raw bytes at offset {}: {:02x} {:02x} {:02x} {:02x}",
+            offset,
+            kexdh_reply_payload[offset],
+            kexdh_reply_payload[offset + 1],
+            kexdh_reply_payload[offset + 2],
+            kexdh_reply_payload[offset + 3]
+        );
+    }
+
+    // Parse public host key - use parse_bytes for binary data, not parse_string
+    let (host_key, _new_offset) = parse_bytes(kexdh_reply_payload, offset)?;
+
+    // Debug: log the actual key type returned by server
+    if let Ok((returned_key_type, _)) = parse_string(&host_key, 0) {
+        debug!(
+            "ssh2.fetch_host_key: server returned '{}' key, requested '{}'",
+            returned_key_type, key_type
+        );
+    }
+
+    Ok(host_key)
+}
+
+/// Perform Diffie-Hellman key exchange and send `KEXDH_INIT`.
+fn perform_dh_key_exchange(
+    stream: &mut TcpStream,
+    prime_hex: &str,
+    group_bits: usize,
+) -> mlua::Result<(BigUint, BigUint)> {
+    let p = BigUint::parse_bytes(prime_hex.as_bytes(), 16)
+        .ok_or_else(|| mlua::Error::RuntimeError("Failed to parse prime".to_string()))?;
+    let g = BigUint::from(DH_GENERATOR);
+
+    // Generate random private key x (should be in range [1, q-1] where q = (p-1)/2)
+    // Use group_bits - 1 to ensure x < q
+    let mut rng = rand::thread_rng();
+    let x = rng.gen_biguint(
+        u64::try_from(group_bits.saturating_sub(1))
+            .map_err(|_err| mlua::Error::RuntimeError("Group bits too large".to_string()))?,
+    );
+    let e = g.modpow(&x, &p); // e = g^x mod p
+
+    // Build and send KEXDH_INIT
+    let mut kexdh_payload = Vec::new();
+    kexdh_payload.push(SSH_MSG_KEXDH_INIT);
+    let e_mpint = pack_mpint(&e);
+    debug!("ssh2: e_mpint length = {} bytes", e_mpint.len());
+    kexdh_payload.extend_from_slice(&e_mpint);
+
+    let kexdh_packet = build_ssh2_packet(&kexdh_payload);
+
+    // Debug: full packet hex dump
+    let hex_all: Vec<String> = kexdh_packet.iter().map(|b| format!("{b:02x}")).collect();
+    debug!("ssh2: KEXDH_INIT full packet ({} bytes): {}", kexdh_packet.len(), hex_all.join(""));
+    debug!(
+        "ssh2: KEXDH_INIT breakdown - payload_len={}, packet_len_field={}, padding={}",
+        kexdh_payload.len(),
+        u32::from_be_bytes(kexdh_packet[0..4].try_into().unwrap()),
+        kexdh_packet[4]
+    );
+
+    stream
+        .write_all(&kexdh_packet)
+        .map_err(|e| mlua::Error::RuntimeError(format!("Failed to send KEXDH_INIT: {e}")))?;
+
+    Ok((x, e))
 }
 
 /// Fetch SSH host key with proper key exchange.
@@ -486,12 +777,14 @@ fn fetch_host_key_impl(host: &str, port: u16, key_type: &str) -> mlua::Result<Ho
         .set_read_timeout(Some(Duration::from_millis(DEFAULT_TIMEOUT_MS)))
         .map_err(|e| mlua::Error::RuntimeError(format!("Failed to set timeout: {e}")))?;
 
-    // Exchange banners
-    let _banner = read_ssh_banner(host, port, DEFAULT_TIMEOUT_MS)?;
+    // Exchange banners - send client banner first
     let client_banner = "SSH-2.0-rustnmap_1.0\r\n";
     stream
         .write_all(client_banner.as_bytes())
         .map_err(|e| mlua::Error::RuntimeError(format!("Failed to send banner: {e}")))?;
+
+    // Read server banner from the same stream
+    let _server_banner = read_banner_from_stream(&mut stream)?;
 
     // Send KEXINIT
     let kex_init_payload = build_kex_init(key_type);
@@ -499,71 +792,39 @@ fn fetch_host_key_impl(host: &str, port: u16, key_type: &str) -> mlua::Result<Ho
     stream
         .write_all(&kex_init_packet)
         .map_err(|e| mlua::Error::RuntimeError(format!("Failed to send KEXINIT: {e}")))?;
+    stream
+        .flush()
+        .map_err(|e| mlua::Error::RuntimeError(format!("Failed to flush: {e}")))?;
 
-    // Receive server KEXINIT (packet and payload validated for protocol compliance)
+    // Receive server KEXINIT and parse to find matching algorithm
     let server_kex_packet = receive_ssh_packet(&mut stream)?;
     let server_kex_payload = extract_payload(&server_kex_packet)?;
-    // Algorithm selection uses fixed group14-sha1; payload received for protocol handshake completion
-    let _ = server_kex_payload;
 
-    // Determine which Diffie-Hellman group to use
-    // For simplicity, we'll try group14 first (2048-bit), then group1 (1024-bit)
-    let (prime_hex, group_bits) = (
-        "FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD1\
-        29024E088A67CC74020BBEA63B139B22514A08798E3404DD\
-        EF9519B3CD3A431B302B0A6DF25F14374FE1356D6D51C245\
-        E485B576625E7EC6F44C42E9A637ED6B0BFF5CB6F406B7ED\
-        EE386BFB5A899FA5AE9F24117C4B1FE649286651ECE45B3D\
-        C2007CB8A163BF0598DA48361C55D39A69163FA8FD24CF5F\
-        83655D23DCA3AD961C62F356208552BB9ED529077096966D\
-        670C354E4ABC9804F1746C08CA18217C32905E462E36CE3B\
-        E39E772C180E86039B2783A2EC07A28FB5C55DF06F4C52C9\
-        DE2BCBF6955817183995497CEA956AE515D2261898FA0510\
-        15728E5A8AACAA68FFFFFFFFFFFFFFFF",
-        2048,
-    );
+    // Parse server KEXINIT and verify key type is supported
+    let (algo_name, prime_hex, group_bits) =
+        parse_server_kexinit_and_check_key_type(&server_kex_payload, key_type)?;
+    debug!("ssh2: using prime for {algo_name} ({group_bits} bits)");
 
-    // Parse prime and create DH values
-    let p = BigUint::parse_bytes(prime_hex.as_bytes(), 16)
-        .ok_or_else(|| mlua::Error::RuntimeError("Failed to parse prime".to_string()))?;
-    let g = BigUint::from(DH_GENERATOR);
-
-    // Generate random private key x
-    let mut rng = rand::thread_rng();
-    let x = rng.gen_biguint(group_bits);
-    let e = g.modpow(&x, &p); // e = g^x mod p
-
-    // Build and send KEXDH_INIT
-    let mut kexdh_payload = Vec::new();
-    kexdh_payload.push(SSH_MSG_KEXDH_INIT);
-    kexdh_payload.extend_from_slice(&pack_mpint(&e));
-
-    let kexdh_packet = build_ssh2_packet(&kexdh_payload);
-    stream
-        .write_all(&kexdh_packet)
-        .map_err(|e| mlua::Error::RuntimeError(format!("Failed to send KEXDH_INIT: {e}")))?;
+    // Perform DH key exchange and send KEXDH_INIT
+    let (_x, _e) = perform_dh_key_exchange(&mut stream, &prime_hex, group_bits)?;
 
     // Receive KEXDH_REPLY
     let kexdh_reply_packet = receive_ssh_packet(&mut stream)?;
     let kexdh_reply_payload = extract_payload(&kexdh_reply_packet)?;
 
-    // Check message type
-    if kexdh_reply_payload.is_empty() || kexdh_reply_payload[0] != SSH_MSG_KEXDH_REPLY {
-        return Err(mlua::Error::RuntimeError(
-            "Expected KEXDH_REPLY message".to_string(),
-        ));
-    }
+    debug!(
+        "ssh2.fetch_host_key: received KEXDH_REPLY packet, {} bytes, payload {} bytes",
+        kexdh_reply_packet.len(),
+        kexdh_reply_payload.len()
+    );
 
-    // Parse KEXDH_REPLY: host key (string), f (mpint), signature (string)
-    let offset = 1;
-
-    // Parse public host key
-    let (host_key, _new_offset) = parse_string(&kexdh_reply_payload, offset)?;
+    // Validate KEXDH_REPLY message type and extract the host key
+    let host_key = validate_kexdh_reply_and_extract_host_key(&kexdh_reply_payload, key_type)?;
 
     // The host key is in SSH format: type + key data
     // For ssh-rsa: string "ssh-rsa" + mpint e + mpint n
     // For ssh-dss: string "ssh-dss" + mpint p + mpint q + mpint g + mpint y
-    let parsed_key = parse_ssh_host_key(host_key.as_bytes())?;
+    let parsed_key = parse_ssh_host_key(&host_key)?;
 
     Ok(parsed_key)
 }
@@ -581,11 +842,24 @@ struct HostKeyInfo {
 
 /// Parse SSH public host key from binary format.
 fn parse_ssh_host_key(data: &[u8]) -> mlua::Result<HostKeyInfo> {
+    debug!("ssh2: parse_ssh_host_key called with data_len={}", data.len());
+
     let mut offset = 0;
 
     // Parse key type string
     let (key_type, new_offset) = parse_string(data, offset)?;
     offset = new_offset;
+
+    debug!(
+        "ssh2: parse_ssh_host_key: key_type={}, offset={}, data_len={}",
+        key_type, offset, data.len()
+    );
+
+    // For DSA keys, dump more info to debug the issue
+    if key_type == "ssh-dss" && data.len() < 1000 {
+        let preview: Vec<String> = data.iter().take(100).map(|b| format!("{b:02x}")).collect();
+        debug!("ssh2: DSA key data (first 100 bytes): {}", preview.join(" "));
+    }
 
     let (bits, algorithm) = match key_type.as_str() {
         "ssh-rsa" => {
@@ -604,7 +878,15 @@ fn parse_ssh_host_key(data: &[u8]) -> mlua::Result<HostKeyInfo> {
         "ssh-dss" => {
             // DSA: p (mpint) + q (mpint) + g (mpint) + y (mpint)
             let (p, new_off) = parse_mpint(data, offset)?;
-            let _q = parse_mpint(data, new_off)?.0;
+            debug!("ssh2: DSA p parsed, offset={}, data_len={}", new_off, data.len());
+            let (_q, new_off) = parse_mpint(data, new_off).map_err(|e| {
+                debug!("ssh2: failed to parse DSA q parameter at offset {}: {}", new_off, e);
+                e
+            })?;
+            let (_g, _new_off) = parse_mpint(data, new_off).map_err(|e| {
+                debug!("ssh2: failed to parse DSA g parameter: {}", e);
+                e
+            })?;
             let bits = u32::try_from(p.bits()).unwrap_or(u32::MAX);
             (bits, "DSA".to_string())
         }
@@ -665,7 +947,8 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
                     table.set("bits", i64::from(key_info.bits))?;
                     table.set("algorithm", key_info.algorithm.as_str())?;
                     table.set("full_key", key_info.full_key.as_str())?;
-                    table.set("fingerprint", calculate_md5_fingerprint(&key_info.fp_input))?;
+                    let fp = calculate_md5_fingerprint(&key_info.fp_input);
+                    table.set("fingerprint", lua.create_string(fp)?)?;
                     table.set(
                         "fp_sha256",
                         calculate_sha256_fingerprint(&key_info.fp_input),
@@ -716,8 +999,11 @@ mod tests {
     fn test_calculate_md5_fingerprint() {
         let data = b"test data";
         let fp = calculate_md5_fingerprint(data);
-        assert_eq!(fp.len(), 47);
-        assert!(fp.contains(':'));
+        assert_eq!(fp.len(), 16); // MD5 is 16 bytes
+        // Known MD5 of "test data": eb733a00c0c9d336e65691a37ab54293
+        assert_eq!(fp[0], 0xeb);
+        assert_eq!(fp[1], 0x73);
+        assert_eq!(fp[2], 0x3a);
     }
 
     #[test]
@@ -753,7 +1039,8 @@ mod tests {
         // Packet should have: 4 bytes length + 1 byte padding + payload + padding
         assert!(packet.len() >= payload.len() + 5);
 
-        // Total length should be multiple of 8 (block size)
-        assert_eq!((packet.len() - 4) % 8, 0);
+        // Per RFC 4253 Section 6: total length INCLUDING the 4-byte packet_length field
+        // must be a multiple of 8 (block size)
+        assert_eq!(packet.len() % 8, 0);
     }
 }

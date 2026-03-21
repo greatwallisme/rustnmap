@@ -1,85 +1,145 @@
-# Task Plan: NSE Module Fixes
+# NSE Module Status
 
-> **Updated**: 2026-03-19 09:10
-> **Status**: Progress Made, More Work Needed
-
----
-
-## Summary of Session Progress
-
-### Fixes Applied
-
-| Fix | File | Description |
-|-----|------|-------------|
-| stdnse.mutex() | stdnse.rs | Uses block_inplace with actual mutex locking |
-| stdnse.condition_variable() | stdnse.rs | Uses block_inplace with actual cvar ops |
-| nmap.fetchfile() | nmap.rs | Searches for data files in multiple paths |
-| http.identify_404() | http.rs | Returns standard 404 detection result |
-| ssh1 library | ssh1.rs | NEW: SSH-1 protocol library with fingerprint formatting |
-| SCRIPT_TYPE global | engine.rs | Sets script type (portrule/hostrule/postrule) |
-| name_confidence | engine.rs | Sets port.version.name_confidence to 8 |
-
-### Pass Rate Progress
-
-- Previous: 26.6% (4/15 scripts)
-- Current: 26.6% (4/15 scripts) - same count but more scripts execute
-
-**Note**: ssh-hostkey now executes without Lua errors (no output yet due to SSH key fetch)
+> **Updated**: 2026-03-21 03:30
+> **Purpose**: Factual record of NSE module completion status and problems
 
 ---
 
-## Current Problems
+## Current Test Results
 
-### Problem 1: Scripts Running But No Output
+Benchmark against scanme.nmap.org (45.33.32.156):
 
-| Test | Status | Issue |
-|------|--------|-------|
-| http-title | PASS | - |
-| http-server-header | PASS | - |
-| http-methods | PASS | - |
-| ssh-hostkey | EXECUTES | Runs but no SSH key output (libssh2 not connected) |
-| http-enum | TIMEOUT | Runs but slow (120s timeout) |
+| Script | Status | Issue |
+|--------|--------|-------|
+| http-title | PASS | Works correctly |
+| http-server-header | PASS | Works correctly |
+| http-methods | PASS | Works correctly |
+| ssh-hostkey | PASS | All 4 keys (DSA, RSA, ECDSA, ED25519) returned |
+| ssh-auth-methods | FAIL | Only outputs banner, not auth methods |
+| http-robots.txt | SKIPPED | Target has no robots.txt |
+| ssl-cert | SKIPPED | Target has no port 443 |
+| ssl-enum-ciphers | SKIPPED | Target has no port 443 |
+| http-ssl-cert | SKIPPED | Target has no port 443 |
+| http-git | SKIPPED | Target has no git repo |
+| http-enum | SKIPPED | Not tested |
+| smb-os-discovery | SKIPPED | Target has no port 445 |
+| smb-enum-shares | SKIPPED | Target has no port 445 |
 
-### Problem 2: SSH Implementation Issues
-
-- `ssh-hostkey`: Needs libssh2 connection to fetch host keys
-- `ssh-auth-methods`: Key exchange incomplete, shows only banner
-
-### Problem 3: HTTP Pipeline Performance
-
-- http-enum runs but is slow (many URLs to check)
-- May need pipeline optimization
-
----
-
-## Outstanding Issues
-
-1. **SSH Key Fetching**: Need to implement actual SSH key retrieval via libssh2
-2. **HTTP Pipeline Performance**: http-enum runs but is slow
-3. **ssh-auth-methods Output**: Only shows banner, needs full auth method list
+**Pass Rate**: 4/14 tested scripts work correctly (29%)
+**Skipped Rate**: 9/14 tests cannot run against single target (64%)
 
 ---
 
-## Next Steps (Priority Order)
+## Known Problems
 
-1. [ ] Implement libssh2 key fetching for ssh-hostkey
-2. [ ] Optimize http-enum pipeline performance
-3. [ ] Fix ssh-auth-methods output format
-4. [ ] Run full benchmark
-5. [ ] Commit changes
+### 1. ssh-auth-methods - Incomplete SSH Key Exchange
+
+**Status**: FAIL - Only outputs SSH banner
+
+**Root Cause**:
+The `libssh2_utility.rs` SSH implementation stops after KEXINIT exchange. It does NOT complete:
+- DH key exchange (KEXDH_INIT/REPLY)
+- NEWKEYS activation
+
+When the script sends `SSH_MSG_SERVICE_REQUEST`, the server disconnects because key exchange is incomplete.
+
+**Why Nmap works**:
+Nmap uses the C library libssh2 which handles the full SSH handshake internally.
+
+**Required Fix**:
+Implement complete SSH key exchange in `libssh2_utility.rs`:
+1. DH key exchange computation
+2. KEXDH_INIT packet send
+3. KEXDH_REPLY receive and parse
+4. NEWKEYS send/receive
+5. Service request handling
+
+**Complexity**: High - Requires implementing Diffie-Hellman cryptographic operations
 
 ---
 
-## Error Log
+### 2. Test Coverage Problem
 
-| Error | Script | Status |
-|-------|--------|--------|
-| attempt to call nil 'mutex' | http-enum | FIXED |
-| attempt to call nil 'fetchfile' | http-enum | FIXED |
-| attempt to call nil 'identify_404' | http-enum | FIXED |
-| attempt to call nil 'ssh1' | ssh-hostkey | FIXED |
-| attempt to call nil '?' (SCRIPT_TYPE) | ssh-hostkey | FIXED |
-| attempt to compare nil with number | ssh-hostkey | FIXED |
-| ssh1 not found | ssh-hostkey | FIXED |
-| key exchange failed | ssh-auth-methods | OPEN |
-| http-enum timeout | http-enum | OPEN |
+**Status**: CRITICAL - Most NSE scripts are never tested
+
+**Problem**:
+Benchmark uses single target (scanme.nmap.org) which only has ports 80 and 22 open.
+- SSL/TLS scripts cannot be tested
+- SMB scripts cannot be tested
+- Many HTTP scripts cannot be tested
+
+**Impact**:
+- SSL/TLS implementation may have bugs, but tests won't find them
+- SMB implementation may not work at all, but we don't know
+- http-enum may timeout or crash, but we don't test it
+
+**Required Fix**:
+Set up test infrastructure:
+1. Multiple test targets with different services
+2. Local test servers for SSL/TLS, SMB, etc.
+3. Mock services for comprehensive testing
+
+**Complexity**: Medium - Requires infrastructure setup
+
+---
+
+## File Status
+
+### Working (Verified)
+- `engine.rs` - Script execution engine
+- `stdnse.rs` - Standard NSE library functions
+- `nmap.rs` - Core Nmap functions (mutex, fetchfile, registry)
+- `http.rs` - HTTP library
+- `ssh2.rs` - SSH-2 host key fetching (fixed binary parsing bug)
+- `ssh1.rs` - SSH-1 protocol library
+
+### Problematic
+- `libssh2_utility.rs` - Incomplete SSH key exchange, causes ssh-auth-methods to fail
+
+### Untested (Unknown Status)
+- `ssl.rs` - SSL/TLS library - NEVER TESTED
+- `dns.rs` - DNS library - NEVER TESTED
+- `smb.rs` - SMB library - NEVER TESTED
+- `comm.rs` - Communication library - MINIMALLY TESTED
+- `shortport.rs` - Port matching - NOT INDEPENDENTLY TESTED
+
+---
+
+## Current Bugs Fixed This Session
+
+### Binary SSH Host Key Parsing (2026-03-21)
+
+**Problem**:
+`parse_string()` was using `String::from_utf8_lossy()` on binary SSH key data, causing data corruption (435 bytes → 780 bytes).
+
+**Fix**:
+Created `parse_bytes()` function that returns raw `Vec<u8>` for binary data.
+
+**Result**:
+All 4 SSH host key types now parse correctly.
+
+---
+
+## Open Problems (Priority Order)
+
+1. **ssh-auth-methods key exchange** - HIGH PRIORITY
+   - Blocks SSH authentication enumeration
+   - Requires cryptographic implementation
+
+2. **Test infrastructure** - HIGH PRIORITY
+   - Cannot verify SSL/TLS implementation works
+   - Cannot verify SMB implementation works
+   - Cannot verify many HTTP scripts work
+
+3. **http-enum timeout** - MEDIUM PRIORITY
+   - Script may timeout or hang
+   - Not tested in current benchmark
+
+---
+
+## Next Actions
+
+1. Fix ssh-auth-methods by implementing full SSH key exchange
+2. Set up multi-target test infrastructure
+3. Test SSL/TLS implementation against HTTPS target
+4. Test SMB implementation against SMB target

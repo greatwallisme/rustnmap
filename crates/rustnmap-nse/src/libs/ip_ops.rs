@@ -60,12 +60,12 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
 
     // Register compare(ip1, ip2) function
     let compare_fn = lua.create_function(|_, (ip1, ip2): (String, String)| {
-        let addr1: IpAddr = ip1.parse().map_err(|e| {
-            mlua::Error::RuntimeError(format!("Invalid IP address '{ip1}': {e}"))
-        })?;
-        let addr2: IpAddr = ip2.parse().map_err(|e| {
-            mlua::Error::RuntimeError(format!("Invalid IP address '{ip2}': {e}"))
-        })?;
+        let addr1: IpAddr = ip1
+            .parse()
+            .map_err(|e| mlua::Error::RuntimeError(format!("Invalid IP address '{ip1}': {e}")))?;
+        let addr2: IpAddr = ip2
+            .parse()
+            .map_err(|e| mlua::Error::RuntimeError(format!("Invalid IP address '{ip2}': {e}")))?;
 
         let result = match addr1.cmp(&addr2) {
             std::cmp::Ordering::Less => -1i64,
@@ -78,9 +78,9 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
 
     // Register is_private(ip) function
     let is_private_fn = lua.create_function(|_, ip: String| {
-        let addr: IpAddr = ip.parse().map_err(|e| {
-            mlua::Error::RuntimeError(format!("Invalid IP address '{ip}': {e}"))
-        })?;
+        let addr: IpAddr = ip
+            .parse()
+            .map_err(|e| mlua::Error::RuntimeError(format!("Invalid IP address '{ip}': {e}")))?;
 
         let is_private = match addr {
             IpAddr::V4(v4) => is_private_ipv4(v4),
@@ -92,9 +92,9 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
 
     // Register is_loopback(ip) function
     let is_loopback_fn = lua.create_function(|_, ip: String| {
-        let addr: IpAddr = ip.parse().map_err(|e| {
-            mlua::Error::RuntimeError(format!("Invalid IP address '{ip}': {e}"))
-        })?;
+        let addr: IpAddr = ip
+            .parse()
+            .map_err(|e| mlua::Error::RuntimeError(format!("Invalid IP address '{ip}': {e}")))?;
 
         let is_loopback = match addr {
             IpAddr::V4(v4) => v4.is_loopback(),
@@ -106,9 +106,9 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
 
     // Register is_link_local(ip) function
     let is_link_local_fn = lua.create_function(|_, ip: String| {
-        let addr: IpAddr = ip.parse().map_err(|e| {
-            mlua::Error::RuntimeError(format!("Invalid IP address '{ip}': {e}"))
-        })?;
+        let addr: IpAddr = ip
+            .parse()
+            .map_err(|e| mlua::Error::RuntimeError(format!("Invalid IP address '{ip}': {e}")))?;
 
         let is_link_local = match addr {
             IpAddr::V4(v4) => is_link_local_ipv4(v4),
@@ -120,9 +120,9 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
 
     // Register todword(ip) function - convert IPv4 to 32-bit integer
     let todword_fn = lua.create_function(|_, ip: String| {
-        let addr: IpAddr = ip.parse().map_err(|e| {
-            mlua::Error::RuntimeError(format!("Invalid IP address '{ip}': {e}"))
-        })?;
+        let addr: IpAddr = ip
+            .parse()
+            .map_err(|e| mlua::Error::RuntimeError(format!("Invalid IP address '{ip}': {e}")))?;
 
         match addr {
             IpAddr::V4(v4) => {
@@ -144,9 +144,7 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
                 "Number {num} is out of range for IPv4 address"
             )));
         }
-        let bytes = u32::try_from(num)
-            .expect("validated range")
-            .to_be_bytes();
+        let bytes = u32::try_from(num).expect("validated range").to_be_bytes();
         let addr = Ipv4Addr::from(bytes);
         Ok(addr.to_string())
     })?;
@@ -154,9 +152,9 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
 
     // Register ip_to_str(ip) function - convert IP to binary string
     let ip_to_str_fn = lua.create_function(|_, ip: String| {
-        let addr: IpAddr = ip.parse().map_err(|e| {
-            mlua::Error::RuntimeError(format!("Invalid IP address '{ip}': {e}"))
-        })?;
+        let addr: IpAddr = ip
+            .parse()
+            .map_err(|e| mlua::Error::RuntimeError(format!("Invalid IP address '{ip}': {e}")))?;
 
         let bytes = match addr {
             IpAddr::V4(v4) => v4.octets().to_vec(),
@@ -167,33 +165,31 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     ip_ops.set("ip_to_str", ip_to_str_fn)?;
 
     // Register str_to_ip(str) function - convert binary string to IP
-    let str_to_ip_fn = lua.create_function(|_, bytes: Vec<u8>| {
-        match bytes.len() {
-            4 => {
-                let arr: [u8; 4] = bytes.try_into().map_err(|_err| {
-                    mlua::Error::RuntimeError("Failed to convert bytes to IPv4".to_string())
-                })?;
-                Ok(Ipv4Addr::from(arr).to_string())
-            }
-            16 => {
-                let arr: [u8; 16] = bytes.try_into().map_err(|_err| {
-                    mlua::Error::RuntimeError("Failed to convert bytes to IPv6".to_string())
-                })?;
-                Ok(Ipv6Addr::from(arr).to_string())
-            }
-            _ => Err(mlua::Error::RuntimeError(format!(
-                "Invalid byte length for IP address: {} (expected 4 or 16)",
-                bytes.len()
-            ))),
+    let str_to_ip_fn = lua.create_function(|_, bytes: Vec<u8>| match bytes.len() {
+        4 => {
+            let arr: [u8; 4] = bytes.try_into().map_err(|_err| {
+                mlua::Error::RuntimeError("Failed to convert bytes to IPv4".to_string())
+            })?;
+            Ok(Ipv4Addr::from(arr).to_string())
         }
+        16 => {
+            let arr: [u8; 16] = bytes.try_into().map_err(|_err| {
+                mlua::Error::RuntimeError("Failed to convert bytes to IPv6".to_string())
+            })?;
+            Ok(Ipv6Addr::from(arr).to_string())
+        }
+        _ => Err(mlua::Error::RuntimeError(format!(
+            "Invalid byte length for IP address: {} (expected 4 or 16)",
+            bytes.len()
+        ))),
     })?;
     ip_ops.set("str_to_ip", str_to_ip_fn)?;
 
     // Register get_parts_as_number(ip) function for IPv6
     let get_parts_fn = lua.create_function(|_, ip: String| {
-        let addr: IpAddr = ip.parse().map_err(|e| {
-            mlua::Error::RuntimeError(format!("Invalid IP address '{ip}': {e}"))
-        })?;
+        let addr: IpAddr = ip
+            .parse()
+            .map_err(|e| mlua::Error::RuntimeError(format!("Invalid IP address '{ip}': {e}")))?;
 
         match addr {
             IpAddr::V4(v4) => {

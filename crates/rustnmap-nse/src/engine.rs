@@ -587,7 +587,10 @@ impl ScriptEngine {
     /// # Errors
     ///
     /// Returns an error if script execution fails.
-    #[expect(clippy::too_many_arguments, reason = "NSE port script requires all host/port context")]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "NSE port script requires all host/port context"
+    )]
     pub fn execute_port_script(
         &self,
         script: &NseScript,
@@ -639,7 +642,10 @@ impl ScriptEngine {
                 .load("return nmap.verbosity()")
                 .eval()
                 .unwrap_or(0);
-            debug!("Executing script {} with verbosity={}", script.id, verbosity);
+            debug!(
+                "Executing script {} with verbosity={}",
+                script.id, verbosity
+            );
 
             // Load and call the action function with host and port
             let func = lua.load_function("return action(host, port)", "action_wrapper")?;
@@ -702,7 +708,11 @@ impl ScriptEngine {
                 debug!("Script {} returned empty output", script.id);
                 ScriptOutput::Empty
             } else {
-                debug!("Script {} returned {} output lines", script.id, output_lines.len());
+                debug!(
+                    "Script {} returned {} output lines",
+                    script.id,
+                    output_lines.len()
+                );
                 ScriptOutput::Plain(output_lines.join("\n"))
             }
         } else {
@@ -786,7 +796,10 @@ impl ScriptEngine {
     /// # Errors
     ///
     /// Returns an error if rule evaluation fails.
-    #[expect(clippy::too_many_arguments, reason = "NSE portrule evaluation requires all host/port context")]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "NSE portrule evaluation requires all host/port context"
+    )]
     pub fn evaluate_portrule(
         &self,
         script: &NseScript,
