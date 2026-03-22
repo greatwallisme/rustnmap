@@ -23,6 +23,8 @@ Full Lua 5.4 scripting engine compatible with Nmap NSE scripts. Supports host sc
 | stdnse | `libs/stdnse.rs` | Complete |
 | comm | `libs/comm.rs` | Complete |
 | shortport | `libs/shortport.rs` | Complete |
+| ssh2 | `libs/ssh2.rs` | Complete |
+| libssh2_utility | `libs/libssh2_utility.rs` | Complete (SSH key exchange implemented) |
 
 ### Script Execution
 

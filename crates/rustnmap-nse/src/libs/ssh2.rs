@@ -517,7 +517,9 @@ fn parse_mpint(data: &[u8], offset: usize) -> mlua::Result<(BigUint, usize)> {
     if data.len() < new_offset + len {
         return Err(mlua::Error::RuntimeError(format!(
             "Data too short for mpint value: need {} bytes at offset {}, have {}",
-            len, new_offset, data.len()
+            len,
+            new_offset,
+            data.len()
         )));
     }
 
@@ -547,7 +549,9 @@ fn parse_bytes(data: &[u8], offset: usize) -> mlua::Result<(Vec<u8>, usize)> {
     if data.len() < new_offset + len {
         return Err(mlua::Error::RuntimeError(format!(
             "Data too short for bytes value: need {} bytes at offset {}, have {}",
-            len, new_offset, data.len()
+            len,
+            new_offset,
+            data.len()
         )));
     }
 
@@ -576,7 +580,9 @@ fn parse_string(data: &[u8], offset: usize) -> mlua::Result<(String, usize)> {
     if data.len() < new_offset + len {
         return Err(mlua::Error::RuntimeError(format!(
             "Data too short for string value: need {} bytes at offset {}, have {}",
-            len, new_offset, data.len()
+            len,
+            new_offset,
+            data.len()
         )));
     }
 
@@ -751,7 +757,11 @@ fn perform_dh_key_exchange(
 
     // Debug: full packet hex dump
     let hex_all: Vec<String> = kexdh_packet.iter().map(|b| format!("{b:02x}")).collect();
-    debug!("ssh2: KEXDH_INIT full packet ({} bytes): {}", kexdh_packet.len(), hex_all.join(""));
+    debug!(
+        "ssh2: KEXDH_INIT full packet ({} bytes): {}",
+        kexdh_packet.len(),
+        hex_all.join("")
+    );
     debug!(
         "ssh2: KEXDH_INIT breakdown - payload_len={}, packet_len_field={}, padding={}",
         kexdh_payload.len(),
@@ -842,7 +852,10 @@ struct HostKeyInfo {
 
 /// Parse SSH public host key from binary format.
 fn parse_ssh_host_key(data: &[u8]) -> mlua::Result<HostKeyInfo> {
-    debug!("ssh2: parse_ssh_host_key called with data_len={}", data.len());
+    debug!(
+        "ssh2: parse_ssh_host_key called with data_len={}",
+        data.len()
+    );
 
     let mut offset = 0;
 
@@ -852,13 +865,18 @@ fn parse_ssh_host_key(data: &[u8]) -> mlua::Result<HostKeyInfo> {
 
     debug!(
         "ssh2: parse_ssh_host_key: key_type={}, offset={}, data_len={}",
-        key_type, offset, data.len()
+        key_type,
+        offset,
+        data.len()
     );
 
     // For DSA keys, dump more info to debug the issue
     if key_type == "ssh-dss" && data.len() < 1000 {
         let preview: Vec<String> = data.iter().take(100).map(|b| format!("{b:02x}")).collect();
-        debug!("ssh2: DSA key data (first 100 bytes): {}", preview.join(" "));
+        debug!(
+            "ssh2: DSA key data (first 100 bytes): {}",
+            preview.join(" ")
+        );
     }
 
     let (bits, algorithm) = match key_type.as_str() {
@@ -878,9 +896,16 @@ fn parse_ssh_host_key(data: &[u8]) -> mlua::Result<HostKeyInfo> {
         "ssh-dss" => {
             // DSA: p (mpint) + q (mpint) + g (mpint) + y (mpint)
             let (p, new_off) = parse_mpint(data, offset)?;
-            debug!("ssh2: DSA p parsed, offset={}, data_len={}", new_off, data.len());
+            debug!(
+                "ssh2: DSA p parsed, offset={}, data_len={}",
+                new_off,
+                data.len()
+            );
             let (_q, new_off) = parse_mpint(data, new_off).map_err(|e| {
-                debug!("ssh2: failed to parse DSA q parameter at offset {}: {}", new_off, e);
+                debug!(
+                    "ssh2: failed to parse DSA q parameter at offset {}: {}",
+                    new_off, e
+                );
                 e
             })?;
             let (_g, _new_off) = parse_mpint(data, new_off).map_err(|e| {
@@ -1000,7 +1025,7 @@ mod tests {
         let data = b"test data";
         let fp = calculate_md5_fingerprint(data);
         assert_eq!(fp.len(), 16); // MD5 is 16 bytes
-        // Known MD5 of "test data": eb733a00c0c9d336e65691a37ab54293
+                                  // Known MD5 of "test data": eb733a00c0c9d336e65691a37ab54293
         assert_eq!(fp[0], 0xeb);
         assert_eq!(fp[1], 0x73);
         assert_eq!(fp[2], 0x3a);

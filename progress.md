@@ -1,6 +1,70 @@
 # Progress: NSE Module Fixes
 
-> **Updated**: 2026-03-20 19:55
+> **Updated**: 2026-03-21 06:00
+
+---
+
+## Session Summary (2026-03-21 continued)
+
+### Key Findings from ssh-auth-methods Test
+
+**Test Result**: FAILED - Post-NEWKEYS encryption required
+
+**What Works**:
+- ✅ DH Group14 key exchange (2048-bit MODP)
+- ✅ KEXDH_INIT/KEXDH_REPLY handling
+- ✅ Shared secret computation
+- ✅ Exchange hash (SHA256)
+- ✅ NEWKEYS activation
+
+**Root Cause Discovered**:
+After NEWKEYS phase, SSH protocol requires **all packets to be encrypted**. Current implementation sends unencrypted SERVICE_REQUEST, causing server to reject with `SSH_MSG_DISCONNECT`.
+
+**Protocol Flow** (RFC 4253):
+```
+NEWKEYS (both sides) → [ENCRYPTION STARTS] → SERVICE_REQUEST (encrypted)
+```
+
+**Required Implementation** (RFC 4253 Section 7.2):
+1. Key derivation from K and H
+2. AES-CTR/CBC encryption
+3. HMAC-SHA1/256 integrity
+
+**Next Steps**:
+Implement post-NEWKEYS encryption using `openssl` crate (already a dependency).
+
+---
+
+## Session Summary (2026-03-21)
+
+## Session Summary (2026-03-21)
+
+This session completed the SSH key exchange implementation for `ssh-auth-methods` script support.
+
+### Key Achievements
+
+1. **Implemented complete SSH key exchange (RFC 4253 Section 8)**
+   - DH Group14 key pair generation (2048-bit MODP)
+   - KEXDH_INIT packet construction
+   - KEXDH_REPLY packet parsing
+   - Exchange hash computation (SHA256)
+   - NEWKEYS activation
+   - Updated `SSHConnection::connect()` to call key exchange
+
+2. **Code quality verified**
+   - Zero clippy warnings (`cargo clippy -p rustnmap-nse -- -D warnings`)
+   - All 238 tests pass
+   - Proper formatting (`cargo fmt --check`)
+   - Comprehensive documentation with backticks
+
+3. **Updated documentation**
+   - `doc/modules/nse-libraries.md` - Added SSH key exchange protocol technical design
+   - `task_plan.md` - Updated implementation status
+   - `findings.md` - Added implementation completion entry
+
+---
+
+## Session Summary (2026-03-20)
 
 ---
 

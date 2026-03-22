@@ -320,19 +320,332 @@ local banner = ssh2.banner(host, port)
 6. **Diffie-Hellman groups**: Support group1 (1024-bit), group14 (2048-bit),
    group16 (4096-bit), and group-exchange (variable)
 
-### Dependencies
+### SSH Key Exchange Protocol
+
+This section describes the complete SSH-2 key exchange implementation required
+for `libssh2_utility.rs` to support authentication method enumeration.
+
+#### Protocol Overview
+
+SSH-2 key exchange follows RFC 4253 Section 8:
+
+```
+Client                                    Server
+------                                    ------
+  |                                         |
+  |-------- SSH-2.0 Client Banner --------->|
+  |<-------- SSH-2.0 Server Banner ---------|
+  |                                         |
+  |-------- KEXINIT ---------------------->|
+  |<-------- KEXINIT -----------------------|
+  |                                         |
+  |-------- KEXDH_INIT ------------------->|
+  |<-------- KEXDH_REPLY ------------------|
+  |                                         |
+  |-------- NEWKEYS ---------------------->|
+  |<-------- NEWKEYS -----------------------|
+  |                                         |
+  |-------- SERVICE_REQUEST (ssh-userauth)>|
+  |<-------- SERVICE_ACCEPT ----------------|
+  |                                         |
+  |-------- USERAUTH_REQUEST (none) ------>|
+  |<-------- USERAUTH_FAILURE -------------|
+  | (returns available auth methods)        |
+```
+
+#### Message Types
+
+```rust
+// SSH Transport Layer Protocol message types
+const SSH_MSG_KEXINIT: u8 = 20;
+const SSH_MSG_NEWKEYS: u8 = 21;
+const SSH_MSG_KEXDH_INIT: u8 = 30;
+const SSH_MSG_KEXDH_REPLY: u8 = 31;
+const SSH_MSG_SERVICE_REQUEST: u8 = 5;
+const SSH_MSG_SERVICE_ACCEPT: u8 = 6;
+const SSH_MSG_USERAUTH_REQUEST: u8 = 50;
+const SSH_MSG_USERAUTH_FAILURE: u8 = 51;
+const SSH_MSG_USERAUTH_SUCCESS: u8 = 52;
+```
+
+#### KEXINIT Message Format
+
+```rust
+struct KexInit {
+    // Message type (SSH_MSG_KEXINIT = 20)
+    message_type: u8,
+    // Cookie (16 random bytes)
+    cookie: [u8; 16],
+    // Key exchange algorithms (comma-separated)
+    kex_algorithms: String,  // "diffie-hellman-group14-sha256,..."
+    // Server host key algorithms
+    server_host_key_algorithms: String,  // "ssh-rsa,ssh-ed25519,..."
+    // Encryption algorithms (client->server, server->client)
+    encryption_algorithms_client_to_server: String,
+    encryption_algorithms_server_to_client: String,
+    // MAC algorithms
+    mac_algorithms_client_to_server: String,
+    mac_algorithms_server_to_client: String,
+    // Compression algorithms
+    compression_algorithms_client_to_server: String,
+    compression_algorithms_server_to_client: String,
+    // Languages
+    languages_client_to_server: String,
+    languages_server_to_client: String,
+    // First kex packet follows
+    first_kex_packet_follows: bool,
+    // Reserved (4 bytes)
+    reserved: u32,
+}
+```
+
+#### KEXDH_INIT Message (RFC 4253 Section 8)
+
+```rust
+// Client sends DH public key (e)
+struct KexDhInit {
+    message_type: u8,  // SSH_MSG_KEXDH_INIT = 30
+    e: Mpint,          // Client's DH public key (g^x mod p)
+}
+```
+
+#### KEXDH_REPLY Message (RFC 4253 Section 8)
+
+```rust
+// Server responds with host key, DH public key, and signature
+struct KexDhReply {
+    message_type: u8,          // SSH_MSG_KEXDH_REPLY = 31
+    host_key: Bytes,           // Server's public host key (K_S)
+    f: Mpint,                  // Server's DH public key (g^y mod p)
+    signature_hash: Bytes,     // H = hash(V_C || V_S || I_C || I_S || K_S || e || f || K)
+}
+```
+
+#### NEWKEYS Message
+
+```rust
+// Both sides send to activate new keys
+struct NewKeys {
+    message_type: u8,  // SSH_MSG_NEWKEYS = 21
+}
+```
+
+#### Diffie-Hellman Group14 Parameters (RFC 3526)
+
+```rust
+// 2048-bit MODP Group
+const DH_GROUP14_PRIME: &str = "
+    FFFFFFFF FFFFFFFF C90FDAA2 2168C234 C4C6628B 80DC1CD1
+    29024E08 8A67CC74 020BBEA6 3B139B22 514A0879 8E3404DD
+    EF9519B3 CD3A431B 302B0A6D F25F1437 4FE1356D 6D51C245
+    E485B576 625E7EC6 F44C42E9 A637ED6B 0BFF5CB6 F406B7ED
+    EE386BFB 5A899FA5 AE9F2411 7C4B1FE6 49286651 ECE65381
+    FFFFFFFF FFFFFFFF
+";
+
+const DH_GROUP14_GENERATOR: u32 = 2;
+```
+
+#### Key Exchange Computation
+
+```rust
+// Client generates x (random) and computes e = g^x mod p
+// Server generates y (random) and computes f = g^y mod p
+// Shared secret: K = f^x mod p = e^y mod p = g^(xy) mod p
+
+use num_bigint::BigUint;
+use num_traits::One;
+use rand::Rng;
+
+fn generate_dh_key_pair() -> (BigUint, BigUint) {
+    let p = BigUint::parse_bytes(DH_GROUP14_PRIME.as_bytes(), 16).unwrap();
+    let g = BigUint::from(DH_GROUP14_GENERATOR);
+
+    // Generate private key x (1 < x < p-1)
+    let mut rng = rand::thread_rng();
+    let p_minus_1 = &p - BigUint::one();
+    let x = rng.gen_biguint_range(&BigUint::one(), &p_minus_1);
+
+    // Compute public key e = g^x mod p
+    let e = g.modpow(&x, &p);
+
+    (e, x)  // Return (public, private)
+}
+
+fn compute_shared_secret(f: &BigUint, x: &BigUint) -> BigUint {
+    let p = BigUint::parse_bytes(DH_GROUP14_PRIME.as_bytes(), 16).unwrap();
+    f.modpow(x, &p)  // K = f^x mod p
+}
+```
+
+#### Exchange Hash Calculation
+
+The exchange hash H is computed as:
+
+```
+H = hash(V_C || V_S || I_C || I_S || K_S || e || f || K)
+```
+
+Where:
+- `V_C`: Client's SSH version string (e.g., "SSH-2.0-rustnmap_1.0")
+- `V_S`: Server's SSH version string
+- `I_C`: Client's KEXINIT payload
+- `I_S`: Server's KEXINIT payload
+- `K_S`: Server's public host key
+- `e`: Client's DH public key
+- `f`: Server's DH public key
+- `K`: Shared secret
+
+```rust
+use sha2::{Sha256, Digest};
+use encoding::Binary;
+
+fn compute_exchange_hash(
+    v_c: &[u8],
+    v_s: &[u8],
+    i_c: &[u8],
+    i_s: &[u8],
+    k_s: &[u8],
+    e: &BigUint,
+    f: &BigUint,
+    k: &BigUint,
+) -> Vec<u8> {
+    let mut hasher = Sha256::new();
+
+    // Concatenate all components in order
+    hasher.update(u32::to_be_bytes(v_c.len() as u32));
+    hasher.update(v_c);
+
+    hasher.update(u32::to_be_bytes(v_s.len() as u32));
+    hasher.update(v_s);
+
+    hasher.update(u32::to_be_bytes(i_c.len() as u32));
+    hasher.update(i_c);
+
+    hasher.update(u32::to_be_bytes(i_s.len() as u32));
+    hasher.update(i_s);
+
+    hasher.update(u32::to_be_bytes(k_s.len() as u32));
+    hasher.update(k_s);
+
+    let e_bytes = e.to_bytes_be();
+    hasher.update(u32::to_be_bytes(e_bytes.len() as u32));
+    hasher.update(&e_bytes);
+
+    let f_bytes = f.to_bytes_be();
+    hasher.update(u32::to_be_bytes(f_bytes.len() as u32));
+    hasher.update(&f_bytes);
+
+    let k_bytes = k.to_bytes_be();
+    hasher.update(u32::to_be_bytes(k_bytes.len() as u32));
+    hasher.update(&k_bytes);
+
+    hasher.finalize().to_vec()
+}
+```
+
+#### Key Derivation
+
+From the exchange hash H and shared secret K, derive:
+
+```rust
+// Initial IV (client->server, server->client)
+// Encryption key (client->server, server->client)
+// MAC key (client->server, server->client)
+
+fn derive_keys(k: &[u8], h: &[u8], key_length: usize, iv_length: usize) -> Vec<[u8; 32]> {
+    // K = hash(K || H || X || session_id) for different X values
+    // This is simplified - full implementation uses multiple rounds
+    todo!("Full key derivation implementation")
+}
+```
+
+#### Implementation Location
+
+The SSH key exchange implementation is in:
+```rust
+// crates/rustnmap-nse/src/libs/libssh2_utility.rs
+
+pub struct SSHConnection {
+    state: ConnectionState,
+    authenticated: bool,
+}
+
+impl SSHConnection {
+    // Phase 1: KEXINIT exchange (already implemented)
+    fn connect(&mut self, host: &str, port: u16) -> mlua::Result<String>;
+
+    // Phase 2: DH key exchange (TO BE IMPLEMENTED)
+    fn perform_key_exchange(&mut self) -> mlua::Result<()>;
+
+    // Phase 3: Service request (already implemented)
+    fn send_service_request(&mut self) -> mlua::Result<()>;
+}
+```
+
+#### Required Functions
+
+```rust
+// Build KEXDH_INIT packet
+fn build_kexdh_init(e: &BigUint) -> Vec<u8>;
+
+// Parse KEXDH_REPLY response
+fn parse_kexdh_reply(data: &[u8]) -> mlua::Result<(Vec<u8>, BigUint, Vec<u8>)>;
+
+// Build NEWKEYS packet
+fn build_newkeys() -> Vec<u8>;
+
+// Complete key exchange sequence
+fn perform_key_exchange(stream: &mut TcpStream) -> mlua::Result<KeyExchangeResult>;
+```
+
+#### Security Considerations
+
+1. **Constant-time operations**: DH computations should use constant-time crypto
+2. **Random number generation**: Use `rand::thread_rng()` for x
+3. **Key validation**: Verify server's host key signature
+4. **No rollback attacks**: Verify received parameters match KEXINIT offer
+5. **Group14 minimum**: Require at least 2048-bit MODP group (RFC 8270)
+
+#### Dependencies
 
 ```toml
 [dependencies]
-# Custom minimal SSH-2 key exchange implementation recommended
-# Nmap implements only the key exchange portion, not full SSH protocol
-# Using full russh library may cause compatibility issues with NSE scripts
+# Cryptographic primitives
 sha1 = "0.10"
 sha2 = "0.10"
 md-5 = "0.10"
+
+# Encoding
 base64 = "0.22"
-num-bigint = "0.4"  # For Diffie-Hellman calculations
-# Alternative: russh = "0.44" (full SSH client, may be overkill)
+hex = "0.4"
+
+# Big integer arithmetic for Diffie-Hellman
+num-bigint = "0.4"
+num-traits = "0.2"
+
+# Random number generation
+rand = "0.8"
+
+# Alternative: Full SSH library (NOT RECOMMENDED for compatibility)
+# russh = "0.44" implements full SSH protocol but may cause compatibility
+# issues with NSE scripts expecting specific Nmap behavior
+```
+
+#### SSH Key Exchange Dependencies
+
+Specifically for SSH key exchange implementation:
+
+```toml
+# For DH computation with large integers
+num-bigint = { version = "0.4", features = ["rand"] }
+
+# For SHA256/SHA512 hash functions
+sha2 = "0.10"
+
+# For MPINT serialization
+[dev-dependencies]
+hex-literal = "0.4"
 ```
 
 ---
