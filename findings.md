@@ -1,9 +1,63 @@
 # NSE Module Technical Findings
 
-> **Updated**: 2026-03-21 05:30
+> **Updated**: 2026-03-22 06:21
 
 ## Purpose
 Factual record of bugs discovered and fixed during NSE module development.
+
+---
+
+## SSH Post-NEWKEYS Encryption Implementation (2026-03-22)
+
+**Status**: CIPHER PERSISTENCE IMPLEMENTED, STILL NOT WORKING
+
+**Root Cause Found**: Creating new cipher per packet resets CTR counter
+
+Per RFC 4344 Section 4:
+> "The initial value of X should be the initial IV... incremented per block"
+
+OpenSSH creates cipher once and reuses it:
+```c
+aesctr_ivsetup(x->ctr, iv)  // Set once
+aesctr_encrypt_bytes(...)    // Counter increments internally
+```
+
+**What Was Implemented**:
+1. **Cipher persistence** - `EncryptionState::Active` now stores:
+   - `tx_cipher: Ctr128BE<Aes128>` - Created once, reused for all outgoing packets
+   - `rx_cipher: Ctr128BE<Aes128>` - Created once, reused for all incoming packets
+
+2. **Helper methods**:
+   - `encrypt(&mut [u8])` - Encrypt in-place using stored `tx_cipher`
+   - `decrypt(&mut [u8])` - Decrypt in-place using stored `rx_cipher`
+   - `tx_mac_key()`, `rx_mac_key()` - Access MAC keys
+
+3. **Removed obsolete functions**:
+   - `encrypt_packet()` - No longer needed (use stored cipher)
+   - `decrypt_packet()` - No longer needed (use stored cipher)
+
+**What's Still Not Working**:
+After implementing cipher persistence, `ssh-auth-methods` still times out completely with no output.
+
+**Symptoms**:
+- `ssh-hostkey` works (doesn't need post-NEWKEYS encryption)
+- `ssh-auth-methods` times out with no output at all
+- Suggests deeper issue in encryption/decryption logic
+
+**Possible Remaining Issues**:
+1. **Cipher type**: `Ctr128BE<Aes128>` may not match server's expectation
+2. **Key derivation**: KDF may not produce keys server expects
+3. **Algorithm negotiation**: Server may reject our cipher/MAC choices
+4. **Counter initialization**: IV may need different treatment
+
+**Files Modified**:
+- `libssh2_utility.rs`: Added cipher persistence, helper methods, removed old functions
+
+**Next Steps**:
+1. Add packet-level debug logging (exact bytes sent/received)
+2. Compare with Wireshark capture of working OpenSSH connection
+3. Verify KDF matches RFC 4253 Section 7.2 exactly
+4. Consider using libssh2 C library for proven implementation
 
 ---
 

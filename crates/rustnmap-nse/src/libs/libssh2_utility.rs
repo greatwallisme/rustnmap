@@ -649,18 +649,29 @@ impl EncryptionKeys {
 }
 
 /// Encryption state for SSH connection.
+///
+/// Per RFC 4344, the CTR mode counter starts at the IV and is incremented
+/// per block (not per packet). The cipher must be created once and reused
+/// for all packets to maintain counter continuity.
 #[derive(Debug)]
-#[allow(clippy::large_enum_variant, reason = "Encryption state holds Box<EncryptionKeys>; size acceptable for SSH connections")]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "EncryptionState contains two AES-128 ciphers (64 bytes each) plus keys; this is intentional for SSH protocol compliance"
+)]
 enum EncryptionState {
     /// No encryption (before NEWKEYS)
     #[expect(dead_code, reason = "Encryption state can be None before NEWKEYS")]
     None,
     /// Encryption active (after NEWKEYS)
     Active {
-        /// Keys for encrypting outgoing packets
-        tx_keys: Box<EncryptionKeys>,
-        /// Keys for decrypting incoming packets
-        rx_keys: Box<EncryptionKeys>,
+        /// Cipher for encrypting outgoing packets (counter continues across packets)
+        tx_cipher: Ctr128BE<Aes128>,
+        /// Cipher for decrypting incoming packets (counter continues across packets)
+        rx_cipher: Ctr128BE<Aes128>,
+        /// MAC key for outgoing packets
+        tx_mac_key: Vec<u8>,
+        /// MAC key for incoming packets
+        rx_mac_key: Vec<u8>,
         /// Sequence number for outgoing packets
         tx_sequence: u32,
         /// Sequence number for incoming packets
@@ -670,11 +681,51 @@ enum EncryptionState {
 
 impl EncryptionState {
     /// Create a new encryption state with derived keys.
+    ///
+    /// # Panics
+    ///
+    /// Panics if cipher creation fails (should not happen with valid 16-byte keys/IVs).
     #[must_use]
+    #[expect(
+        clippy::needless_pass_by_value,
+        clippy::boxed_local,
+        reason = "Accepts Box<EncryptionKeys> from KeyExchangeResult; consuming it transfers ownership of cipher state"
+    )]
     fn new(keys: Box<EncryptionKeys>) -> Self {
+        // Create TX cipher from client-to-server keys
+        type Aes128Ctr = Ctr128BE<Aes128>;
+        let tx_key_array: [u8; 16] = keys
+            .client_to_server_enc_key
+            .as_slice()
+            .try_into()
+            .expect("TX encryption key must be 16 bytes");
+        let tx_iv_array: [u8; 16] = keys
+            .client_to_server_iv
+            .as_slice()
+            .try_into()
+            .expect("TX IV must be 16 bytes");
+        let tx_cipher = Aes128Ctr::new_from_slices(&tx_key_array, &tx_iv_array)
+            .expect("Failed to create TX cipher");
+
+        // Create RX cipher from server-to-client keys
+        let rx_key_array: [u8; 16] = keys
+            .server_to_client_enc_key
+            .as_slice()
+            .try_into()
+            .expect("RX encryption key must be 16 bytes");
+        let rx_iv_array: [u8; 16] = keys
+            .server_to_client_iv
+            .as_slice()
+            .try_into()
+            .expect("RX IV must be 16 bytes");
+        let rx_cipher = Aes128Ctr::new_from_slices(&rx_key_array, &rx_iv_array)
+            .expect("Failed to create RX cipher");
+
         Self::Active {
-            tx_keys: keys.clone(),
-            rx_keys: keys,
+            tx_cipher,
+            rx_cipher,
+            tx_mac_key: keys.client_to_server_mac_key.clone(),
+            rx_mac_key: keys.server_to_client_mac_key.clone(),
             tx_sequence: 0,
             rx_sequence: 0,
         }
@@ -710,21 +761,55 @@ impl EncryptionState {
         }
     }
 
-    /// Get transmit encryption keys.
+    /// Encrypt packet data for transmission.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if encryption is not active or encryption fails.
+    fn encrypt(&mut self, data: &mut [u8]) -> mlua::Result<()> {
+        if let Self::Active { tx_cipher, .. } = self {
+            tx_cipher
+                .try_apply_keystream(data)
+                .map_err(|e| mlua::Error::RuntimeError(format!("Encryption failed: {e}")))
+        } else {
+            Err(mlua::Error::RuntimeError(
+                "Encryption not active".to_string(),
+            ))
+        }
+    }
+
+    /// Decrypt received packet data.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if decryption is not active or decryption fails.
+    fn decrypt(&mut self, data: &mut [u8]) -> mlua::Result<()> {
+        if let Self::Active { rx_cipher, .. } = self {
+            rx_cipher
+                .try_apply_keystream(data)
+                .map_err(|e| mlua::Error::RuntimeError(format!("Decryption failed: {e}")))
+        } else {
+            Err(mlua::Error::RuntimeError(
+                "Decryption not active".to_string(),
+            ))
+        }
+    }
+
+    /// Get the transmit MAC key.
     #[must_use]
-    fn tx_keys(&self) -> Option<&EncryptionKeys> {
-        if let Self::Active { tx_keys, .. } = self {
-            Some(tx_keys)
+    fn tx_mac_key(&self) -> Option<&[u8]> {
+        if let Self::Active { tx_mac_key, .. } = self {
+            Some(tx_mac_key)
         } else {
             None
         }
     }
 
-    /// Get receive encryption keys.
+    /// Get the receive MAC key.
     #[must_use]
-    fn rx_keys(&self) -> Option<&EncryptionKeys> {
-        if let Self::Active { rx_keys, .. } = self {
-            Some(rx_keys)
+    fn rx_mac_key(&self) -> Option<&[u8]> {
+        if let Self::Active { rx_mac_key, .. } = self {
+            Some(rx_mac_key)
         } else {
             None
         }
@@ -807,77 +892,6 @@ fn build_kex_init() -> Vec<u8> {
     payload
 }
 
-/// Encrypt SSH packet payload using AES-128-CTR.
-///
-/// # Arguments
-///
-/// * `payload` - Packet payload to encrypt
-/// * `sequence` - Packet sequence number
-/// * `enc_key` - Encryption key (16 bytes for AES-128)
-/// * `iv` - Initial vector (16 bytes)
-///
-/// # Returns
-///
-/// Encrypted payload.
-///
-/// # Errors
-///
-/// Returns error if key/IV lengths are invalid or encryption fails.
-fn encrypt_packet(
-    payload: &[u8],
-    _sequence: u32,
-    enc_key: &[u8],
-    iv: &[u8],
-) -> mlua::Result<Vec<u8>> {
-    // AES-128-CTR (CTR mode with BE counter)
-    type Aes128Ctr = Ctr128BE<Aes128>;
-
-    // Create cipher from key and IV
-    let key_array: [u8; 16] = enc_key
-        .try_into()
-        .map_err(|_e| mlua::Error::RuntimeError("Invalid encryption key length".to_string()))?;
-    let iv_array: [u8; 16] = iv
-        .try_into()
-        .map_err(|_e| mlua::Error::RuntimeError("Invalid IV length".to_string()))?;
-
-    let mut cipher = Aes128Ctr::new_from_slices(&key_array, &iv_array)
-        .map_err(|e| mlua::Error::RuntimeError(format!("Failed to create cipher: {e}")))?;
-
-    // Encrypt the payload
-    let mut encrypted = payload.to_vec();
-    cipher
-        .try_apply_keystream(&mut encrypted)
-        .map_err(|e| mlua::Error::RuntimeError(format!("Encryption failed: {e}")))?;
-
-    Ok(encrypted)
-}
-
-/// Decrypt SSH packet payload using AES-128-CTR.
-///
-/// # Arguments
-///
-/// * `payload` - Packet payload to decrypt
-/// * `sequence` - Packet sequence number
-/// * `enc_key` - Decryption key (16 bytes for AES-128)
-/// * `iv` - Initial vector (16 bytes)
-///
-/// # Returns
-///
-/// Decrypted payload.
-///
-/// # Errors
-///
-/// Returns error if key/IV lengths are invalid or decryption fails.
-fn decrypt_packet(
-    payload: &[u8],
-    sequence: u32,
-    enc_key: &[u8],
-    iv: &[u8],
-) -> mlua::Result<Vec<u8>> {
-    // CTR mode encryption and decryption are the same operation
-    encrypt_packet(payload, sequence, enc_key, iv)
-}
-
 /// Compute MAC over packet using HMAC-SHA256.
 ///
 /// Per RFC 4253 Section 6.4, MAC is computed over:
@@ -911,65 +925,61 @@ fn compute_mac(packet_data: &[u8], sequence: u32, mac_key: &[u8]) -> mlua::Resul
 
 /// Send encrypted SSH packet.
 ///
-/// Per RFC 4253 Section 6.4:
-/// - `packet_length` is sent in clear text
-/// - The rest of the packet is encrypted
-/// - MAC is appended after encrypted data
+/// Per RFC 4253 Section 6.3:
+/// - The entire packet (including `packet_length`) is encrypted
+/// - Only the MAC is sent unencrypted
+/// - MAC is computed over: sequence || `encrypted_packet`
 ///
-/// Wire format: `[packet_length (4, clear)] [encrypted_packet] [MAC (32)]`
+/// Wire format: `[encrypted: packet_length + padding_length + payload + padding] [MAC (32)]`
 ///
 /// # Arguments
 ///
 /// * `stream` - TCP stream to write to
-/// * `encryption` - Encryption state with keys and sequence number
+/// * `encryption` - Encryption state with cipher and sequence number
 /// * `payload` - Packet payload to send
 ///
 /// # Errors
 ///
-/// Returns error if encryption fails, write fails, or keys are invalid.
+/// Returns error if encryption fails, write fails, or cipher is invalid.
 fn send_encrypted_packet(
     stream: &mut TcpStream,
     encryption: &mut EncryptionState,
     payload: &[u8],
 ) -> mlua::Result<()> {
+    // Get sequence number for this packet
+    let sequence = encryption.next_tx_sequence();
+
+    // Get MAC key (clone to avoid borrow conflict with encrypt)
+    let tx_mac_key = encryption
+        .tx_mac_key()
+        .ok_or_else(|| mlua::Error::RuntimeError("Encryption not active".to_string()))?
+        .to_vec();
+
     // Build SSH2 packet: (length_bytes, packet_data)
     let (length_bytes, packet_data) = build_ssh2_packet(payload);
 
-    // Get sequence number for this packet and clone keys to avoid borrow issues
-    let sequence = encryption.next_tx_sequence();
+    // Assemble complete packet: length + data
+    // Per RFC 4253 Section 6.3: "Note that the 'packet_length' field is also encrypted"
+    let mut complete_packet = Vec::with_capacity(4 + packet_data.len());
+    complete_packet.extend_from_slice(&length_bytes);
+    complete_packet.extend_from_slice(&packet_data);
 
-    // Clone the keys we need before the mutable borrow
-    let (enc_key, iv, mac_key) = {
-        let Some(tx_keys) = encryption.tx_keys() else {
-            return Err(mlua::Error::RuntimeError(
-                "Encryption active but no keys available".to_string(),
-            ));
-        };
-        (
-            tx_keys.client_to_server_enc_key.clone(),
-            tx_keys.client_to_server_iv.clone(),
-            tx_keys.client_to_server_mac_key.clone(),
-        )
-    };
+    // Compute MAC over UNENCRYPTED packet
+    // Per RFC 4253 Section 6.4: "The MAC is computed from the sequence number,
+    // the packet length, padding length, payload, and padding"
+    let mac = compute_mac(&complete_packet, sequence, &tx_mac_key)?;
 
-    // Encrypt packet data (not including length)
-    let encrypted_packet = encrypt_packet(&packet_data, sequence, &enc_key, &iv)?;
+    debug!("Computed MAC over unencrypted packet: {:02X?}", &mac[..8.min(mac.len())]);
 
-    // Compute MAC over sequence_number || unencrypted_packet
-    // Note: MAC covers: sequence || length || packet_data
-    let mut mac_input = Vec::with_capacity(4 + 4 + packet_data.len());
-    mac_input.extend_from_slice(&sequence.to_be_bytes());
-    mac_input.extend_from_slice(&length_bytes);
-    mac_input.extend_from_slice(&packet_data);
+    // NOW encrypt the entire packet including packet_length
+    encryption.encrypt(&mut complete_packet)?;
 
-    let mac = compute_mac(&mac_input, sequence, &mac_key)?;
+    debug!("Sending encrypted packet: sequence={}, total_len={}, first 20 bytes (encrypted): {:02X?}",
+           sequence, complete_packet.len(), &complete_packet[..complete_packet.len().min(20)]);
 
-    // Send: length (clear) || encrypted_packet || MAC
+    // Send: encrypted_packet || MAC
     stream
-        .write_all(&length_bytes)
-        .map_err(|e| mlua::Error::RuntimeError(format!("Failed to write packet length: {e}")))?;
-    stream
-        .write_all(&encrypted_packet)
+        .write_all(&complete_packet)
         .map_err(|e| mlua::Error::RuntimeError(format!("Failed to write encrypted packet: {e}")))?;
     stream
         .write_all(&mac)
@@ -980,12 +990,12 @@ fn send_encrypted_packet(
 
 /// Receive encrypted SSH packet.
 ///
-/// Per RFC 4253 Section 6.4:
-/// - `packet_length` is received in clear text
-/// - The rest of the packet is encrypted
-/// - MAC is received after encrypted data and must be verified
+/// Per RFC 4253 Section 6.3:
+/// - The entire packet (including `packet_length`) is encrypted
+/// - Only the MAC is sent unencrypted
+/// - MAC is verified over: sequence || `encrypted_packet`
 ///
-/// Wire format: `[packet_length (4, clear)] [encrypted_packet] [MAC (32)]`
+/// Wire format: `[encrypted: packet_length + padding_length + payload + padding] [MAC (32)]`
 ///
 /// # Arguments
 ///
@@ -1003,27 +1013,29 @@ fn receive_encrypted_packet(
     stream: &mut TcpStream,
     encryption: &mut EncryptionState,
 ) -> mlua::Result<Vec<u8>> {
-    // Clone the keys we need before the mutable borrow
-    let (enc_key, iv, mac_key) = {
-        let Some(rx_keys) = encryption.rx_keys() else {
-            return Err(mlua::Error::RuntimeError(
-                "Encryption active but no keys available".to_string(),
-            ));
-        };
-        (
-            rx_keys.server_to_client_enc_key.clone(),
-            rx_keys.server_to_client_iv.clone(),
-            rx_keys.server_to_client_mac_key.clone(),
-        )
-    };
+    // Get sequence number and MAC key for this packet
+    let sequence = encryption.next_rx_sequence();
+    let rx_mac_key = encryption
+        .rx_mac_key()
+        .ok_or_else(|| mlua::Error::RuntimeError("Encryption not active".to_string()))?
+        .to_vec();
 
-    // Read packet length (clear text)
-    let mut length_bytes = [0u8; 4];
+    // Read encrypted packet_length (first 4 bytes encrypted)
+    let mut encrypted_length = [0u8; 4];
     stream
-        .read_exact(&mut length_bytes)
-        .map_err(|e| mlua::Error::RuntimeError(format!("Failed to read packet length: {e}")))?;
+        .read_exact(&mut encrypted_length)
+        .map_err(|e| mlua::Error::RuntimeError(format!("Failed to read encrypted packet length: {e}")))?;
 
-    let packet_length = u32::from_be_bytes(length_bytes) as usize;
+    // Clone the encrypted length for later assembly
+    let encrypted_length_copy = encrypted_length;
+
+    // Decrypt the packet_length field
+    // Per RFC 4253 Section 6.3: packet_length is encrypted
+    encryption.decrypt(&mut encrypted_length)?;
+
+    let packet_length = u32::from_be_bytes(encrypted_length) as usize;
+
+    debug!("Received encrypted packet: length={}", packet_length);
 
     if packet_length > 262_144 {
         return Err(mlua::Error::RuntimeError(format!(
@@ -1031,42 +1043,51 @@ fn receive_encrypted_packet(
         )));
     }
 
-    // Read encrypted packet data + MAC (32 bytes)
-    let total_read = packet_length + 32;
+    // Read the rest of the encrypted packet + MAC (32 bytes)
+    // packet_length includes: padding_length + payload + padding
+    let remaining_encrypted = packet_length;
+    let total_read = remaining_encrypted + 32;
     let mut encrypted_data_with_mac = vec![0u8; total_read];
     stream
         .read_exact(&mut encrypted_data_with_mac)
-        .map_err(|e| mlua::Error::RuntimeError(format!("Failed to read encrypted packet: {e}")))?;
+        .map_err(|e| mlua::Error::RuntimeError(format!("Failed to read encrypted packet data: {e}")))?;
 
     // Split encrypted packet and MAC
-    let (encrypted_packet, received_mac) = encrypted_data_with_mac.split_at(packet_length);
+    let (encrypted_packet_data, received_mac) = encrypted_data_with_mac.split_at(remaining_encrypted);
     let received_mac_array: [u8; 32] = received_mac
         .try_into()
         .map_err(|_e| mlua::Error::RuntimeError("Invalid MAC length".to_string()))?;
 
-    // Get sequence number for this packet
-    let sequence = encryption.next_rx_sequence();
+    // Assemble complete ENCRYPTED packet: encrypted length + encrypted data
+    let mut complete_encrypted_packet = Vec::with_capacity(4 + encrypted_packet_data.len());
+    complete_encrypted_packet.extend_from_slice(&encrypted_length_copy);  // Encrypted copy
+    complete_encrypted_packet.extend_from_slice(encrypted_packet_data);
 
-    // Decrypt packet data
-    let decrypted_packet = decrypt_packet(encrypted_packet, sequence, &enc_key, &iv)?;
+    // Decrypt only the data portion (length was already decrypted above)
+    let mut decrypted_data = encrypted_packet_data.to_vec();
+    encryption.decrypt(&mut decrypted_data)?;
 
-    // Verify MAC
-    // MAC covers: sequence || length || decrypted_packet
-    let mut mac_input = Vec::with_capacity(4 + 4 + decrypted_packet.len());
-    mac_input.extend_from_slice(&sequence.to_be_bytes());
-    mac_input.extend_from_slice(&length_bytes);
-    mac_input.extend_from_slice(&decrypted_packet);
+    // Assemble complete DECRYPTED packet: decrypted length + decrypted data
+    let mut complete_decrypted_packet = Vec::with_capacity(4 + decrypted_data.len());
+    complete_decrypted_packet.extend_from_slice(&encrypted_length);  // Already decrypted
+    complete_decrypted_packet.extend_from_slice(&decrypted_data);
 
-    let expected_mac = compute_mac(&mac_input, sequence, &mac_key)?;
+    debug!("Received and decrypted packet: total_len={}, first 20 bytes: {:02X?}",
+           complete_decrypted_packet.len(), &complete_decrypted_packet[..complete_decrypted_packet.len().min(20)]);
+
+    // Verify MAC over DECRYPTED packet
+    // Per RFC 4253 Section 6.4: MAC computed over unencrypted packet
+    let expected_mac = compute_mac(&complete_decrypted_packet, sequence, &rx_mac_key)?;
 
     if expected_mac != received_mac_array {
+        debug!("MAC verification failed: expected {:02X?}, got {:02X?}", expected_mac, received_mac_array);
         return Err(mlua::Error::RuntimeError(
             "MAC verification failed".to_string(),
         ));
     }
 
-    // Extract payload from decrypted packet
-    extract_payload(&decrypted_packet)
+    // Extract payload from decrypted packet (skip the 4-byte length field)
+    extract_payload(&complete_decrypted_packet[4..])
 }
 
 /// Send service request for ssh-userauth.
@@ -1127,15 +1148,30 @@ fn send_service_request(
 /// Uses `Box` for large fields to avoid stack overflow in release builds.
 struct KeyExchangeResult {
     /// Shared secret K (used for key derivation)
-    #[allow(dead_code, reason = "K is stored for potential future use in key derivation")]
+    #[allow(
+        dead_code,
+        reason = "K is stored for potential future use in key derivation"
+    )]
     k: Box<BigUint>,
     /// Exchange hash H (used for key derivation and session ID)
-    #[allow(dead_code, reason = "H is stored for potential future use in key derivation")]
-    #[allow(clippy::box_collection, reason = "Box needed to reduce struct stack size for release builds")]
+    #[allow(
+        dead_code,
+        reason = "H is stored for potential future use in key derivation"
+    )]
+    #[allow(
+        clippy::box_collection,
+        reason = "Box needed to reduce struct stack size for release builds"
+    )]
     h: Box<Vec<u8>>,
     /// Server's host key (not directly used by NSE scripts)
-    #[allow(dead_code, reason = "Host key is received but not used by current NSE scripts")]
-    #[allow(clippy::box_collection, reason = "Box needed to reduce struct stack size for release builds")]
+    #[allow(
+        dead_code,
+        reason = "Host key is received but not used by current NSE scripts"
+    )]
+    #[allow(
+        clippy::box_collection,
+        reason = "Box needed to reduce struct stack size for release builds"
+    )]
     _host_key: Box<Vec<u8>>,
     /// Derived encryption keys
     keys: Box<EncryptionKeys>,
@@ -1356,7 +1392,10 @@ fn list_auth_methods_impl(
 
 /// SSH connection state.
 #[derive(Debug)]
-#[allow(clippy::large_enum_variant, reason = "Connection state holds stream, Box<Vec<u8>> fields, and encryption; size acceptable for SSH connections")]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "Connection state holds stream, Box<Vec<u8>> fields, and encryption; size acceptable for SSH connections"
+)]
 enum ConnectionState {
     /// Not connected
     Disconnected,
@@ -1369,16 +1408,28 @@ enum ConnectionState {
         #[allow(dead_code, reason = "host and port kept for potential future use")]
         port: u16,
         /// Client version string (saved for key exchange)
-        #[allow(clippy::box_collection, reason = "Box needed to reduce enum stack size for release builds")]
+        #[allow(
+            clippy::box_collection,
+            reason = "Box needed to reduce enum stack size for release builds"
+        )]
         _client_version: Box<Vec<u8>>,
         /// Server version string (saved for key exchange)
-        #[allow(clippy::box_collection, reason = "Box needed to reduce enum stack size for release builds")]
+        #[allow(
+            clippy::box_collection,
+            reason = "Box needed to reduce enum stack size for release builds"
+        )]
         _server_version: Box<Vec<u8>>,
         /// Client KEXINIT payload (saved for key exchange)
-        #[allow(clippy::box_collection, reason = "Box needed to reduce enum stack size for release builds")]
+        #[allow(
+            clippy::box_collection,
+            reason = "Box needed to reduce enum stack size for release builds"
+        )]
         _client_kexinit: Box<Vec<u8>>,
         /// Server KEXINIT payload (saved for key exchange)
-        #[allow(clippy::box_collection, reason = "Box needed to reduce enum stack size for release builds")]
+        #[allow(
+            clippy::box_collection,
+            reason = "Box needed to reduce enum stack size for release builds"
+        )]
         _server_kexinit: Box<Vec<u8>>,
         /// Encryption state
         encryption: EncryptionState,
@@ -1405,6 +1456,7 @@ impl SSHConnection {
     }
 
     /// Connect to SSH server and get banner.
+    #[expect(clippy::too_many_lines, reason = "SSH connection requires multiple protocol steps")]
     fn connect(&mut self, host: &str, port: u16) -> mlua::Result<String> {
         const SSH_BANNER_PREFIX: &[u8] = b"SSH-2.0-";
 
@@ -1509,13 +1561,25 @@ impl SSHConnection {
             banner: banner.clone(),
             host: host.to_string(),
             port,
-            #[allow(clippy::implicit_clone, reason = "to_vec needed to convert &[u8] to Vec<u8>")]
+            #[allow(
+                clippy::implicit_clone,
+                reason = "to_vec needed to convert &[u8] to Vec<u8>"
+            )]
             _client_version: Box::new(client_version.to_vec()),
-            #[allow(clippy::implicit_clone, reason = "to_vec needed to convert &[u8] to Vec<u8>")]
+            #[allow(
+                clippy::implicit_clone,
+                reason = "to_vec needed to convert &[u8] to Vec<u8>"
+            )]
             _server_version: Box::new(server_version.to_vec()),
-            #[allow(clippy::implicit_clone, reason = "to_vec needed to convert &[u8] to Vec<u8>")]
+            #[allow(
+                clippy::implicit_clone,
+                reason = "to_vec needed to convert &[u8] to Vec<u8>"
+            )]
             _client_kexinit: Box::new(kex_init_payload.to_vec()),
-            #[allow(clippy::implicit_clone, reason = "to_vec needed to convert &[u8] to Vec<u8>")]
+            #[allow(
+                clippy::implicit_clone,
+                reason = "to_vec needed to convert &[u8] to Vec<u8>"
+            )]
             _server_kexinit: Box::new(server_kex_payload.to_vec()),
             encryption,
         };
@@ -1544,9 +1608,7 @@ impl UserData for SSHConnection {
             debug!("libssh2-utility.SSHConnection:connect({}, {})", host, port);
 
             let result = match this.connect(&host, port) {
-                Ok(_) => {
-                    Ok(Value::Boolean(true))
-                },
+                Ok(_) => Ok(Value::Boolean(true)),
                 Err(e) => {
                     debug!("connect failed: {}", e);
                     Ok(Value::Boolean(false))
@@ -1651,9 +1713,9 @@ impl UserData for SSHConnection {
 
             // Directly destructure the state to get stream and encryption
             let (stream, encryption_opt) = match &mut this.state {
-                ConnectionState::Connected { stream, encryption, .. } => {
-                    (stream, encryption.is_active().then_some(encryption))
-                },
+                ConnectionState::Connected {
+                    stream, encryption, ..
+                } => (stream, encryption.is_active().then_some(encryption)),
                 ConnectionState::Disconnected => {
                     return Ok(Value::Nil);
                 }
@@ -1670,7 +1732,7 @@ impl UserData for SSHConnection {
                 }
                 Err(e) => {
                     debug!("list auth methods failed: {}", e);
-                    Ok(Value::Nil)
+                    Err(e)
                 }
             }
         });
@@ -1695,10 +1757,12 @@ impl UserData for SSHConnection {
 
                 // Get stream and encryption directly
                 let (stream, encryption_opt) = match &mut this.state {
-                    ConnectionState::Connected { stream, encryption, .. } => {
+                    ConnectionState::Connected {
+                        stream, encryption, ..
+                    } => {
                         let enc_opt = encryption.is_active().then_some(encryption);
                         (stream, enc_opt)
-                    },
+                    }
                     ConnectionState::Disconnected => {
                         let table = lua.create_table()?;
                         table.set(1, false)?;
@@ -1709,8 +1773,7 @@ impl UserData for SSHConnection {
 
                 let mut encryption = encryption_opt;
                 // Try to list auth methods first
-                let Ok(methods) = list_auth_methods_impl(stream, &mut encryption, &username)
-                else {
+                let Ok(methods) = list_auth_methods_impl(stream, &mut encryption, &username) else {
                     let table = lua.create_table()?;
                     table.set(1, false)?;
                     table.set(2, Value::Nil)?;
@@ -1758,10 +1821,12 @@ impl UserData for SSHConnection {
 
                 // Get stream and encryption directly
                 let (stream, encryption_opt) = match &mut this.state {
-                    ConnectionState::Connected { stream, encryption, .. } => {
+                    ConnectionState::Connected {
+                        stream, encryption, ..
+                    } => {
                         let enc_opt = encryption.is_active().then_some(encryption);
                         (stream, enc_opt)
-                    },
+                    }
                     ConnectionState::Disconnected => {
                         return Ok(Value::Nil);
                     }
@@ -1845,10 +1910,12 @@ impl UserData for SSHConnection {
 
                 // Get stream and encryption directly
                 let (stream, encryption_opt) = match &mut this.state {
-                    ConnectionState::Connected { stream, encryption, .. } => {
+                    ConnectionState::Connected {
+                        stream, encryption, ..
+                    } => {
                         let enc_opt = encryption.is_active().then_some(encryption);
                         (stream, enc_opt)
-                    },
+                    }
                     ConnectionState::Disconnected => {
                         return Ok(Value::Nil);
                     }
