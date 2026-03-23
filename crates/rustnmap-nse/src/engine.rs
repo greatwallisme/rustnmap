@@ -196,22 +196,51 @@ impl ScriptEngine {
             };
 
             // Use Lua's tostring() to convert value, which respects __tostring metamethod
-            let val_str: String = match &val {
+            match &val {
                 mlua::Value::String(s) => {
-                    s.to_str().ok().map(|s| s.to_string()).unwrap_or_default()
+                    if let Ok(s) = s.to_str() {
+                        output_lines.push(format!("{key_str}: {s}"));
+                    }
                 }
-                mlua::Value::Integer(n) => n.to_string(),
-                mlua::Value::Number(n) => n.to_string(),
-                mlua::Value::Boolean(b) => b.to_string(),
-                mlua::Value::Table(_) => {
-                    // Call Lua's tostring() to respect __tostring metamethod
-                    tostring_fn.call::<String>(val.clone()).unwrap_or_default()
+                mlua::Value::Integer(n) => {
+                    output_lines.push(format!("{key_str}: {n}"));
                 }
-                _ => String::new(),
-            };
+                mlua::Value::Number(n) => {
+                    output_lines.push(format!("{key_str}: {n}"));
+                }
+                mlua::Value::Boolean(b) => {
+                    output_lines.push(format!("{key_str}: {b}"));
+                }
+                mlua::Value::Table(t) => {
+                    // Check if it's an array (indexed table)
+                    let is_array = t.pairs::<mlua::Value, mlua::Value>()
+                        .flatten()
+                        .all(|(k, _)| matches!(k, mlua::Value::Integer(_)));
 
-            if !val_str.is_empty() {
-                output_lines.push(format!("{key_str}: {val_str}"));
+                    if is_array {
+                        // Format array elements
+                        output_lines.push(format!("{key_str}:"));
+                        for (_, item_val) in t.pairs::<mlua::Value, mlua::Value>().flatten() {
+                            if let mlua::Value::String(s) = item_val {
+                                if let Ok(s) = s.to_str() {
+                                    output_lines.push(format!("  {s}"));
+                                }
+                            } else {
+                                let item_str = tostring_fn.call::<String>(item_val).unwrap_or_default();
+                                if !item_str.is_empty() {
+                                    output_lines.push(format!("  {item_str}"));
+                                }
+                            }
+                        }
+                    } else {
+                        // Call Lua's tostring() for non-array tables
+                        let val_str = tostring_fn.call::<String>(val.clone()).unwrap_or_default();
+                        if !val_str.is_empty() {
+                            output_lines.push(format!("{key_str}: {val_str}"));
+                        }
+                    }
+                }
+                _ => {}
             }
         }
 
