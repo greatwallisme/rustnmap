@@ -12,6 +12,10 @@ description = "Nmap Script Engine (NSE) implementation for RustNmap - Lua 5.4 sc
 keywords = ["nmap", "lua", "scripting", "security", "network"]
 categories = ["network-programming", "scripting-language-bindings"]
 
+[features]
+default = ["openssl"]
+openssl = ["dep:openssl"]
+
 [dependencies]
 # Core dependencies
 rustnmap-common = { path = "../rustnmap-common" }
@@ -50,6 +54,12 @@ sha1 = "0.10"
 sha2 = "0.10"
 num-bigint = { version = "0.4", features = ["rand"] }
 num-traits = "0.2"
+
+# OpenSSL for SSL/TLS certificate parsing
+openssl = { version = "0.10", optional = true }
+
+# Hex encoding for certificate fingerprints
+hex = "0.4"
 
 # Cryptography for SMB/NTLM authentication
 des = "0.8"

@@ -44,10 +44,12 @@ pub struct SSHConnection {
 impl std::fmt::Debug for SSHConnection {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.state {
-            ConnectionState::Disconnected => f.debug_struct("SSHConnection")
+            ConnectionState::Disconnected => f
+                .debug_struct("SSHConnection")
                 .field("state", &"Disconnected")
                 .finish(),
-            ConnectionState::Connected { banner, .. } => f.debug_struct("SSHConnection")
+            ConnectionState::Connected { banner, .. } => f
+                .debug_struct("SSHConnection")
                 .field("state", &"Connected")
                 .field("banner", banner)
                 .finish(),
@@ -148,7 +150,9 @@ impl SSHConnection {
         {
             tokio::task::block_in_place(|| {
                 tokio::runtime::Handle::current().block_on(async {
-                    let _ = handle.disconnect(russh::Disconnect::ByApplication, "", "").await;
+                    let _ = handle
+                        .disconnect(russh::Disconnect::ByApplication, "", "")
+                        .await;
                 });
             });
         }
@@ -167,31 +171,48 @@ impl UserData for SSHConnection {
             this.connect(&host, port)
         });
 
-        methods.add_method_mut("connect_pcall", |lua, this, (host_arg, port_arg): (Value, Value)| {
-            // Extract host string
-            let host = match host_arg {
-                Value::Table(ref t) => t.get::<String>("ip")?,
-                Value::String(s) => s.to_str()?.to_string(),
-                _ => return Err(mlua::Error::RuntimeError("Invalid host parameter".to_string())),
-            };
+        methods.add_method_mut(
+            "connect_pcall",
+            |lua, this, (host_arg, port_arg): (Value, Value)| {
+                // Extract host string
+                let host = match host_arg {
+                    Value::Table(ref t) => t.get::<String>("ip")?,
+                    Value::String(s) => s.to_str()?.to_string(),
+                    _ => {
+                        return Err(mlua::Error::RuntimeError(
+                            "Invalid host parameter".to_string(),
+                        ))
+                    }
+                };
 
-            // Extract port number
-            let port = match port_arg {
-                Value::Table(ref t) => t.get::<u16>("number")?,
-                Value::Integer(n) => u16::try_from(n)
-                    .map_err(|e| mlua::Error::RuntimeError(format!("Invalid port: {e}")))?,
-                _ => return Err(mlua::Error::RuntimeError("Invalid port parameter".to_string())),
-            };
+                // Extract port number
+                let port = match port_arg {
+                    Value::Table(ref t) => t.get::<u16>("number")?,
+                    Value::Integer(n) => u16::try_from(n)
+                        .map_err(|e| mlua::Error::RuntimeError(format!("Invalid port: {e}")))?,
+                    _ => {
+                        return Err(mlua::Error::RuntimeError(
+                            "Invalid port parameter".to_string(),
+                        ))
+                    }
+                };
 
-            debug!(
-                "libssh2-utility.SSHConnection:connect_pcall extracted host={}, port={}",
-                host, port
-            );
-            match this.connect(&host, port) {
-                Ok(banner) => Ok((Value::Boolean(true), Value::String(lua.create_string(&banner)?))),
-                Err(e) => Ok((Value::Boolean(false), Value::String(lua.create_string(e.to_string())?))),
-            }
-        });
+                debug!(
+                    "libssh2-utility.SSHConnection:connect_pcall extracted host={}, port={}",
+                    host, port
+                );
+                match this.connect(&host, port) {
+                    Ok(banner) => Ok((
+                        Value::Boolean(true),
+                        Value::String(lua.create_string(&banner)?),
+                    )),
+                    Err(e) => Ok((
+                        Value::Boolean(false),
+                        Value::String(lua.create_string(e.to_string())?),
+                    )),
+                }
+            },
+        );
 
         methods.add_method_mut("list", |lua, this, username: String| {
             let methods = this.list_auth_methods(&username)?;
@@ -209,14 +230,15 @@ impl UserData for SSHConnection {
             Ok(())
         });
 
-        methods.add_meta_method(MetaMethod::ToString, |_, _, ()| {
-            Ok("SSHConnection")
-        });
+        methods.add_meta_method(MetaMethod::ToString, |_, _, ()| Ok("SSHConnection"));
     }
 }
 
 /// Extract host and port from Lua arguments.
-#[expect(dead_code, reason = "Reserved for future use in alternative connection methods")]
+#[expect(
+    dead_code,
+    reason = "Reserved for future use in alternative connection methods"
+)]
 fn extract_host_port(_lua: &mlua::Lua, args: Value) -> mlua::Result<(String, u16)> {
     let (host_param, port_param) = match args {
         Value::Table(t) => {
@@ -224,20 +246,33 @@ fn extract_host_port(_lua: &mlua::Lua, args: Value) -> mlua::Result<(String, u16
             let port = t.get(2)?;
             (host, port)
         }
-        _ => return Err(mlua::Error::RuntimeError("Expected table arguments".to_string())),
+        _ => {
+            return Err(mlua::Error::RuntimeError(
+                "Expected table arguments".to_string(),
+            ))
+        }
     };
 
     let host = match host_param {
         Value::Table(t) => t.get::<String>("ip")?,
         Value::String(s) => s.to_str()?.to_string(),
-        _ => return Err(mlua::Error::RuntimeError("Invalid host parameter".to_string())),
+        _ => {
+            return Err(mlua::Error::RuntimeError(
+                "Invalid host parameter".to_string(),
+            ))
+        }
     };
 
     let port = match port_param {
         Value::Table(t) => t.get::<u16>("number")?,
-        Value::Integer(n) => u16::try_from(n)
-            .map_err(|e| mlua::Error::RuntimeError(format!("Invalid port: {e}")))?,
-        _ => return Err(mlua::Error::RuntimeError("Invalid port parameter".to_string())),
+        Value::Integer(n) => {
+            u16::try_from(n).map_err(|e| mlua::Error::RuntimeError(format!("Invalid port: {e}")))?
+        }
+        _ => {
+            return Err(mlua::Error::RuntimeError(
+                "Invalid port parameter".to_string(),
+            ))
+        }
     };
 
     Ok((host, port))
@@ -253,7 +288,9 @@ pub fn register(lua: &NseLua) -> Result<()> {
 
     let module = lua.lua().create_table()?;
 
-    let ssh_connection_ctor = lua.lua().create_function(|_, ()| Ok(SSHConnection::new()))?;
+    let ssh_connection_ctor = lua
+        .lua()
+        .create_function(|_, ()| Ok(SSHConnection::new()))?;
 
     let ssh_connection_class = lua.lua().create_table()?;
     ssh_connection_class.set("new", ssh_connection_ctor)?;
@@ -281,25 +318,50 @@ mod tests {
         crate::libs::register_all(&mut lua).unwrap();
 
         // Test that require "libssh2-utility" works
-        let result: mlua::Result<mlua::Value> = lua.lua().load(r#"
+        let result: mlua::Result<mlua::Value> = lua
+            .lua()
+            .load(
+                r#"
             local libssh2_util = require "libssh2-utility"
             return libssh2_util
-        "#).eval();
+        "#,
+            )
+            .eval();
 
-        assert!(result.is_ok(), "require 'libssh2-utility' failed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "require 'libssh2-utility' failed: {:?}",
+            result.err()
+        );
 
         let module = result.unwrap();
         assert!(!matches!(module, mlua::Value::Nil), "require returned nil");
-        assert!(matches!(module, mlua::Value::Table(_)), "require should return table, got {:?}", module);
+        assert!(
+            matches!(module, mlua::Value::Table(_)),
+            "require should return table, got {:?}",
+            module
+        );
 
         // Test that SSHConnection is accessible
-        let ssh_connection: mlua::Result<mlua::Value> = lua.lua().load(r#"
+        let ssh_connection: mlua::Result<mlua::Value> = lua
+            .lua()
+            .load(
+                r#"
             local libssh2_util = require "libssh2-utility"
             return libssh2_util.SSHConnection
-        "#).eval();
+        "#,
+            )
+            .eval();
 
-        assert!(ssh_connection.is_ok(), "SSHConnection access failed: {:?}", ssh_connection.err());
-        assert!(!matches!(ssh_connection.unwrap(), mlua::Value::Nil), "SSHConnection is nil");
+        assert!(
+            ssh_connection.is_ok(),
+            "SSHConnection access failed: {:?}",
+            ssh_connection.err()
+        );
+        assert!(
+            !matches!(ssh_connection.unwrap(), mlua::Value::Nil),
+            "SSHConnection is nil"
+        );
     }
 
     #[test]
@@ -308,13 +370,22 @@ mod tests {
         crate::libs::register_all(&mut lua).unwrap();
 
         // Test creating an SSHConnection instance
-        let result: mlua::Result<String> = lua.lua().load(r#"
+        let result: mlua::Result<String> = lua
+            .lua()
+            .load(
+                r#"
             local libssh2_util = require "libssh2-utility"
             local conn = libssh2_util.SSHConnection.new()
             return type(conn)
-        "#).eval();
+        "#,
+            )
+            .eval();
 
-        assert!(result.is_ok(), "SSHConnection creation failed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "SSHConnection creation failed: {:?}",
+            result.err()
+        );
         let type_name = result.unwrap();
         assert_eq!(type_name, "userdata", "SSHConnection should be userdata");
     }

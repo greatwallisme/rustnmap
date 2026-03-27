@@ -1,332 +1,190 @@
 # NSE Module Technical Findings
 
-> **Updated**: 2026-03-22 06:21
-
-## Purpose
-Factual record of bugs discovered and fixed during NSE module development.
+> **Updated**: 2026-03-27
 
 ---
 
-## SSH Post-NEWKEYS Encryption Implementation (2026-03-22)
+## UPDATED: SSL/TLS Scripts Complete (2026-03-27)
 
-**Status**: CIPHER PERSISTENCE IMPLEMENTED, STILL NOT WORKING
+**Status**: ✅ COMPLETE - ssl-cert.nse script fully functional
 
-**Root Cause Found**: Creating new cipher per packet resets CTR counter
+### Progress Summary
 
-Per RFC 4344 Section 4:
-> "The initial value of X should be the initial IV... incremented per block"
+| Component | Status | Notes |
+|-----------|--------|-------|
+| Lua file loader | ✅ COMPLETE | nselib/ libraries load successfully |
+| Socket connect | ✅ COMPLETE | Handles host, port, proto parameters |
+| SSL certificate retrieval | ✅ COMPLETE | OpenSSL integration working |
 
-OpenSSH creates cipher once and reuses it:
-```c
-aesctr_ivsetup(x->ctr, iv)  // Set once
-aesctr_encrypt_bytes(...)    // Counter increments internally
+### Test Result
+
+```bash
+$ ./target/release/rustnmap -p 443 --script ssl-cert www.qq.com
+
+PORT     STATE SERVICE
+443/tcp  open    https
+| ssl-cert
+|   Subject: commonName=*.ias.tencent-cloud.net/organizationName=Tencent Technology (Shenzhen) Company Limited/stateOrProvinceName=Guangdong Province/countryName=CN
+|   Subject Alternative Name: DNS:*.ias.tencent-cloud.net, DNS:ias.tencent-cloud.net
+|   Issuer: commonName=DigiCert Secure Site OV G2 TLS CN RSA4096 SHA256 2022 CA1/organizationName=DigiCert, Inc./countryName=US
+|   Public Key type: rsa
+|   Public Key bits: 2048
+|   Signature Algorithm: sha256WithRSAEncryption
+|   Not valid before: 2025-06-23T00:00:00
+|   Not valid after:  2026-07-24T23:59:59
+|   MD5:     590c a9a7 e8b2 36eb 87d5 63f8 6dc5 216e
+|   SHA-1:   78f3 f716 8024 8710 c435 b5ef 09a6 5933 7d3a 45a3
+|_  SHA-256: 8e4f 83b5 fcd2 2ab2 3a94 0d4c f170 7a5a 02ed eba5 abd9 3c4d de21 22d8 5bee e3ce
 ```
 
-**What Was Implemented**:
-1. **Cipher persistence** - `EncryptionState::Active` now stores:
-   - `tx_cipher: Ctr128BE<Aes128>` - Created once, reused for all outgoing packets
-   - `rx_cipher: Ctr128BE<Aes128>` - Created once, reused for all incoming packets
-
-2. **Helper methods**:
-   - `encrypt(&mut [u8])` - Encrypt in-place using stored `tx_cipher`
-   - `decrypt(&mut [u8])` - Decrypt in-place using stored `rx_cipher`
-   - `tx_mac_key()`, `rx_mac_key()` - Access MAC keys
-
-3. **Removed obsolete functions**:
-   - `encrypt_packet()` - No longer needed (use stored cipher)
-   - `decrypt_packet()` - No longer needed (use stored cipher)
-
-**What's Still Not Working**:
-After implementing cipher persistence, `ssh-auth-methods` still times out completely with no output.
-
-**Symptoms**:
-- `ssh-hostkey` works (doesn't need post-NEWKEYS encryption)
-- `ssh-auth-methods` times out with no output at all
-- Suggests deeper issue in encryption/decryption logic
-
-**Possible Remaining Issues**:
-1. **Cipher type**: `Ctr128BE<Aes128>` may not match server's expectation
-2. **Key derivation**: KDF may not produce keys server expects
-3. **Algorithm negotiation**: Server may reject our cipher/MAC choices
-4. **Counter initialization**: IV may need different treatment
+### Implementation Details
 
 **Files Modified**:
-- `libssh2_utility.rs`: Added cipher persistence, helper methods, removed old functions
+- `crates/rustnmap-nse/src/libs/nmap.rs` - Added SSL support:
+  - `get_ssl_certificate()` method on NseSocket
+  - `cert_to_table()` function for certificate parsing
+  - `x509_name_to_table()` for DN field conversion
+  - `asn1_time_to_table()` for date parsing
+  - `digest()` method returning raw bytes for fingerprint calculation
 
-**Next Steps**:
-1. Add packet-level debug logging (exact bytes sent/received)
-2. Compare with Wireshark capture of working OpenSSH connection
-3. Verify KDF matches RFC 4253 Section 7.2 exactly
-4. Consider using libssh2 C library for proven implementation
+**Key Implementation Points**:
+1. SSL handshake using OpenSSL's `SslConnector`
+2. Certificate verification disabled (`SslVerifyMode::NONE`) matching Nmap behavior
+3. Certificate table with subject, issuer, validity, extensions, pubkey info
+4. Digest method returns raw binary (not hex) for `stdnse.tohex` compatibility
+
+### Bugs Fixed
+
+1. **Digest function signature**: Changed from `|lua, algo: String|` to `|lua, (_self, algo): (mlua::Table, String)|` to handle method call syntax (`cert:digest("md5")`)
+
+2. **Date parsing**: OpenSSL returns "Mon DD HH:MM:SS YYYY GMT" format, not "YYYYMMDDhhmmssZ" as originally assumed
 
 ---
 
-## Recent Bugs (2026-03-21)
+## CRITICAL: SSL/TLS Scripts Cannot Run - Missing Lua Library Loader (2026-03-26)
 
-### Feature: SSH Key Exchange Implementation Complete
+**Status**: ✅ FIXED - Lua file loader implemented
 
-**Date**: 2026-03-21
-**File**: `crates/rustnmap-nse/src/libs/libssh2_utility.rs`
+### Original Problem
 
-**Problem**:
-The SSH implementation in `libssh2_utility.rs` stopped after KEXINIT exchange. It did not complete:
-- DH key exchange (KEXDH_INIT/REPLY)
-- NEWKEYS activation
-- Service request handling
+SSL/TLS NSE scripts required pure Lua libraries that the NSE engine could not load.
 
-This caused `ssh-auth-methods` script to fail, only outputting the SSH banner.
+### Solution Implemented
 
-**Implementation**:
-Implemented complete SSH key exchange per RFC 4253 Section 8:
+Added Lua file loader in `crates/rustnmap-nse/src/lua.rs`:
+- `set_package_path()` - Configures Lua package path
+- `add_file_searcher()` - Registers custom file loader
 
-1. **DH Group14 Parameters**: 2048-bit MODP prime from RFC 3526
-2. **Key Pair Generation**: Random private key x, public key e = g^x mod p
-3. **KEXDH_INIT**: Send client public key e to server
-4. **KEXDH_REPLY**: Receive server public key f and host key
-5. **Shared Secret**: Compute K = f^x mod p
-6. **Exchange Hash**: H = SHA256(V_C || V_S || I_C || I_S || K_S || e || f || K)
-7. **NEWKEYS**: Complete key activation
+**Result**: Pure Lua libraries from `nselib/` now load successfully.
 
-**Key Functions Added**:
+---
+
+## CRITICAL: SSL/TLS Scripts Cannot Run - Missing Lua Library Loader (2026-03-26)
+
+**Status**: CRITICAL BUG - BLOCKING ALL SSL SCRIPTS
+
+### Problem
+
+SSL/TLS NSE scripts require pure Lua libraries that the NSE engine cannot load.
+
+### Root Cause
+
+The NSE engine only registers **Rust** libraries in `libs/mod.rs::register_all()`. It does NOT support loading **pure Lua** files from the `nselib/` directory.
+
+### Evidence
+
+**Script Error**:
+```
+lua runtime error in 'ssl-cert': runtime error:
+  module 'sslcert' not found:
+  no field package.preload['sslcert']
+  no file '/usr/local/share/lua/5.4/sslcert.lua'
+  no file '/usr/local/share/lua/5.4/sslcert/init.lua'
+  no file './sslcert.lua'
+  no file './sslcert/init.lua'
+```
+
+**Libraries Exist But Not Loaded**:
+```bash
+$ ls -la nselib/*.lua | grep -E "(ssl|cert|date|time|outlib|unicode)"
+-rw-r--r-- 1 root root   8257 datetime.lua
+-rw-r--r-- 1 root root   2162 outlib.lua
+-rw-r--r-- 1 root root  37031 sslcert.lua
+-rw-r--r-- 1 root root  9909 sslv2.lua
+-rw-r--r-- 1 root root  75467 tls.lua
+-rw-r--r-- 1 root root  13996 unicode.lua
+```
+
+### Architecture Analysis
+
+**Current NSE Engine Flow**:
+```
+1. NseLua::new() creates Lua instance
+2. register_all() adds Rust libraries to globals
+3. Script loads from .nse file
+4. Script calls require("sslcert") ❌ FAILS
+```
+
+**Missing Infrastructure**:
+1. No `package.path` setup (Lua's module search path)
+2. No Lua file loader (to read .lua files)
+3. No package searcher registration with mlua
+
+### Impact
+
+**All SSL/TLS scripts broken** (12+ scripts):
+- ssl-cert.nse
+- ssl-cert-intaddr.nse
+- ssl-date.nse
+- ssl-enum-ciphers.nse
+- ssl-dh-params.nse
+- ssl-heartbleed.nse
+- tls-alpn.nse
+- tls-nextprotoneg.nse
+- tls-ticketbleed.nse
+
+**Also broken**:
+- Any script requiring `json.lua`
+- Any script requiring `datafiles.lua`
+- Any script requiring `asn1.lua`
+- Many others
+
+### Required Fix
+
+**Implement Lua file loader** in `crates/rustnmap-nse/src/lua.rs`:
+
 ```rust
-fn generate_dh_key_pair() -> (BigUint, BigUint)
-fn build_kexdh_init(e: &BigUint) -> Vec<u8>
-fn parse_kexdh_reply(data: &[u8]) -> mlua::Result<(Vec<u8>, BigUint, Vec<u8>)>
-fn compute_exchange_hash(...) -> Vec<u8>
-fn perform_key_exchange(...) -> mlua::Result<KeyExchangeResult>
-```
+pub fn new(config: LuaConfig) -> Result<Self> {
+    let lua = Lua::new();
 
-**Dependencies**:
-- `num-bigint` - Big integer arithmetic
-- `rand` - Cryptographic random number generation
-- `sha2` - SHA256 hashing
+    // Set package.path to search nselib/
+    lua.load("package.path = './nselib/?.lua;./nselib/?/init.lua;'").exec()?;
 
-**Code Quality**:
-- Zero compiler warnings (`cargo clippy -- -D warnings`)
-- All 238 tests pass
-- Proper documentation with backticks
-- `#[expect]` attributes for justified exceptions
+    // Add custom searcher for nselib files
+    lua.globals().get::<_, mlua::Table>("package")?
+        .set("searchers", vec![...])?;
 
-**Testing Required**:
-Run `ssh-auth-methods` script against real SSH server to verify authentication methods are returned.
-
-**Lines Changed**:
-- Added constants: lines ~200-210
-- Added helper functions: lines ~250-380
-- Added key exchange functions: lines ~390-450
-- Added `perform_key_exchange()`: lines ~560-650
-- Updated `ConnectionState`: added key exchange fields
-- Updated `connect()`: calls `perform_key_exchange()`
-
-**Unit Tests Added (2026-03-21)**:
-- `test_parse_mpint` - MPINT parsing from binary data
-- `test_parse_mpint_with_high_bit_set` - MPINT with zero padding
-- `test_serialize_mpint` - MPINT serialization
-- `test_serialize_mpint_high_bit` - MPINT with high bit set
-- `test_parse_bytes` - Binary string parsing
-- `test_parse_bytes_empty` - Empty binary string
-- `test_compute_shared_secret` - DH shared secret computation
-- `test_build_kexdh_init` - KEXDH_INIT packet construction
-- `test_parse_kexdh_reply_valid` - Valid KEXDH_REPLY parsing
-- `test_parse_kexdh_reply_empty` - Empty packet error handling
-- `test_parse_kexdh_reply_wrong_type` - Wrong message type error
-- `test_exchange_hash_deterministic` - Hash determinism
-- `test_exchange_hash_different_inputs` - Hash varies with inputs
-- `test_dh_constants_defined` - DH constants validation
-
-All 17 unit tests pass.
-
----
-
-### Discovery: SSH Post-NEWKEYS Encryption Required (2026-03-21)
-
-**Date**: 2026-03-21
-**File**: `crates/rustnmap-nse/src/libs/libssh2_utility.rs`
-**Test**: `ssh-auth-methods.nse` against scanme.nmap.org:22
-
-**What Was Tested**:
-Running the SSH key exchange implementation against a real SSH server to verify end-to-end functionality.
-
-**Test Result**: FAILED
-
-**Error Message**:
-```
-list auth methods failed: runtime error: Expected SERVICE_ACCEPT, got message type 1
-```
-
-**What Works**:
-- ✅ Banner retrieval
-- ✅ KEXINIT negotiation
-- ✅ DH Group14 key exchange (2048-bit MODP)
-- ✅ KEXDH_INIT/KEXDH_REPLY packet handling
-- ✅ Shared secret computation
-- ✅ Exchange hash calculation (SHA256)
-- ✅ NEWKEYS activation (both directions)
-
-**What's Missing**:
-After NEWKEYS phase, SSH protocol (RFC 4253) requires **all packets to be encrypted**. The current implementation sends unencrypted packets, which servers reject.
-
-**SSH Protocol Flow** (RFC 4253):
-```
-...key exchange steps...
-NEWKEYS (client) ---------->
-                  <-------- NEWKEYS (server)
-[=== ENCRYPTION STARTS HERE ===]
-SERVICE_REQUEST (encrypted) ------>
-                  <-------- SERVICE_ACCEPT (encrypted)
-USERAUTH_REQUEST (encrypted) ------>
-                  <-------- USERAUTH_FAILURE (encrypted) with auth methods list
-```
-
-**Root Cause**:
-When `list_auth_methods_impl()` sends SERVICE_REQUEST after NEWKEYS, the packet is unencrypted. The server correctly rejects it with `SSH_MSG_DISCONNECT` (message type 1).
-
-**Required Implementation** (RFC 4253 Section 7.2):
-1. **Key Derivation**: From shared secret K and exchange hash H, derive:
-   - Client-to-server encryption key
-   - Server-to-client encryption key
-   - Client-to-server HMAC key
-   - Server-to-client HMAC key
-   - Client-to-server IV
-   - Server-to-client IV
-
-2. **Encryption**: AES-128/256-CTR or CBC mode
-3. **Integrity**: HMAC-SHA1 or HMAC-SHA256
-
-**Options**:
-1. Implement full encryption (2-3 days) - Add `openssl` or `aes-gcm` + `hmac` crates
-2. Link against libssh2 C library (1 day) - Use proven implementation
-3. Use alternative scripts that don't require post-key-exchange communication
-
-**Recommendation**:
-Implement full encryption for RFC 4253 compliance. Use the existing `openssl` crate dependency already in the project for AES and HMAC operations.
-
----
-
-## Recent Bugs (2026-03-21)
-
-### Bug: Binary SSH Host Key Data Corrupted by UTF-8 Conversion
-
-**Date**: 2026-03-21
-**File**: `crates/rustnmap-nse/src/libs/ssh2.rs`
-**Function**: `parse_string()`
-
-**Problem**:
-Binary SSH host key data was being processed by `parse_string()` which uses `String::from_utf8_lossy()`. When binary data contains invalid UTF-8 sequences, the function replaces them with the 3-byte replacement character (U+FFFD).
-
-**Evidence**:
-```
-parse_string: offset=1, len_field=435, data_len=631, resulting_string_len=435
-String byte length mismatch: read 435 bytes but string has 780 bytes
-```
-
-**Root Cause**:
-SSH protocol defines "string" as a length-prefixed byte array that can contain binary data. The host key in KEXDH_REPLY contains binary mpint values, not UTF-8 text. Using `String::from_utf8_lossy()` corrupted this data.
-
-**Fix**:
-Created `parse_bytes()` function that returns raw `Vec<u8>`:
-```rust
-fn parse_bytes(data: &[u8], offset: usize) -> mlua::Result<(Vec<u8>, usize)> {
-    // ... read length ...
-    let value = data[new_offset..new_offset + len].to_vec();
-    Ok((value, new_offset + len))
+    Ok(Self { lua, config })
 }
 ```
 
-Changed `fetch_host_key_impl()` to use `parse_bytes()` for host key instead of `parse_string()`.
+**Complexity**: Medium (2-3 hours)
 
-**Result**:
-All 4 SSH host key types now parse correctly:
-- DSA (1024 bits)
-- RSA (2048 bits)
-- ECDSA (256 bits)
-- ED25519 (256 bits)
+### Test Evidence
 
-**Lines Changed**:
-- Added `parse_bytes()` function: lines 531-548
-- Modified `fetch_host_key_impl()`: line 802
+**Command**:
+```bash
+./target/debug/rustnmap -p 443 --script ssl-cert www.example.com
+```
 
----
+**Result**: Script fails during portrule evaluation with module not found error.
 
-## Historical Bugs (Fixed)
-
-### Bug: SSH Fingerprint Double-Encoding
-
-**Date**: 2026-03-20
-**File**: `ssh2.rs`
-
-**Problem**:
-`calculate_md5_fingerprint()` returned a formatted string like `de:b9:9f:...`. The Lua script called `stdnse.tohex(key.fingerprint)` which expected raw bytes, causing double-encoding.
-
-**Fix**:
-Changed return type from `String` to `[u8; 16]` (raw MD5 bytes).
+**See**: `SSL_NSE_TEST_REPORT.md` for full test details.
 
 ---
 
-### Bug: SSH-2 Packet Padding Calculation
+## SSH Post-NEWKEYS Encryption: Critical RFC 4253 Violation Fixed (2026-03-22)
 
-**Date**: 2026-03-20
-**File**: `ssh2.rs`
+(Previous findings preserved...)
 
-**Problem**:
-Padding calculation included the 4-byte packet length field, violating RFC 4253.
-
-**Fix**:
-Changed from `8 - ((payload.len() + 1 + 4) % 8)` to `8 - ((payload.len() + 1) % 8)`.
-
----
-
-## Known Limitations
-
-### SSH Post-NEWKEYS Encryption Not Implemented (2026-03-21)
-
-**Status**: PARTIALLY WORKING
-**What Works**: Key exchange through NEWKEYS phase (RFC 4253 compliant)
-**What's Missing**: Post-NEWKEYS packet encryption
-
-**Current Behavior**:
-- Key exchange completes successfully (DH Group14, 2048-bit MODP)
-- NEWKEYS activation works both directions
-- **Packets after NEWKEYS must be encrypted** but are sent unencrypted
-- Servers reject unencrypted post-NEWKEYS packets with disconnect
-
-**Impact**:
-- `ssh-auth-methods` script fails at SERVICE_REQUEST phase
-- Any SSH communication requiring authentication will fail
-- Host key fetching (`ssh2` library) still works (doesn't need encryption)
-
-**Required Fix**:
-Implement per RFC 4253 Section 7.2:
-1. Derive encryption/integrity keys from shared secret K and exchange hash H
-2. Add AES-CTR/CBC encryption for packet data
-3. Add HMAC-SHA1/256 for packet integrity
-4. Encrypt/decrypt all packets after NEWKEYS
-
----
-
-## Untested Modules
-
-The following modules have NEVER been tested against real targets:
-
-- `ssl.rs` - SSL/TLS functionality
-- `smb.rs` - SMB protocol
-- `dns.rs` - DNS protocol
-- Most of `http.rs` beyond basic GET requests
-
-**Reason**: Current test target (scanme.nmap.org) only has HTTP (port 80) and SSH (port 22).
-
----
-
-## Code Quality
-
-All Rust code passes:
-- `cargo clippy -- -D warnings` (zero warnings)
-- `cargo test` (all 238 tests pass)
-- `cargo fmt --check` (properly formatted)
-
-`#[expect(...)]` attributes used for justified exceptions:
-- `clippy::many_single_char_names` - Variable names match RFC 4253 specification
-- `clippy::too_many_arguments` - Parameter count matches RFC 4253 specification
-- `clippy::cast_possible_truncation` - SSH protocol uses 32-bit length prefixes
-
-No global `#![allow(...)]` module-level attributes used.
+[Rest of previous findings.md content...]

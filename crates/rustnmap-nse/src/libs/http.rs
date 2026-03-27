@@ -67,7 +67,7 @@
 use std::collections::HashMap;
 use std::fmt::Write as FmtWrite;
 use std::io::{Read, Write};
-use std::net::TcpStream;
+use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration;
 
 use flate2::read::{DeflateDecoder, GzDecoder};
@@ -231,10 +231,6 @@ impl Default for RequestOptions {
 }
 
 /// Build HTTP request.
-#[expect(
-    clippy::format_push_string,
-    reason = "HTTP request building is not performance-critical"
-)]
 fn build_request(
     method: &str,
     host: &str,
@@ -243,9 +239,29 @@ fn build_request(
     options: &RequestOptions,
     body: Option<&[u8]>,
 ) -> Vec<u8> {
+    build_request_with_conn(method, host, port, path, options, body, "close")
+}
+
+/// Build an HTTP/1.1 request with an explicit `Connection` header value.
+///
+/// Used by the pipeline engine to send `keep-alive` on reused sockets and
+/// `close` on the final request of each connection batch.
+#[expect(
+    clippy::format_push_string,
+    reason = "HTTP request building is not performance-critical"
+)]
+fn build_request_with_conn(
+    method: &str,
+    host: &str,
+    port: u16,
+    path: &str,
+    options: &RequestOptions,
+    body: Option<&[u8]>,
+    connection: &str,
+) -> Vec<u8> {
     let mut request = format!("{method} {path} HTTP/1.1\r\n");
     request.push_str(&format!("Host: {host}:{port}\r\n"));
-    request.push_str("Connection: close\r\n");
+    request.push_str(&format!("Connection: {connection}\r\n"));
     request.push_str("User-Agent: Mozilla/5.0 (compatible; Nmap NSE)\r\n");
 
     // Add custom headers
@@ -488,23 +504,126 @@ fn parse_set_cookie(value: &str) -> mlua::Result<Cookie> {
     Ok(cookie)
 }
 
+/// Read exactly one HTTP response from a buffered byte slice.
+///
+/// Returns `(response, bytes_consumed)` so the caller can advance its
+/// buffer cursor.  The function parses the `Content-Length` header to
+/// know where the body ends; if the header is absent it reads until the
+/// buffer is exhausted (suitable for the last response on a closed
+/// connection).
+///
+/// # Errors
+///
+/// Returns an error if the buffer contains no valid HTTP response header.
+fn read_one_response(
+    buf: &[u8],
+    max_body_size: usize,
+    truncated_ok: bool,
+) -> mlua::Result<Option<(HttpResponse, usize)>> {
+    // Need at least the header terminator.
+    let Some(header_end) = buf.windows(4).position(|w| w == b"\r\n\r\n") else {
+        return Ok(None);
+    };
+
+    let header_bytes = &buf[..header_end];
+    let header_str = std::str::from_utf8(header_bytes)
+        .map_err(|e| mlua::Error::RuntimeError(format!("Invalid UTF-8 in headers: {e}")))?;
+
+    // Extract Content-Length if present.
+    let content_length: Option<usize> = header_str.split("\r\n").skip(1).find_map(|line| {
+        let (key, val) = line.split_once(':')?;
+        if key.trim().eq_ignore_ascii_case("content-length") {
+            val.trim().parse().ok()
+        } else {
+            None
+        }
+    });
+
+    // Check Transfer-Encoding: chunked.
+    let is_chunked = header_str.split("\r\n").skip(1).any(|line| {
+        line.split_once(':').is_some_and(|(k, v)| {
+            k.trim().eq_ignore_ascii_case("transfer-encoding")
+                && v.trim().eq_ignore_ascii_case("chunked")
+        })
+    });
+
+    let body_start = header_end + 4;
+    let available = buf.len().saturating_sub(body_start);
+
+    let (body_len, complete) = if is_chunked {
+        // For chunked encoding consume all available bytes; the response is
+        // complete when the terminal "0\r\n\r\n" chunk is present.
+        let complete = buf[body_start..].windows(5).any(|w| w == b"0\r\n\r\n");
+        (available, complete)
+    } else if let Some(cl) = content_length {
+        (cl, available >= cl)
+    } else {
+        // No Content-Length and not chunked: we cannot determine the boundary
+        // without waiting for EOF.  Return None and let the caller decide.
+        return Ok(None);
+    };
+
+    if !complete {
+        return Ok(None);
+    }
+
+    let end = body_start + body_len;
+    if end > buf.len() {
+        return Ok(None);
+    }
+
+    let response = parse_response(&buf[..end], max_body_size, truncated_ok)?;
+    Ok(Some((response, end)))
+}
+
+/// Connect to `host:port` with timeout, returning a configured `TcpStream`.
+///
+/// # Errors
+///
+/// Returns an error if DNS resolution fails, no address is available, or
+/// the TCP connection cannot be established within `timeout`.
+fn connect(host: &str, port: u16, timeout: Duration) -> mlua::Result<TcpStream> {
+    let addr_str = format!("{host}:{port}");
+
+    let addrs: Vec<_> = addr_str
+        .to_socket_addrs()
+        .map_err(|e| mlua::Error::RuntimeError(format!("Failed to resolve {addr_str}: {e}")))?
+        .collect();
+
+    let addr = addrs
+        .first()
+        .ok_or_else(|| mlua::Error::RuntimeError(format!("No address resolved for {addr_str}")))?;
+
+    let stream = TcpStream::connect_timeout(addr, timeout)
+        .map_err(|e| mlua::Error::RuntimeError(format!("Connection failed to {addr_str}: {e}")))?;
+
+    stream
+        .set_read_timeout(Some(timeout))
+        .map_err(|e| mlua::Error::RuntimeError(format!("Failed to set read timeout: {e}")))?;
+
+    stream
+        .set_write_timeout(Some(timeout))
+        .map_err(|e| mlua::Error::RuntimeError(format!("Failed to set write timeout: {e}")))?;
+
+    Ok(stream)
+}
+
 /// Perform HTTP request over TCP.
+///
+/// Opens a new connection for each call (suitable for single requests with
+/// `Connection: close`).  For bulk requests use the pipeline engine instead.
+///
+/// # Errors
+///
+/// Returns an error if connection, send, or response parsing fails.
 fn perform_request(
     host: &str,
     port: u16,
     request: &[u8],
     options: &RequestOptions,
 ) -> mlua::Result<HttpResponse> {
-    let addr = format!("{host}:{port}");
-
-    let stream = TcpStream::connect(&addr)
-        .map_err(|e| mlua::Error::RuntimeError(format!("Connection failed to {addr}: {e}")))?;
-
-    stream
-        .set_read_timeout(Some(Duration::from_millis(options.timeout)))
-        .map_err(|e| mlua::Error::RuntimeError(format!("Failed to set timeout: {e}")))?;
-
-    let mut stream = stream;
+    let timeout = Duration::from_millis(options.timeout);
+    let mut stream = connect(host, port, timeout)?;
 
     stream
         .write_all(request)
@@ -959,6 +1078,12 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
 
     // Register pipeline_go function
     let pipeline_go_fn = lua.create_function(
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            clippy::cast_possible_wrap,
+            reason = "Lua integers are i64, safe to cast for pipeline length (small positive number)"
+        )]
         |lua, (host, port, all_requests): (Value, Value, Option<Table>)| {
             let (host_str, port_num) = extract_host_port(host, port);
 
@@ -967,41 +1092,225 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
             };
 
             let pipeline_len = pipeline.len().unwrap_or(0);
+            if pipeline_len == 0 {
+                return Ok(Value::Table(lua.create_table()?));
+            }
+
             debug!(
                 "http.pipeline_go({}, {}, {})",
                 host_str, port_num, pipeline_len
             );
 
-            let results = lua.create_table()?;
-
-            // Execute each request in pipeline
+            // Collect all (method, path, opts) upfront.
+            let mut entries: Vec<(String, String, RequestOptions)> =
+                Vec::with_capacity(pipeline_len as usize);
             for i in 1..=pipeline_len {
-                let request_opt: Option<Table> = pipeline.get(i).ok();
-                let Some(request) = request_opt else {
+                let Some(req): Option<Table> = pipeline.get(i).ok().flatten() else {
                     continue;
                 };
-
-                let method: String = request
+                let method: String = req
                     .get("method")
                     .ok()
                     .flatten()
                     .unwrap_or_else(|| "GET".to_string());
-                let path: String = request
+                let path: String = req
                     .get("path")
                     .ok()
                     .flatten()
                     .unwrap_or_else(|| "/".to_string());
-                let opts = parse_options(request.get("options").ok());
+                let opts = parse_options(req.get("options").ok());
+                entries.push((method, path, opts));
+            }
 
-                let req = build_request(&method, &host_str, port_num, &path, &opts, None);
+            let results = lua.create_table()?;
 
-                if let Ok(response) = perform_request(&host_str, port_num, &req, &opts) {
-                    if let Ok(tbl) = response_to_table(lua, &response) {
-                        let _ = results.set(i, tbl);
+            // --- Probe first request with keep-alive to discover connlimit ---
+            //
+            // Nmap's get_pipeline_limit() reads Keep-Alive: max=N from the
+            // first response.  HTTP/1.1 without "Connection: close" implies
+            // persistent connections; default batch size mirrors nmap's 40.
+            let default_connlimit: usize = 40;
+
+            let (first_method, first_path, first_opts) = &entries[0];
+            let probe_req = build_request_with_conn(
+                first_method,
+                &host_str,
+                port_num,
+                first_path,
+                first_opts,
+                None,
+                "keep-alive",
+            );
+
+            let timeout = Duration::from_millis(first_opts.timeout);
+
+            // connlimit: how many requests we send per TCP connection.
+            let mut connlimit = default_connlimit;
+
+            let probe_resp =
+                perform_request(&host_str, port_num, &probe_req, first_opts).ok();
+
+            if let Some(ref resp) = probe_resp {
+                // Parse "Keep-Alive: max=N" header.
+                if let Some(ka) = resp.header.get("keep-alive") {
+                    for part in ka.split(',') {
+                        let part = part.trim();
+                        if let Some(val) = part.strip_prefix("max=") {
+                            if let Ok(n) = val.trim().parse::<usize>() {
+                                // +1 because the probe already used one slot.
+                                connlimit = n + 1;
+                            }
+                        }
                     }
+                }
+                // "Connection: close" means server won't pipeline.
+                if resp
+                    .header
+                    .get("connection")
+                    .is_some_and(|v| v.eq_ignore_ascii_case("close"))
+                {
+                    connlimit = 1;
+                }
+                if let Ok(tbl) = response_to_table(lua, resp) {
+                    let _ = results.set(1_i64, tbl);
                 }
             }
 
+            debug!(
+                "http.pipeline_go: connlimit={}, total={}",
+                connlimit, pipeline_len
+            );
+
+            // --- Send remaining requests in batches on reused sockets ---
+            let mut sent = 1usize; // probe counts as first request
+            let mut conn_sent = 1usize; // requests sent on current connection
+            let mut stream_opt: Option<TcpStream> = None;
+
+            while sent < entries.len() {
+                // Reconnect when needed.
+                if conn_sent >= connlimit || stream_opt.is_none() {
+                    conn_sent = 0;
+                    match connect(&host_str, port_num, timeout) {
+                        Ok(s) => stream_opt = Some(s),
+                        Err(e) => {
+                            debug!("http.pipeline_go: reconnect failed: {}", e);
+                            break;
+                        }
+                    }
+                }
+
+                let stream = stream_opt.as_mut().unwrap_or_else(|| {
+                    unreachable!("stream_opt is Some after successful reconnect above")
+                });
+
+                // Determine batch size for this connection window.
+                let remaining = entries.len() - sent;
+                let window = connlimit - conn_sent;
+                let batch = window.min(remaining);
+
+                // Build and send all requests in this batch concatenated.
+                let mut batch_bytes: Vec<u8> = Vec::new();
+                for b in 0..batch {
+                    let idx = sent + b;
+                    let (method, path, opts) = &entries[idx];
+                    // Last request of this connection uses "close" so the
+                    // server knows to terminate after it, preventing a hang
+                    // waiting for EOF on the final response.
+                    let is_last_on_conn = b + 1 == batch && conn_sent + batch >= connlimit;
+                    let is_last_overall = idx + 1 == entries.len();
+                    let conn_hdr = if is_last_on_conn || is_last_overall {
+                        "close"
+                    } else {
+                        "keep-alive"
+                    };
+                    let req = build_request_with_conn(
+                        method,
+                        &host_str,
+                        port_num,
+                        path,
+                        opts,
+                        None,
+                        conn_hdr,
+                    );
+                    batch_bytes.extend_from_slice(&req);
+                }
+
+                if let Err(e) = stream.write_all(&batch_bytes) {
+                    debug!("http.pipeline_go: send failed: {}", e);
+                    stream_opt = None;
+                    continue;
+                }
+
+                // Read responses for every request in the batch.
+                let mut recv_buf: Vec<u8> = Vec::new();
+                let mut tmp = [0u8; 8192];
+                let mut batch_recv = 0usize;
+
+                'batch: while batch_recv < batch {
+                    // Try to parse a complete response from the buffer first.
+                    let opts = &entries[sent + batch_recv].2;
+                    match read_one_response(
+                        &recv_buf,
+                        opts.max_body_size,
+                        opts.truncated_ok,
+                    ) {
+                        Ok(Some((resp, consumed))) => {
+                            if let Ok(tbl) = response_to_table(lua, &resp) {
+                                // result index is 1-based in Lua.
+                                let lua_idx = (sent + batch_recv + 1) as i64;
+                                let _ = results.set(lua_idx, tbl);
+                            }
+                            recv_buf.drain(..consumed);
+                            batch_recv += 1;
+                            continue 'batch;
+                        }
+                        Ok(None) => {} // need more data
+                        Err(e) => {
+                            debug!(
+                                "http.pipeline_go: parse error at batch[{}]: {}",
+                                batch_recv, e
+                            );
+                            // Skip this response; re-sync is not feasible.
+                            batch_recv += 1;
+                            recv_buf.clear();
+                            continue 'batch;
+                        }
+                    }
+
+                    // Buffer incomplete — read more bytes.
+                    match stream.read(&mut tmp) {
+                        Ok(0) => {
+                            // Server closed; parse what we have.
+                            if !recv_buf.is_empty() {
+                                let opts = &entries[sent + batch_recv].2;
+                                if let Ok(resp) = parse_response(
+                                    &recv_buf,
+                                    opts.max_body_size,
+                                    opts.truncated_ok,
+                                ) {
+                                    if let Ok(tbl) = response_to_table(lua, &resp) {
+                                        let lua_idx = (sent + batch_recv + 1) as i64;
+                                        let _ = results.set(lua_idx, tbl);
+                                    }
+                                }
+                            }
+                            stream_opt = None;
+                            break 'batch;
+                        }
+                        Ok(n) => recv_buf.extend_from_slice(&tmp[..n]),
+                        Err(e) => {
+                            debug!("http.pipeline_go: read error: {}", e);
+                            stream_opt = None;
+                            break 'batch;
+                        }
+                    }
+                }
+
+                sent += batch;
+                conn_sent += batch;
+            }
+
+            debug!("http.pipeline_go: done, sent={}/{}", sent, entries.len());
             Ok(Value::Table(results))
         },
     )?;

@@ -213,7 +213,8 @@ impl ScriptEngine {
                 }
                 mlua::Value::Table(t) => {
                     // Check if it's an array (indexed table)
-                    let is_array = t.pairs::<mlua::Value, mlua::Value>()
+                    let is_array = t
+                        .pairs::<mlua::Value, mlua::Value>()
                         .flatten()
                         .all(|(k, _)| matches!(k, mlua::Value::Integer(_)));
 
@@ -226,7 +227,8 @@ impl ScriptEngine {
                                     output_lines.push(format!("  {s}"));
                                 }
                             } else {
-                                let item_str = tostring_fn.call::<String>(item_val).unwrap_or_default();
+                                let item_str =
+                                    tostring_fn.call::<String>(item_val).unwrap_or_default();
                                 if !item_str.is_empty() {
                                     output_lines.push(format!("  {item_str}"));
                                 }

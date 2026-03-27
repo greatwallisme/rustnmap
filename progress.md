@@ -1,440 +1,109 @@
-# Progress: NSE Module Fixes
+# Progress: SSL NSE Testing
 
-> **Updated**: 2026-03-22 06:21
-
----
-
-## Session Summary (2026-03-22)
-
-### SSH Post-NEWKEYS Encryption Implementation (STILL NOT WORKING)
-
-This session implemented cipher persistence for SSH encryption to fix CTR counter reset issue.
-
-### Work Completed
-
-1. **Root cause identified**: Creating new cipher per packet resets CTR counter
-   - Per RFC 4344, CTR counter must continue across packets
-   - OpenSSH creates cipher once and reuses it
-
-2. **Implemented cipher persistence**
-   - `EncryptionState::Active` now stores `tx_cipher` and `rx_cipher` instances
-   - Added helper methods: `encrypt()`, `decrypt()`, `tx_mac_key()`, `rx_mac_key()`
-   - Ciphers created once in `EncryptionState::new()` and reused for all packets
-
-3. **Code quality**
-   - Zero compiler warnings
-   - Zero clippy warnings
-   - All 39 tests pass
-
-### Current Status
-
-**Encryption Implementation**: Cipher persistence implemented but STILL NOT WORKING
-
-Symptoms:
-- Key exchange completes successfully (KEXDH_INIT/REPLY, NEWKEYS)
-- `ssh-hostkey` script works (doesn't need post-NEWKEYS encryption)
-- `ssh-auth-methods` times out completely (no output at all)
-- Suggests issue may be in encryption/decryption logic itself
-
-Remaining issues to investigate:
-1. **Cipher type**: Using `Ctr128BE<Aes128>` - verify this is correct for SSH
-2. **Key derivation**: Verify KDF matches server's expectation
-3. **Algorithm negotiation**: Server may not accept our cipher/MAC choices
-4. **MAC verification**: May be failing on first encrypted response
-
-### Test Results
-
-| Script | Status | Details |
-|--------|--------|---------|
-| ssh-hostkey | PASS | Returns all 4 host keys |
-| ssh-auth-methods | TIMEOUT | No output, complete timeout |
-| Build | Release build | PASS | 35s, zero warnings, **no segfault** |
-| Build | NSE crate | PASS | All dependencies resolved |
-| Quality | Clippy | PASS | Zero warnings |
-| Quality | Format | PASS | After `cargo fmt` |
-| Quality | Tests | PASS | 251 unit tests |
-| Function | ssh-hostkey | PASS | All 4 keys (DSA, RSA, ECDSA, ED25519) |
-| Function | ssh-auth-methods | PARTIAL | Banner only (expected - post-NEWKEYS encryption not implemented) |
-| Runtime | Release SSH | PASS | 7.18s, no segfault |
-
-### Fixes Verified
-
-1. **Type Fixes** (`libssh2_utility.rs`)
-   - `Ok(true)`/`Ok(false)` → `Ok(Value::Boolean(true/false))`
-   - Applied via bulk replace_all
-   - All 8 type mismatches resolved
-
-2. **if/else Structure Fixes**
-   - Fixed broken patterns in `parse_namelist()`
-   - Fixed broken patterns in `serialize_mpint()`
-   - Fixed broken patterns in `parse_kexdh_reply()`
-   - Fixed broken patterns in `EncryptionState` methods
-   - Fixed broken patterns in `ConnectionState` destructuring
-
-3. **Debug Cleanup**
-   - Removed 20+ `eprintln!` debug statements
-   - Clean output for production use
-
-4. **Clippy Warnings**
-   - All warnings resolved with `#[expect]` attributes
-   - EncryptionState: `large_enum_variant` allowed
-   - ConnectionState: `large_enum_variant` allowed
-   - KeyExchangeResult: `dead_code`, `box_collection` allowed
-   - `implicit_clone` allowed for `to_vec()` conversions
-
-5. **Release Build Segfault** (commit 958a011)
-   - Root cause: Unsafe `ConnectionContext` pattern
-   - Fix: Removed unsafe mutable references
-   - Result: Release builds execute cleanly
-
-### Test Commands Used
-
-```bash
-# Build verification
-cargo build -p rustnmap-cli
-cargo build --release -p rustnmap-cli
-cargo build -p rustnmap-nse
-
-# Code quality
-cargo clippy -p rustnmap-nse -- -D warnings
-cargo fmt --check -p rustnmap-nse
-cargo test -p rustnmap-nse
-
-# Functionality tests
-./target/debug/rustnmap -p 22 --script=ssh-hostkey scanme.nmap.org
-./target/debug/rustnmap -p 22 --script=ssh-auth-methods scanme.nmap.org
-./target/release/rustnmap -p 22 --script=ssh-hostkey scanme.nmap.org
-```
-
-### Sample Output - SSH Hostkey (Release Build)
-
-```
-| ssh-hostkey
-|   1: 1024 AC00:A01A:82FF:CC55:99DC:672B:3497:6B75 (DSA)
-|   2: 2048 203D:2D44:622A:B05A:9DB5:B305:14C2:A6B2 (RSA)
-|   3: 256 9602:BB5E:5754:1C4E:452F:564C:4A24:B257 (ECDSA)
-|_  4: 256 33FA:910F:E0E1:7B1F:6D05:A2B0:F154:4156 (ED25519)
-```
-
-### Known Limitations
-
-- **Post-NEWKEYS encryption**: Not implemented (RFC 4253 Section 7.2)
-  - Scripts requiring encrypted communication will only output banner
-  - This is expected behavior, not a bug
-
-### Files Modified This Session
-
-| File | Purpose |
-|------|---------|
-| `test_plan.md` | Created for tracking test results |
+> **Updated**: 2026-03-27
 
 ---
 
-## Session Summary (2026-03-21 continued)
+## Session Summary (2026-03-27)
 
-### Key Findings from ssh-auth-methods Test
+### COMPLETED: SSL Scripts Fully Functional
 
-**Test Result**: FAILED - Post-NEWKEYS encryption required
+**Status**: ✅ ssl-cert.nse script works correctly with full certificate parsing.
 
-**What Works**:
-- ✅ DH Group14 key exchange (2048-bit MODP)
-- ✅ KEXDH_INIT/KEXDH_REPLY handling
-- ✅ Shared secret computation
-- ✅ Exchange hash (SHA256)
-- ✅ NEWKEYS activation
+### What Was Implemented
 
-**Root Cause Discovered**:
-After NEWKEYS phase, SSH protocol requires **all packets to be encrypted**. Current implementation sends unencrypted SERVICE_REQUEST, causing server to reject with `SSH_MSG_DISCONNECT`.
+1. **Lua File Loader** (2026-03-26)
+   - Custom file searcher for `nselib/` directory
+   - `package.path` configuration
+   - Pure Lua library loading
 
-**Protocol Flow** (RFC 4253):
-```
-NEWKEYS (both sides) → [ENCRYPTION STARTS] → SERVICE_REQUEST (encrypted)
-```
+2. **Socket Connect Method** (2026-03-27)
+   - `connect(host, port, proto)` implementation
+   - Host/port parameter handling (string/table formats)
+   - Synchronous mode for NSE compatibility
 
-**Required Implementation** (RFC 4253 Section 7.2):
-1. Key derivation from K and H
-2. AES-CTR/CBC encryption
-3. HMAC-SHA1/256 integrity
+3. **SSL Certificate Retrieval** (2026-03-27)
+   - `get_ssl_certificate()` method
+   - OpenSSL integration for SSL handshake
+   - Certificate parsing to Lua table format
+   - Fingerprint calculation (MD5, SHA-1, SHA-256)
+   - Date parsing for validity period
 
-**Next Steps**:
-Implement post-NEWKEYS encryption using `openssl` crate (already a dependency).
+### Bugs Fixed
 
----
-
-## Session Summary (2026-03-21)
-
-## Session Summary (2026-03-21)
-
-This session completed the SSH key exchange implementation for `ssh-auth-methods` script support.
-
-### Key Achievements
-
-1. **Implemented complete SSH key exchange (RFC 4253 Section 8)**
-   - DH Group14 key pair generation (2048-bit MODP)
-   - KEXDH_INIT packet construction
-   - KEXDH_REPLY packet parsing
-   - Exchange hash computation (SHA256)
-   - NEWKEYS activation
-   - Updated `SSHConnection::connect()` to call key exchange
-
-2. **Code quality verified**
-   - Zero clippy warnings (`cargo clippy -p rustnmap-nse -- -D warnings`)
-   - All 238 tests pass
-   - Proper formatting (`cargo fmt --check`)
-   - Comprehensive documentation with backticks
-
-3. **Updated documentation**
-   - `doc/modules/nse-libraries.md` - Added SSH key exchange protocol technical design
-   - `task_plan.md` - Updated implementation status
-   - `findings.md` - Added implementation completion entry
-
----
-
-## Session Summary (2026-03-20)
-
----
-
-## Session Summary (2026-03-20)
-
-This session focused on fixing clippy warnings and ensuring code quality compliance with zero-tolerance standards.
-
-### Key Achievements
-
-1. **Fixed all clippy warnings in ssh2.rs**
-   - Extracted helper functions to reduce function complexity
-   - Fixed map_err_ignore pattern
-   - Inlined format args
-   - Removed incorrect dead_code expectation
-   - Fixed documentation markdown
-
-2. **Fixed clippy warnings in libssh2_utility.rs**
-   - Combined identical match arms
-
-3. **Corrected SSH-2 packet padding calculation**
-   - Fixed RFC 4253 compliance
-   - Test verification passes
-
-4. **Zero errors, zero warnings verified**
-   - `cargo clippy -p rustnmap-nse -- -D warnings` - PASS
-   - `cargo fmt --check` - PASS
-   - `cargo test -p rustnmap-nse` - PASS (237 tests)
-   - `cargo build -p rustnmap-cli --release` - PASS
-
----
-
-## Technical Changes
-
-### ssh2.rs Refactoring
-
-**Before**: 111-line `fetch_host_key_impl` function
-
-**After**: Extracted two helper functions:
-```rust
-fn parse_disconnect_message(payload: &[u8]) -> mlua::Result<(u32, String)> {
-    // Parse SSH DISCONNECT message (reason_code, description)
-}
-
-fn perform_dh_key_exchange(
-    stream: &mut TcpStream,
-    prime_hex: &str,
-    group_bits: usize,
-) -> mlua::Result<(BigUint, BigUint)> {
-    // Generate DH keys and send KEXDH_INIT
-}
-```
-
-### Padding Formula Fix
-
-**Before**:
-```rust
-let mut padding_length = 8 - ((payload.len() + 1 + 4) % 8);
-```
-
-**After**:
-```rust
-let mut padding_length = 8 - ((payload.len() + 1) % 8);
-```
-
----
-
-## Files Changed
-
-| File | Lines Changed | Purpose |
-|------|---------------|---------|
-| ssh2.rs | ~50 | Clippy fixes, refactoring |
-| libssh2_utility.rs | ~5 | Match arm consolidation |
-| task_plan.md | ~20 | Updated status |
-| findings.md | ~50 | Added new findings |
+| Bug | Root Cause | Fix |
+|-----|------------|-----|
+| "attempt to yield from outside a coroutine" | Used async method instead of sync | Changed to `add_method_mut` |
+| "bad argument #1: error converting Lua table to String" | Digest function wrong signature | Added `(_self, algo)` tuple params |
+| Fingerprints showing character codes | Returning hex string instead of raw bytes | Return `digest_bytes` directly |
+| Invalid date format | Wrong parsing for OpenSSL time format | Parse "Mon DD HH:MM:SS YYYY GMT" |
 
 ---
 
 ## Test Results
 
-### Before This Session
-- Clippy: 4 errors
-- Test: 1 failure (test_build_ssh2_packet)
+| Phase | Status | Details |
+|-------|--------|---------|
+| Find SSL target | ✅ PASS | www.qq.com:443 |
+| Build & clippy | ✅ PASS | Zero warnings |
+| ssl-cert.nse | ✅ PASS | Full certificate output |
+| ssl-cert-intaddr | ✅ PASS | Returns empty (expected) |
 
-### After This Session
-- Clippy: 0 errors, 0 warnings
-- Test: All 237 tests pass
-- Release build: SUCCESS
+### Sample Output
 
----
-
-## Outstanding Work
-
-1. **SSH key exchange algorithm negotiation** - Modern servers prefer curve25519/ecdh
-2. **HTTP pipeline performance** - http-enum may need optimization
-3. **ssh-auth-methods output** - Depends on SSH fixes
-
----
-
-## Verification Commands
-
-```bash
-# Build and check
-cargo clippy -p rustnmap-nse -- -D warnings
-cargo fmt --check
-cargo test -p rustnmap-nse
-cargo build -p rustnmap-cli --release
-
-# Test NSE functionality
-./target/release/rustnmap -p 80 --script http-title scanme.nmap.org
+```
+| ssl-cert
+|   Subject: commonName=*.ias.tencent-cloud.net/organizationName=Tencent Technology (Shenzhen) Company Limited/stateOrProvinceName=Guangdong Province/countryName=CN
+|   Subject Alternative Name: DNS:*.ias.tencent-cloud.net, DNS:ias.tencent-cloud.net
+|   Issuer: commonName=DigiCert Secure Site OV G2 TLS CN RSA4096 SHA256 2022 CA1/organizationName=DigiCert, Inc./countryName=US
+|   Public Key type: rsa
+|   Public Key bits: 2048
+|   Signature Algorithm: sha256WithRSAEncryption
+|   Not valid before: 2025-06-23T00:00:00
+|   Not valid after:  2026-07-24T23:59:59
+|   MD5:     590c a9a7 e8b2 36eb 87d5 63f8 6dc5 216e
+|   SHA-1:   78f3 f716 8024 8710 c435 b5ef 09a6 5933 7d3a 45a3
+|_  SHA-256: 8e4f 83b5 fcd2 2ab2 3a94 0d4c f170 7a5a 02ed eba5 abd9 3c4d de21 22d8 5bee e3ce
 ```
 
 ---
 
-## Previous Session Summary
+## Files Modified
 
-This session focused on fixing the NSE module's mlua integration patterns and adding missing Nmap API functions.
-
-### Key Achievements
-
-1. **Fixed stdnse.mutex() and stdnse.condition_variable()**
-   - Replaced thread spawning with `tokio::task::block_in_place`
-   - Added actual mutex state tracking with `MutexState` struct
-   - Implemented real lock/trylock/unlock operations
-
-2. **Added nmap.fetchfile()**
-   - Searches multiple paths for data files
-   - Returns file path if found, nil otherwise
-
-3. **Added http.identify_404()**
-   - Returns standard 404 detection result
-   - Allows http-enum and similar scripts to execute
+| File | Change |
+|------|--------|
+| `crates/rustnmap-nse/src/lua.rs` | Added file searcher, package.path |
+| `crates/rustnmap-nse/src/libs/nmap.rs` | SSL connect, cert parsing, digest |
+| `crates/rustnmap-nse/Cargo.toml` | OpenSSL dependency |
 
 ---
 
-## Technical Changes
+## Previous Session (2026-03-26)
 
-### stdnse.rs
+### CRITICAL FINDING: SSL Scripts Cannot Run
 
-```rust
-// Before: Stub that returned true
-let mutex_fn = lua.create_function(move |_, operation: String| {
-    Ok(true)  // Always succeeded
-});
+**Root Cause**: NSE engine missing Lua file loader for pure Lua libraries.
 
-// After: Actual mutex with state tracking
-struct MutexState {
-    holder: Option<String>,
-    lock_count: u32,
-}
+### What Was Discovered
 
-let mutex_op_fn = lua.create_function(move |lua, operation: String| {
-    let mut guard = mutex_arc.lock()?;
-    match operation.as_str() {
-        "lock" => { guard.holder = Some("current"); Ok(true) }
-        "trylock" => { ... }
-        "done" => { guard.holder = None; Ok(true) }
-    }
-});
+The SSL scripts require pure Lua libraries from `nselib/` directory:
+- `sslcert.lua` (37KB) - SSL certificate handling
+- `tls.lua` (75KB) - TLS protocol
+- `datetime.lua` - Date/time formatting
+- `outlib.lua`, `unicode.lua`, etc.
+
+**The Problem**:
+1. NSE engine only registers Rust libraries (`libs/mod.rs::register_all()`)
+2. No `package.path` configuration for Lua to search `nselib/`
+3. No file loader to read and execute `.lua` files
+
+**Error Message**:
+```
+lua runtime error in 'ssl-cert': runtime error:
+  module 'sslcert' not found:
+  no field package.preload['sslcert']
+  no file '/usr/local/share/lua/5.4/sslcert.lua'
+  ...
 ```
 
-### nmap.rs
-
-```rust
-// Added fetchfile function
-fn get_fetchfile_search_paths() -> Vec<std::path::PathBuf> {
-    // ~/.rustnmap/, RUSTNMAPDIR, ./reference/nmap/, /usr/share/rustnmap/, /usr/share/nmap/
-}
-
-let fetchfile_fn = lua.create_function(|lua, filename: String| {
-    for base_path in get_fetchfile_search_paths() {
-        let full_path = base_path.join(&filename);
-        if full_path.exists() {
-            return Ok(lua.create_string(full_path.to_string_lossy())?);
-        }
-    }
-    Ok(mlua::Value::Nil)
-});
-```
-
-### http.rs
-
-```rust
-// Added identify_404 function
-let identify_404_fn = lua.create_function(|lua, (_, _): (Value, Value)| {
-    let result = lua.create_table()?;
-    result.set(1, true)?;   // 404 detection works
-    result.set(2, 404)?;    // Server returns 404
-    Ok(Value::Table(result))
-});
-```
-
----
-
-## Files Changed
-
-| File | Lines Changed | Purpose |
-|------|---------------|---------|
-| stdnse.rs | ~80 | Mutex/condvar fixes |
-| nmap.rs | ~50 | Added fetchfile |
-| http.rs | ~15 | Added identify_404 |
-
----
-
-## Test Results
-
-### Before This Session
-- Pass Rate: 26.6% (4/15 scripts)
-- http-enum: Failed with "attempt to call nil 'fetchfile'"
-
-### After This Session
-- http-enum: Now executes (seen pipeline_add calls)
-- Timing out at 120s - needs investigation
-- Other HTTP scripts still pass
-
----
-
-## Outstanding Work
-
-1. **Investigate http-enum timeout**
-   - May be related to pipeline_go
-   - May be normal (many URLs to check)
-
-2. **SSH key exchange**
-   - Still incomplete
-   - Affects ssh-auth-methods, ssh-hostkey
-
-3. **ssh1 library**
-   - Missing entirely
-   - Required by ssh-hostkey
-
----
-
-## Verification Commands
-
-```bash
-# Build and check
-cargo build -p rustnmap-nse
-cargo test -p rustnmap-nse
-cargo clippy -p rustnmap-nse -- -D warnings
-
-# Test specific scripts
-cargo run -p rustnmap-cli -- -sS -p80 --script http-title 45.33.32.156
-cargo run -p rustnmap-cli -- -sS -p80 --script http-enum 45.33.32.156
-
-# Full benchmark
-./benchmarks/nse_comparison_test.sh
-```
+**Solution**: Implemented Lua file loader in `lua.rs`.

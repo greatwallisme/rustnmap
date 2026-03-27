@@ -3,7 +3,8 @@
 //! This module provides the Lua runtime environment with NSE-specific
 //! libraries and sandboxing.
 
-use mlua::{Lua, Value};
+use mlua::{Function, Lua, LuaOptions, StdLib, Value};
+use std::path::Path;
 
 use crate::error::{Error, Result};
 
@@ -56,10 +57,37 @@ impl NseLua {
     /// # Errors
     ///
     /// Returns an error if Lua initialization fails.
+    ///
+    /// # Notes
+    ///
+    /// Loads Lua standard libraries needed by NSE scripts. The `debug` library
+    /// is required by `strict.lua` (used by many nselib modules).
+    ///
+    /// # Safety
+    ///
+    /// The `debug` library provides introspection capabilities that could
+    /// potentially be misused by untrusted scripts. However, it is required
+    /// for compatibility with Nmap's nselib modules. Scripts should be
+    /// properly sandboxed using other mechanisms (timeout, memory limits).
     pub fn new(config: LuaConfig) -> Result<Self> {
-        let lua = Lua::new();
+        // Load safe standard libraries plus debug library (required by strict.lua)
+        // IO and OS libraries are excluded for security/sandboxing
+        //
+        // SAFETY: The debug library is required by nselib strict.lua.
+        // Scripts run with timeouts and memory limits as mitigations.
+        let lua = unsafe {
+            Lua::unsafe_new_with(StdLib::ALL_SAFE | StdLib::DEBUG, LuaOptions::default())
+        };
 
-        Ok(Self { lua, config })
+        let mut nse_lua = Self { lua, config };
+
+        // Configure package.path to search nselib directory
+        nse_lua.set_package_path()?;
+
+        // Add custom file searcher for loading .lua files from nselib
+        nse_lua.add_file_searcher()?;
+
+        Ok(nse_lua)
     }
 
     /// Create a new NSE Lua runtime with default configuration.
@@ -306,6 +334,165 @@ impl NseLua {
             message: e.to_string(),
         })
     }
+
+    /// Configure `package.path` to search the nselib directory.
+    ///
+    /// This sets the Lua package path to search for modules in:
+    /// - `./nselib/?.lua` - for modules like `sslcert.lua`
+    /// - `./nselib/?/init.lua` - for modules like `tls/init.lua`
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if setting package.path fails.
+    fn set_package_path(&mut self) -> Result<()> {
+        let package: mlua::Table =
+            self.lua
+                .globals()
+                .get("package")
+                .map_err(|e| Error::LuaError {
+                    script: "runtime".to_string(),
+                    message: format!("failed to get package table: {e}"),
+                })?;
+
+        // Set package.path to search nselib directory
+        // This matches nmap's Lua module search path
+        package
+            .set("path", "./nselib/?.lua;./nselib/?/init.lua")
+            .map_err(|e| Error::LuaError {
+                script: "runtime".to_string(),
+                message: format!("failed to set package.path: {e}"),
+            })?;
+
+        Ok(())
+    }
+
+    /// Add a custom file searcher to `package.searchers`.
+    ///
+    /// This function prepends a custom searcher to the `package.searchers` table
+    /// that reads Lua files from the filesystem. The searcher:
+    ///
+    /// 1. Takes a module name (e.g., "sslcert")
+    /// 2. Searches for `./nselib/sslcert.lua`
+    /// 3. Searches for `./nselib/sslcert/init.lua`
+    /// 4. Returns the loaded chunk or an error message string
+    ///
+    /// The custom searcher is inserted at the beginning of `package.searchers`
+    /// so it takes precedence over the default Lua searchers.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the searcher cannot be registered.
+    fn add_file_searcher(&mut self) -> Result<()> {
+        let package: mlua::Table =
+            self.lua
+                .globals()
+                .get("package")
+                .map_err(|e| Error::LuaError {
+                    script: "runtime".to_string(),
+                    message: format!("failed to get package table: {e}"),
+                })?;
+
+        let searchers: mlua::Table = package.get("searchers").map_err(|e| Error::LuaError {
+            script: "runtime".to_string(),
+            message: format!("failed to get package.searchers: {e}"),
+        })?;
+
+        // Create a custom searcher function
+        // In Lua 5.4, searchers are called with (modname) and return:
+        // - loader function (or string explaining why it couldn't find module)
+        // The return type is mlua::Result<Value> which can be:
+        // - Ok(Function) - the loader function
+        // - Ok(String) - error message (why module not found)
+        // - Err(Error) - actual error occurred
+        let searcher = self
+            .lua
+            .create_function(|lua, modname: String| {
+                // Try loading from nselib/?.lua
+                let path1 = format!("./nselib/{modname}.lua");
+                if Path::new(&path1).exists() {
+                    match std::fs::read_to_string(&path1) {
+                        Ok(source) => {
+                            // Load the Lua source and return the chunk as a function
+                            return match lua.load(&source).set_name(&path1).into_function() {
+                                Ok(chunk) => Ok(Value::Function(chunk)),
+                                Err(e) => {
+                                    let msg = format!(
+                                        "error loading module '{modname}' from '{path1}':\n{e}"
+                                    );
+                                    Ok(Value::String(lua.create_string(&msg)?))
+                                }
+                            };
+                        }
+                        Err(e) => {
+                            let msg =
+                                format!("error reading module '{modname}' from '{path1}': {e}");
+                            return Ok(Value::String(lua.create_string(&msg)?));
+                        }
+                    }
+                }
+
+                // Try loading from nselib/?/init.lua
+                let path2 = format!("./nselib/{modname}/init.lua");
+                if Path::new(&path2).exists() {
+                    match std::fs::read_to_string(&path2) {
+                        Ok(source) => {
+                            return match lua.load(&source).set_name(&path2).into_function() {
+                                Ok(chunk) => Ok(Value::Function(chunk)),
+                                Err(e) => {
+                                    let msg = format!(
+                                        "error loading module '{modname}' from '{path2}':\n{e}"
+                                    );
+                                    Ok(Value::String(lua.create_string(&msg)?))
+                                }
+                            };
+                        }
+                        Err(e) => {
+                            let msg =
+                                format!("error reading module '{modname}' from '{path2}': {e}");
+                            return Ok(Value::String(lua.create_string(&msg)?));
+                        }
+                    }
+                }
+
+                // Module not found, return error message string
+                // This allows the next searcher to be tried
+                let msg =
+                    format!("no file './nselib/{modname}.lua' or './nselib/{modname}/init.lua'");
+                Ok(Value::String(lua.create_string(&msg)?))
+            })
+            .map_err(|e| Error::LuaError {
+                script: "runtime".to_string(),
+                message: format!("failed to create file searcher: {e}"),
+            })?;
+
+        // Insert our custom searcher at position 1 (beginning of searchers table)
+        // Lua tables are 1-indexed
+        // Shift existing searchers down
+        let len = searchers.raw_len().saturating_add(1);
+
+        // Shift all existing searchers down by 1
+        for i in (1..len).rev() {
+            if let Ok(current) = searchers.get::<Function>(i) {
+                // Use raw_set to avoid metamethods
+                searchers
+                    .raw_set(i + 1, current)
+                    .map_err(|e| Error::LuaError {
+                        script: "runtime".to_string(),
+                        message: format!("failed to set searcher at index {}: {e}", i + 1),
+                    })?;
+            }
+        }
+
+        // Insert our custom searcher at position 1
+        searchers
+            .raw_set(1, searcher)
+            .map_err(|e| Error::LuaError {
+                script: "runtime".to_string(),
+                message: format!("failed to set file searcher: {e}"),
+            })?;
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -383,5 +570,37 @@ mod tests {
         let func = nse_lua.load_function("return 42", "const_func").unwrap();
         let result: i32 = nse_lua.call_function(&func, ()).unwrap();
         assert_eq!(result, 42);
+    }
+
+    #[test]
+    fn test_package_path_configuration() {
+        let nse_lua = NseLua::new_default().unwrap();
+
+        // Verify package.path is set correctly
+        let package: mlua::Table = nse_lua.lua.globals().get("package").unwrap();
+        let path: String = package.get("path").unwrap();
+
+        assert!(path.contains("./nselib/?.lua"));
+        assert!(path.contains("./nselib/?/init.lua"));
+    }
+
+    #[test]
+    fn test_file_searcher_registered() {
+        let nse_lua = NseLua::new_default().unwrap();
+
+        // Verify package.searchers table exists and has our custom searcher
+        let package: mlua::Table = nse_lua.lua.globals().get("package").unwrap();
+        let searchers: mlua::Table = package.get("searchers").unwrap();
+
+        // Verify searchers table is not empty
+        let searcher_count = searchers.raw_len();
+        assert!(searcher_count > 0, "searchers table should not be empty");
+
+        // Verify first searcher is a function (our custom file searcher)
+        let first_searcher: mlua::Value = searchers.get(1).unwrap();
+        assert!(
+            matches!(first_searcher, mlua::Value::Function(_)),
+            "first searcher should be a function"
+        );
     }
 }
