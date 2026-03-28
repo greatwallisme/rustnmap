@@ -548,31 +548,38 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     stdnse_table.set("condition_variable", condition_variable_fn)?;
 
     // Register new_thread(fn, ...) function
+    // In Nmap, this spawns a concurrent thread. Since our engine is single-threaded,
+    // we create a coroutine, resume it immediately with the provided arguments,
+    // and return (thread_handle, first_result).
     let new_thread_fn = lua.create_function(|lua, args: MultiValue| {
-        if args.is_empty() {
-            return Err(mlua::Error::RuntimeError(
+        let mut args_iter = args.into_iter();
+        let func_val = args_iter.next().ok_or_else(|| {
+            mlua::Error::RuntimeError(
                 "new_thread requires at least a function argument".to_string(),
-            ));
-        }
+            )
+        })?;
 
-        // First argument should be the function to run
-        let func_val =
-            args.iter().next().cloned().ok_or_else(|| {
-                mlua::Error::RuntimeError("Missing function argument".to_string())
-            })?;
-
-        // Convert to function
         let mlua::Value::Function(func) = func_val else {
             return Err(mlua::Error::RuntimeError(
                 "First argument must be a function".to_string(),
             ));
         };
 
-        // Create a thread (coroutine in Lua terms)
+        // Collect remaining arguments to pass to the function
+        let extra_args: Vec<Value> = args_iter.collect();
+
+        // Create a coroutine from the function
         let thread = lua.create_thread(func)?;
 
-        // Return the thread handle
-        Ok(mlua::Value::Thread(thread))
+        // Immediately resume the thread with extra arguments (single-threaded execution)
+        let results: MultiValue = thread.resume::<MultiValue>(MultiValue::from_vec(extra_args))?;
+
+        // Return the thread handle and the first result value
+        let first_result = results.into_iter().next().unwrap_or(Value::Nil);
+        Ok(MultiValue::from_vec(vec![
+            Value::Thread(thread),
+            first_result,
+        ]))
     })?;
     stdnse_table.set("new_thread", new_thread_fn)?;
 

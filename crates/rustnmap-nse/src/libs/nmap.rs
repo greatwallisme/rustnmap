@@ -1,4 +1,6 @@
 //! Nmap base library for NSE.
+//! Nmap base library for NSE.
+//!
 //!
 //! This module provides the `nmap` library which exposes core scan information
 //! and utilities to Lua scripts. It corresponds to Nmap's nmap NSE library.
@@ -454,6 +456,26 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     })?;
     nmap_table.set("fetchfile", fetchfile_fn)?;
 
+    // Register condvar(id) function - creates a condition variable for thread synchronization.
+    // In Nmap, nmap.condvar returns a table with wait/signal/broadcast methods.
+    // Since our engine runs Lua single-threaded within a process, these are simplified:
+    // wait() returns immediately, signal()/broadcast() are no-ops.
+    let condvar_fn = lua.create_function(|lua, _id: mlua::Value| {
+        let condvar_table = lua.create_table()?;
+
+        let wait_fn = lua.create_function(|_, ()| Ok(true))?;
+        condvar_table.set("wait", wait_fn)?;
+
+        let signal_fn = lua.create_function(|_, ()| Ok(true))?;
+        condvar_table.set("signal", signal_fn)?;
+
+        let broadcast_fn = lua.create_function(|_, ()| Ok(true))?;
+        condvar_table.set("broadcast", broadcast_fn)?;
+
+        Ok(condvar_table)
+    })?;
+    nmap_table.set("condvar", condvar_fn)?;
+
     // Set the nmap table as a global
     lua.globals().set("nmap", nmap_table)?;
 
@@ -487,6 +509,8 @@ pub struct NseSocket {
     backlog: i32,
     /// Socket timeout in milliseconds
     timeout: u64,
+    /// Internal buffer for `receive_buf` delimiter matching
+    buffer: Vec<u8>,
     /// SSL/TLS certificate (if SSL connection)
     #[cfg(feature = "openssl")]
     certificate: Option<X509>,
@@ -576,7 +600,10 @@ fn asn1_time_to_table(
 
     if parts.len() >= 4 {
         // Explicit month names for clarity even though "Jan" and default both return 1
-        #[expect(clippy::match_same_arms, reason = "Explicit month names for readability")]
+        #[expect(
+            clippy::match_same_arms,
+            reason = "Explicit month names for readability"
+        )]
         let month = match parts[0] {
             "Jan" => 1,
             "Feb" => 2,
@@ -742,7 +769,8 @@ fn cert_to_table(lua: &mlua::Lua, cert: &X509) -> mlua::Result<mlua::Table> {
         let san_values: Vec<String> = san
             .iter()
             .filter_map(|name| {
-                name.dnsname().map(|dns| format!("DNS:{dns}"))
+                name.dnsname()
+                    .map(|dns| format!("DNS:{dns}"))
                     .or_else(|| name.ipaddress().map(|ip| format!("IP:{ip:?}")))
             })
             .collect();
@@ -770,6 +798,7 @@ impl NseSocket {
             state: SocketState::Disconnected,
             backlog: 128,
             timeout: 10_000, // Default 10 second timeout
+            buffer: Vec::new(),
             #[cfg(feature = "openssl")]
             certificate: None,
             #[cfg(feature = "openssl")]
@@ -801,7 +830,10 @@ impl NseSocket {
     ///
     /// Returns error if socket is not connected.
     /// Note: This function is reserved for future use.
-    #[allow(dead_code, reason = "Reserved for future SSL/TLS read/write operations")]
+    #[allow(
+        dead_code,
+        reason = "Reserved for future SSL/TLS read/write operations"
+    )]
     fn get_stream_mut(&mut self) -> mlua::Result<&mut std::net::TcpStream> {
         match &mut self.state {
             SocketState::Connected { stream, is_ssl, .. } => {
@@ -824,7 +856,10 @@ impl NseSocket {
 
     /// Get a reference to the SSL stream if connected via SSL.
     #[cfg(feature = "openssl")]
-    #[allow(dead_code, reason = "Reserved for future SSL/TLS read/write operations")]
+    #[allow(
+        dead_code,
+        reason = "Reserved for future SSL/TLS read/write operations"
+    )]
     #[must_use]
     fn get_ssl_stream(&self) -> Option<&openssl::ssl::SslStream<std::net::TcpStream>> {
         self.ssl_stream.as_ref()
@@ -832,7 +867,10 @@ impl NseSocket {
 
     /// Get a mutable reference to the SSL stream if connected via SSL.
     #[cfg(feature = "openssl")]
-    #[allow(dead_code, reason = "Reserved for future SSL/TLS read/write operations")]
+    #[allow(
+        dead_code,
+        reason = "Reserved for future SSL/TLS read/write operations"
+    )]
     fn get_ssl_stream_mut(&mut self) -> Option<&mut openssl::ssl::SslStream<std::net::TcpStream>> {
         self.ssl_stream.as_mut()
     }
@@ -840,7 +878,8 @@ impl NseSocket {
 
 #[expect(
     clippy::too_many_lines,
-    reason = "UserData impl requires many method registrations"
+    clippy::items_after_statements,
+    reason = "UserData impl requires many method registrations; inner helpers after let statements"
 )]
 impl mlua::UserData for NseSocket {
     fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
@@ -947,7 +986,8 @@ impl mlua::UserData for NseSocket {
                         )
                     });
 
-                    let stream = result.map_err(|e| mlua::Error::RuntimeError(format!("Connect failed: {e}")))?;
+                    let stream = result
+                        .map_err(|e| mlua::Error::RuntimeError(format!("Connect failed: {e}")))?;
 
                     // Perform SSL handshake if requested
                     #[cfg(feature = "openssl")]
@@ -956,8 +996,11 @@ impl mlua::UserData for NseSocket {
 
                         // Create SSL connector with certificate verification disabled
                         // (Nmap doesn't verify certificates during scanning)
-                        let mut builder = SslConnector::builder(SslMethod::tls())
-                            .map_err(|e| mlua::Error::RuntimeError(format!("Failed to create SSL connector: {e}")))?;
+                        let mut builder = SslConnector::builder(SslMethod::tls()).map_err(|e| {
+                            mlua::Error::RuntimeError(format!(
+                                "Failed to create SSL connector: {e}"
+                            ))
+                        })?;
                         builder.set_verify(SslVerifyMode::NONE);
                         let connector = builder.build();
 
@@ -965,7 +1008,9 @@ impl mlua::UserData for NseSocket {
                         let ssl_stream = tokio::task::block_in_place(|| {
                             connector.connect(host.as_str(), stream)
                         })
-                        .map_err(|e| mlua::Error::RuntimeError(format!("SSL handshake failed: {e}")))?;
+                        .map_err(|e| {
+                            mlua::Error::RuntimeError(format!("SSL handshake failed: {e}"))
+                        })?;
 
                         // Extract peer certificate
                         let cert = ssl_stream.ssl().peer_certificate();
@@ -1138,184 +1183,416 @@ impl mlua::UserData for NseSocket {
         });
 
         // Send data to the socket
-        methods.add_method_mut("send", |_, this, data: mlua::String| {
+        // Returns: (true, bytes_sent) on success, (nil, error_msg) on failure
+        methods.add_method_mut("send", |lua, this, data: mlua::String| {
             let bytes = data.to_string_lossy().into_bytes();
+            let byte_count = bytes.len();
 
             #[cfg(feature = "openssl")]
             if let Some(ssl_stream) = this.get_ssl_stream_mut() {
-                // Use SSL stream for SSL connections
-                std::io::Write::write_all(ssl_stream, &bytes)
-                    .map_err(|e| mlua::Error::RuntimeError(format!("SSL send failed: {e}")))?;
-                return Ok(bytes.len());
+                return match std::io::Write::write_all(ssl_stream, &bytes) {
+                    Ok(()) => Ok(mlua::MultiValue::from_vec(vec![
+                        mlua::Value::Boolean(true),
+                        mlua::Value::Integer(i64::try_from(byte_count).unwrap_or(i64::MAX)),
+                    ])),
+                    Err(e) => {
+                        let err_str = lua.create_string(format!("SSL send failed: {e}"))?;
+                        Ok(mlua::MultiValue::from_vec(vec![
+                            mlua::Value::Nil,
+                            mlua::Value::String(err_str),
+                        ]))
+                    }
+                };
             }
 
-            // Fall back to TCP stream
-            let stream = this.get_stream_mut()?;
-            stream
-                .write_all(&bytes)
-                .map_err(|e| mlua::Error::RuntimeError(format!("Send failed: {e}")))?;
-            Ok(bytes.len())
+            let stream = match this.get_stream_mut() {
+                Ok(s) => s,
+                Err(e) => {
+                    let err_str = lua.create_string(e.to_string())?;
+                    return Ok(mlua::MultiValue::from_vec(vec![
+                        mlua::Value::Nil,
+                        mlua::Value::String(err_str),
+                    ]));
+                }
+            };
+            match stream.write_all(&bytes) {
+                Ok(()) => Ok(mlua::MultiValue::from_vec(vec![
+                    mlua::Value::Boolean(true),
+                    mlua::Value::Integer(i64::try_from(byte_count).unwrap_or(i64::MAX)),
+                ])),
+                Err(e) => {
+                    let err_str = lua.create_string(format!("Send failed: {e}"))?;
+                    Ok(mlua::MultiValue::from_vec(vec![
+                        mlua::Value::Nil,
+                        mlua::Value::String(err_str),
+                    ]))
+                }
+            }
         });
 
         // Receive data with pattern matching (bytes, or all)
         // Pattern can be: "a" = all, number = exact bytes
+        // Receive data with pattern matching
+        // Returns: (true, data) on success, (nil, err_msg) on failure
+        // Pattern can be: "a" = all, number = exact bytes, 0 = all
         methods.add_method_mut("receive", |lua, this, pattern: mlua::Value| {
-            // Get timeout before borrowing stream
+            /// Read all data from a Read trait object, return (true, data) or (nil, err)
+            fn read_all<R: Read>(lua: &mlua::Lua, mut reader: R) -> mlua::Result<mlua::MultiValue> {
+                let mut buf = Vec::new();
+                match reader.read_to_end(&mut buf) {
+                    Ok(_) => {
+                        let s = lua.create_string(&*String::from_utf8_lossy(&buf))?;
+                        Ok(mlua::MultiValue::from_vec(vec![
+                            mlua::Value::Boolean(true),
+                            mlua::Value::String(s),
+                        ]))
+                    }
+                    Err(e) => {
+                        let err_str = lua.create_string(format!("Receive failed: {e}"))?;
+                        Ok(mlua::MultiValue::from_vec(vec![
+                            mlua::Value::Nil,
+                            mlua::Value::String(err_str),
+                        ]))
+                    }
+                }
+            }
+
+            /// Helper: read exact N bytes, return (true, data) or (nil, err)
+            fn read_exact<R: Read>(
+                lua: &mlua::Lua,
+                mut reader: R,
+                n: usize,
+            ) -> mlua::Result<mlua::MultiValue> {
+                let mut buf = vec![0u8; n];
+                match reader.read_exact(&mut buf) {
+                    Ok(()) => {
+                        let s = lua.create_string(&*String::from_utf8_lossy(&buf))?;
+                        Ok(mlua::MultiValue::from_vec(vec![
+                            mlua::Value::Boolean(true),
+                            mlua::Value::String(s),
+                        ]))
+                    }
+                    Err(e) => {
+                        let err_str = lua.create_string(format!("Receive failed: {e}"))?;
+                        Ok(mlua::MultiValue::from_vec(vec![
+                            mlua::Value::Nil,
+                            mlua::Value::String(err_str),
+                        ]))
+                    }
+                }
+            }
+
             let timeout_ms = this.timeout();
+            let timeout_dur = std::time::Duration::from_millis(timeout_ms);
 
             #[cfg(feature = "openssl")]
             if let Some(ssl_stream) = this.get_ssl_stream_mut() {
-                // Use SSL stream for SSL connections
                 ssl_stream
                     .get_ref()
-                    .set_read_timeout(Some(std::time::Duration::from_millis(timeout_ms)))
+                    .set_read_timeout(Some(timeout_dur))
                     .map_err(|e| mlua::Error::RuntimeError(format!("Set timeout failed: {e}")))?;
 
                 return match pattern {
-                    // Pattern "a" - read all available data
                     mlua::Value::String(s) if s.to_string_lossy() == "a" => {
-                        let mut buffer = Vec::new();
-                        ssl_stream
-                            .read_to_end(&mut buffer)
-                            .map_err(|e| mlua::Error::RuntimeError(format!("Receive failed: {e}")))?;
-                        let s = String::from_utf8_lossy(&buffer);
-                        lua.create_string(&*s)
+                        read_all(lua, ssl_stream)
                     }
-                    // Pattern number - read exactly N bytes
                     mlua::Value::Integer(n) if n > 0 => {
-                        let mut buffer = vec![0u8; usize::try_from(n).unwrap_or(usize::MAX)];
-                        ssl_stream
-                            .read_exact(&mut buffer)
-                            .map_err(|e| mlua::Error::RuntimeError(format!("Receive failed: {e}")))?;
-                        let s = String::from_utf8_lossy(&buffer);
-                        lua.create_string(&*s)
+                        read_exact(lua, ssl_stream, usize::try_from(n).unwrap_or(usize::MAX))
                     }
-                    // Pattern 0 - read all available (same as "a")
-                    mlua::Value::Integer(0) => {
-                        let mut buffer = Vec::new();
-                        ssl_stream
-                            .read_to_end(&mut buffer)
-                            .map_err(|e| mlua::Error::RuntimeError(format!("Receive failed: {e}")))?;
-                        let s = String::from_utf8_lossy(&buffer);
-                        lua.create_string(&*s)
-                    }
+                    mlua::Value::Integer(0) => read_all(lua, ssl_stream),
                     _ => Err(mlua::Error::RuntimeError(
                         "Invalid receive pattern".to_string(),
                     )),
                 };
             }
 
-            // Fall back to TCP stream
-            let stream = this.get_stream_mut()?;
+            let stream = this
+                .get_stream_mut()
+                .map_err(|e| mlua::Error::RuntimeError(format!("Socket not connected: {e}")))?;
             stream
-                .set_read_timeout(Some(std::time::Duration::from_millis(timeout_ms)))
+                .set_read_timeout(Some(timeout_dur))
                 .map_err(|e| mlua::Error::RuntimeError(format!("Set timeout failed: {e}")))?;
 
             match pattern {
-                // Pattern "a" - read all available data
-                mlua::Value::String(s) if s.to_string_lossy() == "a" => {
-                    let mut buffer = Vec::new();
-                    stream
-                        .read_to_end(&mut buffer)
-                        .map_err(|e| mlua::Error::RuntimeError(format!("Receive failed: {e}")))?;
-                    let s = String::from_utf8_lossy(&buffer);
-                    lua.create_string(&*s)
-                }
-                // Pattern number - read exactly N bytes
+                mlua::Value::String(s) if s.to_string_lossy() == "a" => read_all(lua, stream),
                 mlua::Value::Integer(n) if n > 0 => {
-                    let mut buffer = vec![0u8; usize::try_from(n).unwrap_or(usize::MAX)];
-                    stream
-                        .read_exact(&mut buffer)
-                        .map_err(|e| mlua::Error::RuntimeError(format!("Receive failed: {e}")))?;
-                    let s = String::from_utf8_lossy(&buffer);
-                    lua.create_string(&*s)
+                    read_exact(lua, stream, usize::try_from(n).unwrap_or(usize::MAX))
                 }
-                // Pattern 0 - read all available (same as "a")
-                mlua::Value::Integer(0) => {
-                    let mut buffer = Vec::new();
-                    stream
-                        .read_to_end(&mut buffer)
-                        .map_err(|e| mlua::Error::RuntimeError(format!("Receive failed: {e}")))?;
-                    let s = String::from_utf8_lossy(&buffer);
-                    lua.create_string(&*s)
-                }
+                mlua::Value::Integer(0) => read_all(lua, stream),
                 _ => Err(mlua::Error::RuntimeError(
                     "Invalid receive pattern".to_string(),
                 )),
             }
         });
 
-        // Receive exactly N bytes
+        // Receive exactly N bytes using repeated read() calls.
+        // Returns: (true, data) on success, (nil, err_msg) on failure.
+        // Accumulates partial data so callers get whatever was read before the error.
         methods.add_method_mut("receive_bytes", |lua, this, n: usize| {
-            // Get timeout before borrowing stream
+            /// Read exactly n bytes via repeated `read()` calls, accumulating partial data.
+            fn read_bytes<R: Read>(
+                lua: &mlua::Lua,
+                mut reader: R,
+                n: usize,
+            ) -> mlua::Result<mlua::MultiValue> {
+                let mut buf = Vec::with_capacity(n);
+                let mut tmp = [0u8; 4096];
+                while buf.len() < n {
+                    let remaining = n - buf.len();
+                    let to_read = remaining.min(tmp.len());
+                    match reader.read(&mut tmp[..to_read]) {
+                        Ok(0) => {
+                            let data_str = lua.create_string(&*String::from_utf8_lossy(&buf))?;
+                            let err_str = lua.create_string("EOF")?;
+                            return Ok(mlua::MultiValue::from_vec(vec![
+                                mlua::Value::Nil,
+                                mlua::Value::String(err_str),
+                                mlua::Value::String(data_str),
+                            ]));
+                        }
+                        Ok(count) => {
+                            buf.extend_from_slice(&tmp[..count]);
+                        }
+                        Err(e) => {
+                            let data_str = lua.create_string(&*String::from_utf8_lossy(&buf))?;
+                            let err_str = lua.create_string(format!("Receive failed: {e}"))?;
+                            return Ok(mlua::MultiValue::from_vec(vec![
+                                mlua::Value::Nil,
+                                mlua::Value::String(err_str),
+                                mlua::Value::String(data_str),
+                            ]));
+                        }
+                    }
+                }
+                let s = lua.create_string(&*String::from_utf8_lossy(&buf))?;
+                Ok(mlua::MultiValue::from_vec(vec![
+                    mlua::Value::Boolean(true),
+                    mlua::Value::String(s),
+                ]))
+            }
+
             let timeout_ms = this.timeout();
+            let timeout_dur = std::time::Duration::from_millis(timeout_ms);
 
             #[cfg(feature = "openssl")]
             if let Some(ssl_stream) = this.get_ssl_stream_mut() {
-                // Use SSL stream for SSL connections
                 ssl_stream
                     .get_ref()
-                    .set_read_timeout(Some(std::time::Duration::from_millis(timeout_ms)))
+                    .set_read_timeout(Some(timeout_dur))
                     .map_err(|e| mlua::Error::RuntimeError(format!("Set timeout failed: {e}")))?;
-
-                let mut buffer = vec![0u8; n];
-                ssl_stream
-                    .read_exact(&mut buffer)
-                    .map_err(|e| mlua::Error::RuntimeError(format!("Receive failed: {e}")))?;
-
-                let s = String::from_utf8_lossy(&buffer);
-                return lua.create_string(&*s);
+                return read_bytes(lua, ssl_stream, n);
             }
 
-            // Fall back to TCP stream
-            let stream = this.get_stream_mut()?;
+            let stream = this
+                .get_stream_mut()
+                .map_err(|e| mlua::Error::RuntimeError(format!("Socket not connected: {e}")))?;
             stream
-                .set_read_timeout(Some(std::time::Duration::from_millis(timeout_ms)))
+                .set_read_timeout(Some(timeout_dur))
                 .map_err(|e| mlua::Error::RuntimeError(format!("Set timeout failed: {e}")))?;
-
-            let mut buffer = vec![0u8; n];
-            stream
-                .read_exact(&mut buffer)
-                .map_err(|e| mlua::Error::RuntimeError(format!("Receive failed: {e}")))?;
-            let s = String::from_utf8_lossy(&buffer);
-            lua.create_string(&*s)
+            read_bytes(lua, stream, n)
         });
 
-        // Receive data into a buffer of specified size
-        methods.add_method_mut("receive_buf", |lua, this, size: usize| {
-            // Get timeout before borrowing stream
-            let timeout_ms = this.timeout();
+        // Buffered receive with delimiter matching.
+        // Signature: sock:receive_buf(delimiter, keeppattern)
+        // - delimiter: string pattern or function (e.g., match.numbytes(n))
+        // - keeppattern: boolean, if true include delimiter in returned data
+        // Returns: (true, data) on match, (nil, err_msg) on error
+        // Maintains internal buffer across calls for delimiter matching.
+        methods.add_method_mut(
+            "receive_buf",
+            |lua, this, (delimiter, keeppattern): (mlua::Value, bool)| {
+                let timeout_ms = this.timeout();
+                let timeout_dur = std::time::Duration::from_millis(timeout_ms);
 
-            #[cfg(feature = "openssl")]
-            if let Some(ssl_stream) = this.get_ssl_stream_mut() {
-                // Use SSL stream for SSL connections
-                ssl_stream
-                    .get_ref()
-                    .set_read_timeout(Some(std::time::Duration::from_millis(timeout_ms)))
-                    .map_err(|e| mlua::Error::RuntimeError(format!("Set timeout failed: {e}")))?;
+                // Check the internal buffer for a delimiter match
+                // Returns Some((extracted_bytes, remaining_bytes)) on match, None on no match
+                fn check_delimiter(
+                    lua: &mlua::Lua,
+                    buf: &[u8],
+                    delimiter: &mlua::Value,
+                ) -> mlua::Result<Option<(Vec<u8>, Vec<u8>)>> {
+                    let buf_str = String::from_utf8_lossy(buf);
 
-                let mut buffer = vec![0u8; size];
-                let n = ssl_stream
-                    .read(&mut buffer)
-                    .map_err(|e| mlua::Error::RuntimeError(format!("Receive failed: {e}")))?;
+                    match delimiter {
+                        mlua::Value::Function(func) => {
+                            // Function delimiter: call with buffer string, expect (left, right) or nil
+                            let buf_lua_str = lua.create_string(&*buf_str)?;
+                            let result: mlua::MultiValue =
+                                func.call(mlua::Value::String(buf_lua_str))?;
+                            let vals: Vec<mlua::Value> = result.into_iter().collect();
+                            if vals.len() >= 2 {
+                                let left = match &vals[0] {
+                                    mlua::Value::Integer(n) => usize::try_from(*n).unwrap_or(0),
+                                    mlua::Value::Number(n) => {
+                                        #[expect(
+                                            clippy::cast_possible_truncation,
+                                            clippy::cast_sign_loss,
+                                            reason = "value from Lua, clamped to usize range"
+                                        )]
+                                        let v = *n as usize;
+                                        v
+                                    }
+                                    _ => return Ok(None),
+                                };
+                                let right = match &vals[1] {
+                                    mlua::Value::Integer(n) => usize::try_from(*n).unwrap_or(0),
+                                    mlua::Value::Number(n) => {
+                                        #[expect(
+                                            clippy::cast_possible_truncation,
+                                            clippy::cast_sign_loss,
+                                            reason = "value from Lua, clamped to usize range"
+                                        )]
+                                        let v = *n as usize;
+                                        v
+                                    }
+                                    _ => return Ok(None),
+                                };
+                                if left > 0 && right > 0 && right <= buf.len() {
+                                    return Ok(Some((
+                                        buf[..right].to_vec(),
+                                        buf[right..].to_vec(),
+                                    )));
+                                }
+                            }
+                            Ok(None)
+                        }
+                        mlua::Value::String(pattern) => {
+                            // String delimiter: use pattern matching like Lua's string.find
+                            let pat = pattern.to_string_lossy();
+                            if let Some(start_byte) = buf_str.find(&*pat) {
+                                let end_byte = start_byte + pat.len();
+                                return Ok(Some((
+                                    buf[..end_byte].to_vec(),
+                                    buf[end_byte..].to_vec(),
+                                )));
+                            }
+                            Ok(None)
+                        }
+                        _ => Err(mlua::Error::RuntimeError(
+                            "Delimiter must be a string or function".to_string(),
+                        )),
+                    }
+                }
 
-                let s = String::from_utf8_lossy(&buffer[..n]);
-                return lua.create_string(&*s);
-            }
+                // Read from the underlying stream into the socket's internal buffer
+                fn read_into_buffer(
+                    this: &mut NseSocket,
+                    timeout_dur: std::time::Duration,
+                ) -> mlua::Result<()> {
+                    let mut tmp = [0u8; 8192];
 
-            // Fall back to TCP stream
-            let stream = this.get_stream_mut()?;
-            stream
-                .set_read_timeout(Some(std::time::Duration::from_millis(timeout_ms)))
-                .map_err(|e| mlua::Error::RuntimeError(format!("Set timeout failed: {e}")))?;
+                    #[cfg(feature = "openssl")]
+                    if let Some(ssl_stream) = this.get_ssl_stream_mut() {
+                        ssl_stream
+                            .get_ref()
+                            .set_read_timeout(Some(timeout_dur))
+                            .map_err(|e| {
+                                mlua::Error::RuntimeError(format!("Set timeout failed: {e}"))
+                            })?;
+                        let count = ssl_stream.read(&mut tmp).map_err(|e| {
+                            mlua::Error::RuntimeError(format!("Receive failed: {e}"))
+                        })?;
+                        if count == 0 {
+                            return Err(mlua::Error::RuntimeError("EOF".to_string()));
+                        }
+                        this.buffer.extend_from_slice(&tmp[..count]);
+                        return Ok(());
+                    }
 
-            let mut buffer = vec![0u8; size];
-            let n = stream
-                .read(&mut buffer)
-                .map_err(|e| mlua::Error::RuntimeError(format!("Receive failed: {e}")))?;
-            let s = String::from_utf8_lossy(&buffer[..n]);
-            lua.create_string(&*s)
-        });
+                    let stream = this.get_stream_mut().map_err(|e| {
+                        mlua::Error::RuntimeError(format!("Socket not connected: {e}"))
+                    })?;
+                    stream.set_read_timeout(Some(timeout_dur)).map_err(|e| {
+                        mlua::Error::RuntimeError(format!("Set timeout failed: {e}"))
+                    })?;
+                    let count = stream
+                        .read(&mut tmp)
+                        .map_err(|e| mlua::Error::RuntimeError(format!("Receive failed: {e}")))?;
+                    if count == 0 {
+                        return Err(mlua::Error::RuntimeError("EOF".to_string()));
+                    }
+                    this.buffer.extend_from_slice(&tmp[..count]);
+                    Ok(())
+                }
+
+                // Main loop: check delimiter, if no match read more data and retry
+                // Limit iterations to prevent infinite loops on bad delimiters
+                for _ in 0..1000 {
+                    if let Some((matched, remaining)) =
+                        check_delimiter(lua, &this.buffer, &delimiter)?
+                    {
+                        let extracted = if keeppattern {
+                            matched
+                        } else {
+                            // For string delimiters: exclude the delimiter itself
+                            // For function delimiters: the function already returned the right boundary
+                            // In nmap, keeppattern=false means exclude up to left-1 for pattern,
+                            // but for function delimiters it means exclude up to left-1 too.
+                            match delimiter {
+                                mlua::Value::Function(func) => {
+                                    let buf_str = String::from_utf8_lossy(&this.buffer);
+                                    let buf_lua_str = lua.create_string(&*buf_str)?;
+                                    let result: mlua::MultiValue =
+                                        func.call(mlua::Value::String(buf_lua_str))?;
+                                    let vals: Vec<mlua::Value> = result.into_iter().collect();
+                                    let left = match vals.first() {
+                                        Some(mlua::Value::Integer(n)) => {
+                                            usize::try_from(*n).unwrap_or(0)
+                                        }
+                                        Some(mlua::Value::Number(n)) => {
+                                            #[expect(
+                                                clippy::cast_possible_truncation,
+                                                clippy::cast_sign_loss,
+                                                reason = "value from Lua, clamped to usize range"
+                                            )]
+                                            let v = *n as usize;
+                                            v
+                                        }
+                                        _ => matched.len(),
+                                    };
+                                    if left > 0 && left <= matched.len() {
+                                        matched[..left.saturating_sub(1)].to_vec()
+                                    } else {
+                                        matched
+                                    }
+                                }
+                                mlua::Value::String(pattern) => {
+                                    let pat = pattern.to_string_lossy();
+                                    let matched_str = String::from_utf8_lossy(&matched);
+                                    if let Some(idx) = matched_str.find(&*pat) {
+                                        matched[..idx].to_vec()
+                                    } else {
+                                        matched
+                                    }
+                                }
+                                _ => matched,
+                            }
+                        };
+                        this.buffer = remaining;
+                        let data_str = lua.create_string(&*String::from_utf8_lossy(&extracted))?;
+                        return Ok(mlua::MultiValue::from_vec(vec![
+                            mlua::Value::Boolean(true),
+                            mlua::Value::String(data_str),
+                        ]));
+                    }
+
+                    // No delimiter match -- read more data from the stream
+                    if let Err(e) = read_into_buffer(this, timeout_dur) {
+                        let err_str = lua.create_string(e.to_string())?;
+                        return Ok(mlua::MultiValue::from_vec(vec![
+                            mlua::Value::Nil,
+                            mlua::Value::String(err_str),
+                        ]));
+                    }
+                }
+
+                let err_str = lua.create_string("receive_buf: too many iterations")?;
+                Ok(mlua::MultiValue::from_vec(vec![
+                    mlua::Value::Nil,
+                    mlua::Value::String(err_str),
+                ]))
+            },
+        );
 
         // Get SSL certificate (if SSL connection)
         #[cfg(feature = "openssl")]

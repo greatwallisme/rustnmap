@@ -2,6 +2,8 @@
 //!
 //! These tests verify the NSE script loading, parsing, and execution capabilities.
 
+use std::collections::HashSet;
+use std::collections::VecDeque;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -315,8 +317,6 @@ fn test_script_timeout_configuration() {
 /// Test script categories are distinct.
 #[test]
 fn test_script_categories_distinct() {
-    use std::collections::HashSet;
-
     let categories = [
         ScriptCategory::Auth,
         ScriptCategory::Broadcast,
@@ -525,4 +525,127 @@ fn test_category_is_intrusive() {
     assert!(!ScriptCategory::Safe.is_intrusive());
     assert!(!ScriptCategory::Default.is_intrusive());
     assert!(!ScriptCategory::Discovery.is_intrusive());
+}
+
+/// Test that all SSL scripts can be loaded without errors.
+///
+/// This verifies that all Lua dependencies (tls.lua, sslcert.lua, etc.) are available
+/// and that each script compiles and evaluates its module-level code successfully.
+#[test]
+fn test_ssl_scripts_load() {
+    let scripts_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("scripts");
+
+    let ssl_scripts = VecDeque::from([
+        "ssl-cert.nse",
+        "ssl-cert-intaddr.nse",
+        "ssl-known-key.nse",
+        "ssl-date.nse",
+        "ssl-heartbleed.nse",
+        "ssl-poodle.nse",
+        "ssl-ccs-injection.nse",
+        "ssl-enum-ciphers.nse",
+        "ssl-dh-params.nse",
+    ]);
+
+    let mut errors: Vec<String> = Vec::new();
+
+    for script_name in &ssl_scripts {
+        let path = scripts_dir.join(script_name);
+        let source = match std::fs::read_to_string(&path) {
+            Ok(s) => s,
+            Err(e) => {
+                errors.push(format!("{script_name}: cannot read - {e}"));
+                continue;
+            }
+        };
+
+        let mut lua = NseLua::new_default().expect("Lua state creation failed");
+        rustnmap_nse::libs::register_all(&mut lua).expect("Lib registration failed");
+        lua.lua()
+            .globals()
+            .set("SCRIPT_NAME", *script_name)
+            .expect("SCRIPT_NAME set failed");
+
+        if let Err(e) = lua.load_script(&source, script_name) {
+            errors.push(format!("{script_name}: load failed - {e}"));
+        }
+    }
+
+    assert!(
+        errors.is_empty(),
+        "SSL script load errors:\n{}",
+        errors.join("\n")
+    );
+}
+
+/// Test that SSL scripts' portrules evaluate without errors on port 443.
+///
+/// Each script is loaded, its portrule function is called with a typical
+/// HTTPS port table, and the boolean result is collected.
+#[test]
+fn test_ssl_scripts_portrule_443() {
+    let scripts_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("scripts");
+
+    let target_ip: std::net::IpAddr = "93.184.216.34".parse().unwrap();
+
+    let ssl_scripts = VecDeque::from([
+        "ssl-cert.nse",
+        "ssl-cert-intaddr.nse",
+        "ssl-known-key.nse",
+        "ssl-date.nse",
+        "ssl-heartbleed.nse",
+        "ssl-poodle.nse",
+        "ssl-ccs-injection.nse",
+        "ssl-enum-ciphers.nse",
+        "ssl-dh-params.nse",
+    ]);
+
+    let mut errors: Vec<String> = Vec::new();
+
+    for script_name in &ssl_scripts {
+        let path = scripts_dir.join(script_name);
+        let source = match std::fs::read_to_string(&path) {
+            Ok(s) => s,
+            Err(e) => {
+                errors.push(format!("{script_name}: cannot read - {e}"));
+                continue;
+            }
+        };
+
+        let mut db = ScriptDatabase::new();
+        let script = NseScript::new((*script_name).to_string(), path, source);
+        db.register_script(&script);
+
+        let engine = ScriptEngine::new(db);
+
+        let result = engine.evaluate_portrule(
+            engine.database().get(*script_name).unwrap(),
+            target_ip,
+            Some("example.com"),
+            443,
+            "tcp",
+            "open",
+            Some("https"),
+        );
+
+        if let Err(e) = result {
+            errors.push(format!("{script_name}: portrule error - {e}"));
+        }
+    }
+
+    assert!(
+        errors.is_empty(),
+        "SSL script portrule errors:\n{}",
+        errors.join("\n")
+    );
 }

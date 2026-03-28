@@ -163,90 +163,108 @@ impl ScriptEngine {
         &self.scheduler
     }
 
-    /// Format a Lua table as Nmap-style output lines.
+    /// Recursively format a Lua value into display strings.
     ///
-    /// This handles tables returned by `stdnse.output_table()` when no string
-    /// output is provided by the script. Uses Lua's `tostring()` function to
-    /// properly handle tables with `__tostring` metamethods.
+    /// Handles nested tables up to `max_depth` levels. Deeper nesting falls
+    /// back to `tostring()`.
     ///
     /// # Arguments
     ///
-    /// * `lua` - The Lua state (needed for tostring)
-    /// * `table` - The Lua table to format
+    /// * `lua` - The Lua state
+    /// * `value` - The value to format
+    /// * `max_depth` - Maximum recursion depth (typically 3)
     ///
     /// # Returns
     ///
-    /// A vector of formatted output lines.
-    fn format_table_output(lua: &mlua::Lua, table: &mlua::Table) -> Vec<String> {
-        let mut output_lines: Vec<String> = Vec::new();
-
-        // Get the Lua `tostring` function for converting values with __tostring metamethods
-        let tostring_fn: mlua::Function = match lua.globals().get("tostring") {
-            Ok(f) => f,
-            Err(_) => return output_lines,
-        };
-
-        for (key, val) in table.pairs::<mlua::Value, mlua::Value>().flatten() {
-            let key_str = match &key {
-                mlua::Value::String(s) => {
-                    s.to_str().ok().map(|s| s.to_string()).unwrap_or_default()
-                }
-                mlua::Value::Integer(n) => n.to_string(),
-                _ => continue,
-            };
-
-            // Use Lua's tostring() to convert value, which respects __tostring metamethod
-            match &val {
-                mlua::Value::String(s) => {
-                    if let Ok(s) = s.to_str() {
-                        output_lines.push(format!("{key_str}: {s}"));
-                    }
-                }
-                mlua::Value::Integer(n) => {
-                    output_lines.push(format!("{key_str}: {n}"));
-                }
-                mlua::Value::Number(n) => {
-                    output_lines.push(format!("{key_str}: {n}"));
-                }
-                mlua::Value::Boolean(b) => {
-                    output_lines.push(format!("{key_str}: {b}"));
-                }
-                mlua::Value::Table(t) => {
-                    // Check if it's an array (indexed table)
-                    let is_array = t
-                        .pairs::<mlua::Value, mlua::Value>()
-                        .flatten()
-                        .all(|(k, _)| matches!(k, mlua::Value::Integer(_)));
-
-                    if is_array {
-                        // Format array elements
-                        output_lines.push(format!("{key_str}:"));
-                        for (_, item_val) in t.pairs::<mlua::Value, mlua::Value>().flatten() {
-                            if let mlua::Value::String(s) = item_val {
-                                if let Ok(s) = s.to_str() {
-                                    output_lines.push(format!("  {s}"));
-                                }
+    /// A vector of formatted strings.
+    fn format_lua_value(lua: &mlua::Lua, value: &mlua::Value, max_depth: usize) -> Vec<String> {
+        match value {
+            mlua::Value::String(s) => s.to_str().map(|s| vec![s.to_string()]).unwrap_or_default(),
+            mlua::Value::Integer(n) => vec![n.to_string()],
+            mlua::Value::Number(n) => vec![n.to_string()],
+            mlua::Value::Boolean(b) => vec![b.to_string()],
+            mlua::Value::Table(t) => {
+                if max_depth == 0 {
+                    match lua.globals().get::<mlua::Function>("tostring") {
+                        Ok(tostring_fn) => {
+                            let s = tostring_fn
+                                .call::<String>(value.clone())
+                                .unwrap_or_default();
+                            if s.is_empty() {
+                                vec![]
                             } else {
-                                let item_str =
-                                    tostring_fn.call::<String>(item_val).unwrap_or_default();
-                                if !item_str.is_empty() {
-                                    output_lines.push(format!("  {item_str}"));
-                                }
+                                vec![s]
                             }
                         }
+                        Err(_) => vec![],
+                    }
+                } else {
+                    Self::format_lua_table(lua, t, max_depth)
+                }
+            }
+            _ => vec![],
+        }
+    }
+
+    /// Format a Lua table as Nmap-style output lines.
+    ///
+    /// For array-like tables, elements are joined with newlines.
+    /// For dict-like tables, entries are formatted as "key: value" pairs.
+    /// Nested tables are handled recursively up to `max_depth`.
+    fn format_lua_table(lua: &mlua::Lua, table: &mlua::Table, max_depth: usize) -> Vec<String> {
+        let pairs: Vec<(mlua::Value, mlua::Value)> = table
+            .pairs::<mlua::Value, mlua::Value>()
+            .flatten()
+            .collect();
+
+        let is_array = pairs
+            .iter()
+            .all(|(k, _)| matches!(k, mlua::Value::Integer(_)));
+
+        if is_array && !pairs.is_empty() {
+            let mut lines = Vec::new();
+            for (_, v) in &pairs {
+                lines.extend(Self::format_lua_value(lua, v, max_depth.saturating_sub(1)));
+            }
+            lines
+        } else {
+            let mut lines = Vec::new();
+            for (k, v) in &pairs {
+                let key_str = match k {
+                    mlua::Value::String(s) => {
+                        s.to_str().ok().map(|s| s.to_string()).unwrap_or_default()
+                    }
+                    mlua::Value::Integer(n) => n.to_string(),
+                    _ => continue,
+                };
+                if let mlua::Value::Table(t) = v {
+                    let sub = Self::format_lua_table(lua, t, max_depth.saturating_sub(1));
+                    if sub.is_empty() {
+                        lines.push(format!("{key_str}: (empty)"));
+                    } else if sub.len() == 1 {
+                        lines.push(format!("{key_str}: {}", sub[0]));
                     } else {
-                        // Call Lua's tostring() for non-array tables
-                        let val_str = tostring_fn.call::<String>(val.clone()).unwrap_or_default();
-                        if !val_str.is_empty() {
-                            output_lines.push(format!("{key_str}: {val_str}"));
+                        lines.push(format!("{key_str}:"));
+                        for line in sub {
+                            lines.push(format!("  {line}"));
+                        }
+                    }
+                } else {
+                    let val_lines = Self::format_lua_value(lua, v, max_depth.saturating_sub(1));
+                    if let Some(first) = val_lines.first() {
+                        if val_lines.len() == 1 {
+                            lines.push(format!("{key_str}: {first}"));
+                        } else {
+                            lines.push(format!("{key_str}: {first}"));
+                            for extra in val_lines.iter().skip(1) {
+                                lines.push(format!("  {extra}"));
+                            }
                         }
                     }
                 }
-                _ => {}
             }
+            lines
         }
-
-        output_lines
     }
 
     /// Create a full Nmap host table with all properties.
@@ -464,11 +482,12 @@ impl ScriptEngine {
         // This MUST be done before loading the script, as scripts use require() to access them
         crate::libs::register_all(&mut lua)?;
 
+        // Set SCRIPT_NAME global BEFORE loading the script, since some scripts
+        // reference it at module level (e.g., ssl-heartbleed uses it in get_script_args)
+        lua.lua().globals().set("SCRIPT_NAME", script.id.as_str())?;
+
         // Load the script
         lua.load_script(&script.source, &script.id)?;
-
-        // Set SCRIPT_NAME global variable (Nmap compatibility)
-        lua.lua().globals().set("SCRIPT_NAME", script.id.as_str())?;
 
         // Set SCRIPT_TYPE global variable (Nmap compatibility)
         // For hostrule scripts, always set to "hostrule"
@@ -487,17 +506,26 @@ impl ScriptEngine {
             // Call the function and get the result
             let result: mlua::MultiValue = lua.call_function(&func, ())?;
 
-            // Convert result to string output
-            let output_parts: Vec<String> = result
-                .iter()
-                .filter_map(|v| match v {
-                    mlua::Value::String(s) => s.to_str().ok().map(|s| s.to_string()),
-                    mlua::Value::Integer(n) => Some(n.to_string()),
-                    mlua::Value::Number(n) => Some(n.to_string()),
-                    mlua::Value::Boolean(b) => Some(b.to_string()),
-                    _ => None,
-                })
-                .collect();
+            // Convert result to string output.
+            // Handles String, Integer, Number, Boolean directly and formats
+            // Table values using the recursive format_lua_table helper.
+            let mut output_parts: Vec<String> = Vec::new();
+            for v in &result {
+                match v {
+                    mlua::Value::String(s) => {
+                        if let Ok(s) = s.to_str() {
+                            output_parts.push(s.to_string());
+                        }
+                    }
+                    mlua::Value::Integer(n) => output_parts.push(n.to_string()),
+                    mlua::Value::Number(n) => output_parts.push(n.to_string()),
+                    mlua::Value::Boolean(b) => output_parts.push(b.to_string()),
+                    mlua::Value::Table(t) => {
+                        output_parts.extend(Self::format_lua_table(lua.lua(), t, 3));
+                    }
+                    _ => {}
+                }
+            }
 
             let output_str = output_parts.join(" ");
 
@@ -620,7 +648,8 @@ impl ScriptEngine {
     /// Returns an error if script execution fails.
     #[expect(
         clippy::too_many_arguments,
-        reason = "NSE port script requires all host/port context"
+        clippy::too_many_lines,
+        reason = "NSE port script requires all host/port context and multi-phase output processing"
     )]
     pub fn execute_port_script(
         &self,
@@ -639,11 +668,12 @@ impl ScriptEngine {
         // This MUST be done before loading the script, as scripts use require() to access them
         crate::libs::register_all(&mut lua)?;
 
+        // Set SCRIPT_NAME BEFORE loading the script, since some scripts reference
+        // SCRIPT_NAME at module level (e.g., ssl-heartbleed uses it in get_script_args)
+        lua.lua().globals().set("SCRIPT_NAME", script.id.as_str())?;
+
         // Load the script
         lua.load_script(&script.source, &script.id)?;
-
-        // Set SCRIPT_NAME global variable (Nmap compatibility)
-        lua.lua().globals().set("SCRIPT_NAME", script.id.as_str())?;
 
         // Set SCRIPT_TYPE global variable (Nmap compatibility)
         // This tells scripts which rule type triggered them (portrule, hostrule, postrule)
@@ -720,15 +750,25 @@ impl ScriptEngine {
             } else if let Some(table) = table_value {
                 // No string, format the table
                 debug!("Script {} formatting table output", script.id);
-                Self::format_table_output(lua.lua(), &table)
+                Self::format_lua_table(lua.lua(), &table, 3)
             } else {
-                // Check for other simple return types
+                // Format any remaining simple return types (string, number, integer, boolean, table)
                 let mut lines: Vec<String> = Vec::new();
                 for value in &result {
                     match value {
                         mlua::Value::Integer(n) => lines.push(n.to_string()),
                         mlua::Value::Number(n) => lines.push(n.to_string()),
                         mlua::Value::Boolean(b) => lines.push(b.to_string()),
+                        mlua::Value::String(s) => {
+                            if let Ok(s) = s.to_str() {
+                                if !s.is_empty() {
+                                    lines.push(s.to_string());
+                                }
+                            }
+                        }
+                        mlua::Value::Table(t) => {
+                            lines.extend(Self::format_lua_table(lua.lua(), t, 3));
+                        }
                         _ => {}
                     }
                 }
@@ -851,6 +891,10 @@ impl ScriptEngine {
         // Register NSE standard libraries (nmap, stdnse, comm, shortport, http, ssh2, ssl, etc.)
         // This MUST be done before loading the script, as scripts use require() to access them
         crate::libs::register_all(&mut lua)?;
+
+        // Set SCRIPT_NAME BEFORE loading the script, since some scripts reference
+        // SCRIPT_NAME at module level (e.g., ssl-heartbleed uses it in get_script_args)
+        lua.lua().globals().set("SCRIPT_NAME", script.id.as_str())?;
 
         // Load the script
         lua.load_script(&script.source, &script.id)?;

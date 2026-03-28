@@ -338,8 +338,7 @@ mod tests {
         assert!(!matches!(module, mlua::Value::Nil), "require returned nil");
         assert!(
             matches!(module, mlua::Value::Table(_)),
-            "require should return table, got {:?}",
-            module
+            "require should return table, got {module:?}"
         );
 
         // Test that SSHConnection is accessible

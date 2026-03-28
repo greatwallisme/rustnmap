@@ -335,11 +335,43 @@ impl NseLua {
         })
     }
 
+    /// Compute the absolute path to the `nselib/` directory.
+    ///
+    /// Resolution order:
+    /// 1. `NSELIB_DIR` environment variable (for production overrides)
+    /// 2. Relative to `CARGO_MANIFEST_DIR` (`../../nselib`) - works during
+    ///    `cargo test` and normal builds
+    /// 3. Relative to current working directory (`./nselib`) - fallback for
+    ///    production when run from the workspace root
+    fn resolve_nselib_dir() -> String {
+        // Environment variable override for production deployments
+        if let Ok(dir) = std::env::var("NSELIB_DIR") {
+            return dir;
+        }
+
+        // During cargo test/build, CARGO_MANIFEST_DIR points to
+        // crates/rustnmap-nse/, so nselib/ is two levels up
+        if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
+            let nselib = std::path::Path::new(&manifest_dir)
+                .parent()
+                .and_then(|p| p.parent())
+                .map(|p| p.join("nselib"));
+            if let Some(ref path) = nselib {
+                if path.exists() {
+                    return path.to_string_lossy().into_owned();
+                }
+            }
+        }
+
+        // Fallback: relative to CWD
+        "./nselib".to_string()
+    }
+
     /// Configure `package.path` to search the nselib directory.
     ///
     /// This sets the Lua package path to search for modules in:
-    /// - `./nselib/?.lua` - for modules like `sslcert.lua`
-    /// - `./nselib/?/init.lua` - for modules like `tls/init.lua`
+    /// - `<nselib_dir>/?.lua` - for modules like `sslcert.lua`
+    /// - `<nselib_dir>/?/init.lua` - for modules like `tls/init.lua`
     ///
     /// # Errors
     ///
@@ -354,10 +386,11 @@ impl NseLua {
                     message: format!("failed to get package table: {e}"),
                 })?;
 
-        // Set package.path to search nselib directory
-        // This matches nmap's Lua module search path
+        let nselib_dir = Self::resolve_nselib_dir();
+        let path_value = format!("{nselib_dir}/?.lua;{nselib_dir}/?/init.lua");
+
         package
-            .set("path", "./nselib/?.lua;./nselib/?/init.lua")
+            .set("path", path_value)
             .map_err(|e| Error::LuaError {
                 script: "runtime".to_string(),
                 message: format!("failed to set package.path: {e}"),
@@ -369,12 +402,8 @@ impl NseLua {
     /// Add a custom file searcher to `package.searchers`.
     ///
     /// This function prepends a custom searcher to the `package.searchers` table
-    /// that reads Lua files from the filesystem. The searcher:
-    ///
-    /// 1. Takes a module name (e.g., "sslcert")
-    /// 2. Searches for `./nselib/sslcert.lua`
-    /// 3. Searches for `./nselib/sslcert/init.lua`
-    /// 4. Returns the loaded chunk or an error message string
+    /// that reads Lua files from the filesystem. The searcher resolves the
+    /// `nselib/` directory using the same logic as `resolve_nselib_dir()`.
     ///
     /// The custom searcher is inserted at the beginning of `package.searchers`
     /// so it takes precedence over the default Lua searchers.
@@ -397,18 +426,17 @@ impl NseLua {
             message: format!("failed to get package.searchers: {e}"),
         })?;
 
+        // Resolve the nselib directory once and capture it in the closure
+        let nselib_dir = Self::resolve_nselib_dir();
+
         // Create a custom searcher function
         // In Lua 5.4, searchers are called with (modname) and return:
         // - loader function (or string explaining why it couldn't find module)
-        // The return type is mlua::Result<Value> which can be:
-        // - Ok(Function) - the loader function
-        // - Ok(String) - error message (why module not found)
-        // - Err(Error) - actual error occurred
         let searcher = self
             .lua
-            .create_function(|lua, modname: String| {
-                // Try loading from nselib/?.lua
-                let path1 = format!("./nselib/{modname}.lua");
+            .create_function(move |lua, modname: String| {
+                // Try loading from <nselib_dir>/<modname>.lua
+                let path1 = format!("{nselib_dir}/{modname}.lua");
                 if Path::new(&path1).exists() {
                     match std::fs::read_to_string(&path1) {
                         Ok(source) => {
@@ -431,8 +459,8 @@ impl NseLua {
                     }
                 }
 
-                // Try loading from nselib/?/init.lua
-                let path2 = format!("./nselib/{modname}/init.lua");
+                // Try loading from <nselib_dir>/<modname>/init.lua
+                let path2 = format!("{nselib_dir}/{modname}/init.lua");
                 if Path::new(&path2).exists() {
                     match std::fs::read_to_string(&path2) {
                         Ok(source) => {
@@ -456,8 +484,9 @@ impl NseLua {
 
                 // Module not found, return error message string
                 // This allows the next searcher to be tried
-                let msg =
-                    format!("no file './nselib/{modname}.lua' or './nselib/{modname}/init.lua'");
+                let msg = format!(
+                    "no file '{nselib_dir}/{modname}.lua' or '{nselib_dir}/{modname}/init.lua'"
+                );
                 Ok(Value::String(lua.create_string(&msg)?))
             })
             .map_err(|e| Error::LuaError {
@@ -580,8 +609,8 @@ mod tests {
         let package: mlua::Table = nse_lua.lua.globals().get("package").unwrap();
         let path: String = package.get("path").unwrap();
 
-        assert!(path.contains("./nselib/?.lua"));
-        assert!(path.contains("./nselib/?/init.lua"));
+        assert!(path.contains("nselib/?.lua"));
+        assert!(path.contains("nselib/?/init.lua"));
     }
 
     #[test]

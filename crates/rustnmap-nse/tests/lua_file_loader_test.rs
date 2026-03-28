@@ -19,8 +19,8 @@ fn change_to_project_root() {
     let nselib_path = project_root.join("nselib");
     assert!(
         nselib_path.exists(),
-        "nselib directory not found at {:?}",
-        nselib_path
+        "nselib directory not found at {}",
+        nselib_path.display()
     );
 }
 
