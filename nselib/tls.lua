@@ -1893,7 +1893,7 @@ function client_hello(t)
     -- OpenSSL also appears to want supported_groups in some cases?
     local need_supported_versions = (proto_ver >= PROTOCOLS["TLSv1.3"])
     local need_key_share = need_supported_versions
-    local need_elliptic_curves = need_supported_versions
+    local need_elliptic_curves = (proto_ver >= PROTOCOLS["TLSv1.2"])
     -- Do we need to add the signature_algorithms extension?
     local need_sigalg = (proto_ver >= PROTOCOLS["TLSv1.2"])
     -- Add specified extensions.
@@ -1955,6 +1955,13 @@ function client_hello(t)
       end
       insert(extensions, pack(">I2", EXTENSIONS["elliptic_curves"]))
       insert(extensions, pack(">s2", EXTENSION_HELPERS["elliptic_curves"](curves)))
+      -- For TLSv1.2, also add ec_point_formats (uncompressed).
+      -- Modern servers require this alongside elliptic_curves when
+      -- ECDHE cipher suites are offered.
+      if proto_ver < PROTOCOLS["TLSv1.3"] then
+        insert(extensions, pack(">I2", EXTENSIONS["ec_point_formats"]))
+        insert(extensions, pack(">s2", EXTENSION_HELPERS["ec_point_formats"]({"uncompressed"})))
+      end
     end
     -- Extensions are optional
     if #extensions ~= 0 then

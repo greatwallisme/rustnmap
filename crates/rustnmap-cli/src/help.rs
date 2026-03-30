@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Help output for RustNmap CLI.
+//! Help output for `RustNmap` CLI.
 //!
 //! This module provides nmap-compatible help text for all command-line options.
 
@@ -24,6 +24,10 @@ use std::io::{self, Write};
 /// # Errors
 ///
 /// Returns an error if writing to stdout fails.
+#[expect(
+    clippy::too_many_lines,
+    reason = "Help output is inherently long due to comprehensive option listing"
+)]
 pub fn print_help() -> io::Result<()> {
     let mut stdout = io::stdout().lock();
 

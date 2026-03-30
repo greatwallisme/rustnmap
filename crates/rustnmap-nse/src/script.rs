@@ -208,14 +208,21 @@ impl NseScript {
     }
 
     /// Check if the script matches a name pattern.
+    ///
+    /// Supports exact match, substring match, glob patterns (`*`, `?`),
+    /// and automatically strips `.nse` extension from patterns so that
+    /// `--script ssl-cert.nse` matches script ID `ssl-cert`.
     #[must_use]
     pub fn matches_pattern(&self, pattern: &str) -> bool {
-        if pattern.contains('*') || pattern.contains('?') {
+        // Strip .nse extension from pattern if present
+        let normalized = pattern.strip_suffix(".nse").unwrap_or(pattern);
+
+        if normalized.contains('*') || normalized.contains('?') {
             // Glob pattern matching
-            match_pattern(&self.id, pattern)
+            match_pattern(&self.id, normalized)
         } else {
             // Exact match or substring
-            self.id == pattern || self.id.contains(pattern)
+            self.id == normalized || self.id.contains(normalized)
         }
     }
 

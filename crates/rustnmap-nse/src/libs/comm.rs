@@ -53,16 +53,19 @@ pub struct NseSocket {
     is_ssl: bool,
     /// Remote address.
     peer_addr: SocketAddr,
+    /// Original hostname for SNI (Server Name Indication).
+    hostname: Option<String>,
 }
 
 impl NseSocket {
     /// Create a new socket from a TCP stream.
-    fn new(stream: TcpStream, peer_addr: SocketAddr) -> Self {
+    fn new(stream: TcpStream, peer_addr: SocketAddr, hostname: Option<String>) -> Self {
         Self {
             stream: Some(stream),
             timeout: Duration::from_millis(DEFAULT_TIMEOUT_MS),
             is_ssl: false,
             peer_addr,
+            hostname,
         }
     }
 
@@ -172,6 +175,43 @@ impl UserData for NseSocket {
         });
 
         methods.add_method("is_ssl", |_, this, ()| Ok(this.is_ssl));
+
+        // get_ssl_certificate() -> certificate_table
+        //
+        // Performs a TLS handshake on a new connection to the same peer and
+        // returns the SSL/TLS certificate. The returned table contains:
+        // - pem: PEM-encoded certificate
+        // - subject: Subject distinguished name
+        // - issuer: Issuer distinguished name
+        // - serial: Serial number
+        // - fingerprint: SHA256 fingerprint
+        // - pubkey: Public key info table (type, bits)
+        // - notbefore: Validity start (ISO 8601)
+        // - notafter: Validity end (ISO 8601)
+        methods.add_method_mut("get_ssl_certificate", |lua, this, ()| {
+            // Check if this socket was opened with SSL
+            if !this.is_ssl {
+                return Ok(Value::Nil);
+            }
+
+            // Use stored hostname or fall back to IP for SNI
+            let hostname = this
+                .hostname
+                .clone()
+                .unwrap_or_else(|| this.peer_addr.ip().to_string());
+
+            // Perform a new TLS connection to retrieve the peer certificate DER
+            let cert_der = tls_connect_and_get_cert(&hostname, this.peer_addr)?;
+
+            // Parse DER into an X509 object and build the certificate table
+            // using the shared implementation (includes ecdhparams for EC keys)
+            let cert = openssl::x509::X509::from_der(&cert_der).map_err(|e| {
+                mlua::Error::RuntimeError(format!("Failed to parse certificate: {e}"))
+            })?;
+            let cert_table = super::ssl::build_cert_table(lua, &cert)?;
+
+            Ok(Value::Table(cert_table))
+        });
     }
 }
 
@@ -204,6 +244,9 @@ fn parse_opts(opts: Option<Table>) -> mlua::Result<ConnectionOpts> {
         }
         if let Ok(proto) = opts.get("proto") {
             let proto: String = proto;
+            if proto == "ssl" {
+                options.ssl = true;
+            }
             options.proto = proto;
         }
     }
@@ -239,12 +282,14 @@ impl Default for ConnectionOpts {
 }
 
 /// Open a connection to host:port.
-fn opencon_impl(host: &str, port: u16, opts: &ConnectionOpts) -> std::io::Result<NseSocket> {
+fn opencon_impl(host: &str, port: u16, opts: &ConnectionOpts, sni_hostname: Option<&str>) -> std::io::Result<NseSocket> {
     // Use block_in_place to yield to the async runtime during blocking network operations
-    tokio::task::block_in_place(|| opencon_impl_blocking(host, port, opts))
-}
-
-/// Blocking implementation of TCP connection.
+    tokio::task::block_in_place(|| {
+        let mut socket = opencon_impl_blocking(host, port, opts)?;
+        socket.hostname = Some(sni_hostname.unwrap_or(host).to_string());
+        Ok(socket)
+    })
+}/// Blocking implementation of TCP connection.
 ///
 /// This function performs the actual blocking DNS resolution and TCP connection.
 /// It is called within `block_in_place` to avoid blocking the async runtime.
@@ -267,7 +312,7 @@ fn opencon_impl_blocking(
     stream.set_read_timeout(Some(opts.timeout))?;
     stream.set_write_timeout(Some(opts.timeout))?;
 
-    let mut socket = NseSocket::new(stream, addrs[0]);
+    let mut socket = NseSocket::new(stream, addrs[0], Some(host.to_string()));
 
     if opts.ssl {
         // Mark the socket as SSL requested
@@ -280,7 +325,7 @@ fn opencon_impl_blocking(
 
 /// Get service banner from host:port.
 fn get_banner_impl(host: &str, port: u16, opts: &ConnectionOpts) -> std::io::Result<String> {
-    let mut socket = opencon_impl(host, port, opts)?;
+    let mut socket = opencon_impl(host, port, opts, None)?;
 
     // Set a shorter timeout for banner grabbing
     let banner_timeout = Duration::from_millis(DEFAULT_BANNER_TIMEOUT_MS);
@@ -311,7 +356,7 @@ fn exchange_impl(
     data: &[u8],
     opts: &ConnectionOpts,
 ) -> std::io::Result<Vec<u8>> {
-    let mut socket = opencon_impl(host, port, opts)?;
+    let mut socket = opencon_impl(host, port, opts, None)?;
 
     // Send data
     socket.send(data)?;
@@ -356,16 +401,87 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     // Create the comm table
     let comm_table = lua.create_table()?;
 
-    // Register opencon(host, port, [opts]) function
-    let opencon_fn =
-        lua.create_function(|lua, (host, port, opts): (String, u16, Option<Table>)| {
+    // Register opencon(host, port, [data], [opts]) function
+    //
+    // Accepts host as string or table (with host.ip), port as number or table (with port.number),
+    // optional data string to send after connection, and optional opts table.
+    // Matches Nmap's comm.opencon signature: opencon(host, port, data, opts)
+    let opencon_fn = lua.create_function(
+        |lua, (host_param, port_param, _data, opts): (Value, Value, Option<mlua::String>, Option<Table>)| {
+            // Extract host string from either string or host table
+            let host = match &host_param {
+                Value::String(s) => s.to_str()?.to_string(),
+                Value::Table(t) => {
+                    let ip: Value = t.get("ip").map_err(|e| {
+                        mlua::Error::RuntimeError(format!("host table missing 'ip' field: {e}"))
+                    })?;
+                    match ip {
+                        Value::String(s) => s.to_str()?.to_string(),
+                        other => {
+                            return Err(mlua::Error::RuntimeError(format!(
+                                "host.ip must be a string, got: {:?}",
+                                other.type_name()
+                            )));
+                        }
+                    }
+                }
+                other => {
+                    return Err(mlua::Error::RuntimeError(format!(
+                        "host must be a string or table, got: {:?}",
+                        other.type_name()
+                    )));
+                }
+            };
+
+            // Extract SNI hostname from host table (targetname or name field)
+            let sni_hostname: Option<String> = match &host_param {
+                Value::Table(t) => t
+                    .get::<Option<String>>("targetname")
+                    .ok()
+                    .flatten()
+                    .or_else(|| t.get::<Option<String>>("name").ok().flatten()),
+                _ => None,
+            };
+
+            // Extract port number from either integer or port table
+            let port = match port_param {
+                Value::Integer(n) => u16::try_from(n).map_err(|e| {
+                    mlua::Error::RuntimeError(format!("port number out of range: {e}"))
+                })?,
+                Value::Table(ref t) => {
+                    let number: i64 = t.get("number").map_err(|e| {
+                        mlua::Error::RuntimeError(format!("port table missing 'number' field: {e}"))
+                    })?;
+                    u16::try_from(number).map_err(|e| {
+                        mlua::Error::RuntimeError(format!("port.number out of range: {e}"))
+                    })?
+                }
+                other => {
+                    return Err(mlua::Error::RuntimeError(format!(
+                        "port must be a number or table, got: {:?}",
+                        other.type_name()
+                    )));
+                }
+            };
+
             let options = parse_opts(opts).map_err(|e| mlua::Error::RuntimeError(e.to_string()))?;
 
-            match opencon_impl(&host, port, &options) {
-                Ok(socket) => Ok(Value::UserData(lua.create_userdata(socket)?)),
-                Err(_e) => Ok(Value::Nil),
+            match opencon_impl(&host, port, &options, sni_hostname.as_deref()) {
+                Ok(socket) => {
+                    // NSE returns: socket, nil (or just socket)
+                    let socket_val = Value::UserData(lua.create_userdata(socket)?);
+                    Ok(mlua::MultiValue::from_vec(vec![socket_val, Value::Nil]))
+                }
+                Err(e) => {
+                    // NSE returns: nil, error_message
+                    Ok(mlua::MultiValue::from_vec(vec![
+                        Value::Nil,
+                        Value::String(lua.create_string(format!("{e}"))?),
+                    ]))
+                }
             }
-        })?;
+        },
+    )?;
     comm_table.set("opencon", opencon_fn)?;
 
     // Register tryssl(host, port, [data], [opts]) function
@@ -404,6 +520,16 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
                 }
             };
 
+            // Extract SNI hostname from host table (targetname or name field)
+            let sni_hostname: Option<String> = match &host_param {
+                Value::Table(t) => t
+                    .get::<Option<String>>("targetname")
+                    .ok()
+                    .flatten()
+                    .or_else(|| t.get::<Option<String>>("name").ok().flatten()),
+                _ => None,
+            };
+
             // Extract port number from either integer or port table
             let port = match port_param {
                 Value::Integer(n) => u16::try_from(n).map_err(|e| {
@@ -429,7 +555,7 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
                 parse_opts(opts).map_err(|e| mlua::Error::RuntimeError(e.to_string()))?;
             options.ssl = true;
 
-            match opencon_impl(&host, port, &options) {
+            match opencon_impl(&host, port, &options, sni_hostname.as_deref()) {
                 Ok(mut socket) => {
                     // Determine protocol string
                     let proto = if socket.is_ssl { "ssl" } else { "tcp" };
@@ -594,6 +720,7 @@ mod tests {
             timeout: Duration::from_secs(30),
             is_ssl: false,
             peer_addr: "127.0.0.1:80".parse().unwrap(),
+            hostname: None,
         };
 
         let _ud = lua.lua().create_userdata(socket).unwrap();
@@ -656,6 +783,7 @@ mod tests {
             timeout: Duration::from_secs(30),
             is_ssl: true,
             peer_addr: "127.0.0.1:443".parse().unwrap(),
+            hostname: None,
         };
 
         let _ud = lua.lua().create_userdata(socket).unwrap();
@@ -671,6 +799,7 @@ mod tests {
             timeout: Duration::from_secs(30),
             is_ssl: false,
             peer_addr: "192.168.1.1:80".parse().unwrap(),
+            hostname: None,
         };
         let _ud = lua.lua().create_userdata(socket_v4).unwrap();
 
@@ -680,6 +809,7 @@ mod tests {
             timeout: Duration::from_secs(30),
             is_ssl: false,
             peer_addr: "[::1]:8080".parse().unwrap(),
+            hostname: None,
         };
         let _ud = lua.lua().create_userdata(socket_v6).unwrap();
     }
@@ -709,6 +839,7 @@ mod tests {
             timeout: Duration::from_secs(30),
             is_ssl: false,
             peer_addr: "127.0.0.1:80".parse().unwrap(),
+            hostname: None,
         };
 
         let debug_str = format!("{socket:?}");
@@ -745,6 +876,7 @@ mod tests {
             timeout: Duration::from_secs(30),
             is_ssl: false,
             peer_addr: "127.0.0.1:80".parse().unwrap(),
+            hostname: None,
         };
 
         assert!(!socket.is_connected());
@@ -765,3 +897,50 @@ mod tests {
         assert!(opts.ssl);
     }
 }
+
+// ---------------------------------------------------------------------------
+// SSL Certificate Helper Functions
+// ---------------------------------------------------------------------------
+
+/// Connect via TLS using the `openssl` crate's `SslConnector` and extract the peer certificate DER data.
+///
+/// This performs a proper TLS 1.2/1.3 handshake with full cipher suite negotiation,
+/// SNI (Server Name Indication), support, and all required extensions. Unlike the previous
+/// hand-crafted `ClientHello` which only offered a single cipher suite (`TLS_RSA_WITH_AES_128_CBC_SHA`),
+/// this uses the system's OpenSSL library which supports all modern cipher suites.
+#[cfg(feature = "openssl")]
+fn tls_connect_and_get_cert(hostname: &str, addr: SocketAddr) -> mlua::Result<Vec<u8>> {
+    use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
+
+    let mut builder =
+        SslConnector::builder(SslMethod::tls()).map_err(|e| {
+            mlua::Error::RuntimeError(format!("Failed to create SSL connector: {e}"))
+        })?;
+    builder.set_verify(SslVerifyMode::NONE);
+    let connector = builder.build();
+
+    let stream =
+        TcpStream::connect_timeout(&addr, Duration::from_millis(DEFAULT_TIMEOUT_MS)).map_err(|e| {
+            mlua::Error::RuntimeError(format!("TLS connect failed to {addr}: {e}"))
+        })?;
+
+    let ssl_stream = connector.connect(hostname, stream).map_err(|e| {
+        mlua::Error::RuntimeError(format!("SSL handshake failed for {hostname}: {e}"))
+    })?;
+
+    let cert = ssl_stream.ssl().peer_certificate().ok_or_else(|| {
+        mlua::Error::RuntimeError("Server did not present a certificate".to_string())
+    })?;
+
+    cert.to_der().map_err(|e| {
+        mlua::Error::RuntimeError(format!("Failed to encode certificate as DER: {e}"))
+    })
+}
+
+#[cfg(not(feature = "openssl"))]
+fn tls_connect_and_get_cert(_hostname: &str, _addr: SocketAddr) -> mlua::Result<Vec<u8>> {
+    Err(mlua::Error::RuntimeError(
+        "SSL support not available (openssl feature not enabled)".to_string(),
+    ))
+}
+

@@ -74,7 +74,8 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
         };
         Ok(result)
     })?;
-    ip_ops.set("compare", compare_fn)?;
+    ip_ops.set("compare", compare_fn.clone())?;
+    ip_ops.set("compare_ip", compare_fn)?; // Nmap-compatible alias
 
     // Register is_private(ip) function
     let is_private_fn = lua.create_function(|_, ip: String| {
@@ -88,7 +89,8 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
         };
         Ok(is_private)
     })?;
-    ip_ops.set("is_private", is_private_fn)?;
+    ip_ops.set("is_private", is_private_fn.clone())?;
+    ip_ops.set("isPrivate", is_private_fn)?; // Nmap-compatible camelCase alias
 
     // Register is_loopback(ip) function
     let is_loopback_fn = lua.create_function(|_, ip: String| {

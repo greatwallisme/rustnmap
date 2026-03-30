@@ -366,6 +366,22 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
         Ok(())
     })?;
     socket_table.set("sleep", socket_sleep_fn)?;
+
+    // Register nmap.socket.parse_ssl_certificate(der_data) function
+    // This static function parses a DER-encoded certificate and returns a table
+    // with certificate fields (subject, issuer, validity, etc.)
+    #[cfg(feature = "openssl")]
+    let parse_ssl_cert_fn = lua.create_function(|lua, der_data: mlua::String| {
+        let der_bytes = der_data.as_bytes();
+        let cert = X509::from_der(&der_bytes).map_err(|e| {
+            mlua::Error::RuntimeError(format!("Failed to parse DER certificate: {e}"))
+        })?;
+        cert_to_table(lua, &cert)
+    })?;
+    #[cfg(not(feature = "openssl"))]
+    let parse_ssl_cert_fn = lua.create_function(|_, _: mlua::Value| Ok(mlua::Value::Nil))?;
+    socket_table.set("parse_ssl_certificate", parse_ssl_cert_fn)?;
+
     nmap_table.set("socket", socket_table)?;
 
     // Register mutex(object) function - creates or gets a mutex for an object
@@ -543,252 +559,13 @@ enum SocketState {
     },
 }
 
-/// Convert X509 name to Lua table with DN fields.
-#[cfg(feature = "openssl")]
-fn x509_name_to_table(
-    lua: &mlua::Lua,
-    name: &openssl::x509::X509NameRef,
-) -> mlua::Result<mlua::Table> {
-    let table = lua.create_table()?;
-
-    for entry in name.entries() {
-        let obj = entry.object();
-        let data = entry.data();
-
-        // Try to get the NID (numeric identifier) for the object
-        let nid = obj.nid();
-
-        // Get the long name for the NID (e.g., "commonName", "organizationName")
-        let key = if nid == openssl::nid::Nid::UNDEF {
-            // Fallback to OID string representation
-            format!("{obj:?}")
-        } else {
-            openssl::nid::Nid::from_raw(nid.as_raw())
-                .long_name()
-                .unwrap_or("unknown")
-                .to_string()
-        };
-
-        // Convert ASN1_STRING to UTF-8 string
-        let value = data
-            .as_utf8()
-            .map_or_else(|_| format!("{data:?}"), |s| s.to_string());
-
-        table.set(key, value)?;
-    }
-
-    Ok(table)
-}
-
-/// Convert `ASN1_TIME` to Lua table or string.
-#[cfg(feature = "openssl")]
-fn asn1_time_to_table(
-    lua: &mlua::Lua,
-    time: &openssl::asn1::Asn1TimeRef,
-) -> mlua::Result<mlua::Value> {
-    // Convert ASN1_TIME to Unix timestamp, then to date components
-    // OpenSSL's to_string() returns format like "Jan 23 00:00:00 2023 GMT"
-    // We need to parse this properly
-
-    use std::str::FromStr;
-
-    let time_str = time.to_string();
-
-    // Parse the OpenSSL time format: "Mon DD HH:MM:SS YYYY GMT"
-    // Example: "Jan 23 00:00:00 2023 GMT"
-    let parts: Vec<&str> = time_str.split_whitespace().collect();
-
-    if parts.len() >= 4 {
-        // Explicit month names for clarity even though "Jan" and default both return 1
-        #[expect(
-            clippy::match_same_arms,
-            reason = "Explicit month names for readability"
-        )]
-        let month = match parts[0] {
-            "Jan" => 1,
-            "Feb" => 2,
-            "Mar" => 3,
-            "Apr" => 4,
-            "May" => 5,
-            "Jun" => 6,
-            "Jul" => 7,
-            "Aug" => 8,
-            "Sep" => 9,
-            "Oct" => 10,
-            "Nov" => 11,
-            "Dec" => 12,
-            _ => 1, // Default to January for unknown months
-        };
-
-        let day = u8::from_str(parts[1]).unwrap_or(1);
-
-        // Parse time HH:MM:SS
-        let time_parts: Vec<&str> = parts[2].split(':').collect();
-        let hour = time_parts
-            .first()
-            .map_or(0, |s| u8::from_str(s).unwrap_or(0));
-        let min = time_parts
-            .get(1)
-            .map_or(0, |s| u8::from_str(s).unwrap_or(0));
-        let sec = time_parts
-            .get(2)
-            .map_or(0, |s| u8::from_str(s).unwrap_or(0));
-
-        let year = i32::from_str(parts[3]).unwrap_or(1970);
-
-        let date_table = lua.create_table()?;
-        date_table.set("year", year)?;
-        date_table.set("month", month)?;
-        date_table.set("day", day)?;
-        date_table.set("hour", hour)?;
-        date_table.set("min", min)?;
-        date_table.set("sec", sec)?;
-
-        Ok(mlua::Value::Table(date_table))
-    } else {
-        // Fallback to string if parsing fails
-        Ok(mlua::Value::String(lua.create_string(&time_str)?))
-    }
-}
-
 /// Convert X509 certificate to NSE-compatible Lua table.
+///
+/// Delegates to [`super::ssl::build_cert_table`] for consistent certificate table
+/// construction across all code paths (including ecdhparams for EC keys).
 #[cfg(feature = "openssl")]
 fn cert_to_table(lua: &mlua::Lua, cert: &X509) -> mlua::Result<mlua::Table> {
-    let cert_table = lua.create_table()?;
-
-    // PEM encoding
-    let pem = cert
-        .to_pem()
-        .map_err(|e| mlua::Error::RuntimeError(format!("Failed to encode PEM: {e}")))?;
-    let pem_str = String::from_utf8_lossy(&pem);
-    cert_table.set("pem", pem_str.as_ref())?;
-
-    // Subject
-    let subject = cert.subject_name();
-    let subject_table = x509_name_to_table(lua, subject)?;
-    cert_table.set("subject", subject_table)?;
-
-    // Issuer
-    let issuer = cert.issuer_name();
-    let issuer_table = x509_name_to_table(lua, issuer)?;
-    cert_table.set("issuer", issuer_table)?;
-
-    // Validity period
-    let validity_table = lua.create_table()?;
-    let not_before = cert.not_before();
-    let not_before_val = asn1_time_to_table(lua, not_before)?;
-    validity_table.set("notBefore", not_before_val)?;
-
-    let not_after = cert.not_after();
-    let not_after_val = asn1_time_to_table(lua, not_after)?;
-    validity_table.set("notAfter", not_after_val)?;
-    cert_table.set("validity", validity_table)?;
-
-    // Signature algorithm
-    let sig_alg = cert.signature_algorithm();
-    let sig_algo_name = sig_alg
-        .object()
-        .nid()
-        .long_name()
-        .unwrap_or("unknown")
-        .to_string();
-    cert_table.set("sig_algorithm", sig_algo_name)?;
-
-    // Public key information
-    let pubkey_table = lua.create_table()?;
-    let pkey = cert
-        .public_key()
-        .map_err(|e| mlua::Error::RuntimeError(format!("Failed to get public key: {e}")))?;
-
-    // Key type
-    let key_type = match pkey.id() {
-        openssl::pkey::Id::RSA => "rsa",
-        openssl::pkey::Id::DSA => "dsa",
-        openssl::pkey::Id::DH => "dh",
-        openssl::pkey::Id::EC => "ec",
-        _ => "unknown",
-    };
-    pubkey_table.set("type", key_type)?;
-
-    // Key bits
-    let bits = pkey.bits();
-    pubkey_table.set("bits", bits)?;
-
-    // RSA-specific fields
-    if pkey.id() == openssl::pkey::Id::RSA {
-        let rsa = pkey
-            .rsa()
-            .map_err(|e| mlua::Error::RuntimeError(format!("Failed to get RSA key: {e}")))?;
-
-        let e = rsa.e();
-        let exponent_bytes = e.to_vec();
-        let exponent_hex = hex::encode(&exponent_bytes);
-        pubkey_table.set("exponent", exponent_hex)?;
-
-        let n = rsa.n();
-        let modulus_bytes = n.to_vec();
-        let modulus_hex = hex::encode(&modulus_bytes);
-        pubkey_table.set("modulus", modulus_hex)?;
-    }
-    cert_table.set("pubkey", pubkey_table)?;
-
-    // Add digest function to the certificate table
-    // This will be called as cert:digest("sha1") etc.
-    // When called as a method, Lua passes self as the first argument
-    let cert_clone = cert.clone();
-    let digest_fn = lua.create_function(move |lua, (_self, algo): (mlua::Table, String)| {
-        use openssl::hash::MessageDigest;
-
-        let message_digest = match algo.to_lowercase().as_str() {
-            "md5" => MessageDigest::md5(),
-            "sha1" => MessageDigest::sha1(),
-            "sha256" => MessageDigest::sha256(),
-            _ => {
-                return Err(mlua::Error::RuntimeError(format!(
-                    "Unknown digest algorithm: {algo}"
-                )))
-            }
-        };
-
-        match cert_clone.digest(message_digest) {
-            Ok(digest_bytes) => {
-                // Return raw binary bytes - stdnse.tohex will convert to hex
-                Ok(mlua::Value::String(lua.create_string(digest_bytes)?))
-            }
-            Err(e) => Err(mlua::Error::RuntimeError(format!(
-                "Digest calculation failed: {e}"
-            ))),
-        }
-    })?;
-
-    // Add extensions - build a list of known extensions
-    let extensions_table = lua.create_table()?;
-
-    // Subject Alternative Name
-    if let Some(san) = cert.subject_alt_names() {
-        let san_values: Vec<String> = san
-            .iter()
-            .filter_map(|name| {
-                name.dnsname()
-                    .map(|dns| format!("DNS:{dns}"))
-                    .or_else(|| name.ipaddress().map(|ip| format!("IP:{ip:?}")))
-            })
-            .collect();
-        if !san_values.is_empty() {
-            let ext_table = lua.create_table()?;
-            ext_table.set("name", "X509v3 Subject Alternative Name")?;
-            ext_table.set("value", san_values.join(", "))?;
-            extensions_table.set(1, ext_table)?;
-        }
-    }
-
-    // Add empty extensions table if no extensions found
-    cert_table.set("extensions", extensions_table)?;
-
-    // Add digest as a regular method (not via metatable __index)
-    cert_table.set("digest", digest_fn)?;
-
-    Ok(cert_table)
+    super::ssl::build_cert_table(lua, cert)
 }
 
 impl NseSocket {
@@ -903,14 +680,22 @@ impl mlua::UserData for NseSocket {
             }
 
             // Extract host (string or table)
-            let host = match &args_vec[0] {
-                mlua::Value::String(s) => s.to_string_lossy().to_string(),
+            // Also extract targetname for SSL SNI (Server Name Indication)
+            let (host, ssl_sni) = match &args_vec[0] {
+                mlua::Value::String(s) => (s.to_string_lossy().to_string(), None),
                 mlua::Value::Table(t) => {
                     // Get IP from table
                     let ip: mlua::String = t.get("ip").map_err(|_e| {
                         mlua::Error::RuntimeError("Missing 'ip' field in host table".to_string())
                     })?;
-                    ip.to_string_lossy().to_string()
+                    let ip_str = ip.to_string_lossy().to_string();
+                    // Get targetname for SNI (SSL connections need hostname, not IP)
+                    let sni: Option<String> = t
+                        .get::<Option<mlua::String>>("targetname")
+                        .ok()
+                        .flatten()
+                        .map(|s| s.to_string_lossy().to_string());
+                    (ip_str, sni)
                 }
                 _ => {
                     return Err(mlua::Error::RuntimeError(
@@ -1005,12 +790,13 @@ impl mlua::UserData for NseSocket {
                         let connector = builder.build();
 
                         // Perform SSL handshake using connector's connect method
-                        let ssl_stream = tokio::task::block_in_place(|| {
-                            connector.connect(host.as_str(), stream)
-                        })
-                        .map_err(|e| {
-                            mlua::Error::RuntimeError(format!("SSL handshake failed: {e}"))
-                        })?;
+                        // Use targetname for SNI if available, otherwise fall back to IP
+                        let ssl_hostname = ssl_sni.as_deref().unwrap_or(&host);
+                        let ssl_stream =
+                            tokio::task::block_in_place(|| connector.connect(ssl_hostname, stream))
+                                .map_err(|e| {
+                                    mlua::Error::RuntimeError(format!("SSL handshake failed: {e}"))
+                                })?;
 
                         // Extract peer certificate
                         let cert = ssl_stream.ssl().peer_certificate();

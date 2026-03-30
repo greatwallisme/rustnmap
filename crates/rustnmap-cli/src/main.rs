@@ -31,7 +31,7 @@ async fn main() -> Result<()> {
     // Parse command-line arguments
     let args = Args::parse().unwrap_or_else(|e| {
         let mut stderr = std::io::stderr().lock();
-        writeln!(stderr, "Failed to parse arguments: {e}").ok();
+        let _ = writeln!(stderr, "Failed to parse arguments: {e}");
         std::process::exit(1);
     });
 

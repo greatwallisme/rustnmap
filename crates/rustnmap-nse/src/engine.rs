@@ -713,7 +713,31 @@ impl ScriptEngine {
 
             // Call the function and get the result
             let result: mlua::MultiValue = lua.call_function(&func, ())?;
+
             debug!("Script {} returned {} values", script.id, result.len());
+
+            // Debug: log each return value type
+            for (i, value) in result.iter().enumerate() {
+                let type_desc: String = match value {
+                    mlua::Value::Nil => "nil".to_string(),
+                    mlua::Value::Boolean(_) => "boolean".to_string(),
+                    mlua::Value::Integer(n) => format!("integer({n})"),
+                    mlua::Value::Number(n) => format!("number({n})"),
+                    mlua::Value::String(s) => {
+                        if let Ok(st) = s.to_str() {
+                            format!("string({})", &st[..st.len().min(80)])
+                        } else {
+                            "string(binary)".to_string()
+                        }
+                    }
+                    mlua::Value::Table(_) => "table".to_string(),
+                    mlua::Value::Function(_) => "function".to_string(),
+                    mlua::Value::Thread(_) => "thread".to_string(),
+                    mlua::Value::UserData(_) => "userdata".to_string(),
+                    _ => "other".to_string(),
+                };
+                debug!("Script {} return value {}: {}", script.id, i, type_desc);
+            }
 
             // Convert result to output
             // Nmap convention: scripts return (table, string) where:

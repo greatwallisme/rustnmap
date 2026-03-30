@@ -109,10 +109,9 @@ async fn handle_history_command(args: &Args) -> Result<()> {
         // Parse until date with multiple format support
         filter.until = parse_date_flexible(until).map(|dt| {
             // Set to end of day for until dates
-            dt.date_naive()
-                .and_hms_opt(23, 59, 59)
-                .map(|t| chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(t, chrono::Utc))
-                .unwrap_or(dt)
+            dt.date_naive().and_hms_opt(23, 59, 59).map_or(dt, |t| {
+                chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(t, chrono::Utc)
+            })
         });
     }
 
@@ -241,7 +240,7 @@ fn handle_validate_profile_command(profile_path: &std::path::Path) -> Result<()>
         writeln!(stdout, "  Targets: {} specified", profile.targets.len())?;
         writeln!(stdout, "  Scan Type: {:?}", profile.scan.scan_type)?;
         writeln!(stdout, "  Ports: {:?}", profile.scan.ports)?;
-    }
+    };
 
     Ok(())
 }
@@ -312,50 +311,61 @@ async fn handle_diff_command(args: &Args, diff_files: &[String]) -> Result<()> {
             "Comparing scans from files: {} vs {}",
             diff_files[0], diff_files[1]
         )?;
-    }
+    };
 
     // Detect format from file extension
-    let (before_result, after_result) =
-        if diff_files[0].ends_with(".json") && diff_files[1].ends_with(".json") {
-            let before_content = std::fs::read_to_string(&diff_files[0]).map_err(|e| {
-                rustnmap_common::Error::Other(format!("Failed to read {}: {e}", diff_files[0]))
-            })?;
-            let after_content = std::fs::read_to_string(&diff_files[1]).map_err(|e| {
-                rustnmap_common::Error::Other(format!("Failed to read {}: {e}", diff_files[1]))
-            })?;
+    let (before_result, after_result) = if std::path::Path::new(&diff_files[0])
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("json"))
+        && std::path::Path::new(&diff_files[1])
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("json"))
+    {
+        let before_content = std::fs::read_to_string(&diff_files[0]).map_err(|e| {
+            rustnmap_common::Error::Other(format!("Failed to read {}: {e}", diff_files[0]))
+        })?;
+        let after_content = std::fs::read_to_string(&diff_files[1]).map_err(|e| {
+            rustnmap_common::Error::Other(format!("Failed to read {}: {e}", diff_files[1]))
+        })?;
 
-            let before: rustnmap_output::ScanResult = serde_json::from_str(&before_content)
-                .map_err(|e| {
-                    rustnmap_common::Error::Other(format!("Failed to parse {}: {e}", diff_files[0]))
-                })?;
-            let after: rustnmap_output::ScanResult =
-                serde_json::from_str(&after_content).map_err(|e| {
-                    rustnmap_common::Error::Other(format!("Failed to parse {}: {e}", diff_files[1]))
-                })?;
-
-            (before, after)
-        } else if diff_files[0].ends_with(".xml") && diff_files[1].ends_with(".xml") {
-            let before_content = std::fs::read_to_string(&diff_files[0]).map_err(|e| {
-                rustnmap_common::Error::Other(format!("Failed to read {}: {e}", diff_files[0]))
-            })?;
-            let after_content = std::fs::read_to_string(&diff_files[1]).map_err(|e| {
-                rustnmap_common::Error::Other(format!("Failed to read {}: {e}", diff_files[1]))
-            })?;
-
-            let before = rustnmap_output::parse_nmap_xml(&before_content).map_err(|e| {
+        let before: rustnmap_output::ScanResult =
+            serde_json::from_str(&before_content).map_err(|e| {
                 rustnmap_common::Error::Other(format!("Failed to parse {}: {e}", diff_files[0]))
             })?;
-            let after = rustnmap_output::parse_nmap_xml(&after_content).map_err(|e| {
+        let after: rustnmap_output::ScanResult =
+            serde_json::from_str(&after_content).map_err(|e| {
                 rustnmap_common::Error::Other(format!("Failed to parse {}: {e}", diff_files[1]))
             })?;
 
-            (before, after)
-        } else {
-            return Err(rustnmap_common::Error::Other(format!(
-                "Unsupported file format. Supported: JSON (.json), XML (.xml). Got: {} and {}",
-                diff_files[0], diff_files[1]
-            )));
-        };
+        (before, after)
+    } else if std::path::Path::new(&diff_files[0])
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("xml"))
+        && std::path::Path::new(&diff_files[1])
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("xml"))
+    {
+        let before_content = std::fs::read_to_string(&diff_files[0]).map_err(|e| {
+            rustnmap_common::Error::Other(format!("Failed to read {}: {e}", diff_files[0]))
+        })?;
+        let after_content = std::fs::read_to_string(&diff_files[1]).map_err(|e| {
+            rustnmap_common::Error::Other(format!("Failed to read {}: {e}", diff_files[1]))
+        })?;
+
+        let before = rustnmap_output::parse_nmap_xml(&before_content).map_err(|e| {
+            rustnmap_common::Error::Other(format!("Failed to parse {}: {e}", diff_files[0]))
+        })?;
+        let after = rustnmap_output::parse_nmap_xml(&after_content).map_err(|e| {
+            rustnmap_common::Error::Other(format!("Failed to parse {}: {e}", diff_files[1]))
+        })?;
+
+        (before, after)
+    } else {
+        return Err(rustnmap_common::Error::Other(format!(
+            "Unsupported file format. Supported: JSON (.json), XML (.xml). Got: {} and {}",
+            diff_files[0], diff_files[1]
+        )));
+    };
 
     let diff = ScanDiff::new(before_result, after_result);
 
@@ -370,12 +380,16 @@ async fn handle_diff_command(args: &Args, diff_files: &[String]) -> Result<()> {
     {
         let mut stdout = std::io::stdout().lock();
         writeln!(stdout, "{report}")?;
-    }
+    };
 
     Ok(())
 }
 
 /// Handle profile-based scanning
+#[expect(
+    clippy::too_many_lines,
+    reason = "Profile scan handler orchestrates multiple subsystems"
+)]
 async fn handle_profile_scan(args: &Args, profile_path: &std::path::Path) -> Result<()> {
     let profile = ScanProfile::from_file(profile_path)
         .map_err(|e| rustnmap_common::Error::Other(format!("Failed to load profile: {e}")))?;
@@ -761,12 +775,16 @@ fn build_scan_config_from_profile(
     }
 
     // DNS server from CLI args
-    config.dns_server = args.dns_server.clone();
+    config.dns_server.clone_from(&args.dns_server);
 
     config
 }
 
 /// Normal scan flow (original `run_scan` logic)
+#[expect(
+    clippy::too_many_lines,
+    reason = "Normal scan handler orchestrates multiple subsystems"
+)]
 async fn run_normal_scan(args: &Args) -> Result<()> {
     #[cfg(feature = "diagnostic")]
     let cli_start = std::time::Instant::now();
@@ -1209,7 +1227,7 @@ fn build_scan_config(args: &Args) -> Result<ScanConfig> {
     config.evasion_config = build_evasion_config(args)?;
 
     // DNS server for local IP detection
-    config.dns_server = args.dns_server.clone();
+    config.dns_server.clone_from(&args.dns_server);
 
     Ok(config)
 }
@@ -1245,7 +1263,7 @@ fn build_evasion_config(args: &Args) -> Result<Option<rustnmap_evasion::EvasionC
 
     // Handle source IP spoofing (-S flag)
     if let Some(ref spoof_ip) = args.spoof_ip {
-        let ip: std::net::IpAddr = spoof_ip.parse().map_err(|_| {
+        let ip: std::net::IpAddr = spoof_ip.parse().map_err(|_e| {
             rustnmap_common::Error::Other(format!("Invalid spoof IP address: {spoof_ip}"))
         })?;
         builder = builder.source_ip(ip);
@@ -1287,7 +1305,7 @@ fn parse_decoy_ips(s: &str) -> Result<Vec<std::net::IpAddr>> {
 
         // Check for RND:number syntax (nmap-compatible random decoys)
         if let Some(number_str) = part.strip_prefix("RND:") {
-            let count: usize = number_str.parse().map_err(|_| {
+            let count: usize = number_str.parse().map_err(|_e| {
                 rustnmap_common::Error::Other(format!(
                     "Invalid RND number: {number_str} (expected RND:<number>)"
                 ))
@@ -1321,7 +1339,7 @@ fn parse_decoy_ips(s: &str) -> Result<Vec<std::net::IpAddr>> {
                     reason = "Truncation is acceptable for decoy IP generation"
                 )]
                 let hash = {
-                    let base = (seed as u64).wrapping_add((pid as u64).wrapping_mul(0x5851_f42d));
+                    let base = (seed as u64).wrapping_add(u64::from(pid).wrapping_mul(0x5851_f42d));
                     let offset = (i as u64).wrapping_mul(0x0001_4057_b7ef);
                     base.wrapping_add(offset)
                 };
@@ -1364,7 +1382,7 @@ fn parse_decoy_ips(s: &str) -> Result<Vec<std::net::IpAddr>> {
             }
         } else {
             // Parse as explicit IP address
-            let ip: std::net::IpAddr = part.parse().map_err(|_| {
+            let ip: std::net::IpAddr = part.parse().map_err(|_e| {
                 rustnmap_common::Error::Other(format!("Invalid decoy IP address: {part}"))
             })?;
             ips.push(ip);
@@ -1382,7 +1400,7 @@ fn parse_decoy_ips(s: &str) -> Result<Vec<std::net::IpAddr>> {
 /// - Seconds: `30s` -> 30 seconds
 /// - Minutes: `5m` -> 5 minutes
 /// - Hours: `1h` -> 1 hour
-/// - Zero: `0` -> no timeout (Duration::MAX)
+/// - Zero: `0` -> no timeout (`Duration::MAX`)
 ///
 /// # Errors
 ///
@@ -1400,7 +1418,7 @@ fn parse_time_duration(input: &str) -> Result<std::time::Duration> {
         let suffix = &input[input.len() - 2..];
         if suffix == "ms" {
             let num_str = &input[..input.len() - 2];
-            let ms: u64 = num_str.parse().map_err(|_| {
+            let ms: u64 = num_str.parse().map_err(|_e| {
                 rustnmap_common::Error::Other(format!("Invalid milliseconds value: {num_str}"))
             })?;
             return Ok(std::time::Duration::from_millis(ms));
@@ -1412,7 +1430,7 @@ fn parse_time_duration(input: &str) -> Result<std::time::Duration> {
         match c {
             's' | 'm' | 'h' => {
                 let num_str = &input[..input.len() - 1];
-                let num: u64 = num_str.parse().map_err(|_| {
+                let num: u64 = num_str.parse().map_err(|_e| {
                     rustnmap_common::Error::Other(format!("Invalid time value: {num_str}"))
                 })?;
                 return Ok(match c {
@@ -1429,7 +1447,7 @@ fn parse_time_duration(input: &str) -> Result<std::time::Duration> {
     // No recognized suffix, try parsing as plain seconds
     let secs: u64 = input
         .parse()
-        .map_err(|_| rustnmap_common::Error::Other(format!("Invalid time format: {input}")))?;
+        .map_err(|_e| rustnmap_common::Error::Other(format!("Invalid time format: {input}")))?;
     Ok(std::time::Duration::from_secs(secs))
 }
 
@@ -1510,16 +1528,16 @@ fn parse_port_string(s: &str) -> Result<PortSpec> {
                     "Invalid port range: {segment}"
                 )));
             }
-            let start: u16 = range_parts[0].parse().map_err(|_| {
+            let start: u16 = range_parts[0].parse().map_err(|_e| {
                 rustnmap_common::Error::Other(format!("Invalid port number: {}", range_parts[0]))
             })?;
-            let end: u16 = range_parts[1].parse().map_err(|_| {
+            let end: u16 = range_parts[1].parse().map_err(|_e| {
                 rustnmap_common::Error::Other(format!("Invalid port number: {}", range_parts[1]))
             })?;
             return Ok(PortSpec::Range { start, end });
         }
         // Single port
-        let port_num: u16 = segment.parse().map_err(|_| {
+        let port_num: u16 = segment.parse().map_err(|_e| {
             rustnmap_common::Error::Other(format!("Invalid port number: {segment}"))
         })?;
         ports.push(port_num);
@@ -1712,13 +1730,12 @@ fn print_host_normal<W: Write>(handle: &mut W, args: &Args, host: &HostResult) {
         }
 
         // Print scripts for open ports
-        use rustnmap_output::NormalFormatter;
-        let formatter = NormalFormatter::new();
+        let formatter = rustnmap_output::NormalFormatter::new();
         for port in &host.ports {
             if matches!(port.state, PortState::Open) {
                 for script in &port.scripts {
                     if let Ok(output) = formatter.format_script(script) {
-                        let _ = write!(handle, "{}", output);
+                        let _ = write!(handle, "{output}");
                     }
                 }
             }
@@ -1742,7 +1759,7 @@ fn print_port_normal<W: Write>(handle: &mut W, _args: &Args, port: &PortResult) 
 
     let formatter = NormalFormatter::new();
     if let Ok(output) = formatter.format_port(port) {
-        let _ = write!(handle, "{}", output);
+        let _ = write!(handle, "{output}");
     } else {
         // Fallback to simple format if formatter fails
         let protocol = match port.protocol {

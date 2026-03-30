@@ -41,61 +41,60 @@ use crate::lua::NseLua;
 /// * `length` - Length of the string to generate
 /// * `charset` - Optional charset (string or table)
 fn random_string_impl(
-    _lua: &mlua::Lua,
+    lua: &mlua::Lua,
     length: i64,
     charset: Option<Value>,
-) -> mlua::Result<String> {
+) -> mlua::Result<mlua::String> {
     let length = usize::try_from(length)
         .map_err(|e| mlua::Error::RuntimeError(format!("Invalid length: {e}")))?;
 
     if length == 0 {
-        return Ok(String::new());
+        return lua.create_string("");
     }
 
     match charset {
         None => {
-            // Return random bytes
+            // Return random bytes as binary string (critical for TLS and crypto)
             let mut rng = rand::thread_rng();
             let mut bytes = vec![0u8; length];
             rng.fill(bytes.as_mut_slice());
-            Ok(String::from_utf8_lossy(&bytes).to_string())
+            lua.create_string(&bytes)
         }
         Some(Value::String(s)) => {
             // Charset is a string - pick random characters from it
             let charset_str = s.to_str().map(|s| s.to_string()).unwrap_or_default();
             if charset_str.is_empty() {
-                return Ok(String::new());
+                return lua.create_string("");
             }
 
             let mut rng = rand::thread_rng();
-            let mut result = String::with_capacity(length);
+            let mut result = Vec::with_capacity(length);
             let charset_bytes = charset_str.as_bytes();
             for _ in 0..length {
                 let idx = rng.gen_range(0..charset_bytes.len());
-                result.push(charset_bytes[idx] as char);
+                result.push(charset_bytes[idx]);
             }
-            Ok(result)
+            lua.create_string(&result)
         }
         Some(Value::Table(t)) => {
             // Charset is a table - pick random elements from it
             let mut rng = rand::thread_rng();
-            let mut result = String::with_capacity(length);
+            let mut result = Vec::with_capacity(length);
 
             // Get the length of the table (sequence)
             let table_len = t.raw_len();
             if table_len == 0 {
-                return Ok(String::new());
+                return lua.create_string("");
             }
 
             for _ in 0..length {
                 let idx = rng.gen_range(1..=table_len);
                 let val: Value = t.get(idx)?;
                 if let Value::String(s) = val {
-                    let s = s.to_str().map(|s| s.to_string()).unwrap_or_default();
-                    result.push_str(&s);
+                    result.extend_from_slice(&s.as_bytes());
                 }
             }
-            Ok(result)
+            lua.create_string(&result)
         }
         Some(_) => Err(mlua::Error::RuntimeError(
             "Charset must be a string or table".to_string(),
@@ -249,8 +248,9 @@ mod tests {
         );
         assert!(result.is_ok());
         let s = result.unwrap();
-        assert_eq!(s.len(), 10);
-        for c in s.chars() {
+        let s_str = s.to_str().unwrap();
+        assert_eq!(s_str.len(), 10);
+        for c in s_str.chars() {
             assert!(c == 'a' || c == 'b' || c == 'c');
         }
     }
@@ -260,7 +260,7 @@ mod tests {
         let lua = mlua::Lua::new();
         let result = random_string_impl(&lua, 0, None::<Value>);
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), "");
+        assert_eq!(result.unwrap().to_str().unwrap(), "");
     }
 
     #[test]
@@ -275,10 +275,21 @@ mod tests {
         );
         assert!(result.is_ok());
         let s = result.unwrap();
-        assert_eq!(s.len(), 8);
-        for c in s.chars() {
+        let s_str = s.to_str().unwrap();
+        assert_eq!(s_str.len(), 8);
+        for c in s_str.chars() {
             assert!(c.is_ascii_lowercase());
         }
+    }
+
+    #[test]
+    fn test_random_string_binary() {
+        // Verify that random_string with no charset returns exact number of raw bytes
+        let lua = mlua::Lua::new();
+        let result = random_string_impl(&lua, 28, None::<Value>);
+        assert!(result.is_ok());
+        let s = result.unwrap();
+        assert_eq!(s.as_bytes().len(), 28);
     }
 
     #[test]

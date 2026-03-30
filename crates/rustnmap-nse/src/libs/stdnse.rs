@@ -305,17 +305,55 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
         })?;
     stdnse_table.set("generate_random_string", generate_random_string_fn)?;
 
-    // Register tohex(data, [separator]) function
+    // Register tohex(data, options) function
+    //
+    // Matches Nmap's stdnse.tohex signature which accepts either:
+    // - a string separator: stdnse.tohex(data, ":")
+    // - a table with options: stdnse.tohex(data, { separator = " ", group = 4 })
+    // When using a table, `group` controls how many hex bytes are grouped together.
     let tohex_fn =
-        lua.create_function(|_, (data, separator): (mlua::String, Option<String>)| {
+        lua.create_function(|lua, (data, options): (mlua::String, mlua::Value)| {
             let bytes = data.as_bytes();
-            let sep = separator.as_deref().unwrap_or("");
-            let hex = bytes
+            let mut separator = String::new();
+            let mut group_size: Option<usize> = None;
+
+            match options {
+                mlua::Value::String(s) => {
+                    if let Ok(s) = s.to_str() {
+                        separator = s.to_string();
+                    }
+                }
+                mlua::Value::Table(t) => {
+                    if let Ok(Some(s)) = t.get::<Option<mlua::String>>("separator") {
+                        separator = s.to_string_lossy().to_string();
+                    }
+                    if let Ok(g) = t.get::<Option<i64>>("group") {
+                        group_size = g.map(|g| usize::try_from(g).unwrap_or(0));
+                    }
+                }
+                _ => {}
+            }
+
+            let hex_chars: Vec<String> = bytes
                 .iter()
                 .map(|b| format!("{b:02x}"))
-                .collect::<Vec<_>>()
-                .join(sep);
-            Ok(hex)
+                .collect();
+
+            let result = if let Some(group) = group_size {
+                if group > 0 {
+                    hex_chars
+                        .chunks(group)
+                        .map(|chunk| chunk.join(&separator))
+                        .collect::<Vec<_>>()
+                        .join(&separator)
+                } else {
+                    hex_chars.join("")
+                }
+            } else {
+                hex_chars.join(&separator)
+            };
+
+            lua.create_string(&result)
         })?;
     stdnse_table.set("tohex", tohex_fn)?;
 
@@ -626,6 +664,121 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
         }
     })?;
     stdnse_table.set("silent_require", silent_require_fn)?;
+
+    // -------------------------------------------------------------------------
+    // stdnse.parse_timespec(timespec)
+    //
+    // Parse a time specification string (e.g. "5s", "100ms", "2m") and return
+    // the value in seconds.
+    //
+    // Supported suffixes: "" (seconds), "s" (seconds), "ms" (milliseconds),
+    // "m" (minutes), "h" (hours).
+    //
+    // Returns (number, nil) on success or (nil, error_string) on failure.
+    // -------------------------------------------------------------------------
+    let parse_timespec_fn = lua.create_function(|lua, timespec: String| {
+        let timespec = timespec.trim();
+        if timespec.is_empty() {
+            return Ok((mlua::Value::Nil, mlua::Value::Nil));
+        }
+
+        // Split into numeric part and unit suffix
+        let num_end = timespec
+            .find(|c: char| !c.is_ascii_digit() && c != '.')
+            .unwrap_or(timespec.len());
+
+        if num_end == 0 {
+            return Ok((
+                mlua::Value::Nil,
+                mlua::Value::String(
+                    lua.create_string(format!("Can't parse time specification \"{timespec}\""))?,
+                ),
+            ));
+        }
+
+        let (num_str, unit): (&str, &str) = (&timespec[..num_end], &timespec[num_end..]);
+
+        let value: f64 = match num_str.parse() {
+            Ok(v) => v,
+            Err(_) => {
+                return Ok((
+                    mlua::Value::Nil,
+                    mlua::Value::String(lua.create_string(format!(
+                        "Can't parse time specification \"{timespec}\" (bad number \"{num_str}\")"
+                    ))?),
+                ));
+            }
+        };
+
+        let multiplier = match unit {
+            "" | "s" => 1.0,
+            "ms" => 0.001,
+            "m" => 60.0,
+            "h" => 3600.0,
+            _ => {
+                return Ok((
+                    mlua::Value::Nil,
+                    mlua::Value::String(lua.create_string(format!(
+                        "Can't parse time specification \"{timespec}\" (bad unit \"{unit}\")"
+                    ))?),
+                ));
+            }
+        };
+
+        Ok((mlua::Value::Number(value * multiplier), mlua::Value::Nil))
+    })?;
+    stdnse_table.set("parse_timespec", parse_timespec_fn)?;
+
+    // -------------------------------------------------------------------------
+    // stdnse.seeall(env)
+    //
+    // Option function for use with stdnse.module. Sets __index = _G on the
+    // module's metatable so that the module can access global variables.
+    // Equivalent to package.seeall from Lua 5.1.
+    // -------------------------------------------------------------------------
+    let seeall_fn = lua.create_function(|lua, env: mlua::Table| {
+        let meta_table = lua.create_table()?;
+        let globals = lua.globals();
+        meta_table.set("__index", globals)?;
+        env.set_metatable(Some(meta_table))?;
+        Ok(())
+    })?;
+    stdnse_table.set("seeall", seeall_fn)?;
+
+    // -------------------------------------------------------------------------
+    // stdnse.module(name, ...)
+    //
+    // Creates a new module environment table, sets _NAME, _PACKAGE, _M fields,
+    // calls each option function (e.g. stdnse.seeall) with the environment,
+    // registers the module in package.loaded[name], and returns the table.
+    //
+    // Usage: _ENV = stdnse.module("mymod", stdnse.seeall)
+    // -------------------------------------------------------------------------
+    let module_fn = lua.create_function(
+        |lua, (name, opts): (String, mlua::Variadic<mlua::Function>)| {
+            let env = lua.create_table()?;
+            env.set("_NAME", name.as_str())?;
+
+            // _PACKAGE is everything up to and including the last dot, or nil
+            if let Some(pos) = name.rfind('.') {
+                env.set("_PACKAGE", &name[..=pos])?;
+            }
+
+            env.set("_M", env.clone())?;
+
+            // Call each option function with the environment
+            for opt_fn in opts {
+                opt_fn.call::<()>(env.clone())?;
+            }
+
+            // Register in package.loaded so subsequent require() returns it
+            let package: mlua::Table = lua.globals().get("package")?;
+            package.set(name.as_str(), env.clone())?;
+
+            Ok(env)
+        },
+    )?;
+    stdnse_table.set("module", module_fn)?;
 
     // Set the stdnse table as a global
     lua.globals().set("stdnse", stdnse_table)?;

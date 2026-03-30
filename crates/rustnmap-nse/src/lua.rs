@@ -494,15 +494,21 @@ impl NseLua {
                 message: format!("failed to create file searcher: {e}"),
             })?;
 
-        // Insert our custom searcher at position 1 (beginning of searchers table)
-        // Lua tables are 1-indexed
-        // Shift existing searchers down
+        // Insert our custom searcher at position 2 (AFTER the preload searcher).
+        //
+        // Lua's require() calls package.searchers in order and uses the first
+        // one that returns a loader function. searcher[1] is the preload
+        // searcher which checks package.preload — this MUST remain first so
+        // that Rust-registered modules (stdnse, nmap, etc.) take precedence
+        // over .lua files on disk. Placing the file searcher before preload
+        // would cause stdnse.lua (which applies strict.lua) to shadow the
+        // Rust-registered stdnse table, breaking access to Rust functions
+        // like stdnse.new_thread.
         let len = searchers.raw_len().saturating_add(1);
 
-        // Shift all existing searchers down by 1
-        for i in (1..len).rev() {
+        // Shift searchers from index 2 onward down by 1
+        for i in (2..len).rev() {
             if let Ok(current) = searchers.get::<Function>(i) {
-                // Use raw_set to avoid metamethods
                 searchers
                     .raw_set(i + 1, current)
                     .map_err(|e| Error::LuaError {
@@ -512,9 +518,9 @@ impl NseLua {
             }
         }
 
-        // Insert our custom searcher at position 1
+        // Insert custom file searcher at position 2 (after preload searcher)
         searchers
-            .raw_set(1, searcher)
+            .raw_set(2, searcher)
             .map_err(|e| Error::LuaError {
                 script: "runtime".to_string(),
                 message: format!("failed to set file searcher: {e}"),

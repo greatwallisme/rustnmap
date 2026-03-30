@@ -37,10 +37,13 @@
 
 use std::fmt::Write as FmtWrite;
 use std::io::{Read, Write};
-use std::net::TcpStream;
+use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration;
 
-use mlua::{String as LuaString, Table, Value};
+#[cfg(feature = "openssl")]
+use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
+
+use mlua::{String as LuaString, Table, UserData, UserDataMethods, Value};
 use sha2::{Digest as Sha256Digest, Sha256};
 use tracing::debug;
 
@@ -50,144 +53,122 @@ use crate::lua::NseLua;
 /// Default timeout for SSL connections in milliseconds.
 const DEFAULT_TIMEOUT_MS: u64 = 10_000;
 
-/// SSL/TLS record types.
-const SSL_RECORD_TYPE_HANDSHAKE: u8 = 0x16;
-const SSL_HANDSHAKE_CLIENT_HELLO: u8 = 0x01;
-const SSL_HANDSHAKE_SERVER_HELLO: u8 = 0x02;
-const SSL_HANDSHAKE_CERTIFICATE: u8 = 0x0B;
-const TLS_VERSION_1_2: u16 = 0x0303;
+/// Maximum bytes to read in a single receive call.
+const MAX_RECEIVE_BYTES: usize = 4096;
 
-/// Build TLS `ClientHello` message.
-fn build_client_hello(hostname: &str) -> Vec<u8> {
-    let mut hello = Vec::new();
+/// Direct TLS ports where TLS is used from the start (no STARTTLS).
+const DIRECT_TLS_PORTS: [u16; 8] = [443, 636, 853, 993, 995, 5061, 6697, 8443];
 
-    // Handshake type: ClientHello
-    hello.push(SSL_HANDSHAKE_CLIENT_HELLO);
+/// STARTTLS service names recognized by the library.
+const STARTTLS_SERVICES: &[&str] = &[
+    "ftp",
+    "smtp",
+    "pop3",
+    "imap",
+    "ldap",
+    "nntp",
+    "xmpp",
+    "postgres",
+    "postgresql",
+    "mysql",
+    "vnc",
+    "lmtp",
+    "tds",
+    "ms-sql-s",
+];
 
-    // ClientHello content
-    let mut client_hello = Vec::new();
+/// STARTTLS port numbers recognized by the library.
+const STARTTLS_PORTS: [u16; 13] = [
+    21, 25, 110, 119, 143, 389, 587, 3306, 5222, 5269, 5432, 5900, 1433,
+];
 
-    // Client version: TLS 1.2
-    client_hello.push(0x03);
-    client_hello.push(0x03);
+/// Connect via TLS using the `openssl` crate's `SslConnector` and extract the peer certificate DER data.
+///
+/// This performs a proper TLS 1.2/1.3 handshake with full cipher suite negotiation,
+/// SNI (Server Name Indication), and all required extensions.
+#[cfg(feature = "openssl")]
+fn tls_connect_and_get_cert(hostname: &str, addr: std::net::SocketAddr) -> mlua::Result<Vec<u8>> {
+    let mut builder =
+        SslConnector::builder(SslMethod::tls()).map_err(|e| {
+            mlua::Error::RuntimeError(format!("Failed to create SSL connector: {e}"))
+        })?;
+    builder.set_verify(SslVerifyMode::NONE);
+    let connector = builder.build();
 
-    // Random (32 bytes)
-    let random: [u8; 32] = rand::random();
-    client_hello.extend_from_slice(&random);
+    let stream = TcpStream::connect_timeout(&addr, Duration::from_millis(DEFAULT_TIMEOUT_MS))
+        .map_err(|e| {
+            mlua::Error::RuntimeError(format!("TLS connect failed to {addr}: {e}"))
+        })?;
 
-    // Session ID (empty)
-    client_hello.push(0x00);
+    let ssl_stream = connector.connect(hostname, stream).map_err(|e| {
+        mlua::Error::RuntimeError(format!("SSL handshake failed for {hostname}: {e}"))
+    })?;
 
-    // Cipher suites
-    let cipher_suites = [0x00, 0x02, 0x00, 0x2F]; // TLS_RSA_WITH_AES_128_CBC_SHA
-    client_hello.extend_from_slice(&cipher_suites);
+    let cert = ssl_stream.ssl().peer_certificate().ok_or_else(|| {
+        mlua::Error::RuntimeError("Server did not present a certificate".to_string())
+    })?;
 
-    // Compression methods
-    client_hello.push(0x01);
-    client_hello.push(0x00);
-
-    // Extensions
-    let mut extensions = Vec::new();
-
-    // Server Name Indication (SNI)
-    if !hostname.is_empty() {
-        let hostname_bytes = hostname.as_bytes();
-        let hostname_len = u16::try_from(hostname_bytes.len()).unwrap_or(0);
-
-        extensions.push(0x00);
-        extensions.push(0x00); // SNI extension type
-        let sni_data_len = hostname_len.saturating_add(5);
-        extensions.extend_from_slice(&sni_data_len.to_be_bytes());
-        extensions.extend_from_slice(&(hostname_len + 3).to_be_bytes());
-        extensions.push(0x00);
-        extensions.extend_from_slice(&hostname_len.to_be_bytes());
-        extensions.extend_from_slice(hostname_bytes);
-    }
-
-    let ext_len = u16::try_from(extensions.len()).unwrap_or(0);
-    client_hello.extend_from_slice(&ext_len.to_be_bytes());
-    client_hello.extend(extensions);
-
-    // Add ClientHello length
-    let ch_len = u16::try_from(client_hello.len()).unwrap_or(0);
-    hello.push(0x00);
-    hello.extend_from_slice(&ch_len.to_be_bytes());
-    hello.extend(client_hello);
-
-    // Wrap in TLS record
-    let mut record = Vec::new();
-    record.push(SSL_RECORD_TYPE_HANDSHAKE);
-    record.extend_from_slice(&TLS_VERSION_1_2.to_be_bytes());
-    let record_len = u16::try_from(hello.len()).unwrap_or(0);
-    record.extend_from_slice(&record_len.to_be_bytes());
-    record.extend(hello);
-
-    record
+    cert.to_der().map_err(|e| {
+        mlua::Error::RuntimeError(format!("Failed to encode certificate as DER: {e}"))
+    })
 }
 
-/// Parse TLS `ServerHello` and extract certificate.
-fn parse_server_response(stream: &mut TcpStream) -> mlua::Result<Vec<u8>> {
-    let mut record_header = [0u8; 5];
-    stream
-        .read_exact(&mut record_header)
-        .map_err(|e| mlua::Error::RuntimeError(format!("Failed to read TLS record: {e}")))?;
-
-    let record_type = record_header[0];
-    let record_len = u16::from_be_bytes([record_header[3], record_header[4]]) as usize;
-
-    let mut record_data = vec![0u8; record_len];
-    stream
-        .read_exact(&mut record_data)
-        .map_err(|e| mlua::Error::RuntimeError(format!("Failed to read TLS record data: {e}")))?;
-
-    if record_type != SSL_RECORD_TYPE_HANDSHAKE {
-        return Err(mlua::Error::RuntimeError(format!(
-            "Expected handshake record, got {record_type:#x}"
-        )));
-    }
-
-    if record_data.is_empty() {
-        return Err(mlua::Error::RuntimeError(
-            "Empty handshake message".to_string(),
-        ));
-    }
-
-    let handshake_type = record_data[0];
-
-    match handshake_type {
-        SSL_HANDSHAKE_SERVER_HELLO => parse_server_response(stream),
-        SSL_HANDSHAKE_CERTIFICATE => parse_certificate_message(&record_data),
-        _ => Err(mlua::Error::RuntimeError(format!(
-            "Unexpected handshake type: {handshake_type:#x}"
-        ))),
-    }
+#[cfg(not(feature = "openssl"))]
+fn tls_connect_and_get_cert(_hostname: &str, _addr: std::net::SocketAddr) -> mlua::Result<Vec<u8>> {
+    Err(mlua::Error::RuntimeError(
+        "SSL support not available (openssl feature not enabled)".to_string(),
+    ))
 }
 
-/// Parse Certificate handshake message.
-fn parse_certificate_message(data: &[u8]) -> mlua::Result<Vec<u8>> {
-    if data.len() < 10 {
-        return Err(mlua::Error::RuntimeError(
-            "Certificate message too short".to_string(),
-        ));
-    }
+/// Connect raw TCP, perform STARTTLS negotiation, then upgrade to TLS and extract certificate.
+///
+/// This is used for protocols that require plaintext negotiation before TLS upgrade
+/// (e.g., SMTP, POP3, IMAP, FTP, XMPP, LDAP, `PostgreSQL`).
+#[cfg(feature = "openssl")]
+fn starttls_and_get_cert(
+    hostname: &str,
+    addr: std::net::SocketAddr,
+    protocol: &str,
+) -> mlua::Result<Vec<u8>> {
+    let stream = TcpStream::connect_timeout(&addr, Duration::from_millis(DEFAULT_TIMEOUT_MS))
+        .map_err(|e| mlua::Error::RuntimeError(format!("Connection failed: {e}")))?;
+    stream
+        .set_read_timeout(Some(Duration::from_millis(DEFAULT_TIMEOUT_MS)))
+        .map_err(|e| mlua::Error::RuntimeError(format!("Failed to set read timeout: {e}")))?;
+    stream
+        .set_write_timeout(Some(Duration::from_millis(DEFAULT_TIMEOUT_MS)))
+        .map_err(|e| mlua::Error::RuntimeError(format!("Failed to set write timeout: {e}")))?;
+    let mut stream = stream;
 
-    let offset = 4;
-    let cert_offset = offset + 3;
-    let cert_len = u32::from_be_bytes([
-        0,
-        data[cert_offset],
-        data[cert_offset + 1],
-        data[cert_offset + 2],
-    ]) as usize;
-    let cert_data_offset = cert_offset + 3;
+    perform_starttls(&mut stream, protocol)?;
 
-    if cert_data_offset + cert_len > data.len() {
-        return Err(mlua::Error::RuntimeError(
-            "Certificate data exceeds message length".to_string(),
-        ));
-    }
+    let mut builder = SslConnector::builder(SslMethod::tls()).map_err(|e| {
+        mlua::Error::RuntimeError(format!("Failed to create SSL connector: {e}"))
+    })?;
+    builder.set_verify(SslVerifyMode::NONE);
+    let connector = builder.build();
+    let ssl_stream = connector.connect(hostname, stream).map_err(|e| {
+        mlua::Error::RuntimeError(format!(
+            "SSL handshake failed for {hostname} (STARTTLS {protocol}): {e}"
+        ))
+    })?;
+    let cert = ssl_stream.ssl().peer_certificate().ok_or_else(|| {
+        mlua::Error::RuntimeError("Server did not present a certificate".to_string())
+    })?;
+    cert.to_der().map_err(|e| {
+        mlua::Error::RuntimeError(format!("Failed to encode certificate as DER: {e}"))
+    })
+}
 
-    Ok(data[cert_data_offset..cert_data_offset + cert_len].to_vec())
+#[cfg(not(feature = "openssl"))]
+fn starttls_and_get_cert(
+    _hostname: &str,
+    _addr: std::net::SocketAddr,
+    _protocol: &str,
+) -> mlua::Result<Vec<u8>> {
+    Err(mlua::Error::RuntimeError(
+        "SSL support not available (openssl feature not enabled)".to_string(),
+    ))
 }
 
 /// Convert DER to PEM format.
@@ -683,12 +664,283 @@ fn perform_starttls(stream: &mut TcpStream, protocol: &str) -> mlua::Result<()> 
 
     Ok(())
 }
+// ---------------------------------------------------------------------------
+// SslSocket - Lua UserData wrapper for a TCP stream used after STARTTLS
+// ---------------------------------------------------------------------------
+
+/// TCP stream wrapper exposed as Lua `UserData` after STARTTLS negotiation.
+///
+/// Provides `send`, `receive`, `close`, `set_timeout`, and `get_ssl_certificate`
+/// methods that NSE scripts call to interact with the TLS-ready connection.
+#[derive(Debug)]
+struct SslSocket {
+    stream: Option<TcpStream>,
+    hostname: String,
+    timeout_ms: u64,
+}
+
+impl SslSocket {
+    fn new(stream: TcpStream, hostname: String) -> Self {
+        Self {
+            stream: Some(stream),
+            hostname,
+            timeout_ms: DEFAULT_TIMEOUT_MS,
+        }
+    }
+}
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "UserData impl requires many method registrations with non-trivial bodies"
+)]
+impl UserData for SslSocket {
+    fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
+        // send(data) -> true | nil, err
+        methods.add_method_mut("send", |_, this, data: LuaString| {
+            let stream = this
+                .stream
+                .as_mut()
+                .ok_or_else(|| mlua::Error::RuntimeError("socket not connected".to_string()))?;
+            stream
+                .write_all(&data.as_bytes())
+                .map_err(|e| mlua::Error::RuntimeError(format!("send failed: {e}")))?;
+            Ok(true)
+        });
+
+        // receive([pattern]) -> data | nil, err
+        //
+        // Patterns:
+        //   "*l"  - read one line (up to and including \n)
+        //   "*a"  - read until EOF / timeout
+        //   <integer> - read exactly N bytes
+        //   nil   - default read up to 4096 bytes
+        methods.add_method_mut("receive", |lua, this, pattern: Option<Value>| {
+            let stream = this
+                .stream
+                .as_mut()
+                .ok_or_else(|| mlua::Error::RuntimeError("socket not connected".to_string()))?;
+
+            match pattern {
+                // "*l" - read until newline
+                Some(Value::String(s)) if s.to_str()? == "*l" => {
+                    let mut buf = Vec::new();
+                    loop {
+                        let mut byte = [0u8; 1];
+                        match stream.read(&mut byte) {
+                            Ok(0) | Err(_) => break,
+                            Ok(_) => {
+                                buf.push(byte[0]);
+                                if byte[0] == b'\n' {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    Ok(lua.create_string(&buf)?)
+                }
+                // "*a" - read all available data
+                Some(Value::String(s)) if s.to_str()? == "*a" => {
+                    let mut buf = Vec::new();
+                    loop {
+                        let mut temp = [0u8; MAX_RECEIVE_BYTES];
+                        match stream.read(&mut temp) {
+                            Ok(0) => break,
+                            Ok(n) => buf.extend_from_slice(&temp[..n]),
+                            Err(e) if e.kind() == std::io::ErrorKind::TimedOut => break,
+                            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                            Err(_) => break,
+                        }
+                    }
+                    Ok(lua.create_string(&buf)?)
+                }
+                // Integer count - read exactly N bytes
+                Some(Value::Integer(n)) => {
+                    let count = usize::try_from(n).map_err(|e| {
+                        mlua::Error::RuntimeError(format!("invalid byte count: {e}"))
+                    })?;
+                    let mut buf = vec![0u8; count];
+                    stream
+                        .read_exact(&mut buf)
+                        .map_err(|e| mlua::Error::RuntimeError(format!("receive failed: {e}")))?;
+                    Ok(lua.create_string(&buf)?)
+                }
+                // Default / unhandled pattern - single read
+                _ => {
+                    let mut buf = [0u8; MAX_RECEIVE_BYTES];
+                    match stream.read(&mut buf) {
+                        Ok(0) => Ok(lua.create_string("")?),
+                        Ok(n) => Ok(lua.create_string(&buf[..n])?),
+                        Err(e) => Err(mlua::Error::RuntimeError(format!("receive failed: {e}"))),
+                    }
+                }
+            }
+        });
+
+        // close() -> true
+        methods.add_method_mut("close", |_, this, ()| {
+            if let Some(stream) = this.stream.take() {
+                let _ = stream.shutdown(std::net::Shutdown::Both);
+            }
+            Ok(true)
+        });
+
+        // set_timeout(ms) -> true
+        methods.add_method_mut("set_timeout", |_, this, ms: u64| {
+            this.timeout_ms = ms;
+            if let Some(ref mut stream) = this.stream {
+                let timeout = Duration::from_millis(ms);
+                stream
+                    .set_read_timeout(Some(timeout))
+                    .map_err(|e| mlua::Error::RuntimeError(format!("set_timeout failed: {e}")))?;
+                stream
+                    .set_write_timeout(Some(timeout))
+                    .map_err(|e| mlua::Error::RuntimeError(format!("set_timeout failed: {e}")))?;
+            }
+            Ok(true)
+        });
+
+        // get_ssl_certificate() -> cert_table
+        //
+        // Creates a new TLS connection to the same peer and retrieves the certificate.
+        // This matches nmap behavior of reconnecting for cert retrieval.
+        methods.add_method_mut("get_ssl_certificate", |lua, this, ()| {
+            let stream = this
+                .stream
+                .as_ref()
+                .ok_or_else(|| mlua::Error::RuntimeError("socket not connected".to_string()))?;
+
+            let peer_addr = stream.peer_addr().map_err(|e| {
+                mlua::Error::RuntimeError(format!("Failed to get peer address: {e}"))
+            })?;
+
+            let cert_der = tls_connect_and_get_cert(&this.hostname, peer_addr)?;
+
+            let table = lua.create_table()?;
+            table.set("pem", der_to_pem(&cert_der))?;
+            table.set(
+                "subject",
+                extract_dn_field(&cert_der).unwrap_or_else(|| "Unknown".to_string()),
+            )?;
+            table.set("issuer", "Unknown".to_string())?;
+            table.set("serial", extract_serial(&cert_der))?;
+            table.set("fingerprint", calculate_fingerprint(&cert_der))?;
+
+            let pubkey = lua.create_table()?;
+            pubkey.set("type", "RSA")?;
+            pubkey.set("bits", 2048)?;
+            table.set("pubkey", pubkey)?;
+
+            let (notbefore, notafter) = extract_validity(&cert_der);
+            table.set("notbefore", notbefore)?;
+            table.set("notafter", notafter)?;
+            table.set("version", 3)?;
+
+            Ok(Value::Table(table))
+        });
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Port classification helpers
+// ---------------------------------------------------------------------------
+
+/// Check if a Lua port value indicates UDP protocol.
+fn is_port_udp(port: &Value) -> bool {
+    if let Value::Table(t) = port {
+        t.get::<Option<String>>("protocol")
+            .ok()
+            .flatten()
+            .is_some_and(|p| p == "udp")
+    } else {
+        false
+    }
+}
+
+/// Check if a Lua port table has `version.service_tunnel == "ssl"`.
+fn has_ssl_tunnel(port: &Value) -> bool {
+    let Value::Table(t) = port else {
+        return false;
+    };
+    let Ok(version) = t.get::<Table>("version") else {
+        return false;
+    };
+    let Ok(tunnel) = version.get::<String>("service_tunnel") else {
+        return false;
+    };
+    tunnel == "ssl"
+}
+
+/// Extract `(service, port_number)` from a Lua port value.
+fn extract_port_info(port: &Value) -> (String, i64) {
+    match port {
+        Value::Table(t) => (
+            t.get::<String>("service").ok().unwrap_or_default(),
+            t.get::<i64>("number").ok().unwrap_or(443),
+        ),
+        Value::Integer(n) => (String::new(), *n),
+        _ => (String::new(), 443),
+    }
+}
+
+/// Check if a port number is a known direct-TLS port.
+fn is_direct_tls_port(port_number: i64) -> bool {
+    DIRECT_TLS_PORTS.contains(&u16::try_from(port_number).unwrap_or(0))
+}
+
+/// Check if a service name or port number is a known STARTTLS target.
+fn is_starttls_service(service: &str, port_number: i64) -> bool {
+    STARTTLS_SERVICES.contains(&service)
+        || STARTTLS_PORTS.contains(&u16::try_from(port_number).unwrap_or(0))
+}
+
+/// Extract `(host_ip, targetname)` from a Lua host value.
+fn extract_host_info(host: &Value) -> (String, String) {
+    let host_str = match host {
+        Value::String(s) => s.to_str().map(|s| s.to_string()).unwrap_or_default(),
+        Value::Table(t) => t
+            .get::<Option<String>>("ip")
+            .ok()
+            .flatten()
+            .unwrap_or_default(),
+        _ => String::new(),
+    };
+    let targetname = match host {
+        Value::Table(t) => t
+            .get::<Option<String>>("targetname")
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| host_str.clone()),
+        _ => host_str.clone(),
+    };
+    (host_str, targetname)
+}
+
+/// Extract port number from a Lua port value.
+fn extract_port_number(port: &Value) -> u16 {
+    match port {
+        Value::Table(t) => u16::try_from(t.get::<i64>("number").ok().unwrap_or(443)).unwrap_or(443),
+        Value::Integer(n) => u16::try_from(*n).unwrap_or(443),
+        _ => 443,
+    }
+}
+
+/// Extract service name from a Lua port value.
+fn extract_port_service(port: &Value) -> String {
+    match port {
+        Value::Table(t) => t.get::<String>("service").ok().unwrap_or_default(),
+        _ => String::new(),
+    }
+}
 
 /// Register the sslcert library with the Lua runtime.
 ///
 /// # Errors
 ///
 /// Returns an error if library registration fails.
+#[expect(
+    clippy::too_many_lines,
+    reason = "Lua library registration requires inline closures that cannot be factored out"
+)]
 pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     let lua = nse_lua.lua_mut();
 
@@ -709,57 +961,188 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
                 host_str, port_num, protocol
             );
 
-            let addr = format!("{host_str}:{port_num}");
-            let stream = TcpStream::connect(&addr).map_err(|e| {
-                mlua::Error::RuntimeError(format!("Connection failed to {addr}: {e}"))
+            // Resolve address
+            let addr_str = format!("{host_str}:{port_num}");
+            let socket_addr: std::net::SocketAddr = addr_str
+                .to_socket_addrs()
+                .map_err(|e| {
+                    mlua::Error::RuntimeError(format!(
+                        "DNS resolution failed for {addr_str}: {e}"
+                    ))
+                })?
+                .next()
+                .ok_or_else(|| {
+                    mlua::Error::RuntimeError(format!("Cannot resolve {addr_str}"))
+                })?;
+
+            // Get certificate DER via proper TLS handshake
+            let cert_der = if let Some(proto) = protocol {
+                starttls_and_get_cert(&host_str, socket_addr, proto.as_str())?
+            } else {
+                tls_connect_and_get_cert(&host_str, socket_addr)?
+            };
+
+            // Parse certificate using OpenSSL for full field extraction
+            let cert = openssl::x509::X509::from_der(&cert_der).map_err(|e| {
+                mlua::Error::RuntimeError(format!("Failed to parse certificate: {e}"))
             })?;
 
-            stream
-                .set_read_timeout(Some(Duration::from_millis(DEFAULT_TIMEOUT_MS)))
-                .map_err(|e| mlua::Error::RuntimeError(format!("Failed to set timeout: {e}")))?;
+            // Build certificate table using the same structure as nmap.rs cert_to_table
+            let table = lua.create_table()?;
 
-            let mut stream = stream;
+            // PEM encoding
+            let pem = cert.to_pem().map_err(|e| {
+                mlua::Error::RuntimeError(format!("Failed to encode PEM: {e}"))
+            })?;
+            table.set("pem", String::from_utf8_lossy(&pem).as_ref())?;
 
-            // Perform STARTTLS if needed
-            if let Some(proto) = protocol {
-                perform_starttls(&mut stream, proto.as_str())?;
+            // Subject
+            let subject = cert.subject_name();
+            let subject_table = lua.create_table()?;
+            for entry in subject.entries() {
+                let key = entry.object().nid().long_name().unwrap_or("unknown").to_string();
+                let value = entry.data().as_utf8()
+                    .map_or_else(|_| "unknown".to_string(), |s| s.to_string());
+                subject_table.set(key.as_str(), value.as_str())?;
+            }
+            table.set("subject", subject_table)?;
+
+            // Issuer
+            let issuer = cert.issuer_name();
+            let issuer_table = lua.create_table()?;
+            for entry in issuer.entries() {
+                let key = entry.object().nid().long_name().unwrap_or("unknown").to_string();
+                let value = entry.data().as_utf8()
+                    .map_or_else(|_| "unknown".to_string(), |s| s.to_string());
+                issuer_table.set(key.as_str(), value.as_str())?;
+            }
+            table.set("issuer", issuer_table)?;
+
+            // Serial number
+            let serial_hex = cert
+                .serial_number()
+                .to_bn()
+                .and_then(|bn| bn.to_hex_str())
+                .map_or_else(|_| "unknown".to_string(), |s| s.to_string());
+            table.set("serial", serial_hex.as_str())?;
+
+            // Validity
+            let validity_table = lua.create_table()?;
+            let not_before = cert.not_before().to_string();
+            let not_after = cert.not_after().to_string();
+            validity_table.set("notBefore", not_before.as_str())?;
+            validity_table.set("notAfter", not_after.as_str())?;
+            table.set("validity", validity_table)?;
+
+            // Signature algorithm
+            let sig_alg = cert.signature_algorithm().object().nid()
+                .long_name().unwrap_or("unknown").to_string();
+            table.set("sig_algorithm", sig_alg.as_str())?;
+
+            // Public key
+            let pkey = cert.public_key().map_err(|e| {
+                mlua::Error::RuntimeError(format!("Failed to get public key: {e}"))
+            })?;
+            let pubkey_table = lua.create_table()?;
+            let key_type = match pkey.id() {
+                openssl::pkey::Id::RSA => "rsa",
+                openssl::pkey::Id::DSA => "dsa",
+                openssl::pkey::Id::DH => "dh",
+                openssl::pkey::Id::EC => "ec",
+                _ => "unknown",
+            };
+            pubkey_table.set("type", key_type)?;
+            pubkey_table.set("bits", pkey.bits())?;
+
+            // RSA-specific fields
+            if pkey.id() == openssl::pkey::Id::RSA {
+                let rsa = pkey.rsa().map_err(|e| {
+                    mlua::Error::RuntimeError(format!("Failed to get RSA key: {e}"))
+                })?;
+                let exponent_bytes = rsa.e().to_vec();
+                pubkey_table.set("exponent", hex::encode(&exponent_bytes))?;
+                let modulus_bytes = rsa.n().to_vec();
+                pubkey_table.set("modulus", hex::encode(&modulus_bytes))?;
             }
 
-            // Send TLS ClientHello
-            let client_hello = build_client_hello(&host_str);
-            stream.write_all(&client_hello).map_err(|e| {
-                mlua::Error::RuntimeError(format!("Failed to send ClientHello: {e}"))
-            })?;
+            // EC-specific fields: add ecdhparams with curve info
+            if pkey.id() == openssl::pkey::Id::EC {
+                let ec_key = pkey.ec_key().map_err(|e| {
+                    mlua::Error::RuntimeError(format!("Failed to get EC key: {e}"))
+                })?;
+                let ecdhparams = lua.create_table()?;
+                let curve_params = lua.create_table()?;
 
-            // Parse server response and extract certificate
-            let cert_der = parse_server_response(&mut stream)?;
-
-            // Parse certificate
-            let pem = der_to_pem(&cert_der);
-            let subject = extract_dn_field(&cert_der).unwrap_or_else(|| "Unknown".to_string());
-            let issuer = "Unknown".to_string(); // Would need more complex parsing
-            let serial = extract_serial(&cert_der);
-            let fingerprint = calculate_fingerprint(&cert_der);
-            let (notbefore, notafter) = extract_validity(&cert_der);
-
-            // Convert to Lua table
-            let table = lua.create_table()?;
-            table.set("pem", pem.as_str())?;
-            table.set("subject", subject.as_str())?;
-            table.set("issuer", issuer.as_str())?;
-            table.set("serial", serial.as_str())?;
-            table.set("fingerprint", fingerprint.as_str())?;
-
-            let pubkey_table = lua.create_table()?;
-            pubkey_table.set("type", "RSA")?;
-            pubkey_table.set("bits", 2048)?;
+                let group = ec_key.group();
+                curve_params.set("ec_curve_type", "namedcurve")?;
+                let curve_name = group.curve_name()
+                    .map_or_else(|| "unknown".to_string(), |nid| nid.long_name().unwrap_or("unknown").to_string());
+                curve_params.set("curve", curve_name.as_str())?;
+                ecdhparams.set("curve_params", curve_params)?;
+                pubkey_table.set("ecdhparams", ecdhparams)?;
+            }
             table.set("pubkey", pubkey_table)?;
 
-            table.set("notbefore", notbefore.as_str())?;
-            table.set("notafter", notafter.as_str())?;
+            // Extensions
+            let extensions_table = lua.create_table()?;
+            if let Some(san) = cert.subject_alt_names() {
+                let ext_table = lua.create_table()?;
+                ext_table.set("name", "X509v3 Subject Alternative Name")?;
+                let san_values: Vec<String> = san.iter()
+                    .filter_map(|name| {
+                        name.dnsname()
+                            .map(|dns| format!("DNS:{dns}"))
+                        .or_else(|| name.ipaddress().map(|ip| format!("IP:{ip:?}")))
+                    })
+                    .collect();
+                ext_table.set("value", san_values.join(", "))?;
+                extensions_table.set(1, ext_table)?;
+            }
+            table.set("extensions", extensions_table)?;
+
+            // Add digest function
+            let cert_clone = cert.clone();
+            let digest_fn = lua.create_function(move |lua, (_self, algo): (mlua::Table, String)| {
+                use openssl::hash::MessageDigest;
+
+                let message_digest = match algo.to_lowercase().as_str() {
+                    "md5" => MessageDigest::md5(),
+                    "sha1" => MessageDigest::sha1(),
+                    "sha256" => MessageDigest::sha256(),
+                    _ => {
+                        return Err(mlua::Error::RuntimeError(format!(
+                            "Unknown digest algorithm: {algo}"
+                        )))
+                    }
+                };
+
+                match cert_clone.digest(message_digest) {
+                    Ok(digest_bytes) => {
+                        Ok(mlua::Value::String(lua.create_string(digest_bytes)?))
+                    }
+                    Err(e) => Err(mlua::Error::RuntimeError(format!(
+                        "Digest calculation failed: {e}"
+                    ))),
+                }
+            })?;
+            table.set("digest", digest_fn)?;
+
             table.set("version", 3)?;
 
-            Ok(Value::Table(table))
+            // Fingerprint (SHA-256 of DER)
+            let fingerprint = {
+                use sha2::Digest as Sha256Digest;
+                let mut hasher = Sha256::new();
+                hasher.update(&cert_der);
+                let result = hasher.finalize();
+                result.iter()
+                    .map(|b| format!("{b:02X}"))
+                    .collect::<Vec<_>>()
+                    .join(":")
+            };
+            table.set("fingerprint", fingerprint.as_str())?;
+
+            Ok((true, Value::Table(table)))
         },
     )?;
     sslcert_table.set("getCertificate", get_cert_fn)?;
@@ -768,37 +1151,377 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     let parse_cert_fn = lua.create_function(|lua, der_data: LuaString| {
         let der_bytes = der_data.as_bytes();
 
-        let pem = der_to_pem(&der_bytes);
-        let subject = extract_dn_field(&der_bytes).unwrap_or_else(|| "Unknown".to_string());
-        let issuer = "Unknown".to_string();
-        let serial = extract_serial(&der_bytes);
-        let fingerprint = calculate_fingerprint(&der_bytes);
-        let (notbefore, notafter) = extract_validity(&der_bytes);
+        let cert = openssl::x509::X509::from_der(&der_bytes).map_err(|e| {
+            mlua::Error::RuntimeError(format!("Failed to parse certificate: {e}"))
+        })?;
 
-        let table = lua.create_table()?;
-        table.set("pem", pem.as_str())?;
-        table.set("subject", subject.as_str())?;
-        table.set("issuer", issuer.as_str())?;
-        table.set("serial", serial.as_str())?;
-        table.set("fingerprint", fingerprint.as_str())?;
+        let cert_table = build_cert_table(lua, &cert)?;
 
-        let pubkey_table = lua.create_table()?;
-        pubkey_table.set("type", "RSA")?;
-        pubkey_table.set("bits", 2048)?;
-        table.set("pubkey", pubkey_table)?;
-
-        table.set("notbefore", notbefore.as_str())?;
-        table.set("notafter", notafter.as_str())?;
-        table.set("version", 3)?;
-
-        Ok(Value::Table(table))
+        Ok(Value::Table(cert_table))
     })?;
     sslcert_table.set("parse_ssl_certificate", parse_cert_fn)?;
+
+    // -------------------------------------------------------------------------
+    // sslcert.getPrepareTLSWithoutReconnect(port)
+    //
+    // Returns:
+    //   nil  - if the port is a direct TLS port (443, 993, ...) or UDP or
+    //          already has an SSL tunnel. The script should use
+    //          `nmap.new_socket()` + connect directly.
+    //   function(host, port) -> (true, socket) | (false, err)
+    //        - if the port supports STARTTLS. The returned function connects,
+    //          performs STARTTLS negotiation, and returns a `SslSocket` userdata
+    //          with send/receive/close/set_timeout/get_ssl_certificate methods.
+    // -------------------------------------------------------------------------
+    let get_prepare_tls_fn = lua.create_function(|lua, port: Value| {
+        // Skip UDP ports entirely
+        if is_port_udp(&port) {
+            return Ok(Value::Nil);
+        }
+        // Skip ports that already have an SSL tunnel
+        if has_ssl_tunnel(&port) {
+            return Ok(Value::Nil);
+        }
+
+        let (service, port_number) = extract_port_info(&port);
+
+        // Direct TLS ports do not need STARTTLS
+        if is_direct_tls_port(port_number) {
+            return Ok(Value::Nil);
+        }
+
+        // Only return a function for known STARTTLS services/ports
+        if !is_starttls_service(&service, port_number) {
+            return Ok(Value::Nil);
+        }
+
+        // Create the STARTTLS helper function.
+        // It captures nothing from this scope (all state comes from its args).
+        let starttls_fn = lua.create_function(move |lua, (host, port): (Value, Value)| {
+            let (host_str, targetname) = extract_host_info(&host);
+            let port_num = extract_port_number(&port);
+            let service_name = extract_port_service(&port);
+
+            debug!(
+                "sslcert.getPrepareTLSWithoutReconnect: connecting to \
+                         {host_str}:{port_num} (service={service_name})"
+            );
+
+            let addr = format!("{host_str}:{port_num}");
+            let mut stream = TcpStream::connect(&addr).map_err(|e| {
+                mlua::Error::RuntimeError(format!("STARTTLS connect failed to {addr}: {e}"))
+            })?;
+
+            let timeout = Duration::from_millis(DEFAULT_TIMEOUT_MS);
+            stream.set_read_timeout(Some(timeout)).map_err(|e| {
+                mlua::Error::RuntimeError(format!("Failed to set read timeout: {e}"))
+            })?;
+            stream.set_write_timeout(Some(timeout)).map_err(|e| {
+                mlua::Error::RuntimeError(format!("Failed to set write timeout: {e}"))
+            })?;
+
+            // Perform STARTTLS handshake for the detected protocol
+            perform_starttls(&mut stream, &service_name)?;
+
+            let socket = SslSocket::new(stream, targetname.clone());
+            let socket_ud = lua.create_userdata(socket)?;
+
+            debug!(
+                "sslcert.getPrepareTLSWithoutReconnect: STARTTLS done for \
+                         {host_str}:{port_num}"
+            );
+
+            Ok((true, Value::UserData(socket_ud)))
+        })?;
+
+        Ok(Value::Function(starttls_fn))
+    })?;
+    sslcert_table.set("getPrepareTLSWithoutReconnect", get_prepare_tls_fn)?;
+
+    // -------------------------------------------------------------------------
+    // sslcert.isPortSupported(port)
+    //
+    // Returns:
+    //   true  - if the port supports TLS (direct TLS or STARTTLS)
+    //   nil   - if the port does not support TLS (UDP, unknown service/port)
+    // -------------------------------------------------------------------------
+    let is_port_supported_fn = lua.create_function(|_lua, port: Value| {
+        // UDP ports are never TLS-supported
+        if is_port_udp(&port) {
+            return Ok(Value::Nil);
+        }
+
+        // Ports with an existing SSL tunnel are supported
+        if has_ssl_tunnel(&port) {
+            return Ok(Value::Boolean(true));
+        }
+
+        let (service, port_number) = extract_port_info(&port);
+
+        let supported =
+            is_starttls_service(&service, port_number) || is_direct_tls_port(port_number);
+
+        if supported {
+            Ok(Value::Boolean(true))
+        } else {
+            Ok(Value::Nil)
+        }
+    })?;
+    sslcert_table.set("isPortSupported", is_port_supported_fn)?;
 
     // Register the sslcert library globally
     lua.globals().set("sslcert", sslcert_table)?;
 
     Ok(())
+}
+
+/// Build a full certificate Lua table from a parsed X509 certificate.
+///
+/// This creates a table with the same structure as `cert_to_table` in `nmap.rs`,
+/// including subject, issuer, serial, fingerprint, pubkey (with ecdhparams for EC),
+/// validity dates, extensions, and digest function.
+#[cfg(feature = "openssl")]
+#[expect(clippy::too_many_lines, reason = "Certificate table construction requires inline field extraction")]
+pub(crate) fn build_cert_table(lua: &mlua::Lua, cert: &openssl::x509::X509) -> mlua::Result<mlua::Table> {
+    use openssl::hash::MessageDigest;
+
+    let cert_table = lua.create_table()?;
+
+    // PEM encoding
+    let pem = cert.to_pem().map_err(|e| {
+        mlua::Error::RuntimeError(format!("Failed to encode PEM: {e}"))
+    })?;
+    let pem_str = String::from_utf8_lossy(&pem);
+    cert_table.set("pem", pem_str.as_ref())?;
+
+    // Subject
+    let subject = cert.subject_name();
+    let subject_table = x509_name_to_table(lua, subject)?;
+    cert_table.set("subject", subject_table)?;
+
+    // Issuer
+    let issuer = cert.issuer_name();
+    let issuer_table = x509_name_to_table(lua, issuer)?;
+    cert_table.set("issuer", issuer_table)?;
+
+    // Validity
+    let validity_table = lua.create_table()?;
+    let not_before = cert.not_before();
+    let not_after = cert.not_after();
+    validity_table.set("notBefore", asn1_time_to_unix(not_before))?;
+    validity_table.set("notAfter", asn1_time_to_unix(not_after))?;
+    cert_table.set("validity", validity_table)?;
+
+    // Serial number
+    let serial_hex = cert
+        .serial_number()
+        .to_bn()
+        .and_then(|bn| bn.to_hex_str())
+        .map_or_else(|_| "unknown".to_string(), |s| s.to_string());
+    cert_table.set("serialNumber", serial_hex.as_str())?;
+
+    // Version
+    cert_table.set("version", i64::from(cert.version()))?;
+
+    // Signature algorithm
+    let sig_alg = cert.signature_algorithm();
+    let algo = sig_alg.object();
+    cert_table.set("sig_algorithm", algo.nid().long_name().unwrap_or("unknown"))?;
+
+    // Public key
+    let pubkey_table = lua.create_table()?;
+    let pkey = cert.public_key().map_err(|e| {
+        mlua::Error::RuntimeError(format!("Failed to get public key: {e}"))
+    })?;
+
+    let key_type = match pkey.id() {
+        openssl::pkey::Id::RSA => "rsa",
+        openssl::pkey::Id::DSA => "dsa",
+        openssl::pkey::Id::DH => "dh",
+        openssl::pkey::Id::EC => "ec",
+        _ => "unknown",
+    };
+    pubkey_table.set("type", key_type)?;
+    pubkey_table.set("bits", pkey.bits())?;
+
+    // RSA-specific fields
+    if pkey.id() == openssl::pkey::Id::RSA {
+        let rsa = pkey.rsa().map_err(|e| {
+            mlua::Error::RuntimeError(format!("Failed to get RSA key: {e}"))
+        })?;
+        let e = rsa.e();
+        let exponent_bytes = e.to_vec();
+        let exponent_hex = hex::encode(&exponent_bytes);
+        pubkey_table.set("exponent", exponent_hex)?;
+
+        let n = rsa.n();
+        let modulus_bytes = n.to_vec();
+        let modulus_hex = hex::encode(&modulus_bytes);
+        pubkey_table.set("modulus", modulus_hex)?;
+    }
+
+    // EC key type: add ecdhparams with curve info
+    if pkey.id() == openssl::pkey::Id::EC {
+        let ec_key = pkey.ec_key().map_err(|e| {
+            mlua::Error::RuntimeError(format!("Failed to get EC key: {e}"))
+        })?;
+        let ecdhparams = lua.create_table()?;
+        let curve_params = lua.create_table()?;
+
+        let group = ec_key.group();
+        curve_params.set("ec_curve_type", "namedcurve")?;
+        let curve_name = group
+            .curve_name()
+            .map_or_else(|| "unknown".to_string(), |nid| nid.long_name().unwrap_or("unknown").to_string());
+        curve_params.set("curve", curve_name)?;
+        ecdhparams.set("curve_params", curve_params)?;
+        pubkey_table.set("ecdhparams", ecdhparams)?;
+    }
+    cert_table.set("pubkey", pubkey_table)?;
+
+    // Extensions
+    let extensions_table = lua.create_table()?;
+    if let Some(san) = cert.subject_alt_names() {
+        let san_values: Vec<String> = san
+            .iter()
+            .filter_map(|name| {
+                name.dnsname()
+                    .map(|dns| format!("DNS:{dns}"))
+                    .or_else(|| name.ipaddress().map(|ip| format!("IP:{ip:?}")))
+            })
+            .collect();
+        if !san_values.is_empty() {
+            let ext_table = lua.create_table()?;
+            ext_table.set("name", "X509v3 Subject Alternative Name")?;
+            ext_table.set("value", san_values.join(", "))?;
+            extensions_table.set(1, ext_table)?;
+        }
+    }
+    cert_table.set("extensions", extensions_table)?;
+
+    // Digest function
+    let cert_clone = cert.clone();
+    let digest_fn = lua.create_function(move |lua, (_self, algo): (mlua::Table, String)| {
+        let message_digest = match algo.to_lowercase().as_str() {
+            "md5" => MessageDigest::md5(),
+            "sha1" => MessageDigest::sha1(),
+            "sha256" => MessageDigest::sha256(),
+            _ => {
+                return Err(mlua::Error::RuntimeError(format!(
+                    "Unknown digest algorithm: {algo}"
+                )))
+            }
+        };
+
+        match cert_clone.digest(message_digest) {
+            Ok(digest_bytes) => Ok(mlua::Value::String(lua.create_string(digest_bytes)?)),
+            Err(e) => Err(mlua::Error::RuntimeError(format!(
+                "Digest calculation failed: {e}"
+            ))),
+        }
+    })?;
+    cert_table.set("digest", digest_fn)?;
+
+    // Fingerprint (SHA-256 of DER)
+    let der_bytes = cert.to_der().unwrap_or_default();
+    let fingerprint = calculate_fingerprint(&der_bytes);
+    cert_table.set("fingerprint", fingerprint.as_str())?;
+
+    Ok(cert_table)
+}
+
+/// Convert X509 name entries to a Lua table.
+#[cfg(feature = "openssl")]
+pub(crate) fn x509_name_to_table(
+    lua: &mlua::Lua,
+    name: &openssl::x509::X509NameRef,
+) -> mlua::Result<mlua::Table> {
+    let table = lua.create_table()?;
+
+    for entry in name.entries() {
+        let obj = entry.object();
+        let data = entry.data();
+
+        let key = if obj.nid() == openssl::nid::Nid::UNDEF {
+            format!("{obj:?}")
+        } else {
+            openssl::nid::Nid::from_raw(obj.nid().as_raw())
+                .long_name()
+                .unwrap_or("unknown")
+                .to_string()
+        };
+
+        let value = data
+            .as_utf8()
+            .map_or_else(|_| format!("{data:?}"), |s| s.to_string());
+
+        table.set(key, value)?;
+    }
+
+    Ok(table)
+}
+
+/// Convert `ASN1_TIME` to Unix epoch seconds.
+///
+/// Nmap stores certificate validity dates as numeric timestamps that
+/// `ssl-cert.nse` passes to `datetime.format_timestamp`. The `ASN1_TIME`
+/// `Display` implementation produces strings like `"Mar  6 00:00:00 2026 GMT"`
+/// which we parse back into a Unix timestamp.
+#[cfg(feature = "openssl")]
+pub(crate) fn asn1_time_to_unix(time: &openssl::asn1::Asn1TimeRef) -> i64 {
+    // Cumulative days per month (non-leap year)
+    const MONTH_DAYS: [i64; 12] = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
+
+    // Parse the Display output: "Mon DD HH:MM:SS YYYY GMT"
+    let s = time.to_string();
+    let parts: Vec<&str> = s.split_whitespace().collect();
+
+    if parts.len() < 5 {
+        return 0;
+    }
+
+    // parts: ["Mar", "6", "00:00:00", "2026", "GMT"]
+    let month_num: i64 = match parts[0] {
+        "Jan" => 1,
+        "Feb" => 2,
+        "Mar" => 3,
+        "Apr" => 4,
+        "May" => 5,
+        "Jun" => 6,
+        "Jul" => 7,
+        "Aug" => 8,
+        "Sep" => 9,
+        "Oct" => 10,
+        "Nov" => 11,
+        "Dec" => 12,
+        _ => return 0,
+    };
+
+    let day: i64 = parts[1].trim_end_matches(',').parse().unwrap_or(1);
+
+    let time_parts: Vec<&str> = parts[2].split(':').collect();
+    let hour: i64 = time_parts.first().and_then(|s| s.parse().ok()).unwrap_or(0);
+    let minute: i64 = time_parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
+    let second: i64 = time_parts.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
+
+    let year: i64 = parts[3].parse().unwrap_or(1970);
+
+    // Compute Unix timestamp using calendar math (no chrono dependency needed)
+    // Days from 1970-01-01 to start of given year
+    let y = year - 1;
+    let days_from_years = y * 365 + y / 4 - y / 100 + y / 400
+        - (1969 * 365 + 1969 / 4 - 1969 / 100 + 1969 / 400);
+
+    // Days from month within the year
+    let is_leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+    let days_from_months = MONTH_DAYS
+        .get(usize::try_from(month_num).map_or(0, |m| m.saturating_sub(1)))
+        .copied()
+        .unwrap_or(0)
+        + i64::from(is_leap && month_num > 2);
+
+    let total_days = days_from_years + days_from_months + day - 1;
+    total_days * 86_400 + hour * 3600 + minute * 60 + second
 }
 
 #[cfg(test)]
@@ -827,12 +1550,5 @@ mod tests {
         let fp = calculate_fingerprint(data);
 
         assert!(fp.contains(':'));
-    }
-
-    #[test]
-    fn test_build_client_hello() {
-        let hello = build_client_hello("example.com");
-        assert!(!hello.is_empty());
-        assert_eq!(hello[0], SSL_RECORD_TYPE_HANDSHAKE);
     }
 }

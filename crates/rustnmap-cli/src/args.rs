@@ -870,17 +870,13 @@ impl Args {
 
                 // Diff
                 Arg::Long("diff") => {
-                    let mut files = Vec::new();
-                    files.push(parser.value()?.string()?);
-                    files.push(parser.value()?.string()?);
+                    let files = vec![parser.value()?.string()?, parser.value()?.string()?];
                     args.diff = Some(files);
                 }
 
                 // From history
                 Arg::Long("from-history") => {
-                    let mut ids = Vec::new();
-                    ids.push(parser.value()?.string()?);
-                    ids.push(parser.value()?.string()?);
+                    let ids = vec![parser.value()?.string()?, parser.value()?.string()?];
                     args.from_history = Some(ids);
                 }
 
@@ -986,7 +982,7 @@ impl Args {
         // Validate spoof IP address
         if let Some(ref ip) = self.spoof_ip {
             ip.parse::<std::net::IpAddr>()
-                .map_err(|_| format!("Invalid spoof IP address: {ip}"))?;
+                .map_err(|_e| format!("Invalid spoof IP address: {ip}"))?;
         }
 
         // Validate decoy IP addresses
@@ -999,13 +995,13 @@ impl Args {
                 if let Some(number_str) = part.strip_prefix("RND:") {
                     let count: usize = number_str
                         .parse()
-                        .map_err(|_| format!("Invalid RND number: {number_str}"))?;
+                        .map_err(|_e| format!("Invalid RND number: {number_str}"))?;
                     if count == 0 || count > 100 {
                         return Err(format!("RND count must be between 1 and 100, got {count}"));
                     }
                 } else {
                     part.parse::<std::net::IpAddr>()
-                        .map_err(|_| format!("Invalid decoy IP address: {part}"))?;
+                        .map_err(|_e| format!("Invalid decoy IP address: {part}"))?;
                 }
             }
         }
@@ -1035,7 +1031,6 @@ impl Args {
         // Handle -s TYPE option (nmap style)
         if let Some(ref scan_type_str) = self.scan_type {
             return match scan_type_str.to_uppercase().as_str() {
-                "S" => ScanType::Syn,
                 "T" => ScanType::Connect,
                 "U" => ScanType::Udp,
                 "F" => ScanType::Fin,
