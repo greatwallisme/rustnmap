@@ -1,0 +1,414 @@
+# RustNmap Test Range - Docker Compose
+# Covers all 14 scan types, 10 port states, 9 host discovery methods,
+# OS detection, version detection, 60+ NSE scripts, traceroute, evasion
+#
+# Usage:
+#   docker compose up -d          # Start all services
+#   docker compose down -v        # Stop and clean
+#   ./scripts/verify.sh           # Verify all ports open
+
+services:
+
+  # ============================================================
+  # SCAN TARGET - Main port scan + host discovery + OS detection
+  # ============================================================
+  scan-target:
+    build:
+      context: .
+      dockerfile: Dockerfiles/scan-target/Dockerfile
+    container_name: rustnmap-scan-target
+    hostname: scan-target.rustnmap.test
+    networks:
+      rustnmap-test:
+        ipv4_address: ${IP_SCAN_TARGET}
+    cap_add:
+      - NET_ADMIN
+      - SYS_PTRACE
+    sysctls:
+      - net.ipv4.icmp_echo_ignore_all=0
+      - net.ipv4.conf.all.accept_source_route=0
+    privileged: true
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 80 && nc -z 127.0.0.1 443"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  # ============================================================
+  # WEB - Nginx HTTP + HTTPS
+  # ============================================================
+  web:
+    image: registry.cn-shanghai.aliyuncs.com/greatwallisme/nginx:1.25-alpine
+    container_name: rustnmap-web
+    hostname: web.rustnmap.test
+    networks:
+      rustnmap-test:
+        ipv4_address: ${IP_WEB}
+    volumes:
+      - ./configs/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./configs/nginx/ssl:/etc/nginx/ssl:ro
+      - ./configs/nginx/html:/usr/share/nginx/html:ro
+      - ./configs/nginx/conf.d:/etc/nginx/conf.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 80 && nc -z 127.0.0.1 443"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # ============================================================
+  # SSH - OpenSSH Server
+  # ============================================================
+  ssh:
+    build:
+      context: .
+      dockerfile: Dockerfiles/ssh/Dockerfile
+    container_name: rustnmap-ssh
+    hostname: ssh.rustnmap.test
+    networks:
+      rustnmap-test:
+        ipv4_address: ${IP_SSH}
+    cap_add:
+      - SYS_PTRACE
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 22"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # ============================================================
+  # DNS - BIND9
+  # ============================================================
+  dns:
+    image: registry.cn-shanghai.aliyuncs.com/greatwallisme/bind9:9.18-22.04_beta
+    container_name: rustnmap-dns
+    hostname: dns.rustnmap.test
+    networks:
+      rustnmap-test:
+        ipv4_address: ${IP_DNS}
+    environment:
+      - BIND9_USER=root
+    volumes:
+      - ./configs/dns/named.conf:/etc/bind/named.conf:ro
+      - ./configs/dns/zones:/var/lib/bind:ro
+    cap_add:
+      - NET_ADMIN
+    sysctls:
+      - net.ipv4.ip_no_pmtu_disc=1
+    healthcheck:
+      test: ["CMD-SHELL", "ls /run/named/named.pid 2>/dev/null || ls /var/run/named/named.pid 2>/dev/null || ps aux 2>/dev/null | grep -q '[n]amed'"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # ============================================================
+  # SMB - Samba
+  # ============================================================
+  smb:
+    image: registry.cn-shanghai.aliyuncs.com/greatwallisme/samba
+    container_name: rustnmap-smb
+    hostname: smb.rustnmap.test
+    networks:
+      rustnmap-test:
+        ipv4_address: ${IP_SMB}
+    command: >
+      -s "public;/share;yes;no;yes;all;all;all"
+      -s "data;/data;no;no;no;testuser;all;all"
+      -u "testuser;test123"
+      -u "admin;admin123"
+      -w "RUSTNMAP"
+      -g "server string = RustNmap Samba Test Server"
+      -g "netbios name = RUSTNMAP-SMB"
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 445"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  # ============================================================
+  # FTP - vsftpd
+  # ============================================================
+  ftp:
+    image: registry.cn-shanghai.aliyuncs.com/greatwallisme/vsftpd
+    container_name: rustnmap-ftp
+    hostname: ftp.rustnmap.test
+    networks:
+      rustnmap-test:
+        ipv4_address: ${IP_FTP}
+    environment:
+      - FTP_USER=testuser
+      - FTP_PASS=test123
+      - PASV_ADDRESS=${IP_FTP}
+      - PASV_MIN_PORT=50000
+      - PASV_MAX_PORT=50100
+    volumes:
+      - ./configs/ftp/vsftpd.conf:/etc/vsftpd/vsftpd.conf:ro
+    cap_add:
+      - NET_ADMIN
+    privileged: true
+    healthcheck:
+      test: ["CMD-SHELL", "ls /var/run/vsftpd/vsftpd.pid 2>/dev/null || ls /run/vsftpd/vsftpd.pid 2>/dev/null || ps aux | grep -q [v]sftpd"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # ============================================================
+  # SMTP - Postfix
+  # ============================================================
+  smtp:
+    image: registry.cn-shanghai.aliyuncs.com/greatwallisme/postfix-relay
+    container_name: rustnmap-smtp
+    hostname: mail.rustnmap.test
+    networks:
+      rustnmap-test:
+        ipv4_address: ${IP_SMTP}
+    environment:
+      - POSTFIX_MYDOMAIN=rustnmap.test
+      - POSTFIX_MYHOSTNAME=mail.rustnmap.test
+    healthcheck:
+      test: ["CMD-SHELL", "postfix status 2>&1 | grep -q running"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # ============================================================
+  # MySQL 8
+  # ============================================================
+  mysql:
+    image: registry.cn-shanghai.aliyuncs.com/greatwallisme/mysql:8.0
+    container_name: rustnmap-mysql
+    hostname: mysql.rustnmap.test
+    networks:
+      rustnmap-test:
+        ipv4_address: ${IP_MYSQL}
+    environment:
+      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}
+    volumes:
+      - ./configs/mysql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h127.0.0.1 -p${MYSQL_ROOT_PASSWORD} 2>/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  # ============================================================
+  # Redis
+  # ============================================================
+  redis:
+    image: registry.cn-shanghai.aliyuncs.com/greatwallisme/redis:7-alpine
+    container_name: rustnmap-redis
+    hostname: redis.rustnmap.test
+    networks:
+      rustnmap-test:
+        ipv4_address: ${IP_REDIS}
+    command: redis-server /usr/local/etc/redis/redis.conf
+    volumes:
+      - ./configs/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # ============================================================
+  # VNC - x11vnc + Xvfb
+  # ============================================================
+  vnc:
+    image: registry.cn-shanghai.aliyuncs.com/greatwallisme/ubuntu-desktop-lxde-vnc:focal
+    container_name: rustnmap-vnc
+    hostname: vnc.rustnmap.test
+    networks:
+      rustnmap-test:
+        ipv4_address: ${IP_VNC}
+    environment:
+      - VNC_PASSWORD=${VNC_PASSWORD}
+      - RESOLUTION=1024x768
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/127.0.0.1/5900' 2>/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  # ============================================================
+  # MAIL - Dovecot (POP3 + IMAP)
+  # ============================================================
+  mail:
+    build:
+      context: .
+      dockerfile: Dockerfiles/mail/Dockerfile
+    container_name: rustnmap-mail
+    hostname: mail.rustnmap.test
+    networks:
+      rustnmap-test:
+        ipv4_address: ${IP_MAIL}
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 110 && nc -z 127.0.0.1 143"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # ============================================================
+  # LDAP - OpenLDAP
+  # ============================================================
+  ldap:
+    build:
+      context: .
+      dockerfile: Dockerfiles/ldap/Dockerfile
+    container_name: rustnmap-ldap
+    hostname: ldap.rustnmap.test
+    networks:
+      rustnmap-test:
+        ipv4_address: ${IP_LDAP}
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 389"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  # ============================================================
+  # NTP - chrony
+  # ============================================================
+  ntp:
+    image: registry.cn-shanghai.aliyuncs.com/greatwallisme/ntp
+    container_name: rustnmap-ntp
+    hostname: ntp.rustnmap.test
+    networks:
+      rustnmap-test:
+        ipv4_address: ${IP_NTP}
+    cap_add:
+      - SYS_TIME
+      - NET_ADMIN
+    healthcheck:
+      test: ["CMD-SHELL", "chronyc tracking 2>/dev/null || true"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+  # ============================================================
+  # SNMP - net-snmp
+  # ============================================================
+  snmp:
+    build:
+      context: .
+      dockerfile: Dockerfiles/snmp/Dockerfile
+    container_name: rustnmap-snmp
+    hostname: snmp.rustnmap.test
+    networks:
+      rustnmap-test:
+        ipv4_address: ${IP_SNMP}
+    cap_add:
+      - NET_ADMIN
+    healthcheck:
+      test: ["CMD-SHELL", "snmpget -v2c -c public 127.0.0.1 SYS_DESCR 2>/dev/null || nc -zu 127.0.0.1 161"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  # ============================================================
+  # TELNET
+  # ============================================================
+  telnet:
+    build:
+      context: .
+      dockerfile: Dockerfiles/telnet/Dockerfile
+    container_name: rustnmap-telnet
+    hostname: telnet.rustnmap.test
+    networks:
+      rustnmap-test:
+        ipv4_address: ${IP_TELNET}
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 23"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # ============================================================
+  # RPCBIND - portmapper
+  # ============================================================
+  rpcbind:
+    image: registry.cn-shanghai.aliyuncs.com/greatwallisme/alpine:3.19
+    container_name: rustnmap-rpcbind
+    hostname: rpcbind.rustnmap.test
+    networks:
+      rustnmap-test:
+        ipv4_address: ${IP_RPCBIND}
+    command: >
+      sh -c "apk add --no-cache rpcbind &&
+             rpcbind -f -i"
+    cap_add:
+      - NET_ADMIN
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 111"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # ============================================================
+  # SCTP - SCTP echo server
+  # ============================================================
+  sctp:
+    build:
+      context: .
+      dockerfile: Dockerfiles/sctp-server/Dockerfile
+    container_name: rustnmap-sctp
+    hostname: sctp.rustnmap.test
+    networks:
+      rustnmap-test:
+        ipv4_address: ${IP_SCTP}
+    cap_add:
+      - NET_ADMIN
+    privileged: true
+    healthcheck:
+      test: ["CMD-SHELL", "ss -lS | grep -q ':7 ' || true"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  # ============================================================
+  # FIREWALL - filtered port states
+  # ============================================================
+  firewall:
+    build:
+      context: .
+      dockerfile: Dockerfiles/firewall/Dockerfile
+    container_name: rustnmap-firewall
+    hostname: firewall.rustnmap.test
+    networks:
+      rustnmap-test:
+        ipv4_address: ${IP_FIREWALL}
+    cap_add:
+      - NET_ADMIN
+    privileged: true
+    healthcheck:
+      test: ["CMD-SHELL", "iptables -L INPUT -n | grep -q DROP"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # ============================================================
+  # ZOMBIE - idle host for -sI idle scan
+  # ============================================================
+  zombie:
+    build:
+      context: .
+      dockerfile: Dockerfiles/zombie/Dockerfile
+    container_name: rustnmap-zombie
+    hostname: zombie.rustnmap.test
+    networks:
+      rustnmap-test:
+        ipv4_address: ${IP_ZOMBIE}
+    cap_add:
+      - NET_ADMIN
+    sysctls:
+      - net.ipv4.icmp_echo_ignore_all=0
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 113"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+networks:
+  rustnmap-test:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: ${TEST_SUBNET}

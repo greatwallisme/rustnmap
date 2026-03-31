@@ -1026,12 +1026,11 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
                 .map_or_else(|_| "unknown".to_string(), |s| s.to_string());
             table.set("serial", serial_hex.as_str())?;
 
-            // Validity
+            // Validity - pass numeric Unix timestamps so ssl-cert.nse can
+            // format them via datetime.format_timestamp
             let validity_table = lua.create_table()?;
-            let not_before = cert.not_before().to_string();
-            let not_after = cert.not_after().to_string();
-            validity_table.set("notBefore", not_before.as_str())?;
-            validity_table.set("notAfter", not_after.as_str())?;
+            validity_table.set("notBefore", asn1_time_to_unix(cert.not_before()))?;
+            validity_table.set("notAfter", asn1_time_to_unix(cert.not_after()))?;
             table.set("validity", validity_table)?;
 
             // Signature algorithm

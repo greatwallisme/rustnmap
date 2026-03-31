@@ -8,13 +8,32 @@ set +e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
-# Configuration
-TARGET_IP="${TARGET_IP:-45.33.32.156}"
+# Configuration - Docker test range defaults
+TARGET_IP="${TARGET_IP:-172.28.0.2}"
 ALT_TARGET="${ALT_TARGET:-127.0.0.1}"
 TEST_PORT="${TEST_PORT:-80}"
 NMAP_BIN="${NMAP_BIN:-/usr/bin/nmap}"
 RUSTNMAP_BIN="${RUSTNMAP_BIN:-${PROJECT_ROOT}/target/release/rustnmap}"
 REFERENCE_SCRIPTS="${REFERENCE_SCRIPTS:-${PROJECT_ROOT}/reference/nmap/scripts}"
+
+# Docker test range IPs (from benchmarks/targets/.env)
+IP_SCAN_TARGET="${IP_SCAN_TARGET:-172.28.0.2}"
+IP_WEB="${IP_WEB:-172.28.0.3}"
+IP_SSH="${IP_SSH:-172.28.0.4}"
+IP_DNS="${IP_DNS:-172.28.0.5}"
+IP_SMB="${IP_SMB:-172.28.0.6}"
+IP_FTP="${IP_FTP:-172.28.0.7}"
+IP_SMTP="${IP_SMTP:-172.28.0.8}"
+IP_MYSQL="${IP_MYSQL:-172.28.0.9}"
+IP_REDIS="${IP_REDIS:-172.28.0.10}"
+IP_VNC="${IP_VNC:-172.28.0.11}"
+IP_MAIL="${IP_MAIL:-172.28.0.12}"
+IP_LDAP="${IP_LDAP:-172.28.0.13}"
+IP_NTP="${IP_NTP:-172.28.0.14}"
+IP_SNMP="${IP_SNMP:-172.28.0.15}"
+IP_TELNET="${IP_TELNET:-172.28.0.16}"
+IP_RPCBIND="${IP_RPCBIND:-172.28.0.17}"
+IP_SCTP="${IP_SCTP:-172.28.0.18}"
 
 # Output directories (separate logs and reports)
 LOG_DIR="${SCRIPT_DIR}/logs"
@@ -283,29 +302,37 @@ run_basic_nse_suite() {
     echo "==========================================================" | tee -a "$LOG_FILE"
     echo "" | tee -a "$LOG_FILE"
 
+    local HTTP_TARGET="${HTTP_TARGET:-$IP_WEB}"
+
     compare_nse_script \
         "HTTP Title" \
         "http-title" \
-        "$TARGET_IP" \
-        "$TEST_PORT"
+        "$HTTP_TARGET" \
+        "80"
 
     compare_nse_script \
         "HTTP Server Header" \
         "http-server-header" \
-        "$TARGET_IP" \
-        "$TEST_PORT"
+        "$HTTP_TARGET" \
+        "80"
 
     compare_nse_script \
         "HTTP Methods" \
         "http-methods" \
-        "$TARGET_IP" \
-        "$TEST_PORT"
+        "$HTTP_TARGET" \
+        "80"
 
     compare_nse_script \
         "HTTP Robots.txt" \
         "http-robots.txt" \
-        "$TARGET_IP" \
-        "$TEST_PORT"
+        "$HTTP_TARGET" \
+        "80"
+
+    compare_nse_script \
+        "HTTP Default Accounts" \
+        "http-default-accounts" \
+        "$HTTP_TARGET" \
+        "80"
 }
 
 # Test Suite: SSL/TLS Scripts
@@ -315,23 +342,30 @@ run_ssl_suite() {
     echo "==========================================================" | tee -a "$LOG_FILE"
     echo "" | tee -a "$LOG_FILE"
 
-    # Use HTTPS port for SSL tests
+    local SSL_TARGET="${SSL_TARGET:-$IP_WEB}"
+
     compare_nse_script \
         "SSL Certificate" \
         "ssl-cert" \
-        "$TARGET_IP" \
+        "$SSL_TARGET" \
+        "443"
+
+    compare_nse_script \
+        "SSL Date" \
+        "ssl-date" \
+        "$SSL_TARGET" \
         "443"
 
     compare_nse_script \
         "SSL Enum Ciphers" \
         "ssl-enum-ciphers" \
-        "$TARGET_IP" \
+        "$SSL_TARGET" \
         "443"
 
     compare_nse_script \
-        "HTTP SSL Cert" \
-        "http-ssl-cert" \
-        "$TARGET_IP" \
+        "TLS ALPN" \
+        "tls-alpn" \
+        "$SSL_TARGET" \
         "443"
 }
 
@@ -342,78 +376,358 @@ run_ssh_suite() {
     echo "==========================================================" | tee -a "$LOG_FILE"
     echo "" | tee -a "$LOG_FILE"
 
+    local SSH_TARGET="${SSH_TARGET:-$IP_SSH}"
+
     compare_nse_script \
         "SSH Auth Methods" \
         "ssh-auth-methods" \
-        "$TARGET_IP" \
+        "$SSH_TARGET" \
         "22"
 
     compare_nse_script \
         "SSH Hostkey" \
         "ssh-hostkey" \
-        "$TARGET_IP" \
+        "$SSH_TARGET" \
+        "22"
+
+    compare_nse_script \
+        "Banner (SSH)" \
+        "banner" \
+        "$SSH_TARGET" \
         "22"
 }
 
-# Test Suite: HTTP Library Scripts
-run_http_library_suite() {
-    echo "==========================================================" | tee -a "$LOG_FILE"
-    echo "Test Suite: HTTP Library Scripts" | tee -a "$LOG_FILE"
-    echo "==========================================================" | tee -a "$LOG_FILE"
-    echo "" | tee -a "$LOG_FILE"
-
-    compare_nse_script \
-        "HTTP Git" \
-        "http-git" \
-        "$TARGET_IP" \
-        "$TEST_PORT"
-
-    compare_nse_script \
-        "HTTP Enum" \
-        "http-enum" \
-        "$TARGET_IP" \
-        "$TEST_PORT"
-}
-
-# Test Suite: SMB Scripts (if target supports it)
-run_smb_suite() {
-    echo "==========================================================" | tee -a "$LOG_FILE"
-    echo "Test Suite: SMB Scripts" | tee -a "$LOG_FILE"
-    echo "==========================================================" | tee -a "$LOG_FILE"
-    echo "" | tee -a "$LOG_FILE"
-
-    # Try SMB on port 445
-    compare_nse_script \
-        "SMB OS Discovery" \
-        "smb-os-discovery" \
-        "$TARGET_IP" \
-        "445"
-
-    compare_nse_script \
-        "SMB Enum Shares" \
-        "smb-enum-shares" \
-        "$TARGET_IP" \
-        "445"
-}
-
-# Test Suite: DNS Scripts
+# Test Suite: DNS Scripts (requires -sU for UDP)
 run_dns_suite() {
     echo "==========================================================" | tee -a "$LOG_FILE"
     echo "Test Suite: DNS Scripts" | tee -a "$LOG_FILE"
     echo "==========================================================" | tee -a "$LOG_FILE"
     echo "" | tee -a "$LOG_FILE"
 
+    local DNS_TARGET="${DNS_TARGET:-$IP_DNS}"
+
+    # DNS scripts need UDP scan
     compare_nse_script \
-        "DNS Service Discovery" \
-        "dns-service-discovery" \
-        "$TARGET_IP" \
-        "53"
+        "DNS Recursion" \
+        "dns-recursion" \
+        "$DNS_TARGET" \
+        "53" \
+        "-sU"
+}
+
+# Test Suite: Host Info Scripts
+run_host_info_suite() {
+    echo "==========================================================" | tee -a "$LOG_FILE"
+    echo "Test Suite: Host Info Scripts" | tee -a "$LOG_FILE"
+    echo "==========================================================" | tee -a "$LOG_FILE"
+    echo "" | tee -a "$LOG_FILE"
 
     compare_nse_script \
-        "DNS NSID" \
-        "dns-nsid" \
-        "$TARGET_IP" \
-        "53"
+        "FCrDNS" \
+        "fcrdns" \
+        "$IP_SCAN_TARGET" \
+        ""
+}
+
+# Test Suite: SMB Scripts (Docker smb target)
+run_smb_suite() {
+    echo "==========================================================" | tee -a "$LOG_FILE"
+    echo "Test Suite: SMB Scripts" | tee -a "$LOG_FILE"
+    echo "==========================================================" | tee -a "$LOG_FILE"
+    echo "" | tee -a "$LOG_FILE"
+
+    compare_nse_script \
+        "SMB OS Discovery" \
+        "smb-os-discovery" \
+        "$IP_SMB" \
+        "445"
+
+    compare_nse_script \
+        "SMB Enum Shares" \
+        "smb-enum-shares" \
+        "$IP_SMB" \
+        "445"
+
+    compare_nse_script \
+        "SMB Protocols" \
+        "smb-protocols" \
+        "$IP_SMB" \
+        "445"
+
+    compare_nse_script \
+        "SMB Security Mode" \
+        "smb-security-mode" \
+        "$IP_SMB" \
+        "445"
+}
+
+# Test Suite: FTP Scripts (Docker ftp target)
+run_ftp_suite() {
+    echo "==========================================================" | tee -a "$LOG_FILE"
+    echo "Test Suite: FTP Scripts" | tee -a "$LOG_FILE"
+    echo "==========================================================" | tee -a "$LOG_FILE"
+    echo "" | tee -a "$LOG_FILE"
+
+    compare_nse_script \
+        "FTP Anon" \
+        "ftp-anon" \
+        "$IP_FTP" \
+        "21"
+
+    compare_nse_script \
+        "FTP Syst" \
+        "ftp-syst" \
+        "$IP_FTP" \
+        "21"
+
+    compare_nse_script \
+        "Banner (FTP)" \
+        "banner" \
+        "$IP_FTP" \
+        "21"
+}
+
+# Test Suite: SMTP Scripts (Docker smtp target)
+run_smtp_suite() {
+    echo "==========================================================" | tee -a "$LOG_FILE"
+    echo "Test Suite: SMTP Scripts" | tee -a "$LOG_FILE"
+    echo "==========================================================" | tee -a "$LOG_FILE"
+    echo "" | tee -a "$LOG_FILE"
+
+    compare_nse_script \
+        "SMTP Commands" \
+        "smtp-commands" \
+        "$IP_SMTP" \
+        "25"
+
+    compare_nse_script \
+        "Banner (SMTP)" \
+        "banner" \
+        "$IP_SMTP" \
+        "25"
+}
+
+# Test Suite: MySQL Scripts (Docker mysql target)
+run_mysql_suite() {
+    echo "==========================================================" | tee -a "$LOG_FILE"
+    echo "Test Suite: MySQL Scripts" | tee -a "$LOG_FILE"
+    echo "==========================================================" | tee -a "$LOG_FILE"
+    echo "" | tee -a "$LOG_FILE"
+
+    compare_nse_script \
+        "MySQL Info" \
+        "mysql-info" \
+        "$IP_MYSQL" \
+        "3306"
+
+    compare_nse_script \
+        "MySQL Empty Password" \
+        "mysql-empty-password" \
+        "$IP_MYSQL" \
+        "3306"
+}
+
+# Test Suite: Redis Scripts (Docker redis target)
+run_redis_suite() {
+    echo "==========================================================" | tee -a "$LOG_FILE"
+    echo "Test Suite: Redis Scripts" | tee -a "$LOG_FILE"
+    echo "==========================================================" | tee -a "$LOG_FILE"
+    echo "" | tee -a "$LOG_FILE"
+
+    compare_nse_script \
+        "Redis Info" \
+        "redis-info" \
+        "$IP_REDIS" \
+        "6379"
+}
+
+# Test Suite: VNC Scripts (Docker vnc target)
+run_vnc_suite() {
+    echo "==========================================================" | tee -a "$LOG_FILE"
+    echo "Test Suite: VNC Scripts" | tee -a "$LOG_FILE"
+    echo "==========================================================" | tee -a "$LOG_FILE"
+    echo "" | tee -a "$LOG_FILE"
+
+    compare_nse_script \
+        "VNC Info" \
+        "vnc-info" \
+        "$IP_VNC" \
+        "5900"
+
+    compare_nse_script \
+        "VNC Title" \
+        "vnc-title" \
+        "$IP_VNC" \
+        "5900"
+}
+
+# Test Suite: Mail Scripts (Docker mail target - POP3/IMAP)
+run_mail_suite() {
+    echo "==========================================================" | tee -a "$LOG_FILE"
+    echo "Test Suite: Mail Scripts" | tee -a "$LOG_FILE"
+    echo "==========================================================" | tee -a "$LOG_FILE"
+    echo "" | tee -a "$LOG_FILE"
+
+    compare_nse_script \
+        "Banner (POP3)" \
+        "banner" \
+        "$IP_MAIL" \
+        "110"
+
+    compare_nse_script \
+        "Banner (IMAP)" \
+        "banner" \
+        "$IP_MAIL" \
+        "143"
+
+    compare_nse_script \
+        "POP3 Capabilities" \
+        "pop3-capabilities" \
+        "$IP_MAIL" \
+        "110"
+
+    compare_nse_script \
+        "IMAP Capabilities" \
+        "imap-capabilities" \
+        "$IP_MAIL" \
+        "143"
+}
+
+# Test Suite: LDAP Scripts (Docker ldap target)
+run_ldap_suite() {
+    echo "==========================================================" | tee -a "$LOG_FILE"
+    echo "Test Suite: LDAP Scripts" | tee -a "$LOG_FILE"
+    echo "==========================================================" | tee -a "$LOG_FILE"
+    echo "" | tee -a "$LOG_FILE"
+
+    compare_nse_script \
+        "LDAP RootDSE" \
+        "ldap-rootdse" \
+        "$IP_LDAP" \
+        "389"
+
+    compare_nse_script \
+        "LDAP Search" \
+        "ldap-search" \
+        "$IP_LDAP" \
+        "389"
+}
+
+# Test Suite: NTP Scripts (Docker ntp target)
+run_ntp_suite() {
+    echo "==========================================================" | tee -a "$LOG_FILE"
+    echo "Test Suite: NTP Scripts" | tee -a "$LOG_FILE"
+    echo "==========================================================" | tee -a "$LOG_FILE"
+    echo "" | tee -a "$LOG_FILE"
+
+    compare_nse_script \
+        "NTP Info" \
+        "ntp-info" \
+        "$IP_NTP" \
+        "123" \
+        "-sU"
+}
+
+# Test Suite: SNMP Scripts (Docker snmp target)
+run_snmp_suite() {
+    echo "==========================================================" | tee -a "$LOG_FILE"
+    echo "Test Suite: SNMP Scripts" | tee -a "$LOG_FILE"
+    echo "==========================================================" | tee -a "$LOG_FILE"
+    echo "" | tee -a "$LOG_FILE"
+
+    compare_nse_script \
+        "SNMP Info" \
+        "snmp-info" \
+        "$IP_SNMP" \
+        "161" \
+        "-sU"
+
+    compare_nse_script \
+        "SNMP SysDescr" \
+        "snmp-sysdescr" \
+        "$IP_SNMP" \
+        "161" \
+        "-sU"
+}
+
+# Test Suite: Telnet Scripts (Docker telnet target)
+run_telnet_suite() {
+    echo "==========================================================" | tee -a "$LOG_FILE"
+    echo "Test Suite: Telnet Scripts" | tee -a "$LOG_FILE"
+    echo "==========================================================" | tee -a "$LOG_FILE"
+    echo "" | tee -a "$LOG_FILE"
+
+    compare_nse_script \
+        "Banner (Telnet)" \
+        "banner" \
+        "$IP_TELNET" \
+        "23"
+}
+
+# Test Suite: RPC Scripts (Docker rpcbind target)
+run_rpc_suite() {
+    echo "==========================================================" | tee -a "$LOG_FILE"
+    echo "Test Suite: RPC Scripts" | tee -a "$LOG_FILE"
+    echo "==========================================================" | tee -a "$LOG_FILE"
+    echo "" | tee -a "$LOG_FILE"
+
+    compare_nse_script \
+        "RPC Info" \
+        "rpcinfo" \
+        "$IP_RPCBIND" \
+        "111"
+}
+
+# Test Suite: HTTP Library Scripts (Docker web target with /git, /robots.txt etc)
+run_http_lib_suite() {
+    echo "==========================================================" | tee -a "$LOG_FILE"
+    echo "Test Suite: HTTP Library Scripts" | tee -a "$LOG_FILE"
+    echo "==========================================================" | tee -a "$LOG_FILE"
+    echo "" | tee -a "$LOG_FILE"
+
+    local HTTP_TARGET="${HTTP_TARGET:-$IP_WEB}"
+
+    compare_nse_script \
+        "HTTP Git" \
+        "http-git" \
+        "$HTTP_TARGET" \
+        "80"
+
+    compare_nse_script \
+        "HTTP Enum" \
+        "http-enum" \
+        "$HTTP_TARGET" \
+        "80"
+
+    compare_nse_script \
+        "HTTP Headers" \
+        "http-headers" \
+        "$HTTP_TARGET" \
+        "80"
+
+    compare_nse_script \
+        "HTTP Date" \
+        "http-date" \
+        "$HTTP_TARGET" \
+        "80"
+
+    compare_nse_script \
+        "HTTP CORS" \
+        "http-cors" \
+        "$HTTP_TARGET" \
+        "80"
+
+    compare_nse_script \
+        "HTTP Cookie Flags" \
+        "http-cookie-flags" \
+        "$HTTP_TARGET" \
+        "80"
+
+    compare_nse_script \
+        "HTTP Security Headers" \
+        "http-security-headers" \
+        "$HTTP_TARGET" \
+        "80"
 }
 
 # Main function
@@ -448,13 +762,25 @@ main() {
     echo "[INFO] Prerequisites OK" | tee -a "$LOG_FILE"
     echo "" | tee -a "$LOG_FILE"
 
-    # Run test suites
-    run_basic_nse_suite
-    run_ssl_suite
-    run_ssh_suite
-    run_http_library_suite
-    run_smb_suite
-    run_dns_suite
+    # Run test suites - Docker test range targets
+    run_basic_nse_suite       # HTTP scripts on web target
+    run_ssl_suite             # SSL/TLS scripts on web target
+    run_ssh_suite             # SSH scripts on ssh target
+    run_dns_suite             # DNS scripts on dns target
+    run_smb_suite             # SMB scripts on smb target
+    run_ftp_suite             # FTP scripts on ftp target
+    run_smtp_suite            # SMTP scripts on smtp target
+    run_mysql_suite           # MySQL scripts on mysql target
+    run_redis_suite           # Redis scripts on redis target
+    run_vnc_suite             # VNC scripts on vnc target
+    run_mail_suite            # POP3/IMAP scripts on mail target
+    run_ldap_suite            # LDAP scripts on ldap target
+    run_ntp_suite             # NTP scripts on ntp target
+    run_snmp_suite            # SNMP scripts on snmp target
+    run_telnet_suite          # Telnet scripts on telnet target
+    run_rpc_suite             # RPC scripts on rpcbind target
+    run_http_lib_suite        # HTTP library scripts on web target
+    run_host_info_suite       # Host info scripts on scan target
 
     # Print summary
     echo "==========================================================" | tee -a "$LOG_FILE"

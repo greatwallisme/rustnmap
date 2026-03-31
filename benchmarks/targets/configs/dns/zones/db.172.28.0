@@ -1,0 +1,30 @@
+$TTL 86400
+@   IN  SOA ns1.rustnmap.test. admin.rustnmap.test. (
+            2026010101  ; Serial
+            3600        ; Refresh
+            1800        ; Retry
+            604800      ; Expire
+            86400       ; Minimum TTL
+)
+
+@       IN  NS  ns1.rustnmap.test.
+
+2   IN  PTR scan-target.rustnmap.test.
+3   IN  PTR web.rustnmap.test.
+4   IN  PTR ssh.rustnmap.test.
+5   IN  PTR dns.rustnmap.test.
+6   IN  PTR smb.rustnmap.test.
+7   IN  PTR ftp.rustnmap.test.
+8   IN  PTR smtp.rustnmap.test.
+9   IN  PTR mysql.rustnmap.test.
+10  IN  PTR redis.rustnmap.test.
+11  IN  PTR vnc.rustnmap.test.
+12  IN  PTR mail.rustnmap.test.
+13  IN  PTR ldap.rustnmap.test.
+14  IN  PTR ntp.rustnmap.test.
+15  IN  PTR snmp.rustnmap.test.
+16  IN  PTR telnet.rustnmap.test.
+17  IN  PTR rpcbind.rustnmap.test.
+18  IN  PTR sctp.rustnmap.test.
+19  IN  PTR firewall.rustnmap.test.
+20  IN  PTR zombie.rustnmap.test.

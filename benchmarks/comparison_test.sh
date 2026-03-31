@@ -8,12 +8,25 @@ set +e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
-# Configuration
-TARGET_IP="${TARGET_IP:-45.33.32.156}"
-ALT_TARGET="${ALT_TARGET:-127.0.0.1}"
-TEST_PORTS="${TEST_PORTS:-22,80,113,443,8080}"
+# Configuration - Docker test range defaults (override with env vars for public targets)
+TARGET_IP="${TARGET_IP:-172.28.0.2}"
+ALT_TARGET="${ALT_TARGET:-172.28.0.3}"
+TEST_PORTS="${TEST_PORTS:-22,80,443,3306,6379}"
 NMAP_BIN="${NMAP_BIN:-/usr/bin/nmap}"
 RUSTNMAP_BIN="${RUSTNMAP_BIN:-${PROJECT_ROOT}/target/release/rustnmap}"
+
+# Docker test range IPs
+IP_SCAN_TARGET="${IP_SCAN_TARGET:-172.28.0.2}"
+IP_WEB="${IP_WEB:-172.28.0.3}"
+IP_SSH="${IP_SSH:-172.28.0.4}"
+IP_DNS="${IP_DNS:-172.28.0.5}"
+IP_SMB="${IP_SMB:-172.28.0.6}"
+IP_FTP="${IP_FTP:-172.28.0.7}"
+IP_SMTP="${IP_SMTP:-172.28.0.8}"
+IP_MYSQL="${IP_MYSQL:-172.28.0.9}"
+IP_FIREWALL="${IP_FIREWALL:-172.28.0.19}"
+IP_ZOMBIE="${IP_ZOMBIE:-172.28.0.20}"
+IP_SCTP="${IP_SCTP:-172.28.0.18}"
 
 # Output directories (separate logs and reports)
 LOG_DIR="${SCRIPT_DIR}/logs"
@@ -424,6 +437,180 @@ run_os_detection_suite() {
         "$RUSTNMAP_BIN -O --osscan-guess $TARGET_IP"
 }
 
+# Test Suite: Host Discovery (8 tests)
+run_host_discovery_suite() {
+    echo "==========================================================" | tee -a "$LOG_FILE"
+    echo "Test Suite: Host Discovery" | tee -a "$LOG_FILE"
+    echo "==========================================================" | tee -a "$LOG_FILE"
+    echo "" | tee -a "$LOG_FILE"
+
+    compare_scans \
+        "ICMP Echo Ping" \
+        "$NMAP_BIN -sn -PE $IP_SCAN_TARGET" \
+        "$RUSTNMAP_BIN -sn -PE $IP_SCAN_TARGET"
+
+    compare_scans \
+        "TCP SYN Ping" \
+        "$NMAP_BIN -sn -PS $IP_SCAN_TARGET" \
+        "$RUSTNMAP_BIN -sn -PS $IP_SCAN_TARGET"
+
+    compare_scans \
+        "TCP ACK Ping" \
+        "$NMAP_BIN -sn -PA $IP_SCAN_TARGET" \
+        "$RUSTNMAP_BIN -sn -PA $IP_SCAN_TARGET"
+
+    compare_scans \
+        "UDP Ping" \
+        "$NMAP_BIN -sn -PU $IP_SCAN_TARGET" \
+        "$RUSTNMAP_BIN -sn -PU $IP_SCAN_TARGET"
+
+    compare_scans \
+        "No Ping (Skip Discovery)" \
+        "$NMAP_BIN -sn -Pn $IP_SCAN_TARGET" \
+        "$RUSTNMAP_BIN -sn -Pn $IP_SCAN_TARGET"
+
+    compare_scans \
+        "ARP Ping" \
+        "$NMAP_BIN -sn -PR $IP_SCAN_TARGET" \
+        "$RUSTNMAP_BIN -sn -PR $IP_SCAN_TARGET"
+
+    compare_scans \
+        "ICMP Timestamp Ping" \
+        "$NMAP_BIN -sn -PP $IP_SCAN_TARGET" \
+        "$RUSTNMAP_BIN -sn -PP $IP_SCAN_TARGET"
+
+    compare_scans \
+        "ICMP Netmask Ping" \
+        "$NMAP_BIN -sn -PM $IP_SCAN_TARGET" \
+        "$RUSTNMAP_BIN -sn -PM $IP_SCAN_TARGET"
+}
+
+# Test Suite: Special Scans (5 tests)
+run_special_scans_suite() {
+    echo "==========================================================" | tee -a "$LOG_FILE"
+    echo "Test Suite: Special Scans" | tee -a "$LOG_FILE"
+    echo "==========================================================" | tee -a "$LOG_FILE"
+    echo "" | tee -a "$LOG_FILE"
+
+    # IP Protocol scan
+    compare_scans \
+        "IP Protocol Scan" \
+        "$NMAP_BIN -sO $IP_SCAN_TARGET" \
+        "$RUSTNMAP_BIN -sO $IP_SCAN_TARGET"
+
+    # SCTP INIT scan
+    compare_scans \
+        "SCTP INIT Scan" \
+        "$NMAP_BIN -sZ -p 7,80 $IP_SCTP" \
+        "$RUSTNMAP_BIN -sZ -p 7,80 $IP_SCTP"
+
+    # SCTP Cookie Echo scan
+    compare_scans \
+        "SCTP Cookie Echo Scan" \
+        "$NMAP_BIN -sY -p 7,80 $IP_SCTP" \
+        "$RUSTNMAP_BIN -sY -p 7,80 $IP_SCTP"
+
+    # FTP Bounce scan (requires FTP server with port_promiscuous)
+    compare_scans \
+        "FTP Bounce Scan" \
+        "$NMAP_BIN -b -p 80 $IP_WEB" \
+        "$RUSTNMAP_BIN -b -p 80 $IP_WEB" \
+        "true"
+
+    # Idle/Zombie scan (requires zombie host with predictable IP ID)
+    compare_scans \
+        "Idle/Zombie Scan" \
+        "$NMAP_BIN -sI $IP_ZOMBIE -p 80 $IP_SCAN_TARGET" \
+        "$RUSTNMAP_BIN -sI $IP_ZOMBIE -p 80 $IP_SCAN_TARGET" \
+        "true"
+}
+
+# Test Suite: Firewall/IDS Evasion (5 tests)
+run_evasion_suite() {
+    echo "==========================================================" | tee -a "$LOG_FILE"
+    echo "Test Suite: Firewall/IDS Evasion" | tee -a "$LOG_FILE"
+    echo "==========================================================" | tee -a "$LOG_FILE"
+    echo "" | tee -a "$LOG_FILE"
+
+    # Fragmentation
+    compare_scans \
+        "Fragmentation Scan" \
+        "$NMAP_BIN -sS -f -p $TEST_PORTS $IP_SCAN_TARGET" \
+        "$RUSTNMAP_BIN -sS -f -p $TEST_PORTS $IP_SCAN_TARGET"
+
+    # Decoys
+    compare_scans \
+        "Decoy Scan" \
+        "$NMAP_BIN -sS -D RND:5 -p $TEST_PORTS $IP_SCAN_TARGET" \
+        "$RUSTNMAP_BIN -sS -D RND:5 -p $TEST_PORTS $IP_SCAN_TARGET" \
+        "true"
+
+    # Source port spoofing
+    compare_scans \
+        "Source Port Spoofing" \
+        "$NMAP_BIN -sS --source-port 53 -p $TEST_PORTS $IP_SCAN_TARGET" \
+        "$RUSTNMAP_BIN -sS --source-port 53 -p $TEST_PORTS $IP_SCAN_TARGET"
+
+    # Data length
+    compare_scans \
+        "Data Length Scan" \
+        "$NMAP_BIN -sS --data-length 24 -p $TEST_PORTS $IP_SCAN_TARGET" \
+        "$RUSTNMAP_BIN -sS --data-length 24 -p $TEST_PORTS $IP_SCAN_TARGET"
+
+    # Bad checksum
+    compare_scans \
+        "Bad Checksum Scan" \
+        "$NMAP_BIN -sS --badsum -p $TEST_PORTS $IP_SCAN_TARGET" \
+        "$RUSTNMAP_BIN -sS --badsum -p $TEST_PORTS $IP_SCAN_TARGET" \
+        "true"
+}
+
+# Test Suite: Traceroute (2 tests)
+run_traceroute_suite() {
+    echo "==========================================================" | tee -a "$LOG_FILE"
+    echo "Test Suite: Traceroute" | tee -a "$LOG_FILE"
+    echo "==========================================================" | tee -a "$LOG_FILE"
+    echo "" | tee -a "$LOG_FILE"
+
+    compare_scans \
+        "Traceroute" \
+        "$NMAP_BIN -sS --traceroute -p 80 $IP_WEB" \
+        "$RUSTNMAP_BIN -sS --traceroute -p 80 $IP_WEB" \
+        "true"
+
+    compare_scans \
+        "Traceroute with Port" \
+        "$NMAP_BIN -sS --traceroute --traceroute-port 443 -p 443 $IP_WEB" \
+        "$RUSTNMAP_BIN -sS --traceroute --traceroute-port 443 -p 443 $IP_WEB" \
+        "true"
+}
+
+# Test Suite: Firewall Detection (3 tests)
+run_firewall_suite() {
+    echo "==========================================================" | tee -a "$LOG_FILE"
+    echo "Test Suite: Firewall Detection" | tee -a "$LOG_FILE"
+    echo "==========================================================" | tee -a "$LOG_FILE"
+    echo "" | tee -a "$LOG_FILE"
+
+    # ACK scan maps firewall rules
+    compare_scans \
+        "ACK Scan (Firewall Mapping)" \
+        "$NMAP_BIN -sA -p 22,80,8888,9999 $IP_FIREWALL" \
+        "$RUSTNMAP_BIN -sA -p 22,80,8888,9999 $IP_FIREWALL"
+
+    # Window scan
+    compare_scans \
+        "Window Scan" \
+        "$NMAP_BIN -sW -p 22,80,8888,9999 $IP_FIREWALL" \
+        "$RUSTNMAP_BIN -sW -p 22,80,8888,9999 $IP_FIREWALL"
+
+    # Maimon scan
+    compare_scans \
+        "Maimon Scan" \
+        "$NMAP_BIN -sM -p $TEST_PORTS $IP_SCAN_TARGET" \
+        "$RUSTNMAP_BIN -sM -p $TEST_PORTS $IP_SCAN_TARGET"
+}
+
 # Main function
 main() {
     echo "==========================================================" | tee -a "$LOG_FILE"
@@ -436,9 +623,14 @@ main() {
     # This ensures maximum test coverage if the run is interrupted
     run_output_suite           # 4 tests - fastest (output format tests)
     run_basic_suite            # 5 tests - quick basic scans
+    run_host_discovery_suite   # 8 tests - host discovery methods
     run_stealth_suite          # 7 tests - stealth scans
     run_advanced_suite         # 6 tests - advanced scans
+    run_firewall_suite         # 3 tests - firewall detection
     run_multi_target_suite     # 5 tests - multi-target scans
+    run_special_scans_suite    # 5 tests - SCTP, FTP bounce, idle scan
+    run_evasion_suite          # 5 tests - firewall/IDS evasion
+    run_traceroute_suite       # 2 tests - traceroute
     run_timing_suite           # 8 tests - timing templates (T0 can hang)
     run_service_detection_suite # 3 tests - service detection (slow)
     run_os_detection_suite     # 3 tests - OS detection (SLOWEST - ~43s)

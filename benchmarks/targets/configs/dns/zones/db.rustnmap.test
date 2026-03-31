@@ -1,0 +1,44 @@
+$TTL 86400
+@   IN  SOA ns1.rustnmap.test. admin.rustnmap.test. (
+            2026010101  ; Serial
+            3600        ; Refresh
+            1800        ; Retry
+            604800      ; Expire
+            86400       ; Minimum TTL
+)
+
+; Nameservers
+@       IN  NS  ns1.rustnmap.test.
+
+; A records
+@               IN  A       172.28.0.2
+ns1             IN  A       172.28.0.5
+web             IN  A       172.28.0.3
+ssh             IN  A       172.28.0.4
+dns             IN  A       172.28.0.5
+smb             IN  A       172.28.0.6
+ftp             IN  A       172.28.0.7
+smtp            IN  A       172.28.0.8
+mail            IN  A       172.28.0.8
+mysql           IN  A       172.28.0.9
+redis           IN  A       172.28.0.10
+vnc             IN  A       172.28.0.11
+ldap            IN  A       172.28.0.13
+ntp             IN  A       172.28.0.14
+snmp            IN  A       172.28.0.15
+telnet          IN  A       172.28.0.16
+rpcbind         IN  A       172.28.0.17
+sctp            IN  A       172.28.0.18
+firewall        IN  A       172.28.0.19
+zombie          IN  A       172.28.0.20
+scan-target     IN  A       172.28.0.2
+
+; CNAME
+www             IN  CNAME   web.rustnmap.test.
+
+; MX records
+@               IN  MX  10  mail.rustnmap.test.
+
+; SRV records
+_sip._tcp       IN  SRV 10  60 5060 web.rustnmap.test.
+_ldap._tcp      IN  SRV 10  60 389  ldap.rustnmap.test.
