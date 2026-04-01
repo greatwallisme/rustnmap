@@ -1,109 +1,79 @@
-# Progress: SSL NSE Testing
+# Progress: NSE Script Compatibility Testing
 
-> **Updated**: 2026-03-27
+> **Updated**: 2026-04-01 (Phase 2 Fixes)
 
 ---
 
-## Session Summary (2026-03-27)
-
-### COMPLETED: SSL Scripts Fully Functional
-
-**Status**: ✅ ssl-cert.nse script works correctly with full certificate parsing.
-
-### What Was Implemented
-
-1. **Lua File Loader** (2026-03-26)
-   - Custom file searcher for `nselib/` directory
-   - `package.path` configuration
-   - Pure Lua library loading
-
-2. **Socket Connect Method** (2026-03-27)
-   - `connect(host, port, proto)` implementation
-   - Host/port parameter handling (string/table formats)
-   - Synchronous mode for NSE compatibility
-
-3. **SSL Certificate Retrieval** (2026-03-27)
-   - `get_ssl_certificate()` method
-   - OpenSSL integration for SSL handshake
-   - Certificate parsing to Lua table format
-   - Fingerprint calculation (MD5, SHA-1, SHA-256)
-   - Date parsing for validity period
+## Session Summary (2026-04-01) - Phase 2
 
 ### Bugs Fixed
 
-| Bug | Root Cause | Fix |
-|-----|------------|-----|
-| "attempt to yield from outside a coroutine" | Used async method instead of sync | Changed to `add_method_mut` |
-| "bad argument #1: error converting Lua table to String" | Digest function wrong signature | Added `(_self, algo)` tuple params |
-| Fingerprints showing character codes | Returning hex string instead of raw bytes | Return `digest_bytes` directly |
-| Invalid date format | Wrong parsing for OpenSSL time format | Parse "Mon DD HH:MM:SS YYYY GMT" |
+3. **RC-8: stdnse.debug parameter type**: Changed `debug`, `verbose`, `print_debug`, and `debug1-5` functions to accept `MultiValue` args with flexible level type. Non-numeric levels are silently skipped (Nmap behavior). Added variadic format string support via `string.format`.
+
+4. **RC-4: dns.query/reverse nil params**: Changed `dns.query` domain and `dns.reverse` ip params from `String` to `Option<String>`. Both return nil for nil input.
+
+### Build Verification
+
+- `cargo clippy -p rustnmap-nse --lib -- -D warnings` - PASS (zero warnings)
+- `cargo test -p rustnmap-nse --lib` - PASS (235 tests, 0 failures)
+- `cargo fmt` - PASS
+
+### Regression Tests (All PASS)
+
+| Script | Target | Result |
+|--------|--------|--------|
+| banner.nse | SSH 172.28.0.4:22 | PASS - shows SSH-2.0-OpenSSH_9.6 |
+| smtp-commands | SMTP 172.28.0.8:25 | PASS - shows EHLO response |
+| http-title | Web 172.28.0.3:80 | PASS - shows page title |
+| ssl-cert | HTTPS 172.28.0.3:443 | PASS - shows certificate details |
+| ssh-auth-methods | SSH 172.28.0.4:22 | PASS - shows publickey |
 
 ---
 
-## Test Results
+## Session Summary (2026-04-01) - Phase 1
 
-| Phase | Status | Details |
-|-------|--------|---------|
-| Find SSL target | ✅ PASS | www.qq.com:443 |
-| Build & clippy | ✅ PASS | Zero warnings |
-| ssl-cert.nse | ✅ PASS | Full certificate output |
-| ssl-cert-intaddr | ✅ PASS | Returns empty (expected) |
+### Bugs Fixed
 
-### Sample Output
+1. **Silent Script Failures**: Changed 4 `debug!` to `warn!` in `orchestrator.rs`. Script execution and rule evaluation failures are now visible at default log level.
 
-```
-| ssl-cert
-|   Subject: commonName=*.ias.tencent-cloud.net/organizationName=Tencent Technology (Shenzhen) Company Limited/stateOrProvinceName=Guangdong Province/countryName=CN
-|   Subject Alternative Name: DNS:*.ias.tencent-cloud.net, DNS:ias.tencent-cloud.net
-|   Issuer: commonName=DigiCert Secure Site OV G2 TLS CN RSA4096 SHA256 2022 CA1/organizationName=DigiCert, Inc./countryName=US
-|   Public Key type: rsa
-|   Public Key bits: 2048
-|   Signature Algorithm: sha256WithRSAEncryption
-|   Not valid before: 2025-06-23T00:00:00
-|   Not valid after:  2026-07-24T23:59:59
-|   MD5:     590c a9a7 e8b2 36eb 87d5 63f8 6dc5 216e
-|   SHA-1:   78f3 f716 8024 8710 c435 b5ef 09a6 5933 7d3a 45a3
-|_  SHA-256: 8e4f 83b5 fcd2 2ab2 3a94 0d4c f170 7a5a 02ed eba5 abd9 3c4d de21 22d8 5bee e3ce
-```
+2. **comm.exchange/get_banner Table Arguments**: Rewrote both functions to accept `Value` for host/port parameters. Added `extract_host()` and `extract_port()` helper functions that handle both string/integer and table (with `.ip`/`.number` fields) arguments.
+
+### Build Verification
+
+- `cargo clippy -p rustnmap-nse -p rustnmap-core --lib -- -D warnings` - PASS (zero warnings)
+- `cargo test -p rustnmap-nse --lib` - PASS (235 tests, 0 failures)
+- `cargo fmt` - PASS
+
+### Expected Impact
+
+The comm fix should resolve the **banner script category** (5 scripts: banner on SSH, FTP, SMTP, POP3, Telnet). These were failing because `comm.exchange(host, port, data)` was called with table arguments, but only string/integer were accepted.
+
+The warn-level logging makes all remaining failures visible to users for easier debugging.
 
 ---
 
-## Files Modified
+## Previous Session (2026-03-31)
 
-| File | Change |
-|------|--------|
-| `crates/rustnmap-nse/src/lua.rs` | Added file searcher, package.path |
-| `crates/rustnmap-nse/src/libs/nmap.rs` | SSL connect, cert parsing, digest |
-| `crates/rustnmap-nse/Cargo.toml` | OpenSSL dependency |
+### NSE Comparison Test Results Against Docker Targets
 
----
+**Run 2 (06:47)**: 9 PASS/WARN, 24 FAIL, 13 SKIP out of 46 tests (19.5%)
+**Run 1 (02:14)**: 8 PASS, 25 FAIL, 13 SKIP out of 46 tests (17.3%)
 
-## Previous Session (2026-03-26)
+### What Was Done
 
-### CRITICAL FINDING: SSL Scripts Cannot Run
+1. Docker test range with 19 containers
+2. 7 code fixes (new_try, receive_lines, comm MultiValue, etc.)
+3. Two full test runs
+4. Build clean with zero warnings
 
-**Root Cause**: NSE engine missing Lua file loader for pure Lua libraries.
+### Root Causes for Remaining FAIL Tests
 
-### What Was Discovered
-
-The SSL scripts require pure Lua libraries from `nselib/` directory:
-- `sslcert.lua` (37KB) - SSL certificate handling
-- `tls.lua` (75KB) - TLS protocol
-- `datetime.lua` - Date/time formatting
-- `outlib.lua`, `unicode.lua`, etc.
-
-**The Problem**:
-1. NSE engine only registers Rust libraries (`libs/mod.rs::register_all()`)
-2. No `package.path` configuration for Lua to search `nselib/`
-3. No file loader to read and execute `.lua` files
-
-**Error Message**:
-```
-lua runtime error in 'ssl-cert': runtime error:
-  module 'sslcert' not found:
-  no field package.preload['sslcert']
-  no file '/usr/local/share/lua/5.4/sslcert.lua'
-  ...
-```
-
-**Solution**: Implemented Lua file loader in `lua.rs`.
+| Category | Scripts | Root Cause |
+|----------|---------|------------|
+| Banner scripts | banner (SSH, FTP, SMTP, POP3, Telnet) | `comm.exchange` returns nil data - **FIXED 2026-04-01** |
+| SSL/TLS scripts | ssl-date, ssl-enum-ciphers, tls-alpn | tls.lua binary parsing incompatible |
+| HTTP library scripts | http-git, http-enum, http-headers, http-date | Missing http.lua functions |
+| Service-specific scripts | redis-info, smb-protocols, smtp-commands, imap-capabilities | Protocol library incompatibility |
+| UDP scripts | dns-recursion, ntp-info, snmp-info, snmp-sysdescr | UDP socket/portrule issues |
+| SMB/LDAP/RPC | smb-protocols, ldap-rootdse, ldap-search, rpcinfo | Complex protocol library missing |
+| Network scripts | fcrdns | DNS resolution library issues |

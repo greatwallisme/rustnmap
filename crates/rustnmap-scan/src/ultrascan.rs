@@ -42,7 +42,7 @@ use std::sync::Arc as StdArc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::packet_adapter::{create_stealth_engine, ScannerPacketEngine};
+use crate::packet_adapter::{create_stealth_engine, create_stealth_engine_with_target, ScannerPacketEngine};
 use rustnmap_common::{Port, PortState, RateLimiter, ScanConfig};
 use rustnmap_net::raw_socket::{parse_tcp_response, RawSocket, TcpPacketBuilder};
 use rustnmap_packet::BpfFilter;
@@ -861,12 +861,23 @@ impl ParallelScanEngine {
     ) -> Result<HashMap<Port, PortState>, rustnmap_common::ScanError> {
         let start_time = Instant::now();
 
+        // Create a per-target packet engine with the correct source address
+        // for this target. The pre-created self.packet_engine may be on the
+        // wrong interface for multi-homed hosts (e.g., Docker bridge vs
+        // external interface).
+        let src_addr = self.source_addr_for_target(target);
+        let target_packet_engine = create_stealth_engine_with_target(
+            Some(src_addr),
+            Some(target),
+            self.config.clone(),
+        );
+
         // Channel for received packets from the receiver task
         let (packet_tx, mut packet_rx) = mpsc::unbounded_channel();
 
         // Clone the sender for the receiver task
         // We'll keep the original and drop it when done to signal completion
-        let receiver_handle = self.start_receiver_task(packet_tx.clone());
+        let receiver_handle = self.start_receiver_task(packet_tx.clone(), target_packet_engine);
 
         // Store packet_tx for later drop - when dropped, receiver will detect closure
 
@@ -1260,10 +1271,12 @@ impl ParallelScanEngine {
     fn start_receiver_task(
         &self,
         packet_tx: mpsc::UnboundedSender<ReceivedPacket>,
+        target_packet_engine: Option<Arc<Mutex<ScannerPacketEngine>>>,
     ) -> JoinHandle<()> {
         const MAX_BATCH: usize = 32;
         let socket = StdArc::clone(&self.socket);
-        let packet_engine = self.packet_engine.clone();
+        // Use per-target engine if available (correct interface), else fall back to pre-created
+        let packet_engine = target_packet_engine.or(self.packet_engine.clone());
         tokio::spawn(async move {
             loop {
                 // Check if channel is closed before blocking on recv
@@ -1377,6 +1390,27 @@ impl ParallelScanEngine {
         }
     }
 
+    /// Resolves the source address for reaching a specific target.
+    ///
+    /// Creates a UDP socket and connects to the target to let the kernel
+    /// determine the correct source address based on routing. This handles
+    /// multi-homed hosts where different targets require different interfaces
+    /// (e.g., Docker bridge vs external network).
+    fn source_addr_for_target(&self, target: Ipv4Addr) -> Ipv4Addr {
+        let socket = std::net::UdpSocket::bind("0.0.0.0:0");
+        if let Ok(sock) = socket {
+            let target_str = format!("{target}:9");
+            if sock.connect(&target_str).is_ok() {
+                if let Ok(local_addr) = sock.local_addr() {
+                    if let std::net::IpAddr::V4(ipv4) = local_addr.ip() {
+                        return ipv4;
+                    }
+                }
+            }
+        }
+        self.local_addr
+    }
+
     /// Sends a single SYN probe to the target.
     fn send_probe(
         &self,
@@ -1386,9 +1420,10 @@ impl ParallelScanEngine {
     ) -> Result<(), rustnmap_common::ScanError> {
         let src_port = Self::generate_source_port();
         let seq = Self::generate_sequence_number();
+        let src_addr = self.source_addr_for_target(target);
 
         // Build TCP SYN packet
-        let packet = TcpPacketBuilder::new(self.local_addr, target, src_port, port)
+        let packet = TcpPacketBuilder::new(src_addr, target, src_port, port)
             .seq(seq)
             .syn()
             .window(65_535)
@@ -1430,8 +1465,9 @@ impl ParallelScanEngine {
         probe.sent_time = Instant::now();
 
         // Rebuild and resend the packet
+        let src_addr = self.source_addr_for_target(probe.target);
         let packet =
-            TcpPacketBuilder::new(self.local_addr, probe.target, probe.src_port, probe.port)
+            TcpPacketBuilder::new(src_addr, probe.target, probe.src_port, probe.port)
                 .seq(probe.seq)
                 .syn()
                 .window(65_535)
@@ -1568,14 +1604,17 @@ impl ParallelScanEngine {
     ) -> Result<HashMap<Port, PortState>, rustnmap_common::ScanError> {
         let start_time = Instant::now();
 
+        // Resolve source address for this specific target
+        let src_addr = self.source_addr_for_target(target);
+
         // Create dedicated packet engine with ICMP BPF filter BEFORE starting receiver
         // This ensures the filter is applied before any packets can arrive
-        let scanner_engine = create_stealth_engine(Some(self.local_addr), self.config.clone());
+        let scanner_engine = create_stealth_engine(Some(src_addr), self.config.clone());
 
         if let Some(ref engine) = scanner_engine {
             // Enable BPF filter to capture only ICMP packets destined to local IP
             // This prevents kernel buffer overflow under network load
-            let filter = BpfFilter::icmp_dst(u32::from(self.local_addr));
+            let filter = BpfFilter::icmp_dst(u32::from(src_addr));
             let _ = engine.lock().await.set_filter(&filter);
 
             // Start the packet engine
@@ -1819,9 +1858,10 @@ impl ParallelScanEngine {
         use rustnmap_net::raw_socket::UdpPacketBuilder;
 
         let src_port = Self::generate_source_port();
+        let src_addr = self.source_addr_for_target(target);
 
         // Build UDP packet
-        let packet = UdpPacketBuilder::new(self.local_addr, target, src_port, port).build();
+        let packet = UdpPacketBuilder::new(src_addr, target, src_port, port).build();
 
         // Send the packet
         let dst_sockaddr = SocketAddr::new(std::net::IpAddr::V4(target), port);
@@ -1860,8 +1900,9 @@ impl ParallelScanEngine {
         probe.sent_time = Instant::now();
 
         // Rebuild and resend
+        let src_addr = self.source_addr_for_target(probe.target);
         let packet =
-            UdpPacketBuilder::new(self.local_addr, probe.target, probe.src_port, probe.port)
+            UdpPacketBuilder::new(src_addr, probe.target, probe.src_port, probe.port)
                 .build();
 
         let dst_sockaddr = SocketAddr::new(std::net::IpAddr::V4(probe.target), probe.port);

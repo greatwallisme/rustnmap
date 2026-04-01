@@ -135,10 +135,31 @@ compare_nse_script() {
     local nmap_start=$(date +%s%3N)
     local nmap_output
     local nmap_exit=0
-    nmap_output=$($NMAP_BIN -sV $base_port_arg --script="$script" $extra_args "$target" 2>&1) || nmap_exit=$?
+    local nmap_time_output
+    nmap_output=$(/usr/bin/time -v $NMAP_BIN -sV $base_port_arg --script="$script" $extra_args "$target" 2>/tmp/nmap_time_$$) || nmap_exit=$?
+    nmap_time_output=$(cat /tmp/nmap_time_$$ 2>/dev/null || echo "")
+    rm -f /tmp/nmap_time_$$
     local nmap_end=$(date +%s%3N)
     local nmap_duration=$((nmap_end - nmap_start))
+
+    # Extract nmap resource usage
+    local nmap_maxrss="N/A"
+    local nmap_cpu_pct="N/A"
+    local nmap_user_cpu="N/A"
+    local nmap_sys_cpu="N/A"
+    if [ -n "$nmap_time_output" ]; then
+        nmap_maxrss=$(echo "$nmap_time_output" | grep "Maximum resident set size" | awk '{print $NF}' | head -1)
+        nmap_cpu_pct=$(echo "$nmap_time_output" | grep "Percent of CPU this job got" | awk '{print $NF}' | head -1)
+        nmap_user_cpu=$(echo "$nmap_time_output" | grep "User time (seconds)" | awk '{print $NF}' | head -1)
+        nmap_sys_cpu=$(echo "$nmap_time_output" | grep "System time (seconds)" | awk '{print $NF}' | head -1)
+    fi
+    # Convert maxrss from KB to MB
+    if [[ "$nmap_maxrss" != "N/A" && -n "$nmap_maxrss" ]]; then
+        nmap_maxrss=$(echo "scale=1; ${nmap_maxrss} / 1024" | bc 2>/dev/null || echo "$nmap_maxrss")"MB"
+    fi
+
     echo "[INFO] nmap completed in ${nmap_duration}ms (exit: $nmap_exit)" | tee -a "$LOG_FILE"
+    echo "[INFO] nmap resources: peak_mem=${nmap_maxrss}, cpu=${nmap_cpu_pct}%, user=${nmap_user_cpu}s, sys=${nmap_sys_cpu}s" | tee -a "$LOG_FILE"
 
     # Delay between scans (2 seconds for reliability)
     sleep 2
@@ -148,10 +169,31 @@ compare_nse_script() {
     local rustnmap_start=$(date +%s%3N)
     local rustnmap_output
     local rustnmap_exit=0
-    rustnmap_output=$($RUSTNMAP_BIN -sV $base_port_arg --script="$script" $extra_args "$target" 2>&1) || rustnmap_exit=$?
+    local rustnmap_time_output
+    rustnmap_output=$(/usr/bin/time -v $RUSTNMAP_BIN -sV $base_port_arg --script="$script" $extra_args "$target" 2>/tmp/rustnmap_time_$$) || rustnmap_exit=$?
+    rustnmap_time_output=$(cat /tmp/rustnmap_time_$$ 2>/dev/null || echo "")
+    rm -f /tmp/rustnmap_time_$$
     local rustnmap_end=$(date +%s%3N)
     local rustnmap_duration=$((rustnmap_end - rustnmap_start))
+
+    # Extract rustnmap resource usage
+    local rustnmap_maxrss="N/A"
+    local rustnmap_cpu_pct="N/A"
+    local rustnmap_user_cpu="N/A"
+    local rustnmap_sys_cpu="N/A"
+    if [ -n "$rustnmap_time_output" ]; then
+        rustnmap_maxrss=$(echo "$rustnmap_time_output" | grep "Maximum resident set size" | awk '{print $NF}' | head -1)
+        rustnmap_cpu_pct=$(echo "$rustnmap_time_output" | grep "Percent of CPU this job got" | awk '{print $NF}' | head -1)
+        rustnmap_user_cpu=$(echo "$rustnmap_time_output" | grep "User time (seconds)" | awk '{print $NF}' | head -1)
+        rustnmap_sys_cpu=$(echo "$rustnmap_time_output" | grep "System time (seconds)" | awk '{print $NF}' | head -1)
+    fi
+    # Convert maxrss from KB to MB
+    if [[ "$rustnmap_maxrss" != "N/A" && -n "$rustnmap_maxrss" ]]; then
+        rustnmap_maxrss=$(echo "scale=1; ${rustnmap_maxrss} / 1024" | bc 2>/dev/null || echo "$rustnmap_maxrss")"MB"
+    fi
+
     echo "[INFO] rustnmap completed in ${rustnmap_duration}ms (exit: $rustnmap_exit)" | tee -a "$LOG_FILE"
+    echo "[INFO] rustnmap resources: peak_mem=${rustnmap_maxrss}, cpu=${rustnmap_cpu_pct}%, user=${rustnmap_user_cpu}s, sys=${rustnmap_sys_cpu}s" | tee -a "$LOG_FILE"
 
     # Calculate speedup
     local speedup="N/A"
@@ -268,6 +310,8 @@ compare_nse_script() {
         speedup="N/A"
     else
         echo "  Speed: ${speedup}x (rustnmap=${rustnmap_duration}ms, nmap=${nmap_duration}ms)" | tee -a "$LOG_FILE"
+        echo "  Resources (nmap):     peak_mem=${nmap_maxrss}, cpu=${nmap_cpu_pct}%, user=${nmap_user_cpu}s, sys=${nmap_sys_cpu}s" | tee -a "$LOG_FILE"
+        echo "  Resources (rustnmap): peak_mem=${rustnmap_maxrss}, cpu=${rustnmap_cpu_pct}%, user=${rustnmap_user_cpu}s, sys=${rustnmap_sys_cpu}s" | tee -a "$LOG_FILE"
     fi
     echo "  Notes: $result_notes" | tee -a "$LOG_FILE"
 
@@ -291,7 +335,7 @@ compare_nse_script() {
         fi
     fi
 
-    TEST_RESULTS+=("$result_status|$test_name|$result_notes|${speedup}x")
+    TEST_RESULTS+=("$result_status|$test_name|$result_notes|${speedup}x|nmap_mem=${nmap_maxrss} rustnmap_mem=${rustnmap_maxrss}")
     echo "" | tee -a "$LOG_FILE"
 }
 
@@ -826,8 +870,8 @@ main() {
         echo "Pass Rate: ${pass_rate}%"
         echo ""
         echo "Detailed Results:"
-        echo "Status|Test Name|Notes|Speedup"
-        echo "------|---------|------|--------"
+        echo "Status|Test Name|Notes|Speedup|Resources"
+        echo "------|---------|------|--------|----------"
         for result in "${TEST_RESULTS[@]}"; do
             echo "$result"
         done

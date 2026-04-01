@@ -1,190 +1,199 @@
 # NSE Module Technical Findings
 
-> **Updated**: 2026-03-27
+> **Updated**: 2026-04-01 (Root Cause Analysis Complete)
 
 ---
 
-## UPDATED: SSL/TLS Scripts Complete (2026-03-27)
+## Root Cause Analysis (2026-04-01) - Systematic Debugging Phase 1
 
-**Status**: ✅ COMPLETE - ssl-cert.nse script fully functional
+### Methodology
+逐个运行失败脚本，抓取实际 Lua 错误信息（不再猜测）。
 
-### Progress Summary
-
-| Component | Status | Notes |
-|-----------|--------|-------|
-| Lua file loader | ✅ COMPLETE | nselib/ libraries load successfully |
-| Socket connect | ✅ COMPLETE | Handles host, port, proto parameters |
-| SSL certificate retrieval | ✅ COMPLETE | OpenSSL integration working |
-
-### Test Result
-
-```bash
-$ ./target/release/rustnmap -p 443 --script ssl-cert www.qq.com
-
-PORT     STATE SERVICE
-443/tcp  open    https
-| ssl-cert
-|   Subject: commonName=*.ias.tencent-cloud.net/organizationName=Tencent Technology (Shenzhen) Company Limited/stateOrProvinceName=Guangdong Province/countryName=CN
-|   Subject Alternative Name: DNS:*.ias.tencent-cloud.net, DNS:ias.tencent-cloud.net
-|   Issuer: commonName=DigiCert Secure Site OV G2 TLS CN RSA4096 SHA256 2022 CA1/organizationName=DigiCert, Inc./countryName=US
-|   Public Key type: rsa
-|   Public Key bits: 2048
-|   Signature Algorithm: sha256WithRSAEncryption
-|   Not valid before: 2025-06-23T00:00:00
-|   Not valid after:  2026-07-24T23:59:59
-|   MD5:     590c a9a7 e8b2 36eb 87d5 63f8 6dc5 216e
-|   SHA-1:   78f3 f716 8024 8710 c435 b5ef 09a6 5933 7d3a 45a3
-|_  SHA-256: 8e4f 83b5 fcd2 2ab2 3a94 0d4c f170 7a5a 02ed eba5 abd9 3c4d de21 22d8 5bee e3ce
-```
-
-### Implementation Details
-
-**Files Modified**:
-- `crates/rustnmap-nse/src/libs/nmap.rs` - Added SSL support:
-  - `get_ssl_certificate()` method on NseSocket
-  - `cert_to_table()` function for certificate parsing
-  - `x509_name_to_table()` for DN field conversion
-  - `asn1_time_to_table()` for date parsing
-  - `digest()` method returning raw bytes for fingerprint calculation
-
-**Key Implementation Points**:
-1. SSL handshake using OpenSSL's `SslConnector`
-2. Certificate verification disabled (`SslVerifyMode::NONE`) matching Nmap behavior
-3. Certificate table with subject, issuer, validity, extensions, pubkey info
-4. Digest method returns raw binary (not hex) for `stdnse.tohex` compatibility
-
-### Bugs Fixed
-
-1. **Digest function signature**: Changed from `|lua, algo: String|` to `|lua, (_self, algo): (mlua::Table, String)|` to handle method call syntax (`cert:digest("md5")`)
-
-2. **Date parsing**: OpenSSL returns "Mon DD HH:MM:SS YYYY GMT" format, not "YYYYMMDDhhmmssZ" as originally assumed
+### Root Causes Found (按优先级排序)
 
 ---
 
-## CRITICAL: SSL/TLS Scripts Cannot Run - Missing Lua Library Loader (2026-03-26)
+#### RC-1: `stdnse.parse_timespec` 不接受 nil 参数 [HIGH - 影响 banner 等脚本]
 
-**Status**: ✅ FIXED - Lua file loader implemented
+**Error**:
+```
+bad argument #1: error converting Lua nil to String (expected string or number)
+stack: stdnse.parse_timespec -> banner:70 -> grab_banner -> action
+```
 
-### Original Problem
+**Root Cause**: Rust 实现签名是 `|lua, timespec: String|`，要求非 nil。但 Nmap 原始实现是：
+```lua
+-- nselib/stdnse.lua:413
+function parse_timespec(timespec)
+  if timespec == nil then return nil, "Can't parse nil timespec" end
+```
+Nmap 脚本普遍在没传参数时传入 nil（如 `stdnse.parse_timespec(stdnse.get_script_args("banner.timeout"))`），期望返回 nil 而非崩溃。
 
-SSL/TLS NSE scripts required pure Lua libraries that the NSE engine could not load.
+**Fix**: 修改 `parse_timespec` 签名为 `Option<String>`，nil 时返回 `(nil, err_msg)`。
+**Affected Scripts**: banner, 以及所有使用 `parse_timespec` 的脚本（122个文件引用）
 
-### Solution Implemented
-
-Added Lua file loader in `crates/rustnmap-nse/src/lua.rs`:
-- `set_package_path()` - Configures Lua package path
-- `add_file_searcher()` - Registers custom file loader
-
-**Result**: Pure Lua libraries from `nselib/` now load successfully.
+**File**: `crates/rustnmap-nse/src/libs/stdnse.rs:675`
 
 ---
 
-## CRITICAL: SSL/TLS Scripts Cannot Run - Missing Lua Library Loader (2026-03-26)
+#### RC-2: `nmap.socket:receive_lines` 方法缺失 [HIGH - 影响 SMTP/IMAP 脚本]
 
-**Status**: CRITICAL BUG - BLOCKING ALL SSL SCRIPTS
-
-### Problem
-
-SSL/TLS NSE scripts require pure Lua libraries that the NSE engine cannot load.
-
-### Root Cause
-
-The NSE engine only registers **Rust** libraries in `libs/mod.rs::register_all()`. It does NOT support loading **pure Lua** files from the `nselib/` directory.
-
-### Evidence
-
-**Script Error**:
+**Error**:
 ```
-lua runtime error in 'ssl-cert': runtime error:
-  module 'sslcert' not found:
-  no field package.preload['sslcert']
-  no file '/usr/local/share/lua/5.4/sslcert.lua'
-  no file '/usr/local/share/lua/5.4/sslcert/init.lua'
-  no file './sslcert.lua'
-  no file './sslcert/init.lua'
+attempt to call a nil value (method 'receive_lines')
+stack: smtp.lua:268 -> smtp.query -> smtp.ehlo -> smtp-commands:91 -> action
 ```
 
-**Libraries Exist But Not Loaded**:
-```bash
-$ ls -la nselib/*.lua | grep -E "(ssl|cert|date|time|outlib|unicode)"
--rw-r--r-- 1 root root   8257 datetime.lua
--rw-r--r-- 1 root root   2162 outlib.lua
--rw-r--r-- 1 root root  37031 sslcert.lua
--rw-r--r-- 1 root root  9909 sslv2.lua
--rw-r--r-- 1 root root  75467 tls.lua
--rw-r--r-- 1 root root  13996 unicode.lua
-```
+**Root Cause**: `NseSocket` UserData 实现中没有 `receive_lines` 方法。虽然之前在 `nmap.rs` 中添加了 `receive_lines`，但那是加在 `nmap` 模块的 socket 模拟上，不是加在 `comm.rs` 的 `NseSocket` UserData 上。
 
-### Architecture Analysis
+smtp.lua 调用的是 `socket:receive_lines()`，这个 socket 是由 `comm.opencon` 或 `nmap.new_socket` 创建的。
 
-**Current NSE Engine Flow**:
-```
-1. NseLua::new() creates Lua instance
-2. register_all() adds Rust libraries to globals
-3. Script loads from .nse file
-4. Script calls require("sslcert") ❌ FAILS
-```
+**Fix**: 在 `NseSocket` 的 `UserData` 实现中添加 `receive_lines` 方法。
+**Affected Scripts**: smtp-commands, imap-capabilities, smtp-brute 等
 
-**Missing Infrastructure**:
-1. No `package.path` setup (Lua's module search path)
-2. No Lua file loader (to read .lua files)
-3. No package searcher registration with mlua
-
-### Impact
-
-**All SSL/TLS scripts broken** (12+ scripts):
-- ssl-cert.nse
-- ssl-cert-intaddr.nse
-- ssl-date.nse
-- ssl-enum-ciphers.nse
-- ssl-dh-params.nse
-- ssl-heartbleed.nse
-- tls-alpn.nse
-- tls-nextprotoneg.nse
-- tls-ticketbleed.nse
-
-**Also broken**:
-- Any script requiring `json.lua`
-- Any script requiring `datafiles.lua`
-- Any script requiring `asn1.lua`
-- Many others
-
-### Required Fix
-
-**Implement Lua file loader** in `crates/rustnmap-nse/src/lua.rs`:
-
-```rust
-pub fn new(config: LuaConfig) -> Result<Self> {
-    let lua = Lua::new();
-
-    // Set package.path to search nselib/
-    lua.load("package.path = './nselib/?.lua;./nselib/?/init.lua;'").exec()?;
-
-    // Add custom searcher for nselib files
-    lua.globals().get::<_, mlua::Table>("package")?
-        .set("searchers", vec![...])?;
-
-    Ok(Self { lua, config })
-}
-```
-
-**Complexity**: Medium (2-3 hours)
-
-### Test Evidence
-
-**Command**:
-```bash
-./target/debug/rustnmap -p 443 --script ssl-cert www.example.com
-```
-
-**Result**: Script fails during portrule evaluation with module not found error.
-
-**See**: `SSL_NSE_TEST_REPORT.md` for full test details.
+**File**: `crates/rustnmap-nse/src/libs/comm.rs:144` (NseSocket UserData impl)
 
 ---
 
-## SSH Post-NEWKEYS Encryption: Critical RFC 4253 Violation Fixed (2026-03-22)
+#### RC-3: `http.can_use_head` 函数缺失 [HIGH - 影响 HTTP 脚本]
 
-(Previous findings preserved...)
+**Error**:
+```
+attempt to call a nil value (field 'can_use_head')
+stack: http-headers:49 -> action
+```
 
-[Rest of previous findings.md content...]
+**Root Cause**: http.lua 库中缺少 `can_use_head` 函数。这个函数检查目标是否支持 HEAD 请求。
+
+**Fix**: 在 http 模块中实现 `can_use_head`。
+**Affected Scripts**: http-headers, http-enum, http-git, http-date 等
+
+**File**: `crates/rustnmap-nse/src/libs/http.rs` (或 nselib/http.lua)
+
+---
+
+#### RC-4: `dns.query` 不接受 nil 参数 [MEDIUM - 影响 fcrdns 等]
+
+**Error**:
+```
+bad argument #1: error converting Lua nil to String (expected string or number)
+stack: dns.query -> fcrdns:80 -> action
+```
+
+**Root Cause**: `dns.query` 函数签名不接受 nil。fcrdns.nse 调用 `dns.query(hostname)` 时，hostname 可能从某个返回 nil 的函数获取。
+
+**Fix**: 检查 dns.query 的参数是否接受 Optional 值。
+**Affected Scripts**: fcrdns, dns相关
+
+**File**: `crates/rustnmap-nse/src/libs/dns.rs` (或 nselib/dns.lua)
+
+---
+
+#### RC-5: `smb.list_dialects` 函数缺失 [MEDIUM - SMB 脚本]
+
+**Error**:
+```
+attempt to call a nil value (field 'list_dialects')
+stack: smb-protocols:54 -> action
+```
+
+**Root Cause**: smb.lua 库中完全没有实现 `list_dialects`。
+
+**Fix**: 在 smb 模块中实现。**复杂度高 - 需要完整 SMB 协议实现。**
+**Affected Scripts**: smb-protocols
+
+**File**: nselib/smb.lua
+
+---
+
+#### RC-6: `ldap.connect` 方法缺失 [MEDIUM - LDAP 脚本]
+
+**Error**:
+```
+attempt to call a nil value (method 'connect')
+stack: ldap-rootdse:130 -> action
+```
+
+**Root Cause**: ldap.lua 库中 `connect` 方法未实现或绑定不正确。
+
+**Fix**: 需要检查 ldap 模块绑定。
+**Affected Scripts**: ldap-rootdse, ldap-search
+
+**File**: nselib/ldap.lua 或 Rust ldap 模块
+
+---
+
+#### RC-7: `redis.getCredentials` 方法缺失 [MEDIUM - Redis 脚本]
+
+**Error**:
+```
+attempt to call a nil value (method 'getCredentials')
+stack: redis-info:186 -> action
+```
+
+**Root Cause**: `getCredentials` 方法没有在相关对象上注册。
+
+**Fix**: 检查 redis 模块的 creds 集成。
+**Affected Scripts**: redis-info
+
+---
+
+#### RC-8: `stdnse.debug` 参数类型不匹配 [LOW - ssl-date]
+
+**Error**:
+```
+bad argument #1: error converting Lua string to i64
+stack: stdnse.debug -> ssl-date:100 -> client_hello -> get_time_sample -> action
+```
+
+**Root Cause**: `stdnse.debug(level, ...)` 的 `level` 参数在某些情况下收到非数字值。
+
+**Fix**: 修改 `stdnse.debug` 的第一个参数为 `Option<i64>` 或接受 nil。
+**Affected Scripts**: ssl-date
+
+---
+
+#### RC-9: UDP 脚本不执行 [LOW - DNS/NTP/SNMP]
+
+**Error**: 无错误信息，脚本完全不执行（portrule 不匹配或 UDP socket 不工作）
+
+**Root Cause**: dns-recursion, ntp-info 等 UDP 脚本没有被执行。可能是 portrule 匹配失败（UDP 端口状态问题）或 Lua 脚本不支持 UDP socket。
+
+**Fix**: 需要进一步调查 UDP 脚本的 portrule 和 socket 支持。
+**Affected Scripts**: dns-recursion, ntp-info, snmp-info, snmp-sysdescr
+
+---
+
+### Pattern Analysis (Phase 2)
+
+#### 共同模式: Rust FFI 参数类型不接受 nil
+
+Nmap Lua 代码大量使用这种模式：
+```lua
+local result = might_return_nil()
+local parsed = stdnse.parse_timespec(result)  -- result 可能是 nil
+```
+
+Nmap 原始实现在收到 nil 时返回 `(nil, err)` 而非崩溃。我们的 Rust 绑定使用 `String` 类型不接受 nil。
+
+**需要系统性修复的方向**: 所有接受 Lua 值的 Rust FFI 函数，都应该使用 `Option<String>` 或 `Value` 类型，然后在函数内部处理 nil 情况。
+
+#### 共同模式: nselib 库函数缺失
+
+http.can_use_head, smb.list_dialects, ldap.connect 等 - 这些是完整协议库级别的缺失，不是简单的类型问题。
+
+---
+
+### 修复优先级
+
+| Priority | Root Cause | Fix Difficulty | Impact |
+|----------|-----------|---------------|--------|
+| P0 | RC-1: parse_timespec nil | LOW (改签名) | 122个脚本 |
+| P0 | RC-2: receive_lines 缺失 | LOW (加方法) | SMTP/IMAP脚本 |
+| P1 | RC-3: http.can_use_head | MEDIUM | HTTP脚本 |
+| P1 | RC-8: stdnse.debug 类型 | LOW | ssl-date等 |
+| P2 | RC-4: dns.query nil | LOW | DNS脚本 |
+| P3 | RC-5: smb.list_dialects | HIGH | SMB脚本 |
+| P3 | RC-6: ldap.connect | HIGH | LDAP脚本 |
+| P3 | RC-7: redis.getCredentials | MEDIUM | Redis脚本 |
+| P3 | RC-9: UDP scripts | HIGH | UDP脚本 |

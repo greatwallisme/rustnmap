@@ -224,6 +224,7 @@ fn build_ptr_domain(ip: &str) -> Option<String> {
 /// # Errors
 ///
 /// Returns an error if library registration fails.
+#[expect(clippy::too_many_lines, reason = "Library registration is inherently verbose")]
 pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     let lua = nse_lua.lua_mut();
 
@@ -243,75 +244,84 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     dns_table.set("TYPE_ANY", 255i64)?;
 
     // Register query function
-    let query_fn = lua.create_function(|lua, (domain, options): (String, Option<Table>)| {
-        debug!("dns.query({})", domain);
+    // Nmap behavior: returns nil if domain is nil rather than crashing
+    let query_fn =
+        lua.create_function(|lua, (domain, options): (Option<String>, Option<Table>)| {
+            let Some(domain) = domain else {
+                return Ok(Value::Nil);
+            };
+            debug!("dns.query({domain})");
 
-        // Parse options
-        let dtype: u16 = options
-            .as_ref()
-            .and_then(|t| t.get::<Option<i64>>("dtype").ok().flatten())
-            .and_then(|n| u16::try_from(n).ok())
-            .unwrap_or(1);
+            // Parse options
+            let dtype: u16 = options
+                .as_ref()
+                .and_then(|t| t.get::<Option<i64>>("dtype").ok().flatten())
+                .and_then(|n| u16::try_from(n).ok())
+                .unwrap_or(1);
 
-        let timeout: u64 = options
-            .as_ref()
-            .and_then(|t| t.get::<Option<u64>>("timeout").ok().flatten())
-            .unwrap_or(DEFAULT_TIMEOUT_MS);
+            let timeout: u64 = options
+                .as_ref()
+                .and_then(|t| t.get::<Option<u64>>("timeout").ok().flatten())
+                .unwrap_or(DEFAULT_TIMEOUT_MS);
 
-        let dns_server: String = options
-            .as_ref()
-            .and_then(|t| t.get::<Option<String>>("host").ok().flatten())
-            .unwrap_or_else(|| "8.8.8.8".to_string());
+            let dns_server: String = options
+                .as_ref()
+                .and_then(|t| t.get::<Option<String>>("host").ok().flatten())
+                .unwrap_or_else(|| "8.8.8.8".to_string());
 
-        // Perform query
-        match dns_query_impl(&domain, dtype, &dns_server, timeout) {
-            Ok(response) => {
-                // Parse response
-                match parse_header(&response) {
-                    Ok((_id, rcode, _qdcount, ancount, header_end)) => {
-                        if rcode != 0 {
-                            return Ok(Value::Nil);
-                        }
-
-                        let results = lua.create_table()?;
-                        let mut offset = header_end;
-
-                        // Skip question section
-                        for _ in 0..1 {
-                            offset = skip_name(&response, offset);
-                            offset += 4; // QTYPE + QCLASS
-                        }
-
-                        // Parse answers
-                        for i in 0..ancount {
-                            match parse_rr(&response, offset) {
-                                Ok((_name, rtype, ttl, rdata, new_offset)) => {
-                                    offset = new_offset;
-
-                                    let record = lua.create_table()?;
-                                    record.set("type", i64::from(rtype))?;
-                                    record.set("ttl", i64::from(ttl))?;
-                                    record.set("data", format_rdata(rtype, &rdata))?;
-
-                                    results.set(i64::from(i + 1), record)?;
-                                }
-                                Err(_) => break,
+            // Perform query
+            match dns_query_impl(&domain, dtype, &dns_server, timeout) {
+                Ok(response) => {
+                    // Parse response
+                    match parse_header(&response) {
+                        Ok((_id, rcode, _qdcount, ancount, header_end)) => {
+                            if rcode != 0 {
+                                return Ok(Value::Nil);
                             }
-                        }
 
-                        Ok(Value::Table(results))
+                            let results = lua.create_table()?;
+                            let mut offset = header_end;
+
+                            // Skip question section
+                            for _ in 0..1 {
+                                offset = skip_name(&response, offset);
+                                offset += 4; // QTYPE + QCLASS
+                            }
+
+                            // Parse answers
+                            for i in 0..ancount {
+                                match parse_rr(&response, offset) {
+                                    Ok((_name, rtype, ttl, rdata, new_offset)) => {
+                                        offset = new_offset;
+
+                                        let record = lua.create_table()?;
+                                        record.set("type", i64::from(rtype))?;
+                                        record.set("ttl", i64::from(ttl))?;
+                                        record.set("data", format_rdata(rtype, &rdata))?;
+
+                                        results.set(i64::from(i + 1), record)?;
+                                    }
+                                    Err(_) => break,
+                                }
+                            }
+
+                            Ok(Value::Table(results))
+                        }
+                        Err(_) => Ok(Value::Nil),
                     }
-                    Err(_) => Ok(Value::Nil),
                 }
+                Err(_) => Ok(Value::Nil),
             }
-            Err(_) => Ok(Value::Nil),
-        }
-    })?;
+        })?;
     dns_table.set("query", query_fn)?;
 
     // Register reverse function
-    let reverse_fn = lua.create_function(|lua, ip: String| {
-        debug!("dns.reverse({})", ip);
+    // Nmap behavior: returns nil if ip is nil
+    let reverse_fn = lua.create_function(|lua, ip: Option<String>| {
+        let Some(ip) = ip else {
+            return Ok(Value::Nil);
+        };
+        debug!("dns.reverse({ip})");
 
         // Build PTR domain from IP
         let Some(ptr_domain) = build_ptr_domain(&ip) else {

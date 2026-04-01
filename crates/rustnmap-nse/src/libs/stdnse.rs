@@ -155,8 +155,33 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     // Create the stdnse table
     let stdnse_table = lua.create_table()?;
 
-    // Register debug(level, message) function
-    let debug_fn = lua.create_function(|_, (level, message): (i64, String)| {
+    // Register debug(level, fmt, ...) function
+    // Nmap behavior: silently returns if level is not numeric.
+    // Supports variadic format args: stdnse.debug(1, "value: %s", val)
+    let debug_fn = lua.create_function(|lua, args: MultiValue| {
+        let mut iter = args.into_iter();
+        let level: i64 = match iter.next().unwrap_or(Value::Nil) {
+            Value::Integer(n) => n,
+            Value::Number(n) => n as i64,
+            _ => return Ok(()), // Silently skip non-numeric levels (Nmap behavior)
+        };
+        let fmt = match iter.next() {
+            Some(Value::String(s)) => s.to_string_lossy().to_string(),
+            _ => return Ok(()),
+        };
+        let rest: Vec<Value> = iter.collect();
+        let message = if rest.is_empty() {
+            fmt
+        } else {
+            let string_format: mlua::Function =
+                lua.globals().get::<mlua::Table>("string")?.get("format")?;
+            let mut call_args = vec![Value::String(lua.create_string(&fmt)?)];
+            call_args.extend(rest);
+            string_format
+                .call::<mlua::String>(MultiValue::from_vec(call_args))?
+                .to_string_lossy()
+                .to_string()
+        };
         debug_impl(level, &message);
         Ok(())
     })?;
@@ -164,23 +189,93 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
 
     // Register debug1, debug2, debug3 convenience functions (Nmap compatibility)
     // These are shorthand for debug(1, ...), debug(2, ...), etc.
+    // Support variadic format args: stdnse.debug1("val: %s", var)
     for level in 1..=5 {
-        let debug_level_fn = lua.create_function(move |_, message: String| {
+        let debug_level_fn = lua.create_function(move |lua, args: MultiValue| {
+            let mut iter = args.into_iter();
+            let fmt = match iter.next() {
+                Some(Value::String(s)) => s.to_string_lossy().to_string(),
+                _ => return Ok(()),
+            };
+            let rest: Vec<Value> = iter.collect();
+            let message = if rest.is_empty() {
+                fmt
+            } else {
+                let string_format: mlua::Function =
+                    lua.globals().get::<mlua::Table>("string")?.get("format")?;
+                let mut call_args = vec![Value::String(lua.create_string(&fmt)?)];
+                call_args.extend(rest);
+                string_format
+                    .call::<mlua::String>(MultiValue::from_vec(call_args))?
+                    .to_string_lossy()
+                    .to_string()
+            };
             debug_impl(level, &message);
             Ok(())
         })?;
         stdnse_table.set(format!("debug{level}"), debug_level_fn)?;
     }
 
-    // Register verbose(level, message) function
-    let verbose_fn = lua.create_function(|_, (level, message): (i64, String)| {
+    // Register verbose(level, fmt, ...) function
+    // Nmap behavior: silently returns if level is not numeric.
+    // Supports variadic format args: stdnse.verbose(1, "value: %s", val)
+    let verbose_fn = lua.create_function(|lua, args: MultiValue| {
+        let mut iter = args.into_iter();
+        let level: i64 = match iter.next().unwrap_or(Value::Nil) {
+            Value::Integer(n) => n,
+            Value::Number(n) => n as i64,
+            _ => return Ok(()),
+        };
+        let fmt = match iter.next() {
+            Some(Value::String(s)) => s.to_string_lossy().to_string(),
+            _ => return Ok(()),
+        };
+        let rest: Vec<Value> = iter.collect();
+        let message = if rest.is_empty() {
+            fmt
+        } else {
+            let string_format: mlua::Function =
+                lua.globals().get::<mlua::Table>("string")?.get("format")?;
+            let mut call_args = vec![Value::String(lua.create_string(&fmt)?)];
+            call_args.extend(rest);
+            string_format
+                .call::<mlua::String>(MultiValue::from_vec(call_args))?
+                .to_string_lossy()
+                .to_string()
+        };
         verbose_impl(level, &message);
         Ok(())
     })?;
     stdnse_table.set("verbose", verbose_fn)?;
 
-    // Register print_debug(level, message) function
-    let print_debug_fn = lua.create_function(|lua, (level, message): (i64, String)| {
+    // Register print_debug(level, fmt, ...) function
+    // Nmap behavior: silently returns if level is not numeric.
+    // Supports variadic format args.
+    let print_debug_fn = lua.create_function(|lua, args: MultiValue| {
+        let mut iter = args.into_iter();
+        let level: i64 = match iter.next().unwrap_or(Value::Nil) {
+            Value::Integer(n) => n,
+            Value::Number(n) => n as i64,
+            _ => return Ok(()),
+        };
+        let fmt = match iter.next() {
+            Some(Value::String(s)) => s.to_string_lossy().to_string(),
+            _ => return Ok(()),
+        };
+        let rest: Vec<Value> = iter.collect();
+        let message = if rest.is_empty() {
+            fmt
+        } else {
+            let string_format: mlua::Function =
+                lua.globals().get::<mlua::Table>("string")?.get("format")?;
+            let mut call_args = vec![Value::String(lua.create_string(&fmt)?)];
+            call_args.extend(rest);
+            string_format
+                .call::<mlua::String>(MultiValue::from_vec(call_args))?
+                .to_string_lossy()
+                .to_string()
+        };
+
         let nmap_level: i64 = lua
             .globals()
             .get::<mlua::Table>("nmap")?
@@ -311,50 +406,46 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     // - a string separator: stdnse.tohex(data, ":")
     // - a table with options: stdnse.tohex(data, { separator = " ", group = 4 })
     // When using a table, `group` controls how many hex bytes are grouped together.
-    let tohex_fn =
-        lua.create_function(|lua, (data, options): (mlua::String, mlua::Value)| {
-            let bytes = data.as_bytes();
-            let mut separator = String::new();
-            let mut group_size: Option<usize> = None;
+    let tohex_fn = lua.create_function(|lua, (data, options): (mlua::String, mlua::Value)| {
+        let bytes = data.as_bytes();
+        let mut separator = String::new();
+        let mut group_size: Option<usize> = None;
 
-            match options {
-                mlua::Value::String(s) => {
-                    if let Ok(s) = s.to_str() {
-                        separator = s.to_string();
-                    }
+        match options {
+            mlua::Value::String(s) => {
+                if let Ok(s) = s.to_str() {
+                    separator = s.to_string();
                 }
-                mlua::Value::Table(t) => {
-                    if let Ok(Some(s)) = t.get::<Option<mlua::String>>("separator") {
-                        separator = s.to_string_lossy().to_string();
-                    }
-                    if let Ok(g) = t.get::<Option<i64>>("group") {
-                        group_size = g.map(|g| usize::try_from(g).unwrap_or(0));
-                    }
-                }
-                _ => {}
             }
-
-            let hex_chars: Vec<String> = bytes
-                .iter()
-                .map(|b| format!("{b:02x}"))
-                .collect();
-
-            let result = if let Some(group) = group_size {
-                if group > 0 {
-                    hex_chars
-                        .chunks(group)
-                        .map(|chunk| chunk.join(&separator))
-                        .collect::<Vec<_>>()
-                        .join(&separator)
-                } else {
-                    hex_chars.join("")
+            mlua::Value::Table(t) => {
+                if let Ok(Some(s)) = t.get::<Option<mlua::String>>("separator") {
+                    separator = s.to_string_lossy().to_string();
                 }
-            } else {
-                hex_chars.join(&separator)
-            };
+                if let Ok(g) = t.get::<Option<i64>>("group") {
+                    group_size = g.map(|g| usize::try_from(g).unwrap_or(0));
+                }
+            }
+            _ => {}
+        }
 
-            lua.create_string(&result)
-        })?;
+        let hex_chars: Vec<String> = bytes.iter().map(|b| format!("{b:02x}")).collect();
+
+        let result = if let Some(group) = group_size {
+            if group > 0 {
+                hex_chars
+                    .chunks(group)
+                    .map(|chunk| chunk.join(&separator))
+                    .collect::<Vec<_>>()
+                    .join(&separator)
+            } else {
+                hex_chars.join("")
+            }
+        } else {
+            hex_chars.join(&separator)
+        };
+
+        lua.create_string(&result)
+    })?;
     stdnse_table.set("tohex", tohex_fn)?;
 
     // Register fromhex(hexstr) function
@@ -676,7 +767,14 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     //
     // Returns (number, nil) on success or (nil, error_string) on failure.
     // -------------------------------------------------------------------------
-    let parse_timespec_fn = lua.create_function(|lua, timespec: String| {
+    let parse_timespec_fn = lua.create_function(|lua, timespec: Option<String>| {
+        // Nmap returns (nil, err) for nil input, matching Lua API convention
+        let Some(timespec) = timespec else {
+            return Ok((
+                mlua::Value::Nil,
+                mlua::Value::String(lua.create_string("Can't parse nil timespec")?),
+            ));
+        };
         let timespec = timespec.trim();
         if timespec.is_empty() {
             return Ok((mlua::Value::Nil, mlua::Value::Nil));

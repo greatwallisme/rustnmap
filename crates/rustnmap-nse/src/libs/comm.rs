@@ -165,6 +165,51 @@ impl UserData for NseSocket {
             Err(e) => Err(mlua::Error::RuntimeError(format!("receive failed: {e}"))),
         });
 
+        // receive_lines(n) - read n lines (delimited by \r\n or \n)
+        // Nmap scripts like smtp.lua call socket:receive_lines(1) to read a response
+        // Returns (true, data) on success, (nil, err_msg) on failure
+        methods.add_method_mut("receive_lines", |lua, this, n: Option<usize>| {
+            let lines_to_read = n.unwrap_or(1);
+            let mut lines_read = 0usize;
+            let mut result = Vec::new();
+            let mut tmp = [0u8; 8192];
+
+            if let Some(ref mut stream) = this.stream {
+                stream
+                    .set_read_timeout(Some(this.timeout))
+                    .map_err(|e| mlua::Error::RuntimeError(format!("set timeout failed: {e}")))?;
+
+                while lines_read < lines_to_read {
+                    let count = match stream.read(&mut tmp) {
+                        Ok(0) => break, // EOF
+                        Ok(n) => n,
+                        Err(e) if e.kind() == std::io::ErrorKind::TimedOut => break,
+                        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                        Err(e) => {
+                            return Err(mlua::Error::RuntimeError(format!(
+                                "receive_lines failed: {e}"
+                            )));
+                        }
+                    };
+                    result.extend_from_slice(&tmp[..count]);
+                    // Count complete lines
+                    lines_read = String::from_utf8_lossy(&result).matches('\n').count();
+                }
+            }
+
+            if result.is_empty() {
+                return Ok(mlua::MultiValue::from_vec(vec![
+                    Value::Nil,
+                    Value::String(lua.create_string("EOF")?),
+                ]));
+            }
+
+            Ok(mlua::MultiValue::from_vec(vec![
+                Value::Boolean(true),
+                Value::String(lua.create_string(&result)?),
+            ]))
+        });
+
         methods.add_method_mut("close", |_, this, ()| match this.close() {
             Ok(()) => Ok(Value::Boolean(true)),
             Err(e) => Err(mlua::Error::RuntimeError(format!("close failed: {e}"))),
@@ -282,14 +327,20 @@ impl Default for ConnectionOpts {
 }
 
 /// Open a connection to host:port.
-fn opencon_impl(host: &str, port: u16, opts: &ConnectionOpts, sni_hostname: Option<&str>) -> std::io::Result<NseSocket> {
+fn opencon_impl(
+    host: &str,
+    port: u16,
+    opts: &ConnectionOpts,
+    sni_hostname: Option<&str>,
+) -> std::io::Result<NseSocket> {
     // Use block_in_place to yield to the async runtime during blocking network operations
     tokio::task::block_in_place(|| {
         let mut socket = opencon_impl_blocking(host, port, opts)?;
         socket.hostname = Some(sni_hostname.unwrap_or(host).to_string());
         Ok(socket)
     })
-}/// Blocking implementation of TCP connection.
+}
+/// Blocking implementation of TCP connection.
 ///
 /// This function performs the actual blocking DNS resolution and TCP connection.
 /// It is called within `block_in_place` to avoid blocking the async runtime.
@@ -382,6 +433,53 @@ fn read_response_impl(socket: &mut NseSocket, opts: &ConnectionOpts) -> std::io:
     }
 }
 
+/// Extract host string from a Lua value (string or host table with `ip` field).
+fn extract_host(value: &Value) -> mlua::Result<String> {
+    match value {
+        Value::String(s) => s
+            .to_str()
+            .map(|s| s.to_string())
+            .map_err(|e| mlua::Error::RuntimeError(format!("host string conversion failed: {e}"))),
+        Value::Table(t) => {
+            let ip: Value = t.get("ip").map_err(|e| {
+                mlua::Error::RuntimeError(format!("host table missing 'ip' field: {e}"))
+            })?;
+            match ip {
+                Value::String(s) => s.to_str().map(|s| s.to_string()).map_err(|e| {
+                    mlua::Error::RuntimeError(format!("host.ip conversion failed: {e}"))
+                }),
+                other => Err(mlua::Error::RuntimeError(format!(
+                    "host.ip must be a string, got: {:?}",
+                    other.type_name()
+                ))),
+            }
+        }
+        other => Err(mlua::Error::RuntimeError(format!(
+            "host must be a string or table, got: {:?}",
+            other.type_name()
+        ))),
+    }
+}
+
+/// Extract port number from a Lua value (integer or port table with `number` field).
+fn extract_port(value: Value) -> mlua::Result<u16> {
+    match value {
+        Value::Integer(n) => u16::try_from(n)
+            .map_err(|e| mlua::Error::RuntimeError(format!("port number out of range: {e}"))),
+        Value::Table(ref t) => {
+            let number: i64 = t.get("number").map_err(|e| {
+                mlua::Error::RuntimeError(format!("port table missing 'number' field: {e}"))
+            })?;
+            u16::try_from(number)
+                .map_err(|e| mlua::Error::RuntimeError(format!("port.number out of range: {e}")))
+        }
+        other => Err(mlua::Error::RuntimeError(format!(
+            "port must be a number or table, got: {:?}",
+            other.type_name()
+        ))),
+    }
+}
+
 /// Register the comm library with the Lua runtime.
 ///
 /// # Arguments
@@ -407,7 +505,13 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     // optional data string to send after connection, and optional opts table.
     // Matches Nmap's comm.opencon signature: opencon(host, port, data, opts)
     let opencon_fn = lua.create_function(
-        |lua, (host_param, port_param, _data, opts): (Value, Value, Option<mlua::String>, Option<Table>)| {
+        |lua,
+         (host_param, port_param, _data, opts): (
+            Value,
+            Value,
+            Option<mlua::String>,
+            Option<Table>,
+        )| {
             // Extract host string from either string or host table
             let host = match &host_param {
                 Value::String(s) => s.to_str()?.to_string(),
@@ -598,31 +702,53 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     comm_table.set("tryssl", tryssl_fn)?;
 
     // Register get_banner(host, port, [opts]) function
-    let get_banner_fn =
-        lua.create_function(|lua, (host, port, opts): (String, u16, Option<Table>)| {
+    // NSE pattern: returns (true, banner) on success, (false, errmsg) on failure
+    // Accepts host as string or table (with host.ip), port as number or table (with port.number)
+    let get_banner_fn = lua.create_function(
+        |lua, (host_param, port_param, opts): (Value, Value, Option<Table>)| {
+            let host = extract_host(&host_param)?;
+            let port = extract_port(port_param)?;
             let options = parse_opts(opts).map_err(|e| mlua::Error::RuntimeError(e.to_string()))?;
 
             match get_banner_impl(&host, port, &options) {
-                Ok(banner) => Ok(Value::String(lua.create_string(&banner)?)),
-                Err(_) => Ok(Value::Nil),
+                Ok(banner) => Ok(mlua::MultiValue::from_vec(vec![
+                    Value::Boolean(true),
+                    Value::String(lua.create_string(&banner)?),
+                ])),
+                Err(e) => Ok(mlua::MultiValue::from_vec(vec![
+                    Value::Boolean(false),
+                    Value::String(lua.create_string(format!("{e}"))?),
+                ])),
             }
-        })?;
+        },
+    )?;
     comm_table.set("get_banner", get_banner_fn)?;
 
     // Register exchange(host, port, data, [opts]) function
+    // NSE pattern: returns (true, response) on success, (false, errmsg) on failure
+    // Accepts host as string or table (with host.ip), port as number or table (with port.number)
     let exchange_fn = lua.create_function(
-        |lua, (host, port, data, opts): (String, u16, mlua::String, Option<Table>)| {
+        |lua, (host_param, port_param, data, opts): (Value, Value, mlua::String, Option<Table>)| {
+            let host = extract_host(&host_param)?;
+            let port = extract_port(port_param)?;
             let options = parse_opts(opts).map_err(|e| mlua::Error::RuntimeError(e.to_string()))?;
 
             match exchange_impl(&host, port, &data.as_bytes(), &options) {
-                Ok(response) => Ok(Value::String(lua.create_string(&response)?)),
-                Err(_) => Ok(Value::Nil),
+                Ok(response) => Ok(mlua::MultiValue::from_vec(vec![
+                    Value::Boolean(true),
+                    Value::String(lua.create_string(&response)?),
+                ])),
+                Err(e) => Ok(mlua::MultiValue::from_vec(vec![
+                    Value::Boolean(false),
+                    Value::String(lua.create_string(format!("{e}"))?),
+                ])),
             }
         },
     )?;
     comm_table.set("exchange", exchange_fn)?;
 
     // Register read_response(socket, [opts]) function
+    // NSE pattern: returns (true, data) on success, (false, errmsg) on failure
     let read_response_fn =
         lua.create_function(|lua, (socket, opts): (mlua::AnyUserData, Option<Table>)| {
             let options = parse_opts(opts).map_err(|e| mlua::Error::RuntimeError(e.to_string()))?;
@@ -630,8 +756,14 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
             let mut socket_ref = socket.borrow_mut::<NseSocket>()?;
 
             match read_response_impl(&mut socket_ref, &options) {
-                Ok(data) => Ok(Value::String(lua.create_string(&data)?)),
-                Err(_) => Ok(Value::Nil),
+                Ok(data) => Ok(mlua::MultiValue::from_vec(vec![
+                    Value::Boolean(true),
+                    Value::String(lua.create_string(&data)?),
+                ])),
+                Err(e) => Ok(mlua::MultiValue::from_vec(vec![
+                    Value::Boolean(false),
+                    Value::String(lua.create_string(format!("{e}"))?),
+                ])),
             }
         })?;
     comm_table.set("read_response", read_response_fn)?;
@@ -645,13 +777,22 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
 
             // Send the request
             if socket_ref.send(&request.as_bytes()).is_err() {
-                return Ok(Value::Nil);
+                return Ok(mlua::MultiValue::from_vec(vec![
+                    Value::Boolean(false),
+                    Value::String(lua.create_string("Send failed")?),
+                ]));
             }
 
             // Read the response
             match read_response_impl(&mut socket_ref, &options) {
-                Ok(data) => Ok(Value::String(lua.create_string(&data)?)),
-                Err(_) => Ok(Value::Nil),
+                Ok(data) => Ok(mlua::MultiValue::from_vec(vec![
+                    Value::Boolean(true),
+                    Value::String(lua.create_string(&data)?),
+                ])),
+                Err(e) => Ok(mlua::MultiValue::from_vec(vec![
+                    Value::Boolean(false),
+                    Value::String(lua.create_string(format!("{e}"))?),
+                ])),
             }
         },
     )?;
@@ -912,17 +1053,13 @@ mod tests {
 fn tls_connect_and_get_cert(hostname: &str, addr: SocketAddr) -> mlua::Result<Vec<u8>> {
     use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
 
-    let mut builder =
-        SslConnector::builder(SslMethod::tls()).map_err(|e| {
-            mlua::Error::RuntimeError(format!("Failed to create SSL connector: {e}"))
-        })?;
+    let mut builder = SslConnector::builder(SslMethod::tls())
+        .map_err(|e| mlua::Error::RuntimeError(format!("Failed to create SSL connector: {e}")))?;
     builder.set_verify(SslVerifyMode::NONE);
     let connector = builder.build();
 
-    let stream =
-        TcpStream::connect_timeout(&addr, Duration::from_millis(DEFAULT_TIMEOUT_MS)).map_err(|e| {
-            mlua::Error::RuntimeError(format!("TLS connect failed to {addr}: {e}"))
-        })?;
+    let stream = TcpStream::connect_timeout(&addr, Duration::from_millis(DEFAULT_TIMEOUT_MS))
+        .map_err(|e| mlua::Error::RuntimeError(format!("TLS connect failed to {addr}: {e}")))?;
 
     let ssl_stream = connector.connect(hostname, stream).map_err(|e| {
         mlua::Error::RuntimeError(format!("SSL handshake failed for {hostname}: {e}"))
@@ -932,9 +1069,8 @@ fn tls_connect_and_get_cert(hostname: &str, addr: SocketAddr) -> mlua::Result<Ve
         mlua::Error::RuntimeError("Server did not present a certificate".to_string())
     })?;
 
-    cert.to_der().map_err(|e| {
-        mlua::Error::RuntimeError(format!("Failed to encode certificate as DER: {e}"))
-    })
+    cert.to_der()
+        .map_err(|e| mlua::Error::RuntimeError(format!("Failed to encode certificate as DER: {e}")))
 }
 
 #[cfg(not(feature = "openssl"))]
@@ -943,4 +1079,3 @@ fn tls_connect_and_get_cert(_hostname: &str, _addr: SocketAddr) -> mlua::Result<
         "SSL support not available (openssl feature not enabled)".to_string(),
     ))
 }
-

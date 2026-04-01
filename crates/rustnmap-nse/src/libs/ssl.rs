@@ -88,17 +88,13 @@ const STARTTLS_PORTS: [u16; 13] = [
 /// SNI (Server Name Indication), and all required extensions.
 #[cfg(feature = "openssl")]
 fn tls_connect_and_get_cert(hostname: &str, addr: std::net::SocketAddr) -> mlua::Result<Vec<u8>> {
-    let mut builder =
-        SslConnector::builder(SslMethod::tls()).map_err(|e| {
-            mlua::Error::RuntimeError(format!("Failed to create SSL connector: {e}"))
-        })?;
+    let mut builder = SslConnector::builder(SslMethod::tls())
+        .map_err(|e| mlua::Error::RuntimeError(format!("Failed to create SSL connector: {e}")))?;
     builder.set_verify(SslVerifyMode::NONE);
     let connector = builder.build();
 
     let stream = TcpStream::connect_timeout(&addr, Duration::from_millis(DEFAULT_TIMEOUT_MS))
-        .map_err(|e| {
-            mlua::Error::RuntimeError(format!("TLS connect failed to {addr}: {e}"))
-        })?;
+        .map_err(|e| mlua::Error::RuntimeError(format!("TLS connect failed to {addr}: {e}")))?;
 
     let ssl_stream = connector.connect(hostname, stream).map_err(|e| {
         mlua::Error::RuntimeError(format!("SSL handshake failed for {hostname}: {e}"))
@@ -108,9 +104,8 @@ fn tls_connect_and_get_cert(hostname: &str, addr: std::net::SocketAddr) -> mlua:
         mlua::Error::RuntimeError("Server did not present a certificate".to_string())
     })?;
 
-    cert.to_der().map_err(|e| {
-        mlua::Error::RuntimeError(format!("Failed to encode certificate as DER: {e}"))
-    })
+    cert.to_der()
+        .map_err(|e| mlua::Error::RuntimeError(format!("Failed to encode certificate as DER: {e}")))
 }
 
 #[cfg(not(feature = "openssl"))]
@@ -142,9 +137,8 @@ fn starttls_and_get_cert(
 
     perform_starttls(&mut stream, protocol)?;
 
-    let mut builder = SslConnector::builder(SslMethod::tls()).map_err(|e| {
-        mlua::Error::RuntimeError(format!("Failed to create SSL connector: {e}"))
-    })?;
+    let mut builder = SslConnector::builder(SslMethod::tls())
+        .map_err(|e| mlua::Error::RuntimeError(format!("Failed to create SSL connector: {e}")))?;
     builder.set_verify(SslVerifyMode::NONE);
     let connector = builder.build();
     let ssl_stream = connector.connect(hostname, stream).map_err(|e| {
@@ -155,9 +149,8 @@ fn starttls_and_get_cert(
     let cert = ssl_stream.ssl().peer_certificate().ok_or_else(|| {
         mlua::Error::RuntimeError("Server did not present a certificate".to_string())
     })?;
-    cert.to_der().map_err(|e| {
-        mlua::Error::RuntimeError(format!("Failed to encode certificate as DER: {e}"))
-    })
+    cert.to_der()
+        .map_err(|e| mlua::Error::RuntimeError(format!("Failed to encode certificate as DER: {e}")))
 }
 
 #[cfg(not(feature = "openssl"))]
@@ -966,14 +959,10 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
             let socket_addr: std::net::SocketAddr = addr_str
                 .to_socket_addrs()
                 .map_err(|e| {
-                    mlua::Error::RuntimeError(format!(
-                        "DNS resolution failed for {addr_str}: {e}"
-                    ))
+                    mlua::Error::RuntimeError(format!("DNS resolution failed for {addr_str}: {e}"))
                 })?
                 .next()
-                .ok_or_else(|| {
-                    mlua::Error::RuntimeError(format!("Cannot resolve {addr_str}"))
-                })?;
+                .ok_or_else(|| mlua::Error::RuntimeError(format!("Cannot resolve {addr_str}")))?;
 
             // Get certificate DER via proper TLS handshake
             let cert_der = if let Some(proto) = protocol {
@@ -991,17 +980,24 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
             let table = lua.create_table()?;
 
             // PEM encoding
-            let pem = cert.to_pem().map_err(|e| {
-                mlua::Error::RuntimeError(format!("Failed to encode PEM: {e}"))
-            })?;
+            let pem = cert
+                .to_pem()
+                .map_err(|e| mlua::Error::RuntimeError(format!("Failed to encode PEM: {e}")))?;
             table.set("pem", String::from_utf8_lossy(&pem).as_ref())?;
 
             // Subject
             let subject = cert.subject_name();
             let subject_table = lua.create_table()?;
             for entry in subject.entries() {
-                let key = entry.object().nid().long_name().unwrap_or("unknown").to_string();
-                let value = entry.data().as_utf8()
+                let key = entry
+                    .object()
+                    .nid()
+                    .long_name()
+                    .unwrap_or("unknown")
+                    .to_string();
+                let value = entry
+                    .data()
+                    .as_utf8()
                     .map_or_else(|_| "unknown".to_string(), |s| s.to_string());
                 subject_table.set(key.as_str(), value.as_str())?;
             }
@@ -1011,8 +1007,15 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
             let issuer = cert.issuer_name();
             let issuer_table = lua.create_table()?;
             for entry in issuer.entries() {
-                let key = entry.object().nid().long_name().unwrap_or("unknown").to_string();
-                let value = entry.data().as_utf8()
+                let key = entry
+                    .object()
+                    .nid()
+                    .long_name()
+                    .unwrap_or("unknown")
+                    .to_string();
+                let value = entry
+                    .data()
+                    .as_utf8()
                     .map_or_else(|_| "unknown".to_string(), |s| s.to_string());
                 issuer_table.set(key.as_str(), value.as_str())?;
             }
@@ -1034,14 +1037,19 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
             table.set("validity", validity_table)?;
 
             // Signature algorithm
-            let sig_alg = cert.signature_algorithm().object().nid()
-                .long_name().unwrap_or("unknown").to_string();
+            let sig_alg = cert
+                .signature_algorithm()
+                .object()
+                .nid()
+                .long_name()
+                .unwrap_or("unknown")
+                .to_string();
             table.set("sig_algorithm", sig_alg.as_str())?;
 
             // Public key
-            let pkey = cert.public_key().map_err(|e| {
-                mlua::Error::RuntimeError(format!("Failed to get public key: {e}"))
-            })?;
+            let pkey = cert
+                .public_key()
+                .map_err(|e| mlua::Error::RuntimeError(format!("Failed to get public key: {e}")))?;
             let pubkey_table = lua.create_table()?;
             let key_type = match pkey.id() {
                 openssl::pkey::Id::RSA => "rsa",
@@ -1066,16 +1074,18 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
 
             // EC-specific fields: add ecdhparams with curve info
             if pkey.id() == openssl::pkey::Id::EC {
-                let ec_key = pkey.ec_key().map_err(|e| {
-                    mlua::Error::RuntimeError(format!("Failed to get EC key: {e}"))
-                })?;
+                let ec_key = pkey
+                    .ec_key()
+                    .map_err(|e| mlua::Error::RuntimeError(format!("Failed to get EC key: {e}")))?;
                 let ecdhparams = lua.create_table()?;
                 let curve_params = lua.create_table()?;
 
                 let group = ec_key.group();
                 curve_params.set("ec_curve_type", "namedcurve")?;
-                let curve_name = group.curve_name()
-                    .map_or_else(|| "unknown".to_string(), |nid| nid.long_name().unwrap_or("unknown").to_string());
+                let curve_name = group.curve_name().map_or_else(
+                    || "unknown".to_string(),
+                    |nid| nid.long_name().unwrap_or("unknown").to_string(),
+                );
                 curve_params.set("curve", curve_name.as_str())?;
                 ecdhparams.set("curve_params", curve_params)?;
                 pubkey_table.set("ecdhparams", ecdhparams)?;
@@ -1087,11 +1097,12 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
             if let Some(san) = cert.subject_alt_names() {
                 let ext_table = lua.create_table()?;
                 ext_table.set("name", "X509v3 Subject Alternative Name")?;
-                let san_values: Vec<String> = san.iter()
+                let san_values: Vec<String> = san
+                    .iter()
                     .filter_map(|name| {
                         name.dnsname()
                             .map(|dns| format!("DNS:{dns}"))
-                        .or_else(|| name.ipaddress().map(|ip| format!("IP:{ip:?}")))
+                            .or_else(|| name.ipaddress().map(|ip| format!("IP:{ip:?}")))
                     })
                     .collect();
                 ext_table.set("value", san_values.join(", "))?;
@@ -1101,29 +1112,30 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
 
             // Add digest function
             let cert_clone = cert.clone();
-            let digest_fn = lua.create_function(move |lua, (_self, algo): (mlua::Table, String)| {
-                use openssl::hash::MessageDigest;
+            let digest_fn =
+                lua.create_function(move |lua, (_self, algo): (mlua::Table, String)| {
+                    use openssl::hash::MessageDigest;
 
-                let message_digest = match algo.to_lowercase().as_str() {
-                    "md5" => MessageDigest::md5(),
-                    "sha1" => MessageDigest::sha1(),
-                    "sha256" => MessageDigest::sha256(),
-                    _ => {
-                        return Err(mlua::Error::RuntimeError(format!(
-                            "Unknown digest algorithm: {algo}"
-                        )))
-                    }
-                };
+                    let message_digest = match algo.to_lowercase().as_str() {
+                        "md5" => MessageDigest::md5(),
+                        "sha1" => MessageDigest::sha1(),
+                        "sha256" => MessageDigest::sha256(),
+                        _ => {
+                            return Err(mlua::Error::RuntimeError(format!(
+                                "Unknown digest algorithm: {algo}"
+                            )))
+                        }
+                    };
 
-                match cert_clone.digest(message_digest) {
-                    Ok(digest_bytes) => {
-                        Ok(mlua::Value::String(lua.create_string(digest_bytes)?))
+                    match cert_clone.digest(message_digest) {
+                        Ok(digest_bytes) => {
+                            Ok(mlua::Value::String(lua.create_string(digest_bytes)?))
+                        }
+                        Err(e) => Err(mlua::Error::RuntimeError(format!(
+                            "Digest calculation failed: {e}"
+                        ))),
                     }
-                    Err(e) => Err(mlua::Error::RuntimeError(format!(
-                        "Digest calculation failed: {e}"
-                    ))),
-                }
-            })?;
+                })?;
             table.set("digest", digest_fn)?;
 
             table.set("version", 3)?;
@@ -1134,7 +1146,8 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
                 let mut hasher = Sha256::new();
                 hasher.update(&cert_der);
                 let result = hasher.finalize();
-                result.iter()
+                result
+                    .iter()
                     .map(|b| format!("{b:02X}"))
                     .collect::<Vec<_>>()
                     .join(":")
@@ -1150,9 +1163,8 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     let parse_cert_fn = lua.create_function(|lua, der_data: LuaString| {
         let der_bytes = der_data.as_bytes();
 
-        let cert = openssl::x509::X509::from_der(&der_bytes).map_err(|e| {
-            mlua::Error::RuntimeError(format!("Failed to parse certificate: {e}"))
-        })?;
+        let cert = openssl::x509::X509::from_der(&der_bytes)
+            .map_err(|e| mlua::Error::RuntimeError(format!("Failed to parse certificate: {e}")))?;
 
         let cert_table = build_cert_table(lua, &cert)?;
 
@@ -1280,16 +1292,22 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
 /// including subject, issuer, serial, fingerprint, pubkey (with ecdhparams for EC),
 /// validity dates, extensions, and digest function.
 #[cfg(feature = "openssl")]
-#[expect(clippy::too_many_lines, reason = "Certificate table construction requires inline field extraction")]
-pub(crate) fn build_cert_table(lua: &mlua::Lua, cert: &openssl::x509::X509) -> mlua::Result<mlua::Table> {
+#[expect(
+    clippy::too_many_lines,
+    reason = "Certificate table construction requires inline field extraction"
+)]
+pub(crate) fn build_cert_table(
+    lua: &mlua::Lua,
+    cert: &openssl::x509::X509,
+) -> mlua::Result<mlua::Table> {
     use openssl::hash::MessageDigest;
 
     let cert_table = lua.create_table()?;
 
     // PEM encoding
-    let pem = cert.to_pem().map_err(|e| {
-        mlua::Error::RuntimeError(format!("Failed to encode PEM: {e}"))
-    })?;
+    let pem = cert
+        .to_pem()
+        .map_err(|e| mlua::Error::RuntimeError(format!("Failed to encode PEM: {e}")))?;
     let pem_str = String::from_utf8_lossy(&pem);
     cert_table.set("pem", pem_str.as_ref())?;
 
@@ -1329,9 +1347,9 @@ pub(crate) fn build_cert_table(lua: &mlua::Lua, cert: &openssl::x509::X509) -> m
 
     // Public key
     let pubkey_table = lua.create_table()?;
-    let pkey = cert.public_key().map_err(|e| {
-        mlua::Error::RuntimeError(format!("Failed to get public key: {e}"))
-    })?;
+    let pkey = cert
+        .public_key()
+        .map_err(|e| mlua::Error::RuntimeError(format!("Failed to get public key: {e}")))?;
 
     let key_type = match pkey.id() {
         openssl::pkey::Id::RSA => "rsa",
@@ -1345,9 +1363,9 @@ pub(crate) fn build_cert_table(lua: &mlua::Lua, cert: &openssl::x509::X509) -> m
 
     // RSA-specific fields
     if pkey.id() == openssl::pkey::Id::RSA {
-        let rsa = pkey.rsa().map_err(|e| {
-            mlua::Error::RuntimeError(format!("Failed to get RSA key: {e}"))
-        })?;
+        let rsa = pkey
+            .rsa()
+            .map_err(|e| mlua::Error::RuntimeError(format!("Failed to get RSA key: {e}")))?;
         let e = rsa.e();
         let exponent_bytes = e.to_vec();
         let exponent_hex = hex::encode(&exponent_bytes);
@@ -1361,17 +1379,18 @@ pub(crate) fn build_cert_table(lua: &mlua::Lua, cert: &openssl::x509::X509) -> m
 
     // EC key type: add ecdhparams with curve info
     if pkey.id() == openssl::pkey::Id::EC {
-        let ec_key = pkey.ec_key().map_err(|e| {
-            mlua::Error::RuntimeError(format!("Failed to get EC key: {e}"))
-        })?;
+        let ec_key = pkey
+            .ec_key()
+            .map_err(|e| mlua::Error::RuntimeError(format!("Failed to get EC key: {e}")))?;
         let ecdhparams = lua.create_table()?;
         let curve_params = lua.create_table()?;
 
         let group = ec_key.group();
         curve_params.set("ec_curve_type", "namedcurve")?;
-        let curve_name = group
-            .curve_name()
-            .map_or_else(|| "unknown".to_string(), |nid| nid.long_name().unwrap_or("unknown").to_string());
+        let curve_name = group.curve_name().map_or_else(
+            || "unknown".to_string(),
+            |nid| nid.long_name().unwrap_or("unknown").to_string(),
+        );
         curve_params.set("curve", curve_name)?;
         ecdhparams.set("curve_params", curve_params)?;
         pubkey_table.set("ecdhparams", ecdhparams)?;
@@ -1508,8 +1527,8 @@ pub(crate) fn asn1_time_to_unix(time: &openssl::asn1::Asn1TimeRef) -> i64 {
     // Compute Unix timestamp using calendar math (no chrono dependency needed)
     // Days from 1970-01-01 to start of given year
     let y = year - 1;
-    let days_from_years = y * 365 + y / 4 - y / 100 + y / 400
-        - (1969 * 365 + 1969 / 4 - 1969 / 100 + 1969 / 400);
+    let days_from_years =
+        y * 365 + y / 4 - y / 100 + y / 400 - (1969 * 365 + 1969 / 4 - 1969 / 100 + 1969 / 400);
 
     // Days from month within the year
     let is_leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;

@@ -492,6 +492,57 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     })?;
     nmap_table.set("condvar", condvar_fn)?;
 
+    // Register new_try(catch_fn) function - creates an error-handling wrapper.
+    // Pattern from nmap nse_nmaplib.cc l_new_try / new_try_finalize:
+    //   local try = nmap.new_try(catch)
+    //   try(socket:connect(host, port))  -- if first return is falsy, calls catch and throws
+    //
+    // The returned try function checks its first argument:
+    //   - If truthy (true): returns remaining arguments unchanged
+    //   - If falsy (nil/false): calls catch function (if provided), then throws
+    //     a table {errtype="nmap.new_try", message=error_string}
+    let new_try_fn = lua.create_function(|lua, catch_fn: Option<mlua::Function>| {
+        lua.create_function(move |lua, args: mlua::MultiValue| {
+            let mut args_vec: Vec<mlua::Value> = args.into_iter().collect();
+            if args_vec.is_empty() {
+                return Err(mlua::Error::RuntimeError(
+                    "nmap.new_try: try() called with no arguments".to_string(),
+                ));
+            }
+
+            let first = &args_vec[0];
+            let is_ok = !matches!(first, mlua::Value::Nil | mlua::Value::Boolean(false));
+
+            if is_ok {
+                // Success: return remaining args (skip the boolean/true first arg)
+                let rest: Vec<mlua::Value> = args_vec.drain(1..).collect();
+                Ok(mlua::MultiValue::from_vec(rest))
+            } else {
+                // Failure: get error message from second arg, call catch, then throw
+                let err_msg = match args_vec.get(1) {
+                    Some(mlua::Value::String(s)) => s.to_string_lossy().to_string(),
+                    Some(mlua::Value::Nil) => "nil error".to_string(),
+                    Some(v) => format!("{v:?}"),
+                    None => "no error message".to_string(),
+                };
+
+                // Call catch function if provided
+                if let Some(ref catch) = catch_fn {
+                    let _ = catch.call::<mlua::MultiValue>(mlua::Value::String(
+                        lua.create_string(&err_msg)?,
+                    ));
+                }
+
+                // Throw a RuntimeError with the error message
+                // NSE scripts catch this via pcall and check the error
+                Err(mlua::Error::RuntimeError(format!(
+                    "nmap.new_try: {err_msg}"
+                )))
+            }
+        })
+    })?;
+    nmap_table.set("new_try", new_try_fn)?;
+
     // Set the nmap table as a global
     lua.globals().set("nmap", nmap_table)?;
 
@@ -1379,6 +1430,90 @@ impl mlua::UserData for NseSocket {
                 ]))
             },
         );
+
+        // Receive exactly n lines from socket.
+        // Signature: sock:receive_lines(n)
+        // - n: number of lines to read (each terminated by \r\n or \n)
+        // Returns: (true, data) on success, (nil, err_msg) on failure
+        methods.add_method_mut("receive_lines", |lua, this, n: usize| {
+            let timeout_ms = this.timeout();
+            let timeout_dur = std::time::Duration::from_millis(timeout_ms);
+
+            let mut lines_read = 0usize;
+            let mut result = Vec::new();
+            let mut tmp = [0u8; 8192];
+
+            while lines_read < n {
+                // Check existing buffer first for any newline-terminated lines
+                while lines_read < n {
+                    // Find \r\n or \n in buffer
+                    let buf_str = String::from_utf8_lossy(&this.buffer);
+                    let line_end = buf_str
+                        .find("\r\n")
+                        .map(|pos| pos + 2)
+                        .or_else(|| buf_str.find('\n').map(|pos| pos + 1));
+
+                    if let Some(end) = line_end {
+                        result.extend_from_slice(&this.buffer[..end]);
+                        this.buffer = this.buffer[end..].to_vec();
+                        lines_read += 1;
+                    } else {
+                        break;
+                    }
+                }
+
+                if lines_read >= n {
+                    break;
+                }
+
+                // Need more data from stream
+                #[cfg(feature = "openssl")]
+                if let Some(ssl_stream) = this.get_ssl_stream_mut() {
+                    ssl_stream
+                        .get_ref()
+                        .set_read_timeout(Some(timeout_dur))
+                        .map_err(|e| {
+                            mlua::Error::RuntimeError(format!("Set timeout failed: {e}"))
+                        })?;
+                    let count = ssl_stream
+                        .read(&mut tmp)
+                        .map_err(|e| mlua::Error::RuntimeError(format!("Receive failed: {e}")))?;
+                    if count == 0 {
+                        break; // EOF
+                    }
+                    this.buffer.extend_from_slice(&tmp[..count]);
+                    continue;
+                }
+
+                let stream = this
+                    .get_stream_mut()
+                    .map_err(|e| mlua::Error::RuntimeError(format!("Socket not connected: {e}")))?;
+                stream
+                    .set_read_timeout(Some(timeout_dur))
+                    .map_err(|e| mlua::Error::RuntimeError(format!("Set timeout failed: {e}")))?;
+                let count = stream
+                    .read(&mut tmp)
+                    .map_err(|e| mlua::Error::RuntimeError(format!("Receive failed: {e}")))?;
+                if count == 0 {
+                    break; // EOF
+                }
+                this.buffer.extend_from_slice(&tmp[..count]);
+            }
+
+            if result.is_empty() {
+                let err_str = lua.create_string("EOF")?;
+                return Ok(mlua::MultiValue::from_vec(vec![
+                    mlua::Value::Nil,
+                    mlua::Value::String(err_str),
+                ]));
+            }
+
+            let s = lua.create_string(&*String::from_utf8_lossy(&result))?;
+            Ok(mlua::MultiValue::from_vec(vec![
+                mlua::Value::Boolean(true),
+                mlua::Value::String(s),
+            ]))
+        });
 
         // Get SSL certificate (if SSL connection)
         #[cfg(feature = "openssl")]

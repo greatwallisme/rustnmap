@@ -370,6 +370,10 @@ fn create_credentials_class(lua: &mlua::Lua) -> Result<Table> {
     credentials_table.set("add", add_fn)?;
 
     // Define the getCredentials method
+    // Returns an iterator function that yields one credential per call.
+    // Matches Nmap's coroutine.wrap-based pattern:
+    //   for cred in c:getCredentials(creds.State.VALID) do ... end
+    //   local cred = c:getCredentials(state)()  -- get first credential
     #[allow(
         clippy::manual_let_else,
         reason = "if let pattern with early return is clearer here"
@@ -383,26 +387,32 @@ fn create_credentials_class(lua: &mlua::Lua) -> Result<Table> {
         // Get credentials from registry
         let globals = lua.globals();
         let nmap: Value = globals.get("nmap")?;
-        let nmap_table = match nmap {
-            Value::Table(t) => t,
-            _ => return lua.create_table(), // No nmap, return empty
+        let nmap_table = if let Value::Table(t) = nmap {
+            t
+        } else {
+            let empty_iter = lua.create_function(|_, (): ()| Ok(Value::Nil))?;
+            return Ok(empty_iter);
         };
 
         let registry: Value = nmap_table.get("registry")?;
-        let registry_table = match registry {
-            Value::Table(t) => t,
-            _ => return lua.create_table(), // No registry, return empty
+        let registry_table = if let Value::Table(t) = registry {
+            t
+        } else {
+            let empty_iter = lua.create_function(|_, (): ()| Ok(Value::Nil))?;
+            return Ok(empty_iter);
         };
 
         let creds_value: Value = registry_table.get("creds")?;
-        let creds_array = match creds_value {
-            Value::Table(t) => t,
-            _ => return lua.create_table(), // No creds, return empty
+        let creds_array = if let Value::Table(t) = creds_value {
+            t
+        } else {
+            let empty_iter = lua.create_function(|_, (): ()| Ok(Value::Nil))?;
+            return Ok(empty_iter);
         };
 
         // Filter credentials based on host, port, service, tags, and state
-        let result = lua.create_table()?;
-        let mut index = 1;
+        // Collect matching credentials into a Lua table (array)
+        let filtered = lua.create_table()?;
 
         for pair in creds_array.pairs::<Value, Table>() {
             let (_, cred) = pair?;
@@ -461,23 +471,50 @@ fn create_credentials_class(lua: &mlua::Lua) -> Result<Table> {
                 continue;
             }
 
-            // Add credential to result
-            result.raw_set(index, cred.clone())?;
-            index += 1;
+            // Add to filtered array
+            let len = filtered.raw_len();
+            filtered.raw_set(len + 1, cred.clone())?;
         }
 
-        Ok(result)
+        // Return an iterator function that yields one credential per call.
+        // Each call returns the next credential table, or nil when exhausted.
+        let iter = lua.create_function(move |_lua, (): ()| {
+            let idx_key: i64 = filtered.get("_iter_idx")?;
+            let idx: usize = if idx_key == 0 {
+                1
+            } else {
+                usize::try_from(idx_key + 1).unwrap_or(usize::MAX)
+            };
+
+            match filtered.get::<Option<Table>>(idx)? {
+                Some(cred) => {
+                    filtered.set("_iter_idx", i64::try_from(idx).unwrap_or(i64::MAX))?;
+                    Ok(Value::Table(cred))
+                }
+                None => Ok(Value::Nil),
+            }
+        })?;
+
+        Ok(iter)
     })?;
     credentials_table.set("getCredentials", get_credentials_fn)?;
 
     // Define the getTable method
+    // Uses the iterator returned by getCredentials to collect all credentials
+    // into a host -> service -> accounts table structure.
     let get_table_fn = lua.create_function(|lua, this: Table| {
-        let credentials_iter: Function = this.get("getCredentials")?;
-        let iter_result: Table = credentials_iter.call(())?;
+        let credentials_iter_fn: Function = this.get("getCredentials")?;
+        let iter: Function = credentials_iter_fn.call((this.clone(),))?;
         let all = lua.create_table()?;
 
-        for pair in iter_result.pairs::<Value, Table>() {
-            let (_, cred) = pair?;
+        // Call the iterator repeatedly until it returns nil
+        loop {
+            let cred_val: Value = iter.call(())?;
+            let cred = match cred_val {
+                Value::Table(t) => t,
+                Value::Nil => break,
+                _ => continue,
+            };
 
             let host: Value = cred.get("host")?;
             let host_str = if let Value::Table(t) = host {
@@ -528,7 +565,7 @@ fn create_credentials_class(lua: &mlua::Lua) -> Result<Table> {
     // Define the __tostring metamethod
     let tostring_fn = lua.create_function(|_lua, this: Table| {
         let get_table_fn: Function = this.get("getTable")?;
-        let all: Value = get_table_fn.call(())?;
+        let all: Value = get_table_fn.call((this.clone(),))?;
 
         match all {
             Value::Table(t) => {

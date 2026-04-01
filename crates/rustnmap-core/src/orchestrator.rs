@@ -63,6 +63,28 @@ fn get_local_address(dns_server: &str) -> std::net::Ipv4Addr {
     std::net::Ipv4Addr::LOCALHOST
 }
 
+/// Gets the source IPv4 address for reaching a specific target.
+///
+/// Creates a UDP socket and connects to the target to determine which local
+/// interface and source address the kernel would route through. This correctly
+/// handles multi-homed hosts (e.g., Docker bridges vs external interfaces).
+fn get_source_address_for_target(target: std::net::Ipv4Addr) -> std::net::Ipv4Addr {
+    let socket = std::net::UdpSocket::bind("0.0.0.0:0");
+    if let Ok(sock) = socket {
+        let target_str = format!("{target}:9"); // Use discard port for routing lookup
+        if sock.connect(&target_str).is_ok() {
+            if let Ok(local_addr) = sock.local_addr() {
+                if let IpAddr::V4(ipv4) = local_addr.ip() {
+                    debug!(target = %target, source = %ipv4, "Source address for target");
+                    return ipv4;
+                }
+            }
+        }
+    }
+    debug!(target = %target, "Failed to detect source address for target, using LOCALHOST");
+    std::net::Ipv4Addr::LOCALHOST
+}
+
 /// Creates a decoy scheduler from the session's evasion configuration.
 ///
 /// # Arguments
@@ -1352,11 +1374,14 @@ impl ScanOrchestrator {
                 }
             };
 
+            // Determine source address for this specific target
+            let src_addr = get_source_address_for_target(target_ip);
+
             // Run batch scan based on scan type
             let scan_results = match scan_type {
                 ScanType::TcpFin => {
                     match TcpFinScanner::with_decoy(
-                        local_addr,
+                        src_addr,
                         scanner_config.clone(),
                         decoy_scheduler.clone(),
                     ) {
@@ -1369,7 +1394,7 @@ impl ScanOrchestrator {
                 }
                 ScanType::TcpNull => {
                     match TcpNullScanner::with_decoy(
-                        local_addr,
+                        src_addr,
                         scanner_config.clone(),
                         decoy_scheduler.clone(),
                     ) {
@@ -1382,7 +1407,7 @@ impl ScanOrchestrator {
                 }
                 ScanType::TcpXmas => {
                     match TcpXmasScanner::with_decoy(
-                        local_addr,
+                        src_addr,
                         scanner_config.clone(),
                         decoy_scheduler.clone(),
                     ) {
@@ -1395,7 +1420,7 @@ impl ScanOrchestrator {
                 }
                 ScanType::TcpMaimon => {
                     match TcpMaimonScanner::with_decoy(
-                        local_addr,
+                        src_addr,
                         scanner_config.clone(),
                         decoy_scheduler.clone(),
                     ) {
@@ -1406,7 +1431,7 @@ impl ScanOrchestrator {
                         }
                     }
                 }
-                ScanType::TcpAck => match TcpAckScanner::new(local_addr, scanner_config.clone()) {
+                ScanType::TcpAck => match TcpAckScanner::new(src_addr, scanner_config.clone()) {
                     Ok(scanner) => scanner.scan_ports_batch(target_ip, ports),
                     Err(e) => {
                         warn!(error = %e, "Failed to create ACK scanner");
@@ -1414,7 +1439,7 @@ impl ScanOrchestrator {
                     }
                 },
                 ScanType::TcpWindow => {
-                    match TcpWindowScanner::new(local_addr, scanner_config.clone()) {
+                    match TcpWindowScanner::new(src_addr, scanner_config.clone()) {
                         Ok(scanner) => scanner.scan_ports_batch(target_ip, ports),
                         Err(e) => {
                             warn!(error = %e, "Failed to create Window scanner");
@@ -1424,7 +1449,7 @@ impl ScanOrchestrator {
                 }
                 ScanType::Udp => {
                     // Use ParallelScanEngine for UDP parallel scanning
-                    match ParallelScanEngine::new(local_addr, scanner_config.clone()) {
+                    match ParallelScanEngine::new(src_addr, scanner_config.clone()) {
                         Ok(engine) => {
                             // scan_udp_ports is async, so we need to block_on
                             // Since this method is synchronous, we use tokio runtime
@@ -2508,7 +2533,7 @@ impl ScanOrchestrator {
                                         }
                                     }
                                     Err(e) => {
-                                        debug!(
+                                        warn!(
                                             ip = %host_result.ip,
                                             port = port_result.number,
                                             script = %script.id,
@@ -2522,7 +2547,7 @@ impl ScanOrchestrator {
                                 // Portrule didn't match, skip
                             }
                             Err(e) => {
-                                debug!(
+                                warn!(
                                     ip = %host_result.ip,
                                     port = port_result.number,
                                     script = %script.id,
@@ -2552,7 +2577,7 @@ impl ScanOrchestrator {
                                 }
                             }
                             Err(e) => {
-                                debug!(
+                                warn!(
                                     ip = %host_result.ip,
                                     script = %script.id,
                                     error = %e,
@@ -2563,7 +2588,7 @@ impl ScanOrchestrator {
                     }
                     Ok(false) => {}
                     Err(e) => {
-                        debug!(
+                        warn!(
                             ip = %host_result.ip,
                             script = %script.id,
                             error = %e,
