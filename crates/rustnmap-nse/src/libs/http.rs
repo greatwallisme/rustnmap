@@ -86,6 +86,9 @@ const DEFAULT_MAX_BODY_SIZE: usize = 2_097_152;
 /// Default maximum redirect count.
 const MAX_REDIRECT_COUNT: u32 = 5;
 
+/// Arguments for the `page_exists` Lua callback.
+type PageExistsArgs = (Option<Table>, Option<u16>, Option<String>, Option<String>, Option<bool>);
+
 /// HTTP response structure.
 #[derive(Debug, Clone)]
 pub struct HttpResponse {
@@ -1318,17 +1321,238 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
 
     // Register identify_404(host, port) function
     // Determines how the target server handles 404 Not Found responses.
-    // Returns: {result, status} where result indicates if 404 detection is reliable
-    let identify_404_fn =
-        lua.create_function(|lua, (_host, _port): (mlua::Value, mlua::Value)| {
-            // Returns standard 404 behavior - server returns 404 status for unknown pages
-            // For advanced use cases, this would probe the server to detect custom 404 handling
-            let result = lua.create_table()?;
-            result.set(1, true)?;
-            result.set(2, 404)?;
-            Ok(mlua::Value::Table(result))
-        })?;
+    // Returns: result_404 (status code), response_table, known_404_body
+    let identify_404_fn = lua.create_function(
+        |lua, (host, port): (Value, Value)| {
+            let (host_str, port_num) = extract_host_port(host, port);
+            debug!("http.identify_404({}, {})", host_str, port_num);
+
+            // Probe a random-looking path that should 404
+            let fake_path = format!("/nmaplowercheck{}", std::process::id());
+            let opts = RequestOptions::default();
+            let request = build_request("GET", &host_str, port_num, &fake_path, &opts, None);
+
+            if let Ok(response) = perform_request(&host_str, port_num, &request, &opts) {
+                    let status = response.status;
+                    let body = String::from_utf8_lossy(&response.body).to_string();
+                    let cleaned = clean_404(&body);
+
+                    let resp_table = response_to_table(lua, &response)?;
+
+                    // Return: result_404 (status code), response_table, known_404_body
+                    let result = lua.create_table()?;
+                    result.set(1, i64::from(status))?;
+                    result.set(2, resp_table)?;
+                    result.set(3, cleaned.as_str())?;
+                    Ok(Value::Table(result))
+                } else {
+                    // Return default 404 behavior
+                    let result = lua.create_table()?;
+                    result.set(1, 404)?;
+                    result.set(2, Value::Nil)?;
+                    result.set(3, "")?;
+                    Ok(Value::Table(result))
+                }
+        },
+    )?;
     http_table.set("identify_404", identify_404_fn)?;
+
+    // Register can_use_head(host, port, result_404, path) function
+    // Checks whether the target server supports HEAD requests.
+    // Returns: bool, response_table (multiple return values)
+    let can_use_head_fn = lua.create_function(
+        |lua, (host, port, result_404, path): (Value, Value, Option<u16>, Option<String>)| {
+            let (host_str, port_num) = extract_host_port(host, port);
+            let path_str = path.as_deref().unwrap_or("/");
+
+            debug!(
+                "http.can_use_head({}, {}, {:?}, {})",
+                host_str, port_num, result_404, path_str
+            );
+
+            // If the 404 result is 200, don't use HEAD
+            if result_404 == Some(200) {
+                return Ok(mlua::Variadic::from(vec![Value::Boolean(false)]));
+            }
+
+            let opts = RequestOptions::default();
+            let request = build_request("HEAD", &host_str, port_num, path_str, &opts, None);
+
+            match perform_request(&host_str, port_num, &request, &opts) {
+                Ok(response) => {
+                    if response.status == 302 {
+                        return Ok(mlua::Variadic::from(vec![Value::Boolean(false)]));
+                    }
+                    if response.status == 200 {
+                        // HEAD should not return a body
+                        if !response.body.is_empty() {
+                            return Ok(mlua::Variadic::from(vec![Value::Boolean(false)]));
+                        }
+                        // Return true and the response data as multiple values
+                        let resp_table = response_to_table(lua, &response)?;
+                        let mut result = mlua::Variadic::new();
+                        result.push(Value::Boolean(true));
+                        result.push(Value::Table(resp_table));
+                        return Ok(result);
+                    }
+                    Ok(mlua::Variadic::from(vec![Value::Boolean(false)]))
+                }
+                Err(_) => Ok(mlua::Variadic::from(vec![Value::Boolean(false)])),
+            }
+        },
+    )?;
+    http_table.set("can_use_head", can_use_head_fn)?;
+
+    // Register page_exists(data, result_404, known_404, page, displayall) function
+    // Determines whether an HTTP response indicates the page exists.
+    let page_exists_fn = lua.create_function(
+        |_, (data, result_404, known_404, page, displayall): PageExistsArgs| {
+            let Some(data) = data else {
+                return Ok(Value::Boolean(false));
+            };
+
+            let status: Option<u16> = data
+                .get::<Option<i64>>("status")
+                .ok()
+                .flatten()
+                .and_then(|s| u16::try_from(s).ok());
+
+            let Some(status_val) = status else {
+                return Ok(Value::Boolean(false));
+            };
+
+            let result_404_val = result_404.unwrap_or(404);
+            let displayall_val = displayall.unwrap_or(false);
+            let _page_str = page.as_deref().unwrap_or("");
+
+            if status_val == 200 {
+                if result_404_val == 200 {
+                    // Both 200: check body against known 404 body
+                    let body: String = data
+                        .get::<Option<String>>("body")
+                        .ok()
+                        .flatten()
+                        .unwrap_or_default();
+                    if body.is_empty() {
+                        return Ok(Value::Boolean(false));
+                    }
+                    let cleaned = clean_404(&body);
+                    let known = known_404.as_deref().unwrap_or("");
+                    if cleaned != known {
+                        return Ok(Value::Boolean(true));
+                    }
+                    Ok(Value::Boolean(false))
+                } else {
+                    // 404 returns non-200, so 200 means page exists
+                    Ok(Value::Boolean(true))
+                }
+            } else if status_val != 404 && status_val != result_404_val {
+                // Not 200, not 404, not same as 404 response
+                if status_val == 401 || displayall_val {
+                    Ok(Value::Boolean(true))
+                } else {
+                    Ok(Value::Boolean(false))
+                }
+            } else {
+                // Page is a 404 or looks like a 404
+                Ok(Value::Boolean(false))
+            }
+        },
+    )?;
+    http_table.set("page_exists", page_exists_fn)?;
+
+    // Register get_status_string(data) function
+    // Returns a human-readable status string from an HTTP response.
+    let get_status_string_fn = lua.create_function(
+        |lua, data: Option<Table>| {
+            let Some(data) = data else {
+                return Ok(Value::String(lua.create_string("nil")?));
+            };
+            let status_line: Option<String> = data.get("status-line").ok().flatten();
+            let status: Option<i64> = data.get("status").ok().flatten();
+
+            match (status_line, status) {
+                (Some(sl), _) => Ok(Value::String(lua.create_string(sl.trim())?)),
+                (None, Some(s)) => {
+                    Ok(Value::String(lua.create_string(format!("HTTP {s}"))?))
+                }
+                _ => Ok(Value::String(lua.create_string("unknown")?)),
+            }
+        },
+    )?;
+    http_table.set("get_status_string", get_status_string_fn)?;
+
+    // Register response_contains(data, pattern) function
+    // Checks if the HTTP response contains the given text.
+    // Returns: found (bool), matches (table of captures)
+    let response_contains_fn = lua.create_function(
+        |lua, (data, pattern): (Option<Table>, String)| {
+            let Some(data) = data else {
+                let mut result = mlua::Variadic::new();
+                result.push(Value::Boolean(false));
+                return Ok(result);
+            };
+
+            // Collect all searchable text
+            let mut search_text = String::new();
+
+            // Body
+            if let Ok(Some(body)) = data.get::<Option<String>>("body") {
+                search_text.push_str(&body);
+                search_text.push('\n');
+            }
+
+            // Status line
+            if let Ok(Some(status_line)) = data.get::<Option<String>>("status-line") {
+                search_text.push_str(&status_line);
+                search_text.push('\n');
+            }
+
+            // Raw headers
+            if let Ok(Some(rawheader)) = data.get::<Option<Table>>("rawheader") {
+                for val in rawheader.sequence_values::<String>().flatten() {
+                    search_text.push_str(&val);
+                    search_text.push('\n');
+                }
+            }
+
+            // Headers
+            if let Ok(Some(headers)) = data.get::<Option<Table>>("header") {
+                for pair in headers.pairs::<String, String>().flatten() {
+                    let _ = writeln!(search_text, "{}: {}", pair.0, pair.1);
+                }
+            }
+
+            // Try Lua pattern matching (not regex - Lua patterns)
+            // Simple substring check first
+            let found = search_text.contains(&pattern);
+
+            let mut result = mlua::Variadic::new();
+            result.push(Value::Boolean(found));
+
+            if found {
+                // Return capture matches as a table
+                // For Lua pattern matching, try to extract captures
+                let matches_table = lua.create_table()?;
+                if let Some(captures) = lua_pattern_match(&search_text, &pattern) {
+                    for (i, cap) in captures.iter().enumerate() {
+                        let idx = i64::try_from(i + 1).unwrap_or(1);
+                        matches_table.set(idx, cap.as_str())?;
+                    }
+                }
+                result.push(Value::Table(matches_table));
+            }
+
+            Ok(result)
+        },
+    )?;
+    http_table.set("response_contains", response_contains_fn)?;
+
+    // Register save_path(host, port, path, status) stub
+    // Records discovered paths for output. Currently a no-op for compatibility.
+    let save_path_fn =
+        lua.create_function(|_, _args: (Value, Value, Value, Value)| Ok(Value::Nil))?;
+    http_table.set("save_path", save_path_fn)?;
 
     // Register the http library globally
     lua.globals().set("http", http_table)?;
@@ -1380,6 +1604,97 @@ fn url_encode(s: &str) -> String {
         }
     }
     result
+}
+
+/// Clean a 404 response body by removing variable parts (timestamps, paths, etc).
+///
+/// This normalizes 404 pages so two different URIs can be compared for equality.
+fn clean_404(body: &str) -> String {
+    let mut cleaned = body.to_string();
+
+    // Remove dates/times
+    if let Ok(re) = regex::Regex::new(r"\d{4}-\d{2}-\d{2}[\sT]\d{2}:\d{2}(:\d{2})?") {
+        cleaned = re.replace_all(&cleaned, "").to_string();
+    }
+
+    // Remove file paths (e.g., /var/www/html/file.php)
+    if let Ok(re) = regex::Regex::new(r"/[\w./\-]+") {
+        cleaned = re.replace_all(&cleaned, "").to_string();
+    }
+
+    // Remove standalone numbers (execution times, etc)
+    if let Ok(re) = regex::Regex::new(r"\b\d+\.\d+\b|\b\d{5,}\b") {
+        cleaned = re.replace_all(&cleaned, "").to_string();
+    }
+
+    // Collapse whitespace
+    if let Ok(re) = regex::Regex::new(r"\s+") {
+        cleaned = re.replace_all(&cleaned, " ").to_string();
+    }
+
+    cleaned.trim().to_string()
+}
+
+/// Simple Lua pattern matching - converts common Lua patterns to regex.
+///
+/// Lua patterns are not full regex but share some syntax. This handles the
+/// most common cases used by Nmap scripts.
+fn lua_pattern_match(text: &str, pattern: &str) -> Option<Vec<String>> {
+    // Convert Lua pattern to regex (basic subset)
+    let mut regex_pattern = String::new();
+    let mut chars = pattern.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        match c {
+            '(' => regex_pattern.push('('),
+            ')' => regex_pattern.push(')'),
+            '.' => regex_pattern.push('.'),
+            '%' => {
+                // Lua escape sequences
+                if let Some(next) = chars.next() {
+                    match next {
+                        'd' => regex_pattern.push_str("\\d"),
+                        'w' => regex_pattern.push_str("\\w"),
+                        'a' => regex_pattern.push_str("[a-zA-Z]"),
+                        's' => regex_pattern.push_str("\\s"),
+                        'l' => regex_pattern.push_str("[a-z]"),
+                        'u' => regex_pattern.push_str("[A-Z]"),
+                        other => regex_pattern.push(other),
+                    }
+                }
+            }
+            '*' => regex_pattern.push('*'),
+            '+' => regex_pattern.push('+'),
+            '?' => regex_pattern.push('?'),
+            '^' => regex_pattern.push('^'),
+            '$' => regex_pattern.push('$'),
+            '[' => regex_pattern.push('['),
+            ']' => regex_pattern.push(']'),
+            _ => {
+                // Escape regex special chars that are literal in Lua
+                if "\\{}|".contains(c) {
+                    regex_package_escape_char(c, &mut regex_pattern);
+                } else {
+                    regex_pattern.push(c);
+                }
+            }
+        }
+    }
+
+    regex::Regex::new(&regex_pattern).ok().and_then(|re| {
+        re.captures(text).map(|caps| {
+            caps.iter()
+                .skip(1)
+                .filter_map(|c| c.map(|m| m.as_str().to_string()))
+                .collect()
+        })
+    })
+}
+
+/// Helper to escape special regex characters.
+fn regex_package_escape_char(c: char, out: &mut String) {
+    out.push('\\');
+    out.push(c);
 }
 
 /// Base64 encoding.

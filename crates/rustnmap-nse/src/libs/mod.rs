@@ -42,6 +42,7 @@ pub mod http;
 pub mod ip_ops;
 pub mod json;
 pub mod libssh2_utility;
+pub mod lpeg;
 pub mod lpeg_utility;
 pub mod netbios;
 pub mod nmap;
@@ -125,6 +126,9 @@ pub fn register_all(lua: &mut NseLua) -> Result<()> {
     lpeg_utility::register(lua)?;
     ip_ops::register(lua)?;
     base64::register(lua)?;
+
+    // Register pure-Rust lpeg module for PEG pattern matching
+    lpeg::register(lua)?;
 
     // After registering all libraries in global namespace,
     // also register them in package.preload so require() works
