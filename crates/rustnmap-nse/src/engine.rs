@@ -444,8 +444,13 @@ impl ScriptEngine {
         version_table.set("cpe", lua.create_table()?)?;
         port_table.set("version", version_table)?;
 
-        // port.reason - Why port is in this state
-        port_table.set("reason", "syn-ack")?;
+        // port.reason - Why port is in this state (protocol-specific)
+        let reason = match protocol {
+            "udp" => "udp-response",
+            "sctp" => "sctp-init-ack",
+            _ => "syn-ack",
+        };
+        port_table.set("reason", reason)?;
 
         // port.reason_ttl - TTL of response
         port_table.set("reason_ttl", mlua::Value::Nil)?;

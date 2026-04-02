@@ -28,7 +28,7 @@
 //! ```
 
 use std::io::{Read, Write};
-use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
+use std::net::{SocketAddr, TcpStream, ToSocketAddrs, UdpSocket};
 use std::time::Duration;
 
 use mlua::{Table, UserData, UserDataMethods, Value};
@@ -42,11 +42,20 @@ const DEFAULT_TIMEOUT_MS: u64 = 30_000;
 /// Default banner read timeout in milliseconds.
 const DEFAULT_BANNER_TIMEOUT_MS: u64 = 5_000;
 
+/// Underlying transport for an NSE socket.
+#[derive(Debug)]
+enum SocketTransport {
+    /// TCP connection.
+    Tcp(TcpStream),
+    /// UDP socket with a connected remote address.
+    Udp(UdpSocket),
+}
+
 /// Socket wrapper for Lua userdata.
 #[derive(Debug)]
 pub struct NseSocket {
-    /// The underlying TCP stream.
-    stream: Option<TcpStream>,
+    /// The underlying transport (TCP or UDP).
+    transport: Option<SocketTransport>,
     /// Connection timeout.
     timeout: Duration,
     /// Whether the socket uses SSL/TLS.
@@ -55,83 +64,121 @@ pub struct NseSocket {
     peer_addr: SocketAddr,
     /// Original hostname for SNI (Server Name Indication).
     hostname: Option<String>,
+    /// Protocol string ("tcp" or "udp").
+    proto: String,
 }
 
 impl NseSocket {
-    /// Create a new socket from a TCP stream.
-    fn new(stream: TcpStream, peer_addr: SocketAddr, hostname: Option<String>) -> Self {
+    /// Create a new TCP socket from a stream.
+    fn new_tcp(stream: TcpStream, peer_addr: SocketAddr, hostname: Option<String>) -> Self {
         Self {
-            stream: Some(stream),
+            transport: Some(SocketTransport::Tcp(stream)),
             timeout: Duration::from_millis(DEFAULT_TIMEOUT_MS),
             is_ssl: false,
             peer_addr,
             hostname,
+            proto: "tcp".to_string(),
+        }
+    }
+
+    /// Create a new UDP socket.
+    fn new_udp(udp: UdpSocket, peer_addr: SocketAddr, hostname: Option<String>) -> Self {
+        Self {
+            transport: Some(SocketTransport::Udp(udp)),
+            timeout: Duration::from_millis(DEFAULT_TIMEOUT_MS),
+            is_ssl: false,
+            peer_addr,
+            hostname,
+            proto: "udp".to_string(),
         }
     }
 
     /// Check if the socket is connected.
     fn is_connected(&self) -> bool {
-        self.stream.is_some()
+        self.transport.is_some()
     }
 
     /// Send data over the socket.
     fn send(&mut self, data: &[u8]) -> std::io::Result<usize> {
-        if let Some(ref mut stream) = self.stream {
-            stream.write(data)
-        } else {
-            Err(std::io::Error::new(
+        match self.transport {
+            Some(SocketTransport::Tcp(ref mut stream)) => stream.write(data),
+            Some(SocketTransport::Udp(ref udp)) => udp.send(data),
+            None => Err(std::io::Error::new(
                 std::io::ErrorKind::NotConnected,
                 "socket not connected",
-            ))
+            )),
         }
     }
 
     /// Receive data from the socket.
     fn receive(&mut self, max_bytes: usize) -> std::io::Result<Vec<u8>> {
-        if let Some(ref mut stream) = self.stream {
-            let mut buffer = vec![0u8; max_bytes];
-            let n = stream.read(&mut buffer)?;
-            buffer.truncate(n);
-            Ok(buffer)
-        } else {
-            Err(std::io::Error::new(
+        match self.transport {
+            Some(SocketTransport::Tcp(ref mut stream)) => {
+                let mut buffer = vec![0u8; max_bytes];
+                let n = stream.read(&mut buffer)?;
+                buffer.truncate(n);
+                Ok(buffer)
+            }
+            Some(SocketTransport::Udp(ref udp)) => {
+                let mut buffer = vec![0u8; max_bytes];
+                let n = udp.recv(&mut buffer)?;
+                buffer.truncate(n);
+                Ok(buffer)
+            }
+            None => Err(std::io::Error::new(
                 std::io::ErrorKind::NotConnected,
                 "socket not connected",
-            ))
+            )),
         }
     }
 
     /// Receive all available data until timeout or closure.
     fn receive_all(&mut self) -> std::io::Result<Vec<u8>> {
-        if let Some(ref mut stream) = self.stream {
-            let mut result = Vec::new();
-            let mut buffer = [0u8; 4096];
+        match self.transport {
+            Some(SocketTransport::Tcp(ref mut stream)) => {
+                let mut result = Vec::new();
+                let mut buffer = [0u8; 4096];
 
-            stream.set_read_timeout(Some(self.timeout))?;
+                stream.set_read_timeout(Some(self.timeout))?;
 
-            loop {
-                match stream.read(&mut buffer) {
-                    Ok(0) => break, // Connection closed
-                    Ok(n) => result.extend_from_slice(&buffer[..n]),
-                    Err(e) if e.kind() == std::io::ErrorKind::TimedOut => break,
-                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
-                    Err(e) => return Err(e),
+                loop {
+                    match stream.read(&mut buffer) {
+                        Ok(0) => break, // Connection closed
+                        Ok(n) => result.extend_from_slice(&buffer[..n]),
+                        Err(e) if e.kind() == std::io::ErrorKind::TimedOut => break,
+                        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                        Err(e) => return Err(e),
+                    }
                 }
-            }
 
-            Ok(result)
-        } else {
-            Err(std::io::Error::new(
+                Ok(result)
+            }
+            Some(SocketTransport::Udp(ref udp)) => {
+                // For UDP, receive a single datagram (up to 64KB)
+                udp.set_read_timeout(Some(self.timeout))?;
+                let mut buffer = vec![0u8; 65535];
+                let n = udp.recv(&mut buffer)?;
+                buffer.truncate(n);
+                Ok(buffer)
+            }
+            None => Err(std::io::Error::new(
                 std::io::ErrorKind::NotConnected,
                 "socket not connected",
-            ))
+            )),
         }
     }
 
     /// Close the socket.
     fn close(&mut self) -> std::io::Result<()> {
-        if let Some(stream) = self.stream.take() {
-            stream.shutdown(std::net::Shutdown::Both)?;
+        if let Some(transport) = self.transport.take() {
+            match transport {
+                SocketTransport::Tcp(stream) => {
+                    stream.shutdown(std::net::Shutdown::Both)?;
+                }
+                SocketTransport::Udp(_) => {
+                    // UDP sockets don't need shutdown; drop handles it
+                }
+            }
         }
         Ok(())
     }
@@ -174,27 +221,40 @@ impl UserData for NseSocket {
             let mut result = Vec::new();
             let mut tmp = [0u8; 8192];
 
-            if let Some(ref mut stream) = this.stream {
-                stream
-                    .set_read_timeout(Some(this.timeout))
-                    .map_err(|e| mlua::Error::RuntimeError(format!("set timeout failed: {e}")))?;
+            match this.transport {
+                Some(SocketTransport::Tcp(ref mut stream)) => {
+                    stream
+                        .set_read_timeout(Some(this.timeout))
+                        .map_err(|e| mlua::Error::RuntimeError(format!("set timeout failed: {e}")))?;
 
-                while lines_read < lines_to_read {
-                    let count = match stream.read(&mut tmp) {
-                        Ok(0) => break, // EOF
-                        Ok(n) => n,
-                        Err(e) if e.kind() == std::io::ErrorKind::TimedOut => break,
-                        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
-                        Err(e) => {
-                            return Err(mlua::Error::RuntimeError(format!(
-                                "receive_lines failed: {e}"
-                            )));
-                        }
-                    };
-                    result.extend_from_slice(&tmp[..count]);
-                    // Count complete lines
-                    lines_read = String::from_utf8_lossy(&result).matches('\n').count();
+                    while lines_read < lines_to_read {
+                        let count = match stream.read(&mut tmp) {
+                            Ok(0) => break, // EOF
+                            Ok(n) => n,
+                            Err(e) if e.kind() == std::io::ErrorKind::TimedOut => break,
+                            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                            Err(e) => {
+                                return Err(mlua::Error::RuntimeError(format!(
+                                    "receive_lines failed: {e}"
+                                )));
+                            }
+                        };
+                        result.extend_from_slice(&tmp[..count]);
+                        // Count complete lines
+                        lines_read = String::from_utf8_lossy(&result).matches('\n').count();
+                    }
                 }
+                Some(SocketTransport::Udp(ref udp)) => {
+                    udp.set_read_timeout(Some(this.timeout))
+                        .map_err(|e| mlua::Error::RuntimeError(format!("set timeout failed: {e}")))?;
+                    // For UDP, receive a single datagram (line-based read doesn't apply well)
+                    let mut buf = vec![0u8; 65535];
+                    let n = udp.recv(&mut buf).map_err(|e| {
+                        mlua::Error::RuntimeError(format!("receive_lines (udp) failed: {e}"))
+                    })?;
+                    result.extend_from_slice(&buf[..n]);
+                }
+                None => {}
             }
 
             if result.is_empty() {
@@ -220,6 +280,8 @@ impl UserData for NseSocket {
         });
 
         methods.add_method("is_ssl", |_, this, ()| Ok(this.is_ssl));
+
+        methods.add_method("get_proto", |_, this, ()| Ok(this.proto.clone()));
 
         // get_ssl_certificate() -> certificate_table
         //
@@ -359,15 +421,28 @@ fn opencon_impl_blocking(
         ));
     }
 
-    let stream = TcpStream::connect_timeout(&addrs[0], opts.timeout)?;
-    stream.set_read_timeout(Some(opts.timeout))?;
-    stream.set_write_timeout(Some(opts.timeout))?;
+    let target = addrs[0];
 
-    let mut socket = NseSocket::new(stream, addrs[0], Some(host.to_string()));
+    let mut socket = if opts.proto == "udp" {
+        // UDP: bind to any local port, then connect to target
+        let udp = if target.is_ipv6() {
+            UdpSocket::bind("[::]:0")?
+        } else {
+            UdpSocket::bind("0.0.0.0:0")?
+        };
+        udp.set_read_timeout(Some(opts.timeout))?;
+        udp.set_write_timeout(Some(opts.timeout))?;
+        udp.connect(target)?;
+        NseSocket::new_udp(udp, target, Some(host.to_string()))
+    } else {
+        // TCP (default)
+        let stream = TcpStream::connect_timeout(&target, opts.timeout)?;
+        stream.set_read_timeout(Some(opts.timeout))?;
+        stream.set_write_timeout(Some(opts.timeout))?;
+        NseSocket::new_tcp(stream, target, Some(host.to_string()))
+    };
 
     if opts.ssl {
-        // Mark the socket as SSL requested
-        // Full TLS/SSL implementation would wrap the stream with native_tls or rustls
         socket.is_ssl = true;
     }
 
@@ -380,24 +455,12 @@ fn get_banner_impl(host: &str, port: u16, opts: &ConnectionOpts) -> std::io::Res
 
     // Set a shorter timeout for banner grabbing
     let banner_timeout = Duration::from_millis(DEFAULT_BANNER_TIMEOUT_MS);
+    socket.timeout = banner_timeout.min(opts.timeout);
 
-    if let Some(ref mut stream) = socket.stream {
-        stream.set_read_timeout(Some(banner_timeout.min(opts.timeout)))?;
+    let buffer = socket.receive(opts.bytes.unwrap_or(1024))?;
+    socket.close()?;
 
-        let mut buffer = vec![0u8; opts.bytes.unwrap_or(1024)];
-        let n = stream.read(&mut buffer)?;
-        buffer.truncate(n);
-
-        socket.close()?;
-
-        // Try to convert to string, fall back to lossy conversion
-        Ok(String::from_utf8_lossy(&buffer).to_string())
-    } else {
-        Err(std::io::Error::new(
-            std::io::ErrorKind::NotConnected,
-            "socket not connected",
-        ))
-    }
+    Ok(String::from_utf8_lossy(&buffer).to_string())
 }
 
 /// Exchange data with host:port (send then receive).
@@ -472,6 +535,33 @@ fn extract_port(value: Value) -> mlua::Result<u16> {
             })?;
             u16::try_from(number)
                 .map_err(|e| mlua::Error::RuntimeError(format!("port.number out of range: {e}")))
+        }
+        other => Err(mlua::Error::RuntimeError(format!(
+            "port must be a number or table, got: {:?}",
+            other.type_name()
+        ))),
+    }
+}
+
+/// Extract port number and optional protocol from a Lua value.
+///
+/// When the port is a table with a `protocol` field (e.g. `"udp"`), the protocol
+/// is returned as `Some(String)` so callers can propagate it to `ConnectionOpts`.
+fn extract_port_and_proto(value: &Value) -> mlua::Result<(u16, Option<String>)> {
+    match value {
+        Value::Integer(n) => {
+            let port = u16::try_from(*n)
+                .map_err(|e| mlua::Error::RuntimeError(format!("port number out of range: {e}")))?;
+            Ok((port, None))
+        }
+        Value::Table(t) => {
+            let number: i64 = t.get("number").map_err(|e| {
+                mlua::Error::RuntimeError(format!("port table missing 'number' field: {e}"))
+            })?;
+            let port = u16::try_from(number)
+                .map_err(|e| mlua::Error::RuntimeError(format!("port.number out of range: {e}")))?;
+            let proto: Option<String> = t.get("protocol").ok().flatten();
+            Ok((port, proto))
         }
         other => Err(mlua::Error::RuntimeError(format!(
             "port must be a number or table, got: {:?}",
@@ -730,8 +820,15 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     let exchange_fn = lua.create_function(
         |lua, (host_param, port_param, data, opts): (Value, Value, mlua::String, Option<Table>)| {
             let host = extract_host(&host_param)?;
-            let port = extract_port(port_param)?;
-            let options = parse_opts(opts).map_err(|e| mlua::Error::RuntimeError(e.to_string()))?;
+            let (port, port_proto) = extract_port_and_proto(&port_param)?;
+            let mut options = parse_opts(opts).map_err(|e| mlua::Error::RuntimeError(e.to_string()))?;
+
+            // If port table has a protocol field and opts doesn't already specify proto, use it
+            if let Some(proto) = port_proto {
+                if options.proto == "tcp" {
+                    options.proto = proto;
+                }
+            }
 
             match exchange_impl(&host, port, &data.as_bytes(), &options) {
                 Ok(response) => Ok(mlua::MultiValue::from_vec(vec![
@@ -857,11 +954,12 @@ mod tests {
         // Create a mock socket (we can't actually connect in unit tests)
         // Just verify the userdata type is registered correctly
         let socket = NseSocket {
-            stream: None,
+            transport: None,
             timeout: Duration::from_secs(30),
             is_ssl: false,
             peer_addr: "127.0.0.1:80".parse().unwrap(),
             hostname: None,
+            proto: "tcp".to_string(),
         };
 
         let _ud = lua.lua().create_userdata(socket).unwrap();
@@ -920,11 +1018,12 @@ mod tests {
         let lua = NseLua::new_default().unwrap();
 
         let socket = NseSocket {
-            stream: None,
+            transport: None,
             timeout: Duration::from_secs(30),
             is_ssl: true,
             peer_addr: "127.0.0.1:443".parse().unwrap(),
             hostname: None,
+            proto: "tcp".to_string(),
         };
 
         let _ud = lua.lua().create_userdata(socket).unwrap();
@@ -936,21 +1035,23 @@ mod tests {
 
         // IPv4 address
         let socket_v4 = NseSocket {
-            stream: None,
+            transport: None,
             timeout: Duration::from_secs(30),
             is_ssl: false,
             peer_addr: "192.168.1.1:80".parse().unwrap(),
             hostname: None,
+            proto: "tcp".to_string(),
         };
         let _ud = lua.lua().create_userdata(socket_v4).unwrap();
 
         // IPv6 loopback
         let socket_v6 = NseSocket {
-            stream: None,
+            transport: None,
             timeout: Duration::from_secs(30),
             is_ssl: false,
             peer_addr: "[::1]:8080".parse().unwrap(),
             hostname: None,
+            proto: "tcp".to_string(),
         };
         let _ud = lua.lua().create_userdata(socket_v6).unwrap();
     }
@@ -976,11 +1077,12 @@ mod tests {
     #[test]
     fn test_nse_socket_debug() {
         let socket = NseSocket {
-            stream: None,
+            transport: None,
             timeout: Duration::from_secs(30),
             is_ssl: false,
             peer_addr: "127.0.0.1:80".parse().unwrap(),
             hostname: None,
+            proto: "tcp".to_string(),
         };
 
         let debug_str = format!("{socket:?}");
@@ -1013,11 +1115,12 @@ mod tests {
     #[test]
     fn test_nse_socket_is_connected() {
         let socket = NseSocket {
-            stream: None,
+            transport: None,
             timeout: Duration::from_secs(30),
             is_ssl: false,
             peer_addr: "127.0.0.1:80".parse().unwrap(),
             hostname: None,
+            proto: "tcp".to_string(),
         };
 
         assert!(!socket.is_connected());

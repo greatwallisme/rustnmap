@@ -252,6 +252,10 @@ fn parse_fp_impl(fp: &str) -> HashMap<String, String> {
 /// # Errors
 ///
 /// Returns an error if library registration fails.
+#[expect(
+    clippy::too_many_lines,
+    reason = "Register function contains inline Lua code for LPeg utility functions"
+)]
 pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     let lua = nse_lua.lua_mut();
 
@@ -284,6 +288,115 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
         Ok(Value::Table(table))
     })?;
     lpeg_utility_table.set("parse_fp", parse_fp_fn)?;
+
+    // Register lpeg-dependent Lua functions directly via inline Lua code.
+    // The full nselib/lpeg-utility.lua cannot be loaded at registration time
+    // because it has transitive dependencies (require "stdnse" -> require "nmap")
+    // that are not yet set up. Instead, we inline only the functions that
+    // depend solely on the already-registered lpeg module.
+    let lua_fn_table: mlua::Table = lua
+        .load(
+            r#"
+local lpeg = require "lpeg"
+local string = require "string"
+local assert = assert
+local tonumber = tonumber
+local pairs = pairs
+local rawset = rawset
+local lower = string.lower
+local upper = string.upper
+
+local result = {}
+
+-- Case-insensitive pattern builder
+local caselessP = lpeg.Cf(
+  (lpeg.P(1) / function(a) return lpeg.S(lower(a)..upper(a)) end)^1,
+  function(a, b) return a * b end
+)
+
+function result.caseless(literal)
+  return assert(caselessP:match(literal))
+end
+
+function result.anywhere(patt)
+  return lpeg.P { patt + 1 * lpeg.V(1) }
+end
+
+function result.split(str, sep)
+  return lpeg.P {
+    lpeg.V "elem" * (lpeg.V "sep" * lpeg.V "elem")^0,
+    elem = lpeg.C((1 - lpeg.V "sep")^0),
+    sep = sep,
+  }:match(str)
+end
+
+-- localize adds locale-aware character classes to a grammar.
+-- Equivalent to lpeg.locale(grammar) but works with LuLPeg which may not
+-- implement locale().
+function result.localize(grammar)
+  if not grammar then return lpeg.P(false) end
+  if not grammar.alpha then
+    grammar.alpha = lpeg.R("az", "AZ") + lpeg.P("_")
+  end
+  if not grammar.digit then
+    grammar.digit = lpeg.R("09")
+  end
+  if not grammar.alnum then
+    grammar.alnum = grammar.alpha + grammar.digit
+  end
+  if not grammar.space then
+    grammar.space = lpeg.S(" \t\r\n\v\f")^1
+  end
+  if not grammar.xdigit then
+    grammar.xdigit = lpeg.R("09", "AF", "af")
+  end
+  if not grammar.punct then
+    grammar.punct = lpeg.R("\33\47") + lpeg.R("\58\64") + lpeg.R("\91\96") + lpeg.R("\123\126")
+  end
+  if not grammar.lower then
+    grammar.lower = lpeg.R("az")
+  end
+  if not grammar.upper then
+    grammar.upper = lpeg.R("AZ")
+  end
+  return lpeg.P(grammar)
+end
+
+function result.atwordboundary(patt)
+  return result.localize {
+    patt + lpeg.V "alpha"^0 * (1 - lpeg.V "alpha")^1 * lpeg.V(1)
+  }
+end
+
+function result.escaped_quote(quot, esc)
+  quot = quot or '"'
+  esc = esc or '\\'
+  return lpeg.P {
+    lpeg.Cs(lpeg.V "quot" * lpeg.Cs((lpeg.V "simple_char" + lpeg.V "noesc" + lpeg.V "unesc")^0) * lpeg.V "quot"),
+    quot = lpeg.P(quot)/"",
+    esc = lpeg.P(esc),
+    simple_char = (lpeg.P(1) - (lpeg.V "quot" + lpeg.V "esc")),
+    unesc = (lpeg.V "esc" * lpeg.C(lpeg.V "esc" + lpeg.P(quot)))/"%1",
+    noesc = lpeg.V "esc" * lpeg.V "simple_char",
+  }
+end
+
+return result
+"#,
+        )
+        .set_name("lpeg-utility-functions")
+        .eval()?;
+
+    for (key, value) in lua_fn_table
+        .pairs::<mlua::String, mlua::Value>()
+        .flatten()
+    {
+        // Rust-registered functions take priority
+        if lpeg_utility_table.get::<mlua::Value>(key.clone())?.is_nil() {
+            lpeg_utility_table.set(key, value)?;
+        }
+    }
+    debug!("lpeg-utility Lua functions registered");
 
     // Register the library globally as "lpeg-utility"
     lua.globals().set("lpeg-utility", lpeg_utility_table)?;

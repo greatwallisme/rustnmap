@@ -87,7 +87,13 @@ const DEFAULT_MAX_BODY_SIZE: usize = 2_097_152;
 const MAX_REDIRECT_COUNT: u32 = 5;
 
 /// Arguments for the `page_exists` Lua callback.
-type PageExistsArgs = (Option<Table>, Option<u16>, Option<String>, Option<String>, Option<bool>);
+type PageExistsArgs = (
+    Option<Table>,
+    Option<u16>,
+    Option<String>,
+    Option<String>,
+    Option<bool>,
+);
 
 /// HTTP response structure.
 #[derive(Debug, Clone)]
@@ -1322,39 +1328,37 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     // Register identify_404(host, port) function
     // Determines how the target server handles 404 Not Found responses.
     // Returns: result_404 (status code), response_table, known_404_body
-    let identify_404_fn = lua.create_function(
-        |lua, (host, port): (Value, Value)| {
-            let (host_str, port_num) = extract_host_port(host, port);
-            debug!("http.identify_404({}, {})", host_str, port_num);
+    let identify_404_fn = lua.create_function(|lua, (host, port): (Value, Value)| {
+        let (host_str, port_num) = extract_host_port(host, port);
+        debug!("http.identify_404({}, {})", host_str, port_num);
 
-            // Probe a random-looking path that should 404
-            let fake_path = format!("/nmaplowercheck{}", std::process::id());
-            let opts = RequestOptions::default();
-            let request = build_request("GET", &host_str, port_num, &fake_path, &opts, None);
+        // Probe a random-looking path that should 404
+        let fake_path = format!("/nmaplowercheck{}", std::process::id());
+        let opts = RequestOptions::default();
+        let request = build_request("GET", &host_str, port_num, &fake_path, &opts, None);
 
-            if let Ok(response) = perform_request(&host_str, port_num, &request, &opts) {
-                    let status = response.status;
-                    let body = String::from_utf8_lossy(&response.body).to_string();
-                    let cleaned = clean_404(&body);
+        if let Ok(response) = perform_request(&host_str, port_num, &request, &opts) {
+            let status = response.status;
+            let body = String::from_utf8_lossy(&response.body).to_string();
+            let cleaned = clean_404(&body);
 
-                    let resp_table = response_to_table(lua, &response)?;
+            let resp_table = response_to_table(lua, &response)?;
 
-                    // Return: result_404 (status code), response_table, known_404_body
-                    let result = lua.create_table()?;
-                    result.set(1, i64::from(status))?;
-                    result.set(2, resp_table)?;
-                    result.set(3, cleaned.as_str())?;
-                    Ok(Value::Table(result))
-                } else {
-                    // Return default 404 behavior
-                    let result = lua.create_table()?;
-                    result.set(1, 404)?;
-                    result.set(2, Value::Nil)?;
-                    result.set(3, "")?;
-                    Ok(Value::Table(result))
-                }
-        },
-    )?;
+            // Return: result_404 (status code), response_table, known_404_body
+            let result = lua.create_table()?;
+            result.set(1, i64::from(status))?;
+            result.set(2, resp_table)?;
+            result.set(3, cleaned.as_str())?;
+            Ok(Value::Table(result))
+        } else {
+            // Return default 404 behavior
+            let result = lua.create_table()?;
+            result.set(1, 404)?;
+            result.set(2, Value::Nil)?;
+            result.set(3, "")?;
+            Ok(Value::Table(result))
+        }
+    })?;
     http_table.set("identify_404", identify_404_fn)?;
 
     // Register can_use_head(host, port, result_404, path) function
@@ -1463,30 +1467,26 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
 
     // Register get_status_string(data) function
     // Returns a human-readable status string from an HTTP response.
-    let get_status_string_fn = lua.create_function(
-        |lua, data: Option<Table>| {
-            let Some(data) = data else {
-                return Ok(Value::String(lua.create_string("nil")?));
-            };
-            let status_line: Option<String> = data.get("status-line").ok().flatten();
-            let status: Option<i64> = data.get("status").ok().flatten();
+    let get_status_string_fn = lua.create_function(|lua, data: Option<Table>| {
+        let Some(data) = data else {
+            return Ok(Value::String(lua.create_string("nil")?));
+        };
+        let status_line: Option<String> = data.get("status-line").ok().flatten();
+        let status: Option<i64> = data.get("status").ok().flatten();
 
-            match (status_line, status) {
-                (Some(sl), _) => Ok(Value::String(lua.create_string(sl.trim())?)),
-                (None, Some(s)) => {
-                    Ok(Value::String(lua.create_string(format!("HTTP {s}"))?))
-                }
-                _ => Ok(Value::String(lua.create_string("unknown")?)),
-            }
-        },
-    )?;
+        match (status_line, status) {
+            (Some(sl), _) => Ok(Value::String(lua.create_string(sl.trim())?)),
+            (None, Some(s)) => Ok(Value::String(lua.create_string(format!("HTTP {s}"))?)),
+            _ => Ok(Value::String(lua.create_string("unknown")?)),
+        }
+    })?;
     http_table.set("get_status_string", get_status_string_fn)?;
 
     // Register response_contains(data, pattern) function
     // Checks if the HTTP response contains the given text.
     // Returns: found (bool), matches (table of captures)
-    let response_contains_fn = lua.create_function(
-        |lua, (data, pattern): (Option<Table>, String)| {
+    let response_contains_fn =
+        lua.create_function(|lua, (data, pattern): (Option<Table>, String)| {
             let Some(data) = data else {
                 let mut result = mlua::Variadic::new();
                 result.push(Value::Boolean(false));
@@ -1544,8 +1544,7 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
             }
 
             Ok(result)
-        },
-    )?;
+        })?;
     http_table.set("response_contains", response_contains_fn)?;
 
     // Register save_path(host, port, path, status) stub

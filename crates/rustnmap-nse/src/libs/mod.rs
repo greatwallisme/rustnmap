@@ -123,12 +123,11 @@ pub fn register_all(lua: &mut NseLua) -> Result<()> {
     stringaux::register(lua)?;
     tableaux::register(lua)?;
     libssh2_utility::register(lua)?;
+    // Register pure-Rust lpeg module BEFORE lpeg-utility (which requires itpeg)
+    lpeg::register(lua)?;
     lpeg_utility::register(lua)?;
     ip_ops::register(lua)?;
     base64::register(lua)?;
-
-    // Register pure-Rust lpeg module for PEG pattern matching
-    lpeg::register(lua)?;
 
     // After registering all libraries in global namespace,
     // also register them in package.preload so require() works

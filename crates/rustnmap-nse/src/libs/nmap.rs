@@ -543,6 +543,16 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     })?;
     nmap_table.set("new_try", new_try_fn)?;
 
+    // Register set_port_state(host, port, state) function
+    // NSE scripts call this to change the port state (e.g., from "open|filtered" to "open")
+    // In our implementation, this is a no-op since port states are determined by the scan engine
+    let set_port_state_fn = lua.create_function(|_, (_host, _port, _state): (mlua::Value, mlua::Value, mlua::Value)| {
+        // Port state changes from scripts are acknowledged but not applied
+        // The actual port state is managed by the scan engine
+        Ok(())
+    })?;
+    nmap_table.set("set_port_state", set_port_state_fn)?;
+
     // Set the nmap table as a global
     lua.globals().set("nmap", nmap_table)?;
 

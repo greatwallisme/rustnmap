@@ -297,10 +297,18 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     // - get_script_args("key") -> value or nil (allows "or" pattern)
     // - get_script_args("k1", "k2") -> value1, value2 (multiple returns)
     let get_script_args_fn = lua.create_function(|lua, args: MultiValue| {
-        // Get storage and handle
+        // Get storage and handle - if no tokio runtime, return nil/empty
         let storage = get_script_args_storage();
-        let handle = tokio::runtime::Handle::try_current()
-            .map_err(|_e| mlua::Error::RuntimeError("No tokio runtime available".to_string()))?;
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            // No tokio runtime available (e.g., during module loading in tests)
+            // Return nil for all requested args, or empty table for no args
+            if args.is_empty() {
+                let result = lua.create_table()?;
+                return Ok(MultiValue::from_vec(vec![Value::Table(result)]));
+            }
+            let nils: Vec<Value> = args.into_iter().map(|_| Value::Nil).collect();
+            return Ok(MultiValue::from_vec(nils));
+        };
 
         // If no arguments, return all script args as a table
         if args.is_empty() {

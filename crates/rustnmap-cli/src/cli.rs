@@ -1729,15 +1729,24 @@ fn print_host_normal<W: Write>(handle: &mut W, args: &Args, host: &HostResult) {
             print_port_normal(handle, args, port);
         }
 
-        // Print scripts for open ports
+        // Print scripts for all ports (any port state can have scripts)
         let formatter = rustnmap_output::NormalFormatter::new();
         for port in &host.ports {
-            if matches!(port.state, PortState::Open) {
-                for script in &port.scripts {
-                    if let Ok(output) = formatter.format_script(script) {
-                        let _ = write!(handle, "{output}");
-                    }
+            for script in &port.scripts {
+                if let Ok(output) = formatter.format_script(script) {
+                    let _ = write!(handle, "{output}");
                 }
+            }
+        }
+    }
+
+    // Host-level scripts
+    if !host.scripts.is_empty() {
+        let formatter = rustnmap_output::NormalFormatter::new();
+        let _ = writeln!(handle, "\nHost script results:");
+        for script in &host.scripts {
+            if let Ok(output) = formatter.format_script(script) {
+                let _ = write!(handle, "{output}");
             }
         }
     }

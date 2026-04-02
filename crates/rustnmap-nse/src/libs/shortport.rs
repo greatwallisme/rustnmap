@@ -134,11 +134,14 @@ fn create_service_rule(
 }
 
 /// Create a port rule function that matches by port number or service name.
+///
+/// `protos` contains zero or more protocol strings. When empty, any protocol
+/// matches (equivalent to Nmap's `nil` proto argument).
 fn create_port_or_service_rule(
     lua: &mlua::Lua,
     ports: Vec<u16>,
     services: &[String],
-    proto: Option<String>,
+    protos: Vec<String>,
     state: Option<String>,
 ) -> mlua::Result<Function> {
     let services_lower: Vec<String> = services.iter().map(|s| s.to_lowercase()).collect();
@@ -161,10 +164,9 @@ fn create_port_or_service_rule(
             .iter()
             .any(|s| port_service.eq_ignore_ascii_case(s));
 
-        // Check protocol if specified
-        let proto_matches = proto
-            .as_ref()
-            .is_none_or(|p| port_proto.eq_ignore_ascii_case(p));
+        // Check protocol: empty protos vec matches any protocol
+        let proto_matches =
+            protos.is_empty() || protos.iter().any(|p| port_proto.eq_ignore_ascii_case(p));
 
         // Check state if specified
         let state_matches = state
@@ -214,6 +216,27 @@ fn parse_services_arg(_lua: &mlua::Lua, arg: Value) -> mlua::Result<Vec<String>>
                 }
             }
             Ok(services)
+        }
+        _ => Ok(Vec::new()),
+    }
+}
+
+/// Parse protocol argument (can be string, table of strings, or nil).
+///
+/// Returns a `Vec<String>` of protocol names. Empty vector means "match any
+/// protocol", mirroring Nmap's behaviour when proto is `nil`.
+fn parse_proto_arg(_lua: &mlua::Lua, arg: Value) -> mlua::Result<Vec<String>> {
+    match arg {
+        Value::String(s) => Ok(vec![s.to_str()?.to_string()]),
+        Value::Table(t) => {
+            let mut protos = Vec::new();
+            for pair in t.pairs::<Value, Value>() {
+                let (_, v) = pair?;
+                if let Value::String(s) = v {
+                    protos.push(s.to_str()?.to_string());
+                }
+            }
+            Ok(protos)
         }
         _ => Ok(Vec::new()),
     }
@@ -332,13 +355,12 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
             Vec::new()
         };
 
-        let proto = args.get(2).and_then(|v| {
-            if let Value::String(s) = v {
-                s.to_str().ok().map(|s| s.to_string())
-            } else {
-                None
-            }
-        });
+        // proto can be a string ("udp"), a table ({"udp", "tcp"}), or nil
+        let protos = if let Some(arg) = args.get(2) {
+            parse_proto_arg(lua, arg.clone())?
+        } else {
+            Vec::new()
+        };
 
         let state = args.get(3).and_then(|v| {
             if let Value::String(s) = v {
@@ -348,7 +370,7 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
             }
         });
 
-        create_port_or_service_rule(lua, ports, &services, proto, state)
+        create_port_or_service_rule(lua, ports, &services, protos, state)
     })?;
     shortport_table.set("port_or_service", port_or_service_fn)?;
 
@@ -567,6 +589,61 @@ mod tests {
         assert!(HTTP_PORTS.contains(&443));
         assert!(!HTTP_PORTS.contains(&22));
         assert!(SSH_PORTS.contains(&22));
+    }
+
+    #[test]
+    fn test_port_or_service_multi_proto() {
+        let mut lua = NseLua::new_default().unwrap();
+        register(&mut lua).unwrap();
+
+        // Create a rule matching port 123 or service "ntp" with proto = {"udp", "tcp"}
+        // This mirrors ntp-info's portrule: shortport.port_or_service(123, "ntp", {"udp", "tcp"})
+        let rule: Function = lua
+            .lua()
+            .load("return shortport.port_or_service(123, 'ntp', {'udp', 'tcp'})")
+            .eval()
+            .unwrap();
+
+        // UDP port 123 should match
+        let port123_udp = create_test_port_table(lua.lua(), 123, "udp", "open", "ntp");
+        let result: bool = rule.call((Value::Nil, port123_udp)).unwrap();
+        assert!(result, "UDP port 123 with ntp service should match");
+
+        // TCP port 123 should also match
+        let port123_tcp = create_test_port_table(lua.lua(), 123, "tcp", "open", "ntp");
+        let result: bool = rule.call((Value::Nil, port123_tcp)).unwrap();
+        assert!(result, "TCP port 123 with ntp service should match");
+
+        // SCTP port 123 should NOT match (not in proto list)
+        let port123_sctp = create_test_port_table(lua.lua(), 123, "sctp", "open", "ntp");
+        let result: bool = rule.call((Value::Nil, port123_sctp)).unwrap();
+        assert!(
+            !result,
+            "SCTP port 123 should not match when proto is {{udp, tcp}}"
+        );
+    }
+
+    #[test]
+    fn test_port_or_service_single_proto() {
+        let mut lua = NseLua::new_default().unwrap();
+        register(&mut lua).unwrap();
+
+        // Single string proto: shortport.port_or_service(53, "dns", "udp")
+        let rule: Function = lua
+            .lua()
+            .load("return shortport.port_or_service(53, 'dns', 'udp')")
+            .eval()
+            .unwrap();
+
+        // UDP port 53 should match
+        let port53_udp = create_test_port_table(lua.lua(), 53, "udp", "open", "dns");
+        let result: bool = rule.call((Value::Nil, port53_udp)).unwrap();
+        assert!(result, "UDP port 53 should match");
+
+        // TCP port 53 should NOT match
+        let port53_tcp = create_test_port_table(lua.lua(), 53, "tcp", "open", "dns");
+        let result: bool = rule.call((Value::Nil, port53_tcp)).unwrap();
+        assert!(!result, "TCP port 53 should not match when proto is 'udp'");
     }
 
     #[test]

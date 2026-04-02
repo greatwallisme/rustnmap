@@ -224,7 +224,10 @@ fn build_ptr_domain(ip: &str) -> Option<String> {
 /// # Errors
 ///
 /// Returns an error if library registration fails.
-#[expect(clippy::too_many_lines, reason = "Library registration is inherently verbose")]
+#[expect(
+    clippy::too_many_lines,
+    reason = "Library registration is inherently verbose"
+)]
 pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     let lua = nse_lua.lua_mut();
 

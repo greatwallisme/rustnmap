@@ -42,7 +42,9 @@ use std::sync::Arc as StdArc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::packet_adapter::{create_stealth_engine, create_stealth_engine_with_target, ScannerPacketEngine};
+use crate::packet_adapter::{
+    create_stealth_engine, create_stealth_engine_with_target, ScannerPacketEngine,
+};
 use rustnmap_common::{Port, PortState, RateLimiter, ScanConfig};
 use rustnmap_net::raw_socket::{parse_tcp_response, RawSocket, TcpPacketBuilder};
 use rustnmap_packet::BpfFilter;
@@ -866,11 +868,8 @@ impl ParallelScanEngine {
         // wrong interface for multi-homed hosts (e.g., Docker bridge vs
         // external interface).
         let src_addr = self.source_addr_for_target(target);
-        let target_packet_engine = create_stealth_engine_with_target(
-            Some(src_addr),
-            Some(target),
-            self.config.clone(),
-        );
+        let target_packet_engine =
+            create_stealth_engine_with_target(Some(src_addr), Some(target), self.config.clone());
 
         // Channel for received packets from the receiver task
         let (packet_tx, mut packet_rx) = mpsc::unbounded_channel();
@@ -1466,12 +1465,11 @@ impl ParallelScanEngine {
 
         // Rebuild and resend the packet
         let src_addr = self.source_addr_for_target(probe.target);
-        let packet =
-            TcpPacketBuilder::new(src_addr, probe.target, probe.src_port, probe.port)
-                .seq(probe.seq)
-                .syn()
-                .window(65_535)
-                .build();
+        let packet = TcpPacketBuilder::new(src_addr, probe.target, probe.src_port, probe.port)
+            .seq(probe.seq)
+            .syn()
+            .window(65_535)
+            .build();
 
         let dst_sockaddr = SocketAddr::new(std::net::IpAddr::V4(probe.target), probe.port);
         self.socket
@@ -1902,8 +1900,7 @@ impl ParallelScanEngine {
         // Rebuild and resend
         let src_addr = self.source_addr_for_target(probe.target);
         let packet =
-            UdpPacketBuilder::new(src_addr, probe.target, probe.src_port, probe.port)
-                .build();
+            UdpPacketBuilder::new(src_addr, probe.target, probe.src_port, probe.port).build();
 
         let dst_sockaddr = SocketAddr::new(std::net::IpAddr::V4(probe.target), probe.port);
         self.socket

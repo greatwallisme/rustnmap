@@ -249,11 +249,6 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
 fn create_account_class(lua: &mlua::Lua) -> Result<Table> {
     let account_table = lua.create_table()?;
 
-    // Create the metatable with __index pointing to account_table
-    let metatable = lua.create_table()?;
-    metatable.set(INDEX, account_table.clone())?;
-    account_table.set_metatable(Some(metatable))?;
-
     // __tostring metamethod
     let tostring_fn = lua.create_function(|_, account: Table| {
         let username: Option<String> = account.get("username")?;
@@ -319,10 +314,12 @@ fn create_account_class(lua: &mlua::Lua) -> Result<Table> {
             account.set("password", password)?;
             account.set("state", state_msg(state))?;
 
-            // Get Account class from globals and set as metatable
+            // Get Account class from globals and create a proper metatable
             let creds_table: Table = lua.globals().get("creds")?;
             let account_class: Table = creds_table.get("Account")?;
-            account.set_metatable(Some(account_class))?;
+            let instance_mt = lua.create_table()?;
+            instance_mt.set(INDEX, account_class)?;
+            account.set_metatable(Some(instance_mt))?;
 
             Ok(account)
         },
@@ -337,11 +334,6 @@ fn create_account_class(lua: &mlua::Lua) -> Result<Table> {
 #[expect(clippy::too_many_lines, reason = "Complex class with multiple methods")]
 fn create_credentials_class(lua: &mlua::Lua) -> Result<Table> {
     let credentials_table = lua.create_table()?;
-
-    // Create the metatable with __index pointing to credentials_table
-    let metatable = lua.create_table()?;
-    metatable.set(INDEX, credentials_table.clone())?;
-    credentials_table.set_metatable(Some(metatable))?;
 
     // Define the add method
     let add_fn = lua.create_function(
@@ -629,10 +621,15 @@ fn create_credentials_class(lua: &mlua::Lua) -> Result<Table> {
                 credentials.set("port_number", *pn)?;
             }
 
-            // Get Credentials class from globals and set as metatable
+            // Get Credentials class from globals and create a proper metatable
+            // The class table has methods (add, getCredentials, getTable, etc.)
+            // but __index is on the class's own metatable, not on the class itself.
+            // We need to create a metatable with __index = class for the instance.
             let creds_table: Table = lua.globals().get("creds")?;
             let credentials_class: Table = creds_table.get("Credentials")?;
-            credentials.set_metatable(Some(credentials_class))?;
+            let instance_mt = lua.create_table()?;
+            instance_mt.set(INDEX, credentials_class)?;
+            credentials.set_metatable(Some(instance_mt))?;
 
             // Store internal state
             credentials.set("_tags", tags_table)?;

@@ -26,9 +26,7 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     let lua = nse_lua.lua_mut();
 
     // Load and execute LuLPeg -- it returns an LL table with the full lpeg API
-    let lulpeg: mlua::Table = lua.load(LULPEG_LUA)
-        .set_name("lulpeg.lua")
-        .eval()?;
+    let lulpeg: mlua::Table = lua.load(LULPEG_LUA).set_name("lulpeg.lua").eval()?;
 
     // Call LL:register() to set package.loaded.lpeg and package.loaded.re
     let register_fn: mlua::Function = lulpeg.get("register")?;
@@ -46,10 +44,7 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
 
     if matches!(lpeg_loaded, mlua::Value::Nil) {
         // Fallback: manually set package.loaded.lpeg
-        let loaded: mlua::Table = lua
-            .globals()
-            .get::<mlua::Table>("package")?
-            .get("loaded")?;
+        let loaded: mlua::Table = lua.globals().get::<mlua::Table>("package")?.get("loaded")?;
         loaded.set("lpeg", lulpeg.clone())?;
     }
 
@@ -60,9 +55,7 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
         .get("preload")?;
 
     let lpeg_ref: mlua::Table = lulpeg;
-    let loader = lua.create_function(move |_, (): ()| {
-        Ok(mlua::Value::Table(lpeg_ref.clone()))
-    })?;
+    let loader = lua.create_function(move |_, (): ()| Ok(mlua::Value::Table(lpeg_ref.clone())))?;
     preload.set("lpeg", loader)?;
 
     Ok(())
@@ -116,12 +109,14 @@ mod tests {
         // Test R (range) and S (set)
         let result: i64 = lua
             .lua()
-            .load(r#"
+            .load(
+                r#"
                 local lpeg = require "lpeg"
                 local digit = lpeg.R("09")
                 local space = lpeg.S(" \t")
                 return (digit + space):match("5") and 1 or 0
-            "#)
+            "#,
+            )
             .eval()
             .unwrap();
         assert_eq!(result, 1);
@@ -135,13 +130,15 @@ mod tests {
         // Test C (capture) and Ct (table capture)
         let result: mlua::Value = lua
             .lua()
-            .load(r#"
+            .load(
+                r#"
                 local lpeg = require "lpeg"
                 local C = lpeg.C
                 local P = lpeg.P
                 local Ct = lpeg.Ct
                 return Ct(C(P("a") + P("b"))^0):match("abba")
-            "#)
+            "#,
+            )
             .eval()
             .unwrap();
         assert!(!matches!(result, mlua::Value::Nil));

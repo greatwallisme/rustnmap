@@ -2484,7 +2484,11 @@ impl ScanOrchestrator {
             let original_target = host_result.hostname.as_deref();
 
             for port_result in &mut host_result.ports {
-                if port_result.state == PortState::Open {
+                // Include Open and OpenOrFiltered (common for UDP) for NSE execution
+                if matches!(
+                    port_result.state,
+                    PortState::Open | PortState::OpenOrFiltered
+                ) {
                     let protocol = match port_result.protocol {
                         rustnmap_output::models::Protocol::Tcp => "tcp",
                         rustnmap_output::models::Protocol::Udp => "udp",

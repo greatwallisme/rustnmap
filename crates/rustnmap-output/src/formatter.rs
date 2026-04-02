@@ -419,15 +419,17 @@ impl OutputFormatter for NormalFormatter {
                 output.push_str(&self.format_port(port)?);
             }
 
-            // Scripts for open ports
-            let open_ports: Vec<_> = host
-                .ports
-                .iter()
-                .filter(|p| matches!(p.state, PortState::Open))
-                .collect();
-
-            for port in &open_ports {
+            // Scripts for ports (show for any port state that has scripts)
+            for port in &host.ports {
                 for script in &port.scripts {
+                    output.push_str(&self.format_script(script)?);
+                }
+            }
+
+            // Host-level scripts
+            if !host.scripts.is_empty() {
+                output.push_str("\nHost script results:\n");
+                for script in &host.scripts {
                     output.push_str(&self.format_script(script)?);
                 }
             }
@@ -814,6 +816,15 @@ impl XmlFormatter {
                 Self::write_os_match(writer, os_match)?;
             }
             writer.write_event(Event::End(BytesEnd::new("os")))?;
+        }
+
+        // Host scripts
+        if !host.scripts.is_empty() {
+            writer.write_event(Event::Start(BytesStart::new("hostscript")))?;
+            for script in &host.scripts {
+                Self::write_script(writer, script)?;
+            }
+            writer.write_event(Event::End(BytesEnd::new("hostscript")))?;
         }
 
         writer.write_event(Event::End(BytesEnd::new("host")))?;
