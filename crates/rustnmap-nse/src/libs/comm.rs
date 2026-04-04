@@ -66,6 +66,9 @@ pub struct NseSocket {
     hostname: Option<String>,
     /// Protocol string ("tcp" or "udp").
     proto: String,
+    /// Internal read buffer for `receive_buf` pattern matching.
+    /// Stores leftover data after a successful pattern match.
+    buffer: Vec<u8>,
 }
 
 impl NseSocket {
@@ -78,6 +81,7 @@ impl NseSocket {
             peer_addr,
             hostname,
             proto: "tcp".to_string(),
+            buffer: Vec::new(),
         }
     }
 
@@ -90,6 +94,7 @@ impl NseSocket {
             peer_addr,
             hostname,
             proto: "udp".to_string(),
+            buffer: Vec::new(),
         }
     }
 
@@ -168,25 +173,86 @@ impl NseSocket {
         }
     }
 
+    /// Set the read/write timeout on the socket.
+    fn set_timeout(&mut self, timeout: Duration) -> std::io::Result<()> {
+        self.timeout = timeout;
+        match self.transport {
+            Some(SocketTransport::Tcp(ref mut stream)) => {
+                stream.set_read_timeout(Some(timeout))?;
+                stream.set_write_timeout(Some(timeout))?;
+            }
+            Some(SocketTransport::Udp(ref udp)) => {
+                udp.set_read_timeout(Some(timeout))?;
+                udp.set_write_timeout(Some(timeout))?;
+            }
+            None => {}
+        }
+        Ok(())
+    }
+
+    /// Reconnect to the stored peer address.
+    fn connect(&mut self, timeout: Duration) -> std::io::Result<()> {
+        // Close existing transport first
+        self.close();
+        self.buffer.clear();
+
+        let stream = TcpStream::connect_timeout(&self.peer_addr, timeout)?;
+        stream.set_read_timeout(Some(self.timeout))?;
+        stream.set_write_timeout(Some(self.timeout))?;
+        self.transport = Some(SocketTransport::Tcp(stream));
+        Ok(())
+    }
+
+    /// Get connection info table (mimics nsock's `socket:get_info()`).
+    /// Returns (`local_ip`, `local_port`, `remote_ip`, `remote_port`, `proto`) or nil
+    fn get_info(&self) -> Option<(String, u16, String, u16, String)> {
+        match self.transport {
+            Some(SocketTransport::Tcp(ref stream)) => {
+                let local = stream.local_addr().ok()?;
+                let remote = stream.peer_addr().ok()?;
+                Some((
+                    local.ip().to_string(),
+                    local.port(),
+                    remote.ip().to_string(),
+                    remote.port(),
+                    self.proto.clone(),
+                ))
+            }
+            Some(SocketTransport::Udp(ref udp)) => {
+                let local = udp.local_addr().ok()?;
+                Some((
+                    local.ip().to_string(),
+                    local.port(),
+                    self.peer_addr.ip().to_string(),
+                    self.peer_addr.port(),
+                    self.proto.clone(),
+                ))
+            }
+            None => None,
+        }
+    }
+
     /// Close the socket.
-    fn close(&mut self) -> std::io::Result<()> {
+    fn close(&mut self) {
         if let Some(transport) = self.transport.take() {
             match transport {
                 SocketTransport::Tcp(stream) => {
-                    stream.shutdown(std::net::Shutdown::Both)?;
+                    // Ignore "not connected" errors -- the peer may have already
+                    // closed the connection, which is normal during script cleanup.
+                    let _ = stream.shutdown(std::net::Shutdown::Both);
                 }
                 SocketTransport::Udp(_) => {
                     // UDP sockets don't need shutdown; drop handles it
                 }
             }
         }
-        Ok(())
     }
 }
 
 #[expect(
     clippy::cast_possible_wrap,
-    reason = "usize to i64 cast for Lua FFI; truncation impossible on 64-bit systems"
+    clippy::too_many_lines,
+    reason = "NSE socket protocol handling requires sequential connection/SSL/read/write logic; usize to i64 cast for Lua FFI is safe on 64-bit"
 )]
 impl UserData for NseSocket {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
@@ -199,17 +265,39 @@ impl UserData for NseSocket {
             }
         });
 
+        // socket:receive([max_bytes])
+        //
+        // Nsock-compatible return: (true, data) on success, (false, error) on failure.
+        // This two-value return is required by http.lua's recv_line, recv_all,
+        // recv_length, and dozens of other nselib callers that do:
+        //   local status, data = socket:receive()
+        //   if not status then ... end
         methods.add_method_mut("receive", |lua, this, max_bytes: Option<usize>| {
             let max = max_bytes.unwrap_or(4096);
             match this.receive(max) {
-                Ok(data) => Ok(Value::String(lua.create_string(&data)?)),
-                Err(e) => Err(mlua::Error::RuntimeError(format!("receive failed: {e}"))),
+                Ok(data) => Ok(mlua::MultiValue::from_vec(vec![
+                    Value::Boolean(true),
+                    Value::String(lua.create_string(&data)?),
+                ])),
+                Err(e) => Ok(mlua::MultiValue::from_vec(vec![
+                    Value::Boolean(false),
+                    Value::String(lua.create_string(format!("receive failed: {e}"))?),
+                ])),
             }
         });
 
+        // socket:receive_all()
+        //
+        // Same nsock-compatible return pattern as receive().
         methods.add_method_mut("receive_all", |lua, this, ()| match this.receive_all() {
-            Ok(data) => Ok(Value::String(lua.create_string(&data)?)),
-            Err(e) => Err(mlua::Error::RuntimeError(format!("receive failed: {e}"))),
+            Ok(data) => Ok(mlua::MultiValue::from_vec(vec![
+                Value::Boolean(true),
+                Value::String(lua.create_string(&data)?),
+            ])),
+            Err(e) => Ok(mlua::MultiValue::from_vec(vec![
+                Value::Boolean(false),
+                Value::String(lua.create_string(format!("receive failed: {e}"))?),
+            ])),
         });
 
         // receive_lines(n) - read n lines (delimited by \r\n or \n)
@@ -223,9 +311,9 @@ impl UserData for NseSocket {
 
             match this.transport {
                 Some(SocketTransport::Tcp(ref mut stream)) => {
-                    stream
-                        .set_read_timeout(Some(this.timeout))
-                        .map_err(|e| mlua::Error::RuntimeError(format!("set timeout failed: {e}")))?;
+                    stream.set_read_timeout(Some(this.timeout)).map_err(|e| {
+                        mlua::Error::RuntimeError(format!("set timeout failed: {e}"))
+                    })?;
 
                     while lines_read < lines_to_read {
                         let count = match stream.read(&mut tmp) {
@@ -245,8 +333,9 @@ impl UserData for NseSocket {
                     }
                 }
                 Some(SocketTransport::Udp(ref udp)) => {
-                    udp.set_read_timeout(Some(this.timeout))
-                        .map_err(|e| mlua::Error::RuntimeError(format!("set timeout failed: {e}")))?;
+                    udp.set_read_timeout(Some(this.timeout)).map_err(|e| {
+                        mlua::Error::RuntimeError(format!("set timeout failed: {e}"))
+                    })?;
                     // For UDP, receive a single datagram (line-based read doesn't apply well)
                     let mut buf = vec![0u8; 65535];
                     let n = udp.recv(&mut buf).map_err(|e| {
@@ -270,9 +359,269 @@ impl UserData for NseSocket {
             ]))
         });
 
-        methods.add_method_mut("close", |_, this, ()| match this.close() {
-            Ok(()) => Ok(Value::Boolean(true)),
-            Err(e) => Err(mlua::Error::RuntimeError(format!("close failed: {e}"))),
+        // receive_buf(pattern, keep_or_drop) - pattern-based buffered receive.
+        //
+        // Reads data from the socket into an internal buffer and applies a pattern
+        // match to delimit the returned data. This is the primary buffered I/O
+        // method used by many NSE scripts (redis, imap, vnc, mqtt, etc.).
+        //
+        // # Parameters
+        //
+        // * `pattern` - Either a Lua string pattern (passed to `string.find`) or a
+        //   function that takes the buffer string and returns (start, end) on match
+        //   or nil on no match (e.g. `match.numbytes(n)` or `match.pattern_limit(...)`).
+        // * `keep_or_drop` - If true, include the matched delimiter in the returned
+        //   data. If false, return data up to (but not including) the match start.
+        //
+        // # Returns
+        //
+        // On success: `true, data_string`
+        // On failure: `false, error_message`
+        //
+        // # Behavior
+        //
+        // Maintains an internal buffer. On each call, new data is appended to the
+        // buffer and the pattern is tested. If the pattern matches, the relevant
+        // portion of the buffer is returned and the remainder is kept for the next
+        // call. If no match, more data is read (up to the socket timeout).
+        methods.add_method_mut(
+            "receive_buf",
+            |lua, this, (pattern, keep_or_drop): (mlua::Value, Option<bool>)| {
+                let include_delimiter = keep_or_drop.unwrap_or(false);
+
+                if this.transport.is_none() {
+                    return Ok(mlua::MultiValue::from_vec(vec![
+                        Value::Boolean(false),
+                        Value::String(lua.create_string("socket not connected")?),
+                    ]));
+                }
+
+                let max_iterations = 128usize;
+                for _ in 0..max_iterations {
+                    // Try matching the pattern against the current buffer
+                    let buf_str = String::from_utf8_lossy(&this.buffer);
+                    let match_result = match &pattern {
+                        Value::Function(func) => {
+                            // Call the Lua matcher function with the buffer string
+                            let result: mlua::MultiValue =
+                                func.call::<mlua::MultiValue>(buf_str.as_ref()).map_err(
+                                    |e| {
+                                        mlua::Error::RuntimeError(format!(
+                                        "receive_buf: pattern function error: {e}"
+                                    ))
+                                    },
+                                )?;
+                            let mut iter = result.into_iter();
+                            let first = iter.next();
+                            let second = iter.next();
+                            match (first, second) {
+                                (Some(Value::Integer(s)), Some(Value::Integer(e))) => {
+                                    Some((
+                                        usize::try_from(s).unwrap_or(0),
+                                        usize::try_from(e).unwrap_or(0),
+                                    ))
+                                }
+                                (Some(Value::Number(s)), Some(Value::Number(e))) => {
+                                    // Lua pattern functions may return f64 byte
+                                    // positions; convert via i64 safely.
+                                    #[expect(
+                                        clippy::cast_possible_truncation,
+                                        reason = "Lua string indices fit in i64; clamped non-negative"
+                                    )]
+                                    let s_idx = usize::try_from(s.max(0.0) as i64).unwrap_or(0);
+                                    #[expect(
+                                        clippy::cast_possible_truncation,
+                                        reason = "Lua string indices fit in i64; clamped non-negative"
+                                    )]
+                                    let e_idx = usize::try_from(e.max(0.0) as i64).unwrap_or(0);
+                                    Some((s_idx, e_idx))
+                                }
+                                _ => None,
+                            }
+                        }
+                        Value::String(pat) => {
+                            // Use string.find on the buffer
+                            let find_fn: mlua::Function =
+                                lua.globals().get::<mlua::Table>("string")?.get("find")?;
+                            let result: mlua::MultiValue = find_fn
+                                .call::<mlua::MultiValue>((buf_str.as_ref(), pat))
+                                .map_err(|e| {
+                                    mlua::Error::RuntimeError(format!(
+                                        "receive_buf: string.find error: {e}"
+                                    ))
+                                })?;
+                            let mut iter = result.into_iter();
+                            let first = iter.next();
+                            let second = iter.next();
+                            match (first, second) {
+                                (Some(Value::Integer(s)), Some(Value::Integer(e))) => {
+                                    Some((
+                                        usize::try_from(s).unwrap_or(0),
+                                        usize::try_from(e).unwrap_or(0),
+                                    ))
+                                }
+                                _ => None,
+                            }
+                        }
+                        _ => {
+                            return Err(mlua::Error::RuntimeError(
+                                "receive_buf: pattern must be a string or function".to_string(),
+                            ));
+                        }
+                    };
+
+                    if let Some((start, end)) = match_result {
+                        // Pattern matched - extract the data and remainder
+                        let buf_len = this.buffer.len();
+
+                        // Validate indices
+                        if start == 0 || start > buf_len || end > buf_len {
+                            return Err(mlua::Error::RuntimeError(format!(
+                                "receive_buf: invalid match indices ({start}, {end}) for buffer of length {buf_len}"
+                            )));
+                        }
+
+                        // Lua indices are 1-based, convert to 0-based
+                        let cut_point = if include_delimiter { end } else { start - 1 };
+                        let result_data = this.buffer[..cut_point].to_vec();
+                        this.buffer = this.buffer[end..].to_vec();
+
+                        return Ok(mlua::MultiValue::from_vec(vec![
+                            Value::Boolean(true),
+                            Value::String(lua.create_string(&result_data)?),
+                        ]));
+                    }
+
+                    // No match - read more data from socket
+                    let mut tmp = [0u8; 8192];
+                    let bytes_read = match this.transport {
+                        Some(SocketTransport::Tcp(ref mut stream)) => {
+                            stream
+                                .set_read_timeout(Some(this.timeout))
+                                .map_err(|e| {
+                                    mlua::Error::RuntimeError(format!(
+                                        "receive_buf: set timeout failed: {e}"
+                                    ))
+                                })?;
+                            match stream.read(&mut tmp) {
+                                Ok(0) => {
+                                    // EOF - return whatever is in the buffer
+                                    if this.buffer.is_empty() {
+                                        return Ok(mlua::MultiValue::from_vec(vec![
+                                            Value::Boolean(false),
+                                            Value::String(lua.create_string("EOF")?),
+                                        ]));
+                                    }
+                                    let result_data =
+                                        std::mem::take(&mut this.buffer);
+                                    return Ok(mlua::MultiValue::from_vec(vec![
+                                        Value::Boolean(true),
+                                        Value::String(lua.create_string(&result_data)?),
+                                    ]));
+                                }
+                                Ok(n) => n,
+                                Err(e)
+                                    if e.kind() == std::io::ErrorKind::TimedOut
+                                        || e.kind() == std::io::ErrorKind::WouldBlock =>
+                                {
+                                    // Timeout - return whatever is in the buffer
+                                    if this.buffer.is_empty() {
+                                        return Ok(mlua::MultiValue::from_vec(vec![
+                                            Value::Boolean(false),
+                                            Value::String(lua.create_string("TIMEOUT")?),
+                                        ]));
+                                    }
+                                    let result_data =
+                                        std::mem::take(&mut this.buffer);
+                                    return Ok(mlua::MultiValue::from_vec(vec![
+                                        Value::Boolean(true),
+                                        Value::String(lua.create_string(&result_data)?),
+                                    ]));
+                                }
+                                Err(e) => {
+                                    return Err(mlua::Error::RuntimeError(format!(
+                                        "receive_buf: read failed: {e}"
+                                    )));
+                                }
+                            }
+                        }
+                        Some(SocketTransport::Udp(ref udp)) => {
+                            udp.set_read_timeout(Some(this.timeout))
+                                .map_err(|e| {
+                                    mlua::Error::RuntimeError(format!(
+                                        "receive_buf: set timeout failed: {e}"
+                                    ))
+                                })?;
+                            match udp.recv(&mut tmp) {
+                                Ok(0) => {
+                                    if this.buffer.is_empty() {
+                                        return Ok(mlua::MultiValue::from_vec(vec![
+                                            Value::Boolean(false),
+                                            Value::String(lua.create_string("EOF")?),
+                                        ]));
+                                    }
+                                    let result_data =
+                                        std::mem::take(&mut this.buffer);
+                                    return Ok(mlua::MultiValue::from_vec(vec![
+                                        Value::Boolean(true),
+                                        Value::String(lua.create_string(&result_data)?),
+                                    ]));
+                                }
+                                Ok(n) => n,
+                                Err(e)
+                                    if e.kind() == std::io::ErrorKind::TimedOut
+                                        || e.kind() == std::io::ErrorKind::WouldBlock =>
+                                {
+                                    if this.buffer.is_empty() {
+                                        return Ok(mlua::MultiValue::from_vec(vec![
+                                            Value::Boolean(false),
+                                            Value::String(lua.create_string("TIMEOUT")?),
+                                        ]));
+                                    }
+                                    let result_data =
+                                        std::mem::take(&mut this.buffer);
+                                    return Ok(mlua::MultiValue::from_vec(vec![
+                                        Value::Boolean(true),
+                                        Value::String(lua.create_string(&result_data)?),
+                                    ]));
+                                }
+                                Err(e) => {
+                                    return Err(mlua::Error::RuntimeError(format!(
+                                        "receive_buf: udp recv failed: {e}"
+                                    )));
+                                }
+                            }
+                        }
+                        None => {
+                            return Ok(mlua::MultiValue::from_vec(vec![
+                                Value::Boolean(false),
+                                Value::String(lua.create_string("socket not connected")?),
+                            ]));
+                        }
+                    };
+
+                    this.buffer.extend_from_slice(&tmp[..bytes_read]);
+                }
+
+                // Exceeded max iterations - return buffer contents to prevent infinite loop
+                let result_data = std::mem::take(&mut this.buffer);
+                if result_data.is_empty() {
+                    Ok(mlua::MultiValue::from_vec(vec![
+                        Value::Boolean(false),
+                        Value::String(lua.create_string("receive_buf: max iterations exceeded")?),
+                    ]))
+                } else {
+                    Ok(mlua::MultiValue::from_vec(vec![
+                        Value::Boolean(true),
+                        Value::String(lua.create_string(&result_data)?),
+                    ]))
+                }
+            },
+        );
+
+        methods.add_method_mut("close", |_, this, ()| {
+            this.close();
+            Ok(Value::Boolean(true))
         });
 
         methods.add_method("get_peer_addr", |_, this, ()| {
@@ -282,6 +631,110 @@ impl UserData for NseSocket {
         methods.add_method("is_ssl", |_, this, ()| Ok(this.is_ssl));
 
         methods.add_method("get_proto", |_, this, ()| Ok(this.proto.clone()));
+
+        // set_timeout(timeout_ms) - set socket read/write timeout
+        // Matches nsock's socket:set_timeout()
+        methods.add_method_mut("set_timeout", |_, this, timeout_ms: Option<u64>| {
+            let ms = timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS);
+            this.set_timeout(Duration::from_millis(ms))
+                .map_err(|e| mlua::Error::RuntimeError(format!("set_timeout failed: {e}")))?;
+            Ok(true)
+        });
+
+        // get_info() - returns (local_ip, local_port, remote_ip, remote_port, proto)
+        // Matches nsock's socket:get_info() used by pipeline_go to check connection state
+        methods.add_method("get_info", |lua, this, ()| match this.get_info() {
+            Some((local_ip, local_port, remote_ip, remote_port, proto)) => {
+                let result = lua.create_table()?;
+                result.set("local_ip", local_ip)?;
+                result.set("local_port", local_port)?;
+                result.set("remote_ip", remote_ip)?;
+                result.set("remote_port", remote_port)?;
+                result.set("proto", proto)?;
+                Ok(Value::Table(result))
+            }
+            None => Ok(Value::Nil),
+        });
+
+        // connect(host, port, proto) - reconnect to host:port
+        // Matches nsock's socket:connect() used by pipeline_go for reconnection
+        methods.add_method_mut(
+            "connect",
+            |_, this, (host_param, port_param, proto_param): (Value, Value, Option<String>)| {
+                let host = match &host_param {
+                    Value::String(s) => s.to_str()?.to_string(),
+                    Value::Table(t) => {
+                        let ip: Value = t.get("ip").map_err(|e| {
+                            mlua::Error::RuntimeError(format!("host table missing 'ip' field: {e}"))
+                        })?;
+                        match ip {
+                            Value::String(s) => s.to_str()?.to_string(),
+                            other => {
+                                return Err(mlua::Error::RuntimeError(format!(
+                                    "host.ip must be a string, got: {:?}",
+                                    other.type_name()
+                                )));
+                            }
+                        }
+                    }
+                    other => {
+                        return Err(mlua::Error::RuntimeError(format!(
+                            "host must be a string or table, got: {:?}",
+                            other.type_name()
+                        )));
+                    }
+                };
+
+                let port = match port_param {
+                    Value::Integer(n) => u16::try_from(n).map_err(|e| {
+                        mlua::Error::RuntimeError(format!("port number out of range: {e}"))
+                    })?,
+                    Value::Table(ref t) => {
+                        let number: i64 = t.get("number").map_err(|e| {
+                            mlua::Error::RuntimeError(format!(
+                                "port table missing 'number' field: {e}"
+                            ))
+                        })?;
+                        u16::try_from(number).map_err(|e| {
+                            mlua::Error::RuntimeError(format!("port.number out of range: {e}"))
+                        })?
+                    }
+                    other => {
+                        return Err(mlua::Error::RuntimeError(format!(
+                            "port must be a number or table, got: {:?}",
+                            other.type_name()
+                        )));
+                    }
+                };
+
+                if let Some(proto) = proto_param {
+                    this.proto = proto;
+                }
+                this.hostname = Some(host.clone());
+
+                tokio::task::block_in_place(|| {
+                    let addr = format!("{host}:{port}");
+                    let addrs: Vec<SocketAddr> = addr
+                        .to_socket_addrs()
+                        .map_err(|e| {
+                            mlua::Error::RuntimeError(format!("DNS resolution failed: {e}"))
+                        })?
+                        .collect();
+
+                    if addrs.is_empty() {
+                        return Err(mlua::Error::RuntimeError(
+                            "could not resolve address".to_string(),
+                        ));
+                    }
+
+                    this.peer_addr = addrs[0];
+                    this.connect(this.timeout)
+                        .map_err(|e| mlua::Error::RuntimeError(format!("connect failed: {e}")))?;
+
+                    Ok(true)
+                })
+            },
+        );
 
         // get_ssl_certificate() -> certificate_table
         //
@@ -301,11 +754,16 @@ impl UserData for NseSocket {
                 return Ok(Value::Nil);
             }
 
-            // Use stored hostname or fall back to IP for SNI
+            // Use stored hostname or fall back to IP for SNI.
+            // Filter out empty strings to avoid OpenSSL SNI errors.
             let hostname = this
                 .hostname
-                .clone()
-                .unwrap_or_else(|| this.peer_addr.ip().to_string());
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .map_or_else(
+                    || this.peer_addr.ip().to_string(),
+                    std::string::ToString::to_string,
+                );
 
             // Perform a new TLS connection to retrieve the peer certificate DER
             let cert_der = tls_connect_and_get_cert(&hostname, this.peer_addr)?;
@@ -398,7 +856,10 @@ fn opencon_impl(
     // Use block_in_place to yield to the async runtime during blocking network operations
     tokio::task::block_in_place(|| {
         let mut socket = opencon_impl_blocking(host, port, opts)?;
-        socket.hostname = Some(sni_hostname.unwrap_or(host).to_string());
+        // Use provided SNI hostname, but fall back to the connection host.
+        // Treat empty string as absent to avoid OpenSSL SNI errors.
+        let effective_hostname = sni_hostname.filter(|s| !s.is_empty()).unwrap_or(host);
+        socket.hostname = Some(effective_hostname.to_string());
         Ok(socket)
     })
 }
@@ -450,17 +911,20 @@ fn opencon_impl_blocking(
 }
 
 /// Get service banner from host:port.
-fn get_banner_impl(host: &str, port: u16, opts: &ConnectionOpts) -> std::io::Result<String> {
+/// Returns raw bytes to preserve binary data (telnet negotiation, etc.)
+fn get_banner_impl(host: &str, port: u16, opts: &ConnectionOpts) -> std::io::Result<Vec<u8>> {
     let mut socket = opencon_impl(host, port, opts, None)?;
 
     // Set a shorter timeout for banner grabbing
     let banner_timeout = Duration::from_millis(DEFAULT_BANNER_TIMEOUT_MS);
     socket.timeout = banner_timeout.min(opts.timeout);
 
-    let buffer = socket.receive(opts.bytes.unwrap_or(1024))?;
-    socket.close()?;
+    // Use receive_all to read all data until timeout
+    // A single receive() may miss data sent in multiple packets
+    let buffer = socket.receive_all()?;
+    socket.close();
 
-    Ok(String::from_utf8_lossy(&buffer).to_string())
+    Ok(buffer)
 }
 
 /// Exchange data with host:port (send then receive).
@@ -482,7 +946,7 @@ fn exchange_impl(
         socket.receive_all()?
     };
 
-    socket.close()?;
+    socket.close();
 
     Ok(result)
 }
@@ -596,7 +1060,7 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     // Matches Nmap's comm.opencon signature: opencon(host, port, data, opts)
     let opencon_fn = lua.create_function(
         |lua,
-         (host_param, port_param, _data, opts): (
+         (host_param, port_param, data_param, opts): (
             Value,
             Value,
             Option<mlua::String>,
@@ -661,10 +1125,37 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
             let options = parse_opts(opts).map_err(|e| mlua::Error::RuntimeError(e.to_string()))?;
 
             match opencon_impl(&host, port, &options, sni_hostname.as_deref()) {
-                Ok(socket) => {
-                    // NSE returns: socket, nil (or just socket)
+                Ok(mut socket) => {
+                    // If data is provided, send it and read a single chunk
+                    // Nmap's opencon sends data and calls sd:receive() (one chunk)
+                    // Returns: socket, response, early_response
+                    let response: Option<Vec<u8>> = if let Some(ref data) = data_param {
+                        if socket.send(&data.as_bytes()).is_err() {
+                            return Ok(mlua::MultiValue::from_vec(vec![
+                                Value::Nil,
+                                Value::String(lua.create_string("send failed")?),
+                            ]));
+                        }
+                        // Read a single chunk (like Nmap's sd:receive())
+                        socket.receive(8192).ok()
+                    } else {
+                        None
+                    };
+
                     let socket_val = Value::UserData(lua.create_userdata(socket)?);
-                    Ok(mlua::MultiValue::from_vec(vec![socket_val, Value::Nil]))
+                    let response_val = match response {
+                        Some(ref r) => {
+                            let s = String::from_utf8_lossy(r).into_owned();
+                            Value::String(lua.create_string(&s)?)
+                        }
+                        None => Value::Nil,
+                    };
+                    // Nmap's opencon returns: status_and_socket, response, early_response
+                    Ok(mlua::MultiValue::from_vec(vec![
+                        socket_val,
+                        response_val,
+                        Value::Nil, // early_response
+                    ]))
                 }
                 Err(e) => {
                     // NSE returns: nil, error_message
@@ -754,14 +1245,16 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
                     // Determine protocol string
                     let proto = if socket.is_ssl { "ssl" } else { "tcp" };
 
-                    // If data is provided, send it and read response
-                    // Nmap's tryssl returns: socket, response, proto, early_response
+                    // If data is provided, send it and read a single chunk of response
+                    // Nmap's tryssl uses sd:receive() which reads one chunk, NOT the
+                    // full response. The caller (e.g. http.pipeline_go) uses next_response()
+                    // to parse the response incrementally from the partial data.
                     let response: Option<Vec<u8>> = if let Some(ref data) = data_param {
                         if socket.send(&data.as_bytes()).is_err() {
                             return Ok(mlua::MultiValue::new()); // Return empty on error
                         }
-                        // Read response after sending data
-                        read_response_impl(&mut socket, &options).ok()
+                        // Read a single chunk (like Nmap's sd:receive())
+                        socket.receive(8192).ok()
                     } else {
                         None
                     };
@@ -801,10 +1294,14 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
             let options = parse_opts(opts).map_err(|e| mlua::Error::RuntimeError(e.to_string()))?;
 
             match get_banner_impl(&host, port, &options) {
-                Ok(banner) => Ok(mlua::MultiValue::from_vec(vec![
-                    Value::Boolean(true),
-                    Value::String(lua.create_string(&banner)?),
-                ])),
+                Ok(banner_bytes) => {
+                    // Use BString to preserve raw bytes including binary data
+                    let banner = mlua::BString::from(banner_bytes);
+                    Ok(mlua::MultiValue::from_vec(vec![
+                        Value::Boolean(true),
+                        Value::String(lua.create_string(banner)?),
+                    ]))
+                }
                 Err(e) => Ok(mlua::MultiValue::from_vec(vec![
                     Value::Boolean(false),
                     Value::String(lua.create_string(format!("{e}"))?),
@@ -821,7 +1318,8 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
         |lua, (host_param, port_param, data, opts): (Value, Value, mlua::String, Option<Table>)| {
             let host = extract_host(&host_param)?;
             let (port, port_proto) = extract_port_and_proto(&port_param)?;
-            let mut options = parse_opts(opts).map_err(|e| mlua::Error::RuntimeError(e.to_string()))?;
+            let mut options =
+                parse_opts(opts).map_err(|e| mlua::Error::RuntimeError(e.to_string()))?;
 
             // If port table has a protocol field and opts doesn't already specify proto, use it
             if let Some(proto) = port_proto {
@@ -960,6 +1458,7 @@ mod tests {
             peer_addr: "127.0.0.1:80".parse().unwrap(),
             hostname: None,
             proto: "tcp".to_string(),
+            buffer: Vec::new(),
         };
 
         let _ud = lua.lua().create_userdata(socket).unwrap();
@@ -1024,6 +1523,7 @@ mod tests {
             peer_addr: "127.0.0.1:443".parse().unwrap(),
             hostname: None,
             proto: "tcp".to_string(),
+            buffer: Vec::new(),
         };
 
         let _ud = lua.lua().create_userdata(socket).unwrap();
@@ -1041,6 +1541,7 @@ mod tests {
             peer_addr: "192.168.1.1:80".parse().unwrap(),
             hostname: None,
             proto: "tcp".to_string(),
+            buffer: Vec::new(),
         };
         let _ud = lua.lua().create_userdata(socket_v4).unwrap();
 
@@ -1052,6 +1553,7 @@ mod tests {
             peer_addr: "[::1]:8080".parse().unwrap(),
             hostname: None,
             proto: "tcp".to_string(),
+            buffer: Vec::new(),
         };
         let _ud = lua.lua().create_userdata(socket_v6).unwrap();
     }
@@ -1083,6 +1585,7 @@ mod tests {
             peer_addr: "127.0.0.1:80".parse().unwrap(),
             hostname: None,
             proto: "tcp".to_string(),
+            buffer: Vec::new(),
         };
 
         let debug_str = format!("{socket:?}");
@@ -1121,6 +1624,7 @@ mod tests {
             peer_addr: "127.0.0.1:80".parse().unwrap(),
             hostname: None,
             proto: "tcp".to_string(),
+            buffer: Vec::new(),
         };
 
         assert!(!socket.is_connected());

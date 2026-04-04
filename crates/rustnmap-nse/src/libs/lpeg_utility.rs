@@ -387,10 +387,7 @@ return result
         .set_name("lpeg-utility-functions")
         .eval()?;
 
-    for (key, value) in lua_fn_table
-        .pairs::<mlua::String, mlua::Value>()
-        .flatten()
-    {
+    for (key, value) in lua_fn_table.pairs::<mlua::String, mlua::Value>().flatten() {
         // Rust-registered functions take priority
         if lpeg_utility_table.get::<mlua::Value>(key.clone())?.is_nil() {
             lpeg_utility_table.set(key, value)?;

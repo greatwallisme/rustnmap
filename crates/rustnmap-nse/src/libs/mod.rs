@@ -46,6 +46,7 @@ pub mod lpeg;
 pub mod lpeg_utility;
 pub mod netbios;
 pub mod nmap;
+pub mod nmapdb;
 pub mod openssl;
 pub mod rand;
 pub mod shortport;
@@ -128,6 +129,7 @@ pub fn register_all(lua: &mut NseLua) -> Result<()> {
     lpeg_utility::register(lua)?;
     ip_ops::register(lua)?;
     base64::register(lua)?;
+    nmapdb::register(lua)?;
 
     // After registering all libraries in global namespace,
     // also register them in package.preload so require() works
@@ -136,10 +138,25 @@ pub fn register_all(lua: &mut NseLua) -> Result<()> {
     Ok(())
 }
 
+/// Modules that have both a Rust and a Lua implementation.
+///
+/// For these modules, the preload loader first loads the Lua file (which
+/// typically provides the full Nmap API), then merges in the Rust-registered
+/// functions. This ensures scripts see the complete module including
+/// Lua-only helpers (e.g. `http.parse_date`) alongside the Rust core
+/// functions.
+const DUAL_MODULES: &[&str] = &[
+    "http", "stdnse", "ipOps", "ftp", "smb", "smbauth", "ssh2", "ssl",
+];
+
 /// Register all NSE libraries in package.preload for `require()` support.
 ///
 /// This function copies the globally registered libraries into package.preload
 /// so that scripts can use `require("http")` instead of just `http`.
+///
+/// For modules listed in [`DUAL_MODULES`] the loader first loads the Lua
+/// source file from nselib, then copies the Rust-registered functions into
+/// the resulting Lua module table. This gives scripts the full module API.
 ///
 /// In Lua, package.preload[`modname`] should contain a loader function that
 /// returns the module. We create loader functions that return the globally
@@ -163,6 +180,9 @@ fn register_package_preload(lua: &mut NseLua) -> Result<()> {
         package.set("preload", t.clone())?;
         t
     };
+
+    // Resolve nselib directory once for all dual-module loaders
+    let nselib_dir = NseLua::resolve_nselib_dir();
 
     // List of all library names to register in preload
     let library_names = [
@@ -193,21 +213,59 @@ fn register_package_preload(lua: &mut NseLua) -> Result<()> {
         "ipOps",
         "base64",
         "ssh1",
+        "nmapdb",
     ];
 
     for name in library_names {
         // Clone the name for the loader function
         let name_owned = name.to_string();
 
-        // Create a loader function that returns the library table from globals
-        let loader = lua_state.create_function(move |lua, (): ()| {
-            // Get the library table from globals and return it
-            let lib_table: mlua::Table = lua.globals().get(name_owned.as_str())?;
-            Ok(lib_table)
-        })?;
+        let is_dual = DUAL_MODULES.contains(&name);
 
-        // Store the loader function in package.preload
-        preload.set(name, loader)?;
+        if is_dual {
+            // Dual-module loader: load Lua file first, then merge Rust functions
+            let nselib_dir_owned = nselib_dir.clone();
+            let loader = lua_state.create_function(move |lua, (): ()| {
+                let lua_path = format!("{nselib_dir_owned}/{name_owned}.lua");
+
+                // Attempt to load the Lua module file
+                if let Ok(source) = std::fs::read_to_string(&lua_path) {
+                    if let Ok(chunk) = lua.load(&source).set_name(&lua_path).into_function() {
+                        // Call the Lua chunk to get its module table
+                        if let Ok(lua_module) = chunk.call::<mlua::Table>(()) {
+                            // Copy Rust functions from the global into the Lua module
+                            if let Ok(rust_global) =
+                                lua.globals().get::<mlua::Table>(name_owned.as_str())
+                            {
+                                for pair in rust_global.pairs::<mlua::Value, mlua::Value>() {
+                                    let (key, value) = pair?;
+                                    lua_module.set(key, value)?;
+                                }
+                            }
+
+                            // Replace the global with the merged table
+                            lua.globals().set(name_owned.as_str(), lua_module.clone())?;
+
+                            return Ok(lua_module);
+                        }
+                    }
+                }
+
+                // Fallback: return the Rust global table as-is
+                let lib_table: mlua::Table = lua.globals().get(name_owned.as_str())?;
+                Ok(lib_table)
+            })?;
+
+            preload.set(name, loader)?;
+        } else {
+            // Standard loader - returns the Rust-registered global table
+            let loader = lua_state.create_function(move |lua, (): ()| {
+                let lib_table: mlua::Table = lua.globals().get(name_owned.as_str())?;
+                Ok(lib_table)
+            })?;
+
+            preload.set(name, loader)?;
+        }
     }
 
     Ok(())

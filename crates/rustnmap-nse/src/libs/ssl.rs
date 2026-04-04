@@ -806,7 +806,13 @@ impl UserData for SslSocket {
                 mlua::Error::RuntimeError(format!("Failed to get peer address: {e}"))
             })?;
 
-            let cert_der = tls_connect_and_get_cert(&this.hostname, peer_addr)?;
+            // Use hostname for SNI, but fall back to IP if hostname is empty
+            let hostname = if this.hostname.is_empty() {
+                peer_addr.ip().to_string()
+            } else {
+                this.hostname.clone()
+            };
+            let cert_der = tls_connect_and_get_cert(&hostname, peer_addr)?;
 
             let table = lua.create_table()?;
             table.set("pem", der_to_pem(&cert_der))?;

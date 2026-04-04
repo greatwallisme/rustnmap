@@ -189,8 +189,8 @@ fn get_fetchfile_search_paths() -> Vec<std::path::PathBuf> {
         paths.push(std::path::PathBuf::from(rustnmapdir));
     }
 
-    // 3. Development path: ./reference/nmap/ (relative to current directory)
-    paths.push(std::path::PathBuf::from("reference/nmap"));
+    // // 3. Development path: ./reference/nmap/ (relative to current directory)
+    // paths.push(std::path::PathBuf::from("reference/nmap"));
 
     // 4. Installed data directory
     paths.push(std::path::PathBuf::from("/usr/share/rustnmap"));
@@ -315,6 +315,13 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     })?;
     nmap_table.set("version_intensity", version_intensity_fn)?;
 
+    // Register is_privileged() function — returns true if running as root
+    let is_privileged_fn = lua.create_function(|_, ()| {
+        // SAFETY: `geteuid()` is a read-only POSIX syscall with no preconditions.
+        Ok(unsafe { libc::geteuid() } == 0)
+    })?;
+    nmap_table.set("is_privileged", is_privileged_fn)?;
+
     // Register clock() function - returns seconds since epoch with microsecond precision
     let clock_fn = lua.create_function(|_, ()| {
         let now = std::time::SystemTime::now()
@@ -344,8 +351,9 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     nmap_table.set("log_write", log_write_fn)?;
 
     // Register new_socket() function - creates a new NSE socket
-    let new_socket_fn = lua.create_function(|lua, ()| {
-        let socket = NseSocket::new();
+    // Accepts optional protocol parameter: new_socket() or new_socket("udp")
+    let new_socket_fn = lua.create_function(|lua, proto: Option<String>| {
+        let socket = NseSocket::new(proto);
         Ok(mlua::Value::UserData(lua.create_userdata(socket)?))
     })?;
     nmap_table.set("new_socket", new_socket_fn)?;
@@ -454,7 +462,7 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     nmap_table.set("mutex", mutex_fn)?;
 
     // Register fetchfile(filename) function - searches for a data file
-    // Searches in order: ~/.rustnmap/, RUSTNMAPDIR env, ./reference/nmap/, /usr/share/rustnmap/
+    // Searches in order: ~/.rustnmap/, RUSTNMAPDIR env, /usr/share/rustnmap/
     let fetchfile_fn = lua.create_function(|lua, filename: String| {
         let search_paths = get_fetchfile_search_paths();
 
@@ -473,24 +481,74 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     nmap_table.set("fetchfile", fetchfile_fn)?;
 
     // Register condvar(id) function - creates a condition variable for thread synchronization.
-    // In Nmap, nmap.condvar returns a table with wait/signal/broadcast methods.
-    // Since our engine runs Lua single-threaded within a process, these are simplified:
-    // wait() returns immediately, signal()/broadcast() are no-ops.
+    // In Nmap, nmap.condvar(obj) returns a FUNCTION that can be called:
+    //   local cv = nmap.condvar(obj)
+    //   cv "signal"    -- signal the condition variable
+    //   cv "wait"      -- wait on the condition variable
+    //   cv "broadcast" -- broadcast to all waiters
+    // Since our engine runs Lua single-threaded within a process, these are no-ops.
     let condvar_fn = lua.create_function(|lua, _id: mlua::Value| {
-        let condvar_table = lua.create_table()?;
+        // Return a function that accepts a command string
+        let cv_fn = lua.create_function(|_, cmd: Option<String>| {
+            // Single-threaded: signal/wait/broadcast are all no-ops
+            let _ = cmd;
+            Ok(true)
+        })?;
 
-        let wait_fn = lua.create_function(|_, ()| Ok(true))?;
-        condvar_table.set("wait", wait_fn)?;
-
-        let signal_fn = lua.create_function(|_, ()| Ok(true))?;
-        condvar_table.set("signal", signal_fn)?;
-
-        let broadcast_fn = lua.create_function(|_, ()| Ok(true))?;
-        condvar_table.set("broadcast", broadcast_fn)?;
-
-        Ok(condvar_table)
+        Ok(cv_fn)
     })?;
     nmap_table.set("condvar", condvar_fn)?;
+
+    // Register get_port_state(host, port_table) function
+    // Returns a port table with state info, or nil if port not scanned.
+    // For host scripts, checks if the requested port was in the scan results.
+    let get_port_state_fn =
+        lua.create_function(|lua, (host, port_spec): (mlua::Table, mlua::Table)| {
+            let port_num: u16 = port_spec.get("number")?;
+            let proto: String = port_spec
+                .get::<String>("protocol")
+                .unwrap_or_else(|_| "tcp".to_string());
+
+            // Check if host has a "ports" table (populated by the engine)
+            if let Ok(ports) = host.get::<mlua::Table>("ports") {
+                // ports is a sequence of port tables
+                for pt in ports.sequence_values::<mlua::Table>().flatten() {
+                    let p_num: u16 = pt.get("number").unwrap_or(0);
+                    let p_proto: String = pt.get("protocol").unwrap_or_else(|_| "tcp".to_string());
+                    if p_num == port_num && p_proto == proto {
+                        return Ok(mlua::Value::Table(pt));
+                    }
+                }
+            }
+
+            // If port not found in scan results, construct a synthetic result
+            // based on whether we can connect to the port
+            if proto == "tcp" {
+                let host_ip: String = host.get("ip")?;
+                let addr = format!("{host_ip}:{port_num}");
+                if let Ok(socket_addr) = addr.parse::<std::net::SocketAddr>() {
+                    let is_open = tokio::task::block_in_place(|| {
+                        std::net::TcpStream::connect_timeout(
+                            &socket_addr,
+                            std::time::Duration::from_secs(2),
+                        )
+                        .is_ok()
+                    });
+
+                    if is_open {
+                        let port_table = lua.create_table()?;
+                        port_table.set("number", port_num)?;
+                        port_table.set("protocol", proto)?;
+                        port_table.set("state", "open")?;
+                        port_table.set("service", lua.create_table()?)?;
+                        return Ok(mlua::Value::Table(port_table));
+                    }
+                }
+            }
+
+            Ok(mlua::Value::Nil)
+        })?;
+    nmap_table.set("get_port_state", get_port_state_fn)?;
 
     // Register new_try(catch_fn) function - creates an error-handling wrapper.
     // Pattern from nmap nse_nmaplib.cc l_new_try / new_try_finalize:
@@ -546,12 +604,25 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     // Register set_port_state(host, port, state) function
     // NSE scripts call this to change the port state (e.g., from "open|filtered" to "open")
     // In our implementation, this is a no-op since port states are determined by the scan engine
-    let set_port_state_fn = lua.create_function(|_, (_host, _port, _state): (mlua::Value, mlua::Value, mlua::Value)| {
-        // Port state changes from scripts are acknowledged but not applied
-        // The actual port state is managed by the scan engine
-        Ok(())
-    })?;
+    let set_port_state_fn = lua.create_function(
+        |_, (_host, _port, _state): (mlua::Value, mlua::Value, mlua::Value)| {
+            // Port state changes from scripts are acknowledged but not applied
+            // The actual port state is managed by the scan engine
+            Ok(())
+        },
+    )?;
     nmap_table.set("set_port_state", set_port_state_fn)?;
+
+    // Register set_port_version(host, port, probestate) function
+    // NSE scripts call this to update service version info on a port.
+    // The port table's version fields (name, product, version, etc.) are modified
+    // directly by the script before calling this. In nmap, this commits those
+    // changes to the internal service database. In our implementation, the version
+    // info is already captured from the port table when scripts complete.
+    let set_port_version_fn = lua.create_function(
+        |_, (_host, _port, _probestate): (mlua::Value, mlua::Value, mlua::Value)| Ok(()),
+    )?;
+    nmap_table.set("set_port_version", set_port_version_fn)?;
 
     // Set the nmap table as a global
     lua.globals().set("nmap", nmap_table)?;
@@ -582,6 +653,10 @@ fn log_write_impl(level: &str, message: &str) {
 pub struct NseSocket {
     /// Internal socket state
     state: SocketState,
+    /// Protocol hint from `new_socket()`
+    proto_hint: Option<String>,
+    /// Requested local bind address from `socket:bind()`
+    bind_addr: Option<std::net::SocketAddr>,
     /// Listen backlog size
     backlog: i32,
     /// Socket timeout in milliseconds
@@ -605,11 +680,19 @@ enum SocketState {
         /// Remote address
         addr: std::net::SocketAddr,
         /// Protocol
+        #[expect(dead_code, reason = "stored for future protocol-specific behavior")]
         proto: String,
         /// TCP stream for send/receive operations (None if using SSL)
         stream: Option<std::net::TcpStream>,
         /// Whether this connection uses SSL
         is_ssl: bool,
+    },
+    /// UDP socket bound to remote address
+    ConnectedUdp {
+        /// Remote address
+        addr: std::net::SocketAddr,
+        /// UDP socket
+        socket: std::net::UdpSocket,
     },
     /// Socket is listening for connections
     Listening {
@@ -631,11 +714,13 @@ fn cert_to_table(lua: &mlua::Lua, cert: &X509) -> mlua::Result<mlua::Table> {
 
 impl NseSocket {
     /// Create a new unconnected socket.
-    fn new() -> Self {
+    fn new(proto_hint: Option<String>) -> Self {
         Self {
             state: SocketState::Disconnected,
+            proto_hint,
+            bind_addr: None,
             backlog: 128,
-            timeout: 10_000, // Default 10 second timeout
+            timeout: 10_000,
             buffer: Vec::new(),
             #[cfg(feature = "openssl")]
             certificate: None,
@@ -766,6 +851,8 @@ impl mlua::UserData for NseSocket {
             };
 
             // Extract port (can be number or port table with .number field)
+            // Also extract protocol from port table if present
+            let mut port_proto: Option<String> = None;
             let port = match &args_vec[1] {
                 mlua::Value::Integer(n) => u16::try_from(*n)
                     .map_err(|e| mlua::Error::RuntimeError(format!("Port out of range: {e}")))?,
@@ -776,6 +863,10 @@ impl mlua::UserData for NseSocket {
                         .map_err(|e| mlua::Error::RuntimeError(format!("Port out of range: {e}")))?
                 }
                 mlua::Value::Table(t) => {
+                    // Extract protocol from port table (e.g., "udp", "tcp")
+                    if let Ok(Some(proto_str)) = t.get::<Option<mlua::String>>("protocol") {
+                        port_proto = Some(proto_str.to_string_lossy().to_string());
+                    }
                     // NSE port object - get the .number field
                     let port_val: mlua::Value = t.get("number").map_err(|_e| {
                         mlua::Error::RuntimeError("Port table missing 'number' field".to_string())
@@ -808,28 +899,81 @@ impl mlua::UserData for NseSocket {
                 }
             };
 
-            // Proto is optional 3rd argument
+            // Proto is optional 3rd argument, or from port table, or proto_hint from new_socket()
             let proto = if args_vec.len() > 2 {
                 match &args_vec[2] {
                     mlua::Value::String(s) => s.to_string_lossy().to_string(),
-                    _ => "tcp".to_string(),
+                    _ => port_proto
+                        .or(this.proto_hint.clone())
+                        .unwrap_or_else(|| "tcp".to_string()),
                 }
             } else {
-                "tcp".to_string()
+                port_proto
+                    .or(this.proto_hint.clone())
+                    .unwrap_or_else(|| "tcp".to_string())
             };
 
             let addr = format!("{host}:{port}");
             match addr.parse::<std::net::SocketAddr>() {
                 Ok(socket_addr) => {
+                    // Handle UDP protocol
+                    if proto == "udp" {
+                        let bind_addr = this.bind_addr.take();
+                        let result = tokio::task::block_in_place(|| {
+                            let local_bind = bind_addr
+                                .map_or_else(|| "0.0.0.0:0".to_string(), |a| a.to_string());
+                            let socket = std::net::UdpSocket::bind(local_bind)?;
+                            socket.set_nonblocking(false)?;
+                            socket.set_read_timeout(Some(std::time::Duration::from_secs(10)))?;
+                            socket.set_write_timeout(Some(std::time::Duration::from_secs(10)))?;
+                            // For UDP, connect() just sets the default destination
+                            let _ = socket.connect(socket_addr);
+                            Ok::<_, std::io::Error>(socket)
+                        });
+
+                        let udp_socket = result.map_err(|e| {
+                            mlua::Error::RuntimeError(format!("UDP socket creation failed: {e}"))
+                        })?;
+
+                        this.state = SocketState::ConnectedUdp {
+                            addr: socket_addr,
+                            socket: udp_socket,
+                        };
+
+                        return Ok(true);
+                    }
+
                     // Check if this is an SSL connection
                     let is_ssl = proto == "ssl";
 
-                    // Block to perform the connect operation
+                    // Connect with optional source port binding
+                    let bind_addr = this.bind_addr.take();
                     let result = tokio::task::block_in_place(|| {
-                        std::net::TcpStream::connect_timeout(
-                            &socket_addr,
-                            std::time::Duration::from_secs(30),
-                        )
+                        if let Some(local_addr) = bind_addr {
+                            // Use socket2 for bind-then-connect
+                            let domain = if socket_addr.is_ipv4() {
+                                socket2::Domain::IPV4
+                            } else {
+                                socket2::Domain::IPV6
+                            };
+                            let sock = socket2::Socket::new(
+                                domain,
+                                socket2::Type::STREAM,
+                                Some(socket2::Protocol::TCP),
+                            )?;
+                            sock.set_reuse_address(true)?;
+                            sock.bind(&local_addr.into())?;
+                            sock.connect_timeout(
+                                &socket_addr.into(),
+                                std::time::Duration::from_secs(30),
+                            )?;
+                            Ok(std::net::TcpStream::from(sock))
+                        } else {
+                            std::net::TcpStream::connect_timeout(
+                                &socket_addr,
+                                std::time::Duration::from_secs(30),
+                            )
+                        }
                     });
 
                     let stream = result
@@ -902,12 +1046,15 @@ impl mlua::UserData for NseSocket {
         });
 
         // Bind socket to local address
-        methods.add_method_mut("bind", |_, _this, (host, port): (String, u16)| {
-            let addr_str = format!("{host}:{port}");
+        methods.add_method_mut("bind", |_, this, (host, port): (mlua::Value, u16)| {
+            let host_str = match host {
+                mlua::Value::String(s) => s.to_string_lossy().to_string(),
+                _ => "0.0.0.0".to_string(),
+            };
+            let addr_str = format!("{host_str}:{port}");
             match addr_str.parse::<std::net::SocketAddr>() {
-                Ok(_socket_addr) => {
-                    // For NSE scripts, binding is conceptual - we just track the state
-                    // Actual socket binding would be done by the listener
+                Ok(socket_addr) => {
+                    this.bind_addr = Some(socket_addr);
                     Ok(true)
                 }
                 Err(e) => Err(mlua::Error::RuntimeError(format!("Invalid address: {e}"))),
@@ -963,7 +1110,7 @@ impl mlua::UserData for NseSocket {
                             };
 
                             // Create new socket for accepted connection
-                            let mut accepted_socket = NseSocket::new();
+                            let mut accepted_socket = NseSocket::new(None);
                             accepted_socket.state = SocketState::Connected {
                                 addr: peer_addr,
                                 proto: proto.clone(),
@@ -1002,25 +1149,66 @@ impl mlua::UserData for NseSocket {
         });
 
         methods.add_method("get_info", |lua, this, ()| {
-            let table = lua.create_table()?;
+            // Returns: (true, lhost, lport, rhost, rport) or (false, err_msg)
             match &this.state {
-                SocketState::Connected { addr, proto, .. } => {
-                    table.set("addr", addr.to_string())?;
-                    table.set("proto", proto.clone())?;
-                    table.set("state", "connected")?;
+                SocketState::Connected { addr, stream, .. } => {
+                    let rhost = lua.create_string(addr.ip().to_string().as_str())?;
+                    let rport = addr.port();
+                    let (lhost, lport) = if let Some(s) = stream {
+                        match s.local_addr() {
+                            Ok(local) => (local.ip().to_string(), local.port()),
+                            Err(_) => ("0.0.0.0".to_string(), 0),
+                        }
+                    } else {
+                        #[cfg(feature = "openssl")]
+                        {
+                            if let Some(ssl) = &this.ssl_stream {
+                                match ssl.get_ref().local_addr() {
+                                    Ok(local) => (local.ip().to_string(), local.port()),
+                                    Err(_) => ("0.0.0.0".to_string(), 0),
+                                }
+                            } else {
+                                ("0.0.0.0".to_string(), 0)
+                            }
+                        }
+                        #[cfg(not(feature = "openssl"))]
+                        {
+                            ("0.0.0.0".to_string(), 0)
+                        }
+                    };
+                    let lhost_str = lua.create_string(lhost.as_str())?;
+                    Ok(mlua::MultiValue::from_vec(vec![
+                        mlua::Value::Boolean(true),
+                        mlua::Value::String(lhost_str),
+                        mlua::Value::Integer(i64::from(lport)),
+                        mlua::Value::String(rhost),
+                        mlua::Value::Integer(i64::from(rport)),
+                    ]))
                 }
-                SocketState::Listening { addr, proto } => {
-                    table.set("addr", addr.to_string())?;
-                    table.set("proto", proto.clone())?;
-                    table.set("state", "listening")?;
+                SocketState::ConnectedUdp { addr, socket } => {
+                    let rhost = lua.create_string(addr.ip().to_string().as_str())?;
+                    let rport = addr.port();
+                    let (lhost, lport) = match socket.local_addr() {
+                        Ok(local) => (local.ip().to_string(), local.port()),
+                        Err(_) => ("0.0.0.0".to_string(), 0),
+                    };
+                    let lhost_str = lua.create_string(lhost.as_str())?;
+                    Ok(mlua::MultiValue::from_vec(vec![
+                        mlua::Value::Boolean(true),
+                        mlua::Value::String(lhost_str),
+                        mlua::Value::Integer(i64::from(lport)),
+                        mlua::Value::String(rhost),
+                        mlua::Value::Integer(i64::from(rport)),
+                    ]))
                 }
-                SocketState::Disconnected => {
-                    table.set("addr", mlua::Value::Nil)?;
-                    table.set("proto", mlua::Value::Nil)?;
-                    table.set("state", "disconnected")?;
+                _ => {
+                    let err = lua.create_string("Not connected")?;
+                    Ok(mlua::MultiValue::from_vec(vec![
+                        mlua::Value::Boolean(false),
+                        mlua::Value::String(err),
+                    ]))
                 }
             }
-            Ok(table)
         });
 
         // Set socket timeout in milliseconds
@@ -1032,8 +1220,25 @@ impl mlua::UserData for NseSocket {
         // Send data to the socket
         // Returns: (true, bytes_sent) on success, (nil, error_msg) on failure
         methods.add_method_mut("send", |lua, this, data: mlua::String| {
-            let bytes = data.to_string_lossy().into_bytes();
+            let bytes = data.as_bytes();
             let byte_count = bytes.len();
+
+            // Handle UDP socket
+            if let SocketState::ConnectedUdp { socket, .. } = &this.state {
+                return match socket.send(&bytes) {
+                    Ok(n) => Ok(mlua::MultiValue::from_vec(vec![
+                        mlua::Value::Boolean(true),
+                        mlua::Value::Integer(i64::try_from(n).unwrap_or(i64::MAX)),
+                    ])),
+                    Err(e) => {
+                        let err_str = lua.create_string(format!("UDP send failed: {e}"))?;
+                        Ok(mlua::MultiValue::from_vec(vec![
+                            mlua::Value::Nil,
+                            mlua::Value::String(err_str),
+                        ]))
+                    }
+                };
+            }
 
             #[cfg(feature = "openssl")]
             if let Some(ssl_stream) = this.get_ssl_stream_mut() {
@@ -1077,12 +1282,241 @@ impl mlua::UserData for NseSocket {
             }
         });
 
+        // Send a UDP datagram to a specific host:port without prior connect()
+        // Signature: sendto(host, port, data)
+        // If socket is Disconnected, creates a UDP socket first.
+        // If socket is already ConnectedUdp, uses send_to on the existing socket.
+        // Returns: (true, nil) on success, (nil, error_msg) on failure
+        methods.add_method_mut(
+            "sendto",
+            |lua, this, (host, port, data): (mlua::Value, mlua::Value, mlua::String)| {
+                // Extract host string
+                let host_str = match &host {
+                    mlua::Value::String(s) => s.to_string_lossy().to_string(),
+                    mlua::Value::Table(t) => {
+                        let ip: mlua::String = t.get("ip").map_err(|_e| {
+                            mlua::Error::RuntimeError(
+                                "Missing 'ip' field in host table".to_string(),
+                            )
+                        })?;
+                        ip.to_string_lossy().to_string()
+                    }
+                    _ => {
+                        return Err(mlua::Error::RuntimeError(
+                            "sendto: host must be string or table".to_string(),
+                        ))
+                    }
+                };
+
+                // Extract port number
+                let port_num = match &port {
+                    mlua::Value::Integer(n) => u16::try_from(*n).map_err(|e| {
+                        mlua::Error::RuntimeError(format!("sendto: port out of range: {e}"))
+                    })?,
+                    mlua::Value::Number(n) =>
+                    {
+                        #[expect(
+                            clippy::cast_possible_truncation,
+                            reason = "try_from validates range"
+                        )]
+                        u16::try_from(*n as i64).map_err(|e| {
+                            mlua::Error::RuntimeError(format!("sendto: port out of range: {e}"))
+                        })?
+                    }
+                    mlua::Value::Table(t) => {
+                        let port_val: mlua::Value = t.get("number").map_err(|_e| {
+                            mlua::Error::RuntimeError(
+                                "sendto: port table missing 'number' field".to_string(),
+                            )
+                        })?;
+                        match port_val {
+                            mlua::Value::Integer(n) => u16::try_from(n).map_err(|e| {
+                                mlua::Error::RuntimeError(format!("sendto: port out of range: {e}"))
+                            })?,
+                            mlua::Value::Number(n) =>
+                            {
+                                #[expect(
+                                    clippy::cast_possible_truncation,
+                                    reason = "try_from validates range"
+                                )]
+                                u16::try_from(n as i64).map_err(|e| {
+                                    mlua::Error::RuntimeError(format!(
+                                        "sendto: port out of range: {e}"
+                                    ))
+                                })?
+                            }
+                            _ => {
+                                return Err(mlua::Error::RuntimeError(
+                                    "sendto: port.number must be a number".to_string(),
+                                ))
+                            }
+                        }
+                    }
+                    _ => {
+                        return Err(mlua::Error::RuntimeError(
+                            "sendto: port must be a number or table".to_string(),
+                        ))
+                    }
+                };
+
+                let dest_addr_str = format!("{host_str}:{port_num}");
+                let dest_addr: std::net::SocketAddr =
+                    dest_addr_str
+                        .parse()
+                        .map_err(|e: std::net::AddrParseError| {
+                            mlua::Error::RuntimeError(format!("sendto: invalid address: {e}"))
+                        })?;
+
+                let bytes = data.as_bytes();
+
+                // Get or create UDP socket
+                match &this.state {
+                    SocketState::ConnectedUdp { socket, .. } => {
+                        match socket.send_to(&bytes, dest_addr) {
+                            Ok(_n) => Ok(mlua::MultiValue::from_vec(vec![
+                                mlua::Value::Boolean(true),
+                                mlua::Value::Nil,
+                            ])),
+                            Err(e) => {
+                                let err_str =
+                                    lua.create_string(format!("sendto: UDP send failed: {e}"))?;
+                                Ok(mlua::MultiValue::from_vec(vec![
+                                    mlua::Value::Nil,
+                                    mlua::Value::String(err_str),
+                                ]))
+                            }
+                        }
+                    }
+                    SocketState::Disconnected => {
+                        // Create a new UDP socket for sendto
+                        let bind_str = if dest_addr.is_ipv4() {
+                            "0.0.0.0:0"
+                        } else {
+                            "[::]:0"
+                        };
+                        let socket = std::net::UdpSocket::bind(bind_str).map_err(|e| {
+                            mlua::Error::RuntimeError(format!(
+                                "sendto: UDP socket bind failed: {e}"
+                            ))
+                        })?;
+                        socket.set_nonblocking(false).map_err(|e| {
+                            mlua::Error::RuntimeError(format!(
+                                "sendto: set_nonblocking failed: {e}"
+                            ))
+                        })?;
+                        let timeout_dur = std::time::Duration::from_millis(this.timeout());
+                        let _ = socket.set_read_timeout(Some(timeout_dur));
+                        let _ = socket.set_write_timeout(Some(timeout_dur));
+
+                        let send_result = socket.send_to(&bytes, dest_addr);
+                        // Transition state so subsequent receive() calls work
+                        this.state = SocketState::ConnectedUdp {
+                            addr: dest_addr,
+                            socket,
+                        };
+
+                        match send_result {
+                            Ok(_n) => Ok(mlua::MultiValue::from_vec(vec![
+                                mlua::Value::Boolean(true),
+                                mlua::Value::Nil,
+                            ])),
+                            Err(e) => {
+                                let err_str =
+                                    lua.create_string(format!("sendto: UDP send failed: {e}"))?;
+                                Ok(mlua::MultiValue::from_vec(vec![
+                                    mlua::Value::Nil,
+                                    mlua::Value::String(err_str),
+                                ]))
+                            }
+                        }
+                    }
+                    SocketState::Connected { .. } => {
+                        // For TCP, sendto delegates to regular send on the connected stream
+                        #[cfg(feature = "openssl")]
+                        if let Some(ssl) = &mut this.ssl_stream {
+                            return match std::io::Write::write_all(ssl, &bytes) {
+                                Ok(()) => Ok(mlua::MultiValue::from_vec(vec![
+                                    mlua::Value::Boolean(true),
+                                    mlua::Value::Nil,
+                                ])),
+                                Err(e) => {
+                                    let err_str =
+                                        lua.create_string(format!("sendto: SSL send failed: {e}"))?;
+                                    Ok(mlua::MultiValue::from_vec(vec![
+                                        mlua::Value::Nil,
+                                        mlua::Value::String(err_str),
+                                    ]))
+                                }
+                            };
+                        }
+
+                        if let SocketState::Connected {
+                            stream: Some(s), ..
+                        } = &mut this.state
+                        {
+                            match std::io::Write::write_all(s, &bytes) {
+                                Ok(()) => Ok(mlua::MultiValue::from_vec(vec![
+                                    mlua::Value::Boolean(true),
+                                    mlua::Value::Nil,
+                                ])),
+                                Err(e) => {
+                                    let err_str =
+                                        lua.create_string(format!("sendto: TCP send failed: {e}"))?;
+                                    Ok(mlua::MultiValue::from_vec(vec![
+                                        mlua::Value::Nil,
+                                        mlua::Value::String(err_str),
+                                    ]))
+                                }
+                            }
+                        } else {
+                            let err_str = lua.create_string("sendto: no stream available")?;
+                            Ok(mlua::MultiValue::from_vec(vec![
+                                mlua::Value::Nil,
+                                mlua::Value::String(err_str),
+                            ]))
+                        }
+                    }
+                    SocketState::Listening { .. } => {
+                        let err_str = lua.create_string("sendto: socket is in listening state")?;
+                        Ok(mlua::MultiValue::from_vec(vec![
+                            mlua::Value::Nil,
+                            mlua::Value::String(err_str),
+                        ]))
+                    }
+                }
+            },
+        );
+
         // Receive data with pattern matching (bytes, or all)
         // Pattern can be: "a" = all, number = exact bytes
         // Receive data with pattern matching
         // Returns: (true, data) on success, (nil, err_msg) on failure
         // Pattern can be: "a" = all, number = exact bytes, 0 = all
         methods.add_method_mut("receive", |lua, this, pattern: mlua::Value| {
+            // Handle UDP socket
+            if let SocketState::ConnectedUdp { socket, .. } = &this.state {
+                let timeout_dur = std::time::Duration::from_millis(this.timeout());
+                let _ = socket.set_read_timeout(Some(timeout_dur));
+                let mut buf = vec![0u8; 65536];
+                return match socket.recv(&mut buf) {
+                    Ok(n) => {
+                        buf.truncate(n);
+                        let s = lua.create_string(&buf)?;
+                        Ok(mlua::MultiValue::from_vec(vec![
+                            mlua::Value::Boolean(true),
+                            mlua::Value::String(s),
+                        ]))
+                    }
+                    Err(e) => {
+                        let err_str = lua.create_string(format!("UDP receive failed: {e}"))?;
+                        Ok(mlua::MultiValue::from_vec(vec![
+                            mlua::Value::Nil,
+                            mlua::Value::String(err_str),
+                        ]))
+                    }
+                };
+            }
+
             /// Read all data from a Read trait object, return (true, data) or (nil, err)
             fn read_all<R: Read>(lua: &mlua::Lua, mut reader: R) -> mlua::Result<mlua::MultiValue> {
                 let mut buf = Vec::new();
@@ -1147,6 +1581,33 @@ impl mlua::UserData for NseSocket {
                         read_exact(lua, ssl_stream, usize::try_from(n).unwrap_or(usize::MAX))
                     }
                     mlua::Value::Integer(0) => read_all(lua, ssl_stream),
+                    mlua::Value::Nil => {
+                        let mut buf = vec![0u8; 8192];
+                        match ssl_stream.read(&mut buf) {
+                            Ok(0) => {
+                                let err_str = lua.create_string("EOF")?;
+                                Ok(mlua::MultiValue::from_vec(vec![
+                                    mlua::Value::Nil,
+                                    mlua::Value::String(err_str),
+                                ]))
+                            }
+                            Ok(n) => {
+                                buf.truncate(n);
+                                let s = lua.create_string(&buf)?;
+                                Ok(mlua::MultiValue::from_vec(vec![
+                                    mlua::Value::Boolean(true),
+                                    mlua::Value::String(s),
+                                ]))
+                            }
+                            Err(e) => {
+                                let err_str = lua.create_string(format!("Receive failed: {e}"))?;
+                                Ok(mlua::MultiValue::from_vec(vec![
+                                    mlua::Value::Nil,
+                                    mlua::Value::String(err_str),
+                                ]))
+                            }
+                        }
+                    }
                     _ => Err(mlua::Error::RuntimeError(
                         "Invalid receive pattern".to_string(),
                     )),
@@ -1166,58 +1627,120 @@ impl mlua::UserData for NseSocket {
                     read_exact(lua, stream, usize::try_from(n).unwrap_or(usize::MAX))
                 }
                 mlua::Value::Integer(0) => read_all(lua, stream),
+                // Default (nil or no pattern): read whatever is available in the buffer
+                mlua::Value::Nil => {
+                    let mut buf = vec![0u8; 8192];
+                    match stream.read(&mut buf) {
+                        Ok(0) => {
+                            let err_str = lua.create_string("EOF")?;
+                            Ok(mlua::MultiValue::from_vec(vec![
+                                mlua::Value::Nil,
+                                mlua::Value::String(err_str),
+                            ]))
+                        }
+                        Ok(n) => {
+                            buf.truncate(n);
+                            let s = lua.create_string(&buf)?;
+                            Ok(mlua::MultiValue::from_vec(vec![
+                                mlua::Value::Boolean(true),
+                                mlua::Value::String(s),
+                            ]))
+                        }
+                        Err(e) => {
+                            let err_str = lua.create_string(format!("Receive failed: {e}"))?;
+                            Ok(mlua::MultiValue::from_vec(vec![
+                                mlua::Value::Nil,
+                                mlua::Value::String(err_str),
+                            ]))
+                        }
+                    }
+                }
                 _ => Err(mlua::Error::RuntimeError(
                     "Invalid receive pattern".to_string(),
                 )),
             }
         });
 
-        // Receive exactly N bytes using repeated read() calls.
-        // Returns: (true, data) on success, (nil, err_msg) on failure.
-        // Accumulates partial data so callers get whatever was read before the error.
+        // Receive exactly N bytes.
+        // Returns: (true, data) on success, (nil, err_msg, partial_data) on failure.
+        // Respects the internal buffer: consumes data from `this.buffer` first,
+        // then reads remaining bytes from the stream.
         methods.add_method_mut("receive_bytes", |lua, this, n: usize| {
-            /// Read exactly n bytes via repeated `read()` calls, accumulating partial data.
-            fn read_bytes<R: Read>(
+            // Handle UDP socket - return full datagram (UDP is message-oriented)
+            if let SocketState::ConnectedUdp { socket, .. } = &this.state {
+                let timeout_dur = std::time::Duration::from_millis(this.timeout());
+                let _ = socket.set_read_timeout(Some(timeout_dur));
+                let mut buf = vec![0u8; 65536];
+                return match socket.recv(&mut buf) {
+                    Ok(recv_n) => {
+                        buf.truncate(recv_n);
+                        let s = lua.create_string(&buf)?;
+                        Ok(mlua::MultiValue::from_vec(vec![
+                            mlua::Value::Boolean(true),
+                            mlua::Value::String(s),
+                        ]))
+                    }
+                    Err(e) => {
+                        let err_str = lua.create_string(format!("UDP receive failed: {e}"))?;
+                        Ok(mlua::MultiValue::from_vec(vec![
+                            mlua::Value::Nil,
+                            mlua::Value::String(err_str),
+                            mlua::Value::String(lua.create_string("")?),
+                        ]))
+                    }
+                };
+            }
+
+            /// Read at least 1 byte, up to n bytes from a reader.
+            /// Returns as soon as any data is available (nmap behavior).
+            fn read_from_stream<R: Read>(
                 lua: &mlua::Lua,
                 mut reader: R,
                 n: usize,
             ) -> mlua::Result<mlua::MultiValue> {
-                let mut buf = Vec::with_capacity(n);
-                let mut tmp = [0u8; 4096];
-                while buf.len() < n {
-                    let remaining = n - buf.len();
-                    let to_read = remaining.min(tmp.len());
-                    match reader.read(&mut tmp[..to_read]) {
-                        Ok(0) => {
-                            let data_str = lua.create_string(&*String::from_utf8_lossy(&buf))?;
-                            let err_str = lua.create_string("EOF")?;
-                            return Ok(mlua::MultiValue::from_vec(vec![
-                                mlua::Value::Nil,
-                                mlua::Value::String(err_str),
-                                mlua::Value::String(data_str),
-                            ]));
-                        }
-                        Ok(count) => {
-                            buf.extend_from_slice(&tmp[..count]);
-                        }
-                        Err(e) => {
-                            let data_str = lua.create_string(&*String::from_utf8_lossy(&buf))?;
-                            let err_str = lua.create_string(format!("Receive failed: {e}"))?;
-                            return Ok(mlua::MultiValue::from_vec(vec![
-                                mlua::Value::Nil,
-                                mlua::Value::String(err_str),
-                                mlua::Value::String(data_str),
-                            ]));
-                        }
+                let mut buf = vec![0u8; n];
+                match reader.read(&mut buf) {
+                    Ok(0) => {
+                        let err_str = lua.create_string("EOF")?;
+                        Ok(mlua::MultiValue::from_vec(vec![
+                            mlua::Value::Nil,
+                            mlua::Value::String(err_str),
+                            mlua::Value::String(lua.create_string("")?),
+                        ]))
+                    }
+                    Ok(count) => {
+                        buf.truncate(count);
+                        let s = lua.create_string(&buf)?;
+                        Ok(mlua::MultiValue::from_vec(vec![
+                            mlua::Value::Boolean(true),
+                            mlua::Value::String(s),
+                        ]))
+                    }
+                    Err(e) => {
+                        let err_str = lua.create_string(format!("Receive failed: {e}"))?;
+                        Ok(mlua::MultiValue::from_vec(vec![
+                            mlua::Value::Nil,
+                            mlua::Value::String(err_str),
+                            mlua::Value::String(lua.create_string("")?),
+                        ]))
                     }
                 }
-                let s = lua.create_string(&*String::from_utf8_lossy(&buf))?;
-                Ok(mlua::MultiValue::from_vec(vec![
-                    mlua::Value::Boolean(true),
-                    mlua::Value::String(s),
-                ]))
             }
 
+            // Step 1: consume from internal buffer first
+            let buffered = this.buffer.len();
+            if buffered > 0 {
+                let take_n = buffered.min(n);
+                let chunk = this.buffer[..take_n].to_vec();
+                this.buffer = this.buffer[take_n..].to_vec();
+                let s = lua.create_string(&chunk)?;
+                return Ok(mlua::MultiValue::from_vec(vec![
+                    mlua::Value::Boolean(true),
+                    mlua::Value::String(s),
+                ]));
+            }
+
+            // Step 2: read from stream (return as soon as any data available)
             let timeout_ms = this.timeout();
             let timeout_dur = std::time::Duration::from_millis(timeout_ms);
 
@@ -1227,7 +1750,7 @@ impl mlua::UserData for NseSocket {
                     .get_ref()
                     .set_read_timeout(Some(timeout_dur))
                     .map_err(|e| mlua::Error::RuntimeError(format!("Set timeout failed: {e}")))?;
-                return read_bytes(lua, ssl_stream, n);
+                return read_from_stream(lua, ssl_stream, n);
             }
 
             let stream = this
@@ -1236,7 +1759,7 @@ impl mlua::UserData for NseSocket {
             stream
                 .set_read_timeout(Some(timeout_dur))
                 .map_err(|e| mlua::Error::RuntimeError(format!("Set timeout failed: {e}")))?;
-            read_bytes(lua, stream, n)
+            read_from_stream(lua, stream, n)
         });
 
         // Buffered receive with delimiter matching.
@@ -1258,12 +1781,10 @@ impl mlua::UserData for NseSocket {
                     buf: &[u8],
                     delimiter: &mlua::Value,
                 ) -> mlua::Result<Option<(Vec<u8>, Vec<u8>)>> {
-                    let buf_str = String::from_utf8_lossy(buf);
-
                     match delimiter {
                         mlua::Value::Function(func) => {
-                            // Function delimiter: call with buffer string, expect (left, right) or nil
-                            let buf_lua_str = lua.create_string(&*buf_str)?;
+                            // Function delimiter: call with buffer as binary string
+                            let buf_lua_str = lua.create_string(buf)?;
                             let result: mlua::MultiValue =
                                 func.call(mlua::Value::String(buf_lua_str))?;
                             let vals: Vec<mlua::Value> = result.into_iter().collect();
@@ -1304,14 +1825,57 @@ impl mlua::UserData for NseSocket {
                             Ok(None)
                         }
                         mlua::Value::String(pattern) => {
-                            // String delimiter: use pattern matching like Lua's string.find
-                            let pat = pattern.to_string_lossy();
-                            if let Some(start_byte) = buf_str.find(&*pat) {
-                                let end_byte = start_byte + pat.len();
-                                return Ok(Some((
-                                    buf[..end_byte].to_vec(),
-                                    buf[end_byte..].to_vec(),
-                                )));
+                            // String delimiter: use Lua pattern matching via string.find
+                            // Nmap's receive_buf uses Lua patterns (e.g., "\r?\n") not
+                            // literal strings. We delegate to string.find for correctness.
+                            let buf_lua_str = lua.create_string(buf)?;
+                            let string_lib: mlua::Table = lua.globals().get("string")?;
+                            let find_fn: mlua::Function = string_lib.get("find")?;
+
+                            // string.find(buffer, pattern, init, plain=false)
+                            let result: mlua::MultiValue = find_fn.call((
+                                mlua::Value::String(buf_lua_str),
+                                mlua::Value::String(pattern.clone()),
+                                1,     // start from position 1 (Lua 1-indexed)
+                                false, // plain = false (enable pattern matching)
+                            ))?;
+
+                            let vals: Vec<mlua::Value> = result.into_iter().collect();
+                            // string.find returns nil if no match, or (start, end) on match
+                            if vals.len() >= 2 {
+                                let start = match &vals[0] {
+                                    mlua::Value::Integer(n) => usize::try_from(*n).unwrap_or(0),
+                                    mlua::Value::Number(n) => {
+                                        #[expect(
+                                            clippy::cast_possible_truncation,
+                                            clippy::cast_sign_loss,
+                                            reason = "value from Lua, clamped to usize range"
+                                        )]
+                                        let v = *n as usize;
+                                        v
+                                    }
+                                    _ => return Ok(None),
+                                };
+                                let end_pos = match &vals[1] {
+                                    mlua::Value::Integer(n) => usize::try_from(*n).unwrap_or(0),
+                                    mlua::Value::Number(n) => {
+                                        #[expect(
+                                            clippy::cast_possible_truncation,
+                                            clippy::cast_sign_loss,
+                                            reason = "value from Lua, clamped to usize range"
+                                        )]
+                                        let v = *n as usize;
+                                        v
+                                    }
+                                    _ => return Ok(None),
+                                };
+                                // Lua string.find uses 1-based indices, convert to 0-based
+                                if start > 0 && end_pos > 0 && end_pos <= buf.len() {
+                                    return Ok(Some((
+                                        buf[..end_pos].to_vec(),
+                                        buf[end_pos..].to_vec(),
+                                    )));
+                                }
                             }
                             Ok(None)
                         }
@@ -1371,14 +1935,11 @@ impl mlua::UserData for NseSocket {
                         let extracted = if keeppattern {
                             matched
                         } else {
-                            // For string delimiters: exclude the delimiter itself
-                            // For function delimiters: the function already returned the right boundary
-                            // In nmap, keeppattern=false means exclude up to left-1 for pattern,
-                            // but for function delimiters it means exclude up to left-1 too.
-                            match delimiter {
+                            // keeppattern=false: for function delimiters, return data up to
+                            // left-1 (exclusive). For string delimiters, exclude the pattern.
+                            match &delimiter {
                                 mlua::Value::Function(func) => {
-                                    let buf_str = String::from_utf8_lossy(&this.buffer);
-                                    let buf_lua_str = lua.create_string(&*buf_str)?;
+                                    let buf_lua_str = lua.create_string(&matched)?;
                                     let result: mlua::MultiValue =
                                         func.call(mlua::Value::String(buf_lua_str))?;
                                     let vals: Vec<mlua::Value> = result.into_iter().collect();
@@ -1404,10 +1965,11 @@ impl mlua::UserData for NseSocket {
                                     }
                                 }
                                 mlua::Value::String(pattern) => {
-                                    let pat = pattern.to_string_lossy();
-                                    let matched_str = String::from_utf8_lossy(&matched);
-                                    if let Some(idx) = matched_str.find(&*pat) {
-                                        matched[..idx].to_vec()
+                                    let pat = pattern.as_bytes().to_vec();
+                                    if let Some(pos) =
+                                        matched.windows(pat.len()).position(|w| w == pat.as_slice())
+                                    {
+                                        matched[..pos].to_vec()
                                     } else {
                                         matched
                                     }
@@ -1416,7 +1978,8 @@ impl mlua::UserData for NseSocket {
                             }
                         };
                         this.buffer = remaining;
-                        let data_str = lua.create_string(&*String::from_utf8_lossy(&extracted))?;
+                        // Return raw binary data as Lua string (not UTF-8 lossy)
+                        let data_str = lua.create_string(&extracted)?;
                         return Ok(mlua::MultiValue::from_vec(vec![
                             mlua::Value::Boolean(true),
                             mlua::Value::String(data_str),

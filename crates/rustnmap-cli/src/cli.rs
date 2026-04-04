@@ -1718,10 +1718,6 @@ fn print_host_normal<W: Write>(handle: &mut W, args: &Args, host: &HostResult) {
         latency_ms / 1000.0
     );
 
-    if let Some(ref mac) = host.mac {
-        let _ = writeln!(handle, "MAC Address: {mac:?}");
-    }
-
     // Port information
     if !host.ports.is_empty() {
         let _ = writeln!(handle, "PORT     STATE SERVICE");
@@ -1757,6 +1753,12 @@ fn print_host_normal<W: Write>(handle: &mut W, args: &Args, host: &HostResult) {
         for os_match in &host.os_matches {
             let _ = writeln!(handle, "{} ({}%)", os_match.name, os_match.accuracy);
         }
+    }
+
+    // MAC address (after ports, scripts, and OS — matching nmap output order)
+    if let Some(ref mac) = host.mac {
+        let vendor = mac.vendor.as_deref().unwrap_or("Unknown");
+        let _ = writeln!(handle, "MAC Address: {} ({vendor})", mac.address.to_uppercase());
     }
 
     let _ = writeln!(handle);

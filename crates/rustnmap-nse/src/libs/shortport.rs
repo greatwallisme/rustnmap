@@ -251,6 +251,10 @@ fn parse_proto_arg(_lua: &mlua::Lua, arg: Value) -> mlua::Result<Vec<String>> {
 /// # Errors
 ///
 /// Returns an error if registration fails.
+#[expect(
+    clippy::too_many_lines,
+    reason = "NSE shortport library registers many port-matching helper functions"
+)]
 pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     let lua = nse_lua.lua_mut();
 
@@ -373,6 +377,74 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
         create_port_or_service_rule(lua, ports, &services, protos, state)
     })?;
     shortport_table.set("port_or_service", port_or_service_fn)?;
+
+    // Register version_port_or_service(ports, [services], [proto], [state], [rarity]) function
+    // Like port_or_service but also checks version_intensity >= rarity (default 7)
+    // and that the port is not in the exclude list (not implemented, always passes)
+    let version_port_or_service_fn = lua.create_function(|lua, args: mlua::Variadic<Value>| {
+        let ports = if let Some(arg) = args.first() {
+            parse_ports_arg(lua, arg.clone())?
+        } else {
+            Vec::new()
+        };
+
+        let services = if let Some(arg) = args.get(1) {
+            parse_services_arg(lua, arg.clone())?
+        } else {
+            Vec::new()
+        };
+
+        let protos = if let Some(arg) = args.get(2) {
+            parse_proto_arg(lua, arg.clone())?
+        } else {
+            Vec::new()
+        };
+
+        let state = args.get(3).and_then(|v| {
+            if let Value::String(s) = v {
+                s.to_str().ok().map(|s| s.to_string())
+            } else {
+                None
+            }
+        });
+
+        let rarity: i64 = args
+            .get(4)
+            .and_then(|v| match v {
+                Value::Integer(n) => Some(*n),
+                Value::Number(n) =>
+                {
+                    #[expect(
+                        clippy::cast_possible_truncation,
+                        reason = "Lua rarity values are small integers"
+                    )]
+                    Some(*n as i64)
+                }
+                _ => None,
+            })
+            .unwrap_or(7);
+
+        let rule = create_port_or_service_rule(lua, ports, &services, protos, state)?;
+
+        // Wrap with version_intensity check
+        lua.create_function(move |lua, (host, port): (Value, Table)| {
+            let base_match: bool = rule.call((host, port))?;
+            if !base_match {
+                return Ok(false);
+            }
+            // Check version_intensity >= rarity
+            let intensity: i64 = lua
+                .load("return nmap.version_intensity()")
+                .eval()
+                .unwrap_or(7);
+            Ok(intensity >= rarity)
+        })
+    })?;
+    shortport_table.set("version_port_or_service", version_port_or_service_fn)?;
+
+    // Register port_is_excluded(port, proto) — always returns false (no exclude list)
+    let port_is_excluded_fn = lua.create_function(|_, (_port, _proto): (u16, String)| Ok(false))?;
+    shortport_table.set("port_is_excluded", port_is_excluded_fn)?;
 
     // Set the shortport table as a global
     lua.globals().set("shortport", shortport_table)?;

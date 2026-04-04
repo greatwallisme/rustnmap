@@ -343,7 +343,8 @@ impl NseLua {
     ///    `cargo test` and normal builds
     /// 3. Relative to current working directory (`./nselib`) - fallback for
     ///    production when run from the workspace root
-    fn resolve_nselib_dir() -> String {
+    #[must_use]
+    pub fn resolve_nselib_dir() -> String {
         // Environment variable override for production deployments
         if let Ok(dir) = std::env::var("NSELIB_DIR") {
             return dir;

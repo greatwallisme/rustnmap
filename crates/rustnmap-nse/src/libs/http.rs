@@ -524,10 +524,21 @@ fn parse_set_cookie(value: &str) -> mlua::Result<Cookie> {
 /// # Errors
 ///
 /// Returns an error if the buffer contains no valid HTTP response header.
+/// Parse one HTTP response from a byte buffer.
+///
+/// Per RFC 2616 §4.4, responses to HEAD requests, 1xx informational,
+/// 204 No Content, and 304 Not Modified MUST NOT include a message-body.
+/// When `method` is one of these cases the body length is zero regardless
+/// of Content-Length or Transfer-Encoding headers.
+///
+/// Returns `Ok(Some((response, bytes_consumed)))` on success,
+/// `Ok(None)` when the buffer does not yet contain a complete response,
+/// or an error on parse failure.
 fn read_one_response(
     buf: &[u8],
     max_body_size: usize,
     truncated_ok: bool,
+    method: &str,
 ) -> mlua::Result<Option<(HttpResponse, usize)>> {
     // Need at least the header terminator.
     let Some(header_end) = buf.windows(4).position(|w| w == b"\r\n\r\n") else {
@@ -556,10 +567,26 @@ fn read_one_response(
         })
     });
 
+    // Extract status code from the status line to check for body-exempt cases.
+    let status_code: u16 = header_str
+        .split_whitespace()
+        .nth(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+
+    // RFC 2616 §4.4: message-body MUST NOT be included for HEAD, 1xx, 204, 304.
+    let body_exempt = method.eq_ignore_ascii_case("HEAD")
+        || (100..=199).contains(&status_code)
+        || status_code == 204
+        || status_code == 304;
+
     let body_start = header_end + 4;
     let available = buf.len().saturating_sub(body_start);
 
-    let (body_len, complete) = if is_chunked {
+    let (body_len, complete) = if body_exempt {
+        // No body expected regardless of headers.
+        (0, true)
+    } else if is_chunked {
         // For chunked encoding consume all available bytes; the response is
         // complete when the terminal "0\r\n\r\n" chunk is present.
         let complete = buf[body_start..].windows(5).any(|w| w == b"0\r\n\r\n");
@@ -744,6 +771,23 @@ fn response_to_table(lua: &Lua, response: &HttpResponse) -> mlua::Result<Table> 
     Ok(table)
 }
 
+/// Create a default response table for failed HTTP requests.
+///
+/// Returns a table with `status=0, body="", header={}` so Lua scripts
+/// can safely check `res.status` without crashing on nil.
+fn default_response_table(lua: &Lua) -> mlua::Result<Table> {
+    let table = lua.create_table()?;
+    table.set("status", 0_i64)?;
+    table.set("body", "")?;
+    table.set("rawbody", "")?;
+    table.set("version", "1.1")?;
+    table.set("status-line", "")?;
+    table.set("header", lua.create_table()?)?;
+    table.set("rawheader", lua.create_table()?)?;
+    table.set("cookies", lua.create_table()?)?;
+    Ok(table)
+}
+
 /// Extract host and port from Lua values.
 ///
 /// For HTTP requests, we use the hostname (not IP) for the Host header.
@@ -915,7 +959,7 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
                 Ok(response) => response_to_table(lua, &response).map(Value::Table),
                 Err(e) => {
                     debug!("http.get failed: {}", e);
-                    Ok(Value::Nil)
+                    default_response_table(lua).map(Value::Table)
                 }
             }
         },
@@ -961,7 +1005,7 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
 
             match perform_request(&host_str, port_num, &request, &opts) {
                 Ok(response) => response_to_table(lua, &response).map(Value::Table),
-                Err(_) => Ok(Value::Nil),
+                Err(_) => default_response_table(lua).map(Value::Table),
             }
         },
     )?;
@@ -1017,7 +1061,7 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
 
             match perform_request(&host_str, port_num, &request, &opts) {
                 Ok(response) => response_to_table(lua, &response).map(Value::Table),
-                Err(_) => Ok(Value::Nil),
+                Err(_) => default_response_table(lua).map(Value::Table),
             }
         },
     )?;
@@ -1034,7 +1078,7 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
 
         match perform_request(&host, port, &request, &opts) {
             Ok(response) => response_to_table(lua, &response).map(Value::Table),
-            Err(_) => Ok(Value::Nil),
+            Err(_) => default_response_table(lua).map(Value::Table),
         }
     })?;
     http_table.set("get_url", get_url_fn)?;
@@ -1050,7 +1094,6 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
         )| {
             debug!("http.pipeline_add({})", path);
 
-            let opts = parse_options(options);
             let method_ref = method.as_deref().unwrap_or("GET");
 
             // Create or get pipeline table
@@ -1070,12 +1113,10 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
             request.set("method", method_ref)?;
             request.set("path", path.as_str())?;
 
-            if !opts.headers.is_empty() {
-                let headers = lua.create_table()?;
-                for (key, value) in &opts.headers {
-                    headers.set(key.as_str(), value.as_str())?;
-                }
-                request.set("headers", headers)?;
+            // Store options table under "options" key for pipeline_go
+            // (matches nmap's pipeline_add which stores options via tableaux.tcopy)
+            if let Some(opts_table) = options {
+                request.set("options", opts_table)?;
             }
 
             pipeline.set(len_idx, request)?;
@@ -1155,35 +1196,103 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
 
             // connlimit: how many requests we send per TCP connection.
             let mut connlimit = default_connlimit;
+            // Track the connection opened for the probe so we can reuse it.
+            let mut stream_opt: Option<TcpStream> = None;
+            let mut conn_sent = 0usize; // requests sent on current connection
 
-            let probe_resp =
-                perform_request(&host_str, port_num, &probe_req, first_opts).ok();
+            // Send probe on a fresh connection and read the response using
+            // the proper HTTP parser (respects HEAD / Content-Length / chunked)
+            // instead of perform_request which reads until EOF and blocks on
+            // keep-alive connections.
+            if let Ok(mut probe_stream) = connect(&host_str, port_num, timeout) {
+                    if probe_stream.write_all(&probe_req).is_ok() {
+                        let mut probe_buf: Vec<u8> = Vec::new();
+                        let mut tmp = [0u8; 8192];
+                        let mut probe_resp: Option<HttpResponse> = None;
 
-            if let Some(ref resp) = probe_resp {
-                // Parse "Keep-Alive: max=N" header.
-                if let Some(ka) = resp.header.get("keep-alive") {
-                    for part in ka.split(',') {
-                        let part = part.trim();
-                        if let Some(val) = part.strip_prefix("max=") {
-                            if let Ok(n) = val.trim().parse::<usize>() {
-                                // +1 because the probe already used one slot.
-                                connlimit = n + 1;
+                        // Read loop: parse once we have a complete response.
+                        'probe: loop {
+                            let parse_result = read_one_response(
+                                &probe_buf,
+                                first_opts.max_body_size,
+                                first_opts.truncated_ok,
+                                first_method,
+                            );
+                            if let Ok(Some((resp, consumed))) = parse_result {
+                                probe_resp = Some(resp);
+                                probe_buf.drain(..consumed);
+                            } else {
+                                match probe_stream.read(&mut tmp) {
+                                    Ok(0) => {
+                                        // Server closed; try parsing remaining.
+                                        if let Ok(resp) = parse_response(
+                                            &probe_buf,
+                                            first_opts.max_body_size,
+                                            first_opts.truncated_ok,
+                                        ) {
+                                            probe_resp = Some(resp);
+                                        }
+                                        break 'probe;
+                                    }
+                                    Ok(n) => {
+                                        probe_buf.extend_from_slice(&tmp[..n]);
+                                    }
+                                    Err(_) => {
+                                        break 'probe;
+                                    },
+                                }
+                            }
+                            if probe_resp.is_some() {
+                                break 'probe;
                             }
                         }
+
+                        if let Some(ref resp) = probe_resp {
+                            // Parse "Keep-Alive: max=N" header.
+                            if let Some(ka) = resp.header.get("keep-alive") {
+                                for part in ka.split(',') {
+                                    let part = part.trim();
+                                    if let Some(val) = part.strip_prefix("max=") {
+                                        if let Ok(n) = val.trim().parse::<usize>() {
+                                            connlimit = n + 1;
+                                        }
+                                    }
+                                }
+                            }
+                            if resp
+                                .header
+                                .get("connection")
+                                .is_some_and(|v| v.eq_ignore_ascii_case("close"))
+                            {
+                                connlimit = 1;
+                            }
+                            if let Ok(tbl) = response_to_table(lua, resp) {
+                                let _ = results.set(1_i64, tbl);
+                            }
+                            // Reuse this connection if server supports keep-alive.
+                            if connlimit > 1 {
+                                stream_opt = Some(probe_stream);
+                                conn_sent = 1;
+                            }
+                        } else {
+                            let default_tbl = lua.create_table()?;
+                            default_tbl.set("status", 0)?;
+                            default_tbl.set("body", "")?;
+                            let _ = results.set(1_i64, default_tbl);
+                        }
+                    } else {
+                        // Write failed.
+                        let default_tbl = lua.create_table()?;
+                        default_tbl.set("status", 0)?;
+                        default_tbl.set("body", "")?;
+                        let _ = results.set(1_i64, default_tbl);
                     }
+                } else {
+                    let default_tbl = lua.create_table()?;
+                    default_tbl.set("status", 0)?;
+                    default_tbl.set("body", "")?;
+                    let _ = results.set(1_i64, default_tbl);
                 }
-                // "Connection: close" means server won't pipeline.
-                if resp
-                    .header
-                    .get("connection")
-                    .is_some_and(|v| v.eq_ignore_ascii_case("close"))
-                {
-                    connlimit = 1;
-                }
-                if let Ok(tbl) = response_to_table(lua, resp) {
-                    let _ = results.set(1_i64, tbl);
-                }
-            }
 
             debug!(
                 "http.pipeline_go: connlimit={}, total={}",
@@ -1192,8 +1301,6 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
 
             // --- Send remaining requests in batches on reused sockets ---
             let mut sent = 1usize; // probe counts as first request
-            let mut conn_sent = 1usize; // requests sent on current connection
-            let mut stream_opt: Option<TcpStream> = None;
 
             while sent < entries.len() {
                 // Reconnect when needed.
@@ -1257,11 +1364,12 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
 
                 'batch: while batch_recv < batch {
                     // Try to parse a complete response from the buffer first.
-                    let opts = &entries[sent + batch_recv].2;
+                    let (ref method, _, ref opts) = entries[sent + batch_recv];
                     match read_one_response(
                         &recv_buf,
                         opts.max_body_size,
                         opts.truncated_ok,
+                        method,
                     ) {
                         Ok(Some((resp, consumed))) => {
                             if let Ok(tbl) = response_to_table(lua, &resp) {
@@ -1279,7 +1387,13 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
                                 "http.pipeline_go: parse error at batch[{}]: {}",
                                 batch_recv, e
                             );
-                            // Skip this response; re-sync is not feasible.
+                            // Set a default response so the result table has no
+                            // gaps (Lua ipairs stops at the first nil key).
+                            let lua_idx = (sent + batch_recv + 1) as i64;
+                            let default_tbl = lua.create_table()?;
+                            default_tbl.set("status", 0)?;
+                            default_tbl.set("body", "")?;
+                            let _ = results.set(lua_idx, default_tbl);
                             batch_recv += 1;
                             recv_buf.clear();
                             continue 'batch;
@@ -1315,6 +1429,20 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
                     }
                 }
 
+                // Fill any remaining unfilled slots in this batch with
+                // default response tables so the Lua result table has no
+                // gaps (prevents ipairs from stopping early).
+                while batch_recv < batch {
+                    let lua_idx = (sent + batch_recv + 1) as i64;
+                    if results.get::<Option<mlua::Table>>(lua_idx)?.is_none() {
+                        let default_tbl = lua.create_table()?;
+                        default_tbl.set("status", 0)?;
+                        default_tbl.set("body", "")?;
+                        let _ = results.set(lua_idx, default_tbl);
+                    }
+                    batch_recv += 1;
+                }
+
                 sent += batch;
                 conn_sent += batch;
             }
@@ -1327,7 +1455,10 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
 
     // Register identify_404(host, port) function
     // Determines how the target server handles 404 Not Found responses.
-    // Returns: result_404 (status code), response_table, known_404_body
+    // Returns multiple Lua values matching nmap's API:
+    //   - success case (404): true, 404
+    //   - success case (200): true, 200, cleaned_body
+    //   - error case: false, "error message"
     let identify_404_fn = lua.create_function(|lua, (host, port): (Value, Value)| {
         let (host_str, port_num) = extract_host_port(host, port);
         debug!("http.identify_404({}, {})", host_str, port_num);
@@ -1339,24 +1470,69 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
 
         if let Ok(response) = perform_request(&host_str, port_num, &request, &opts) {
             let status = response.status;
-            let body = String::from_utf8_lossy(&response.body).to_string();
-            let cleaned = clean_404(&body);
 
-            let resp_table = response_to_table(lua, &response)?;
+            if status == 404 {
+                // Server returns proper 404
+                return Ok(mlua::Variadic::from(vec![
+                    Value::Boolean(true),
+                    Value::Integer(404),
+                ]));
+            }
 
-            // Return: result_404 (status code), response_table, known_404_body
-            let result = lua.create_table()?;
-            result.set(1, i64::from(status))?;
-            result.set(2, resp_table)?;
-            result.set(3, cleaned.as_str())?;
-            Ok(Value::Table(result))
+            if status == 200 {
+                // Server returns 200 for everything - check body to distinguish
+                let body = String::from_utf8_lossy(&response.body).to_string();
+                let cleaned = clean_404(&body);
+
+                // Also check a second URL to see if bodies differ
+                let fake_path2 = format!("/NmapUpperCheck{}", std::process::id());
+                let request2 = build_request("GET", &host_str, port_num, &fake_path2, &opts, None);
+
+                if let Ok(response2) = perform_request(&host_str, port_num, &request2, &opts) {
+                    let body2 = String::from_utf8_lossy(&response2.body).to_string();
+                    let cleaned2 = clean_404(&body2);
+
+                    if cleaned == cleaned2 {
+                        // Same body for both 404s - can use body comparison
+                        let cleaned_lua = lua.create_string(&cleaned)?;
+                        return Ok(mlua::Variadic::from(vec![
+                            Value::Boolean(true),
+                            Value::Integer(200),
+                            Value::String(cleaned_lua),
+                        ]));
+                    }
+                    // Different bodies - can't reliably identify 404
+                    let msg = lua.create_string(
+                        "Two known 404 pages returned valid and different pages; \
+                         unable to identify valid response.",
+                    )?;
+                    return Ok(mlua::Variadic::from(vec![
+                        Value::Boolean(false),
+                        Value::String(msg),
+                    ]));
+                }
+
+                // Second request failed, assume 200 behavior
+                let cleaned_lua = lua.create_string(&cleaned)?;
+                return Ok(mlua::Variadic::from(vec![
+                    Value::Boolean(true),
+                    Value::Integer(200),
+                    Value::String(cleaned_lua),
+                ]));
+            }
+
+            // Other status codes - treat as 404 equivalent
+            Ok(mlua::Variadic::from(vec![
+                Value::Boolean(true),
+                Value::Integer(i64::from(status)),
+            ]))
         } else {
-            // Return default 404 behavior
-            let result = lua.create_table()?;
-            result.set(1, 404)?;
-            result.set(2, Value::Nil)?;
-            result.set(3, "")?;
-            Ok(Value::Table(result))
+            // Request failed
+            let msg = lua.create_string("Failed while testing for 404 error message")?;
+            Ok(mlua::Variadic::from(vec![
+                Value::Boolean(false),
+                Value::String(msg),
+            ]))
         }
     })?;
     http_table.set("identify_404", identify_404_fn)?;
@@ -1487,9 +1663,19 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     // Returns: found (bool), matches (table of captures)
     let response_contains_fn =
         lua.create_function(|lua, (data, pattern): (Option<Table>, String)| {
+            // Nmap compat: empty or nil pattern always returns true.
+            // Always return (bool, table) so callers can safely ipairs(matches).
+            if pattern.is_empty() {
+                let mut result = mlua::Variadic::new();
+                result.push(Value::Boolean(true));
+                result.push(Value::Table(lua.create_table()?));
+                return Ok(result);
+            }
+
             let Some(data) = data else {
                 let mut result = mlua::Variadic::new();
                 result.push(Value::Boolean(false));
+                result.push(Value::Table(lua.create_table()?));
                 return Ok(result);
             };
 
@@ -1523,25 +1709,33 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
                 }
             }
 
-            // Try Lua pattern matching (not regex - Lua patterns)
-            // Simple substring check first
-            let found = search_text.contains(&pattern);
+            // Nmap compat: case-insensitive by default (nmap's http.lua
+            // converts both pattern and text to lowercase before matching).
+            // Nmap uses Lua string.match() which supports Lua patterns like
+            // (.*), (.-)< , [^<]+ etc.  We use lua_pattern_match which
+            // converts Lua patterns to regex.
+            let search_lower = search_text.to_lowercase();
+            let pattern_lower = pattern.to_lowercase();
+
+            // Use Lua pattern matching (converted to regex) as the primary
+            // matching mechanism.  Fall back to literal contains() only if
+            // the pattern cannot be compiled as a regex.
+            let captures = lua_pattern_match(&search_lower, &pattern_lower);
+            let found = captures.is_some();
 
             let mut result = mlua::Variadic::new();
             result.push(Value::Boolean(found));
 
-            if found {
-                // Return capture matches as a table
-                // For Lua pattern matching, try to extract captures
-                let matches_table = lua.create_table()?;
-                if let Some(captures) = lua_pattern_match(&search_text, &pattern) {
-                    for (i, cap) in captures.iter().enumerate() {
-                        let idx = i64::try_from(i + 1).unwrap_or(1);
-                        matches_table.set(idx, cap.as_str())?;
-                    }
+            // Always return a matches table (even if empty) so callers
+            // can safely do ipairs(matches) without hitting nil.
+            let matches_table = lua.create_table()?;
+            if let Some(caps) = captures {
+                for (i, cap) in caps.iter().enumerate() {
+                    let idx = i64::try_from(i + 1).unwrap_or(1);
+                    matches_table.set(idx, cap.as_str())?;
                 }
-                result.push(Value::Table(matches_table));
             }
+            result.push(Value::Table(matches_table));
 
             Ok(result)
         })?;

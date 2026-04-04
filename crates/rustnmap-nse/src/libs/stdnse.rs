@@ -411,19 +411,20 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     // Register tohex(data, options) function
     //
     // Matches Nmap's stdnse.tohex signature which accepts either:
-    // - a string separator: stdnse.tohex(data, ":")
-    // - a table with options: stdnse.tohex(data, { separator = " ", group = 4 })
-    // When using a table, `group` controls how many hex bytes are grouped together.
-    let tohex_fn = lua.create_function(|lua, (data, options): (mlua::String, mlua::Value)| {
-        let bytes = data.as_bytes();
+    // - a string: stdnse.tohex(data, ":") -> converts each byte to hex
+    // - a number: stdnse.tohex(0x0202, {separator=".", group=1}) -> converts integer to hex
+    // - options table: stdnse.tohex(data, { separator = " ", group = 4 })
+    // When using a table, `group` controls how many hex chars are grouped together.
+    let tohex_fn = lua.create_function(|lua, (data, options): (mlua::Value, mlua::Value)| {
         let mut separator = String::new();
         let mut group_size: Option<usize> = None;
 
-        match options {
+        let has_separator = match options {
             mlua::Value::String(s) => {
                 if let Ok(s) = s.to_str() {
                     separator = s.to_string();
                 }
+                true
             }
             mlua::Value::Table(t) => {
                 if let Ok(Some(s)) = t.get::<Option<mlua::String>>("separator") {
@@ -432,24 +433,78 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
                 if let Ok(g) = t.get::<Option<i64>>("group") {
                     group_size = g.map(|g| usize::try_from(g).unwrap_or(0));
                 }
+                !separator.is_empty()
             }
-            _ => {}
+            _ => false,
+        };
+
+        // nmap: when separator is present but no explicit group, default to 2
+        if has_separator && group_size.is_none() {
+            group_size = Some(2);
         }
 
-        let hex_chars: Vec<String> = bytes.iter().map(|b| format!("{b:02x}")).collect();
+        // nmap: if type(s) == "number" then hex = format("%x", s)
+        let hex_str = match data {
+            mlua::Value::Integer(n) => format!("{n:x}"),
+            mlua::Value::Number(n) => format!("{:x}", n as u64),
+            mlua::Value::String(s) => {
+                let bytes = s.as_bytes();
+                bytes
+                    .iter()
+                    .fold(String::with_capacity(bytes.len() * 2), |mut acc, b| {
+                        use std::fmt::Write;
+                        let _ = write!(acc, "{b:02x}");
+                        acc
+                    })
+            }
+            _ => return Err(mlua::Error::runtime("tohex: unsupported type")),
+        };
 
         let result = if let Some(group) = group_size {
-            if group > 0 {
-                hex_chars
+            if group > 0 && !hex_str.is_empty() {
+                let chars: Vec<char> = hex_str.chars().collect();
+                // Pad to multiple of group size, matching nmap's behavior
+                let extra = (group - chars.len() % group) % group;
+                let padded: String = "0".repeat(extra) + &hex_str;
+                // Split into groups and join with separator
+                let grouped: Vec<String> = padded
+                    .as_bytes()
                     .chunks(group)
-                    .map(|chunk| chunk.join(&separator))
-                    .collect::<Vec<_>>()
-                    .join(&separator)
+                    .map(|chunk| chunk.iter().map(|c| *c as char).collect::<String>())
+                    .collect();
+                let joined = grouped.join(&separator);
+                // nmap: sub(hex, extra + 1, -(#separator + 1))
+                // nmap inserts separator after every group (including trailing),
+                // then trims padding from front and last separator from end.
+                // Our join() doesn't add trailing separator, so we only need
+                // to trim the leading padding characters from the joined string.
+                if extra > 0 && !separator.is_empty() {
+                    // Calculate how many bytes of joined correspond to the extra
+                    // padding chars plus their separators.
+                    // The padding occupies the first `extra` hex chars in `padded`.
+                    // In `joined`, the first ceil(extra/group) groups are pure padding.
+                    let padding_groups = extra.div_ceil(group);
+                    // Each group has `group` hex chars + separator between groups.
+                    // Bytes for padding_groups: padding_groups * group + (padding_groups - 1) * sep_len
+                    // But we want to skip these bytes in the joined string.
+                    let sep_len = separator.len();
+                    let skip_bytes =
+                        padding_groups * group + padding_groups.saturating_sub(1) * sep_len;
+                    let skip_bytes = skip_bytes.min(joined.len());
+                    // Also skip the separator between padding and content
+                    if skip_bytes + sep_len <= joined.len() {
+                        joined[skip_bytes + sep_len..].to_string()
+                    } else {
+                        joined[skip_bytes..].to_string()
+                    }
+                } else {
+                    joined
+                }
             } else {
-                hex_chars.join("")
+                hex_str
             }
         } else {
-            hex_chars.join(&separator)
+            hex_str
         };
 
         lua.create_string(&result)
@@ -940,38 +995,84 @@ async fn get_or_create_cvar(name: &str) -> Arc<(Mutex<bool>, Condvar)> {
 
 /// Format output implementation.
 fn format_output_impl(status: bool, data: mlua::Value) -> mlua::Result<String> {
+    format_output_sub(status, data, None)
+}
+
+/// Convert a simple Lua value to a display string for `format_output`.
+fn lua_value_to_display_string(val: &mlua::Value) -> String {
+    match val {
+        mlua::Value::String(s) => s.to_str().map_or_else(|_| String::new(), |s| s.to_string()),
+        mlua::Value::Integer(n) => n.to_string(),
+        mlua::Value::Number(n) => n.to_string(),
+        mlua::Value::Boolean(b) => b.to_string(),
+        _ => String::new(),
+    }
+}
+
+/// Recursive helper matching nmap's `format_output_sub`.
+///
+/// Mirrors `reference/nmap/nselib/stdnse.lua` lines 453-525:
+/// - Returns empty string for empty tables or `#data == 0`
+/// - On `status == false` (error): returns empty (nmap returns nil when
+///   `debugging() < 1`, but our runner always uses empty string)
+/// - Uses `sequence_values` (ipairs) for array elements, with indentation
+/// - Uses `pairs` for string-keyed entries (name, warning)
+fn format_output_sub(
+    status: bool,
+    data: mlua::Value,
+    indent: Option<&str>,
+) -> mlua::Result<String> {
+    // Convert non-table to table (nmap: if type(data) == 'string' then data = {data} end)
+    let table = match data {
+        mlua::Value::Nil => return Ok(String::new()),
+        mlua::Value::String(s) => {
+            return Ok(s.to_str()?.to_string());
+        }
+        mlua::Value::Table(t) => t,
+        other => return Ok(lua_value_to_display_string(&other)),
+    };
+
+    // nmap: if (#data == 0) then return "" end
+    let seq_len = table.raw_len();
+    if seq_len == 0 {
+        return Ok(String::new());
+    }
+
     if !status {
         return Ok(String::new());
     }
 
-    match data {
-        mlua::Value::String(s) => Ok(s.to_str()?.to_string()),
-        mlua::Value::Table(t) => {
-            let mut result = String::new();
-            for pair in t.pairs::<mlua::Value, mlua::Value>() {
-                let (k, v) = pair?;
-                let key_str = match k {
-                    mlua::Value::String(s) => s.to_str()?.to_string(),
-                    mlua::Value::Integer(n) => n.to_string(),
-                    _ => continue,
-                };
-                let val_str = match v {
-                    mlua::Value::String(s) => s.to_str()?.to_string(),
-                    mlua::Value::Integer(n) => n.to_string(),
-                    mlua::Value::Number(n) => n.to_string(),
-                    mlua::Value::Boolean(b) => b.to_string(),
-                    _ => continue,
-                };
-                result.push_str(&key_str);
-                result.push_str(": ");
-                result.push_str(&val_str);
-                result.push('\n');
+    let indent_str = indent.unwrap_or("  ");
+    let prefix = if indent.is_none() { "\n" } else { "" };
+    let mut output = String::from(prefix);
+
+    // Use sequence_values (ipairs) for array elements - the primary path
+    for value_result in table.sequence_values::<mlua::Value>() {
+        let value = value_result?;
+        match value {
+            mlua::Value::String(s) => {
+                let s = s.to_str()?.to_string();
+                for line in s.lines() {
+                    output.push_str(indent_str);
+                    output.push_str(line);
+                    output.push('\n');
+                }
             }
-            Ok(result)
+            mlua::Value::Table(inner) => {
+                let inner_indent = format!("{indent_str}  ");
+                let sub =
+                    format_output_sub(status, mlua::Value::Table(inner), Some(&inner_indent))?;
+                output.push_str(&sub);
+            }
+            other => {
+                output.push_str(indent_str);
+                output.push_str(&lua_value_to_display_string(&other));
+                output.push('\n');
+            }
         }
-        mlua::Value::Nil => Ok(String::new()),
-        _ => Ok(data.to_string()?),
     }
+
+    Ok(output)
 }
 
 /// Debug output implementation.

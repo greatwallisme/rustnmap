@@ -242,11 +242,11 @@ fn parse_timespec(spec: &str) -> Option<u64> {
 
 /// Find a file in Nmap data directories
 fn find_file(filename: &str) -> Option<String> {
-    // Try to find in the reference directory first
-    let ref_path = format!("/root/project/rust-nmap/reference/nmap/{filename}");
-    if Path::new(&ref_path).exists() {
-        return Some(ref_path);
-    }
+    // // Try to find in the reference directory first
+    // let ref_path = format!("/root/project/rust-nmap/reference/nmap/{filename}");
+    // if Path::new(&ref_path).exists() {
+    //     return Some(ref_path);
+    // }
     // Try system Nmap directories
     let system_paths = [
         format!("/usr/share/nmap/{filename}"),

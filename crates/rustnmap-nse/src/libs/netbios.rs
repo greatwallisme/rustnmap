@@ -67,6 +67,10 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     netbios_table.set("QUERY_TYPE_NB", QUERY_TYPE_NB)?;
     netbios_table.set("QUERY_TYPE_NBSTAT", QUERY_TYPE_NBSTAT)?;
 
+    // Stub: get_server_name(ip) - returns (false, nil) to skip NetBIOS name lookup
+    let get_server_name_fn = lua.create_function(|_, _ip: String| Ok((false, mlua::Value::Nil)))?;
+    netbios_table.set("get_server_name", get_server_name_fn)?;
+
     // Set the netbios table in globals
     lua.globals().set("netbios", netbios_table)?;
 

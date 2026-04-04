@@ -193,6 +193,17 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
                 Value::String(s) => s.to_string_lossy().to_string(),
                 Value::Integer(n) => n.to_string(),
                 Value::Number(n) => n.to_string(),
+                Value::Table(t) => {
+                    // NSE passes host table with .ip field
+                    match t.get::<Option<String>>("ip") {
+                        Ok(Some(ip)) => ip,
+                        _ => {
+                            return Err(mlua::Error::RuntimeError(
+                                "Invalid host table: missing 'ip' field".to_string(),
+                            ))
+                        }
+                    }
+                }
                 _ => {
                     return Err(mlua::Error::RuntimeError(
                         "Invalid host parameter".to_string(),

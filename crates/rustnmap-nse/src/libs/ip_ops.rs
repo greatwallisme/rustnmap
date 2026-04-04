@@ -153,7 +153,7 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     ip_ops.set("fromdword", fromdword_fn)?;
 
     // Register ip_to_str(ip) function - convert IP to binary string
-    let ip_to_str_fn = lua.create_function(|_, ip: String| {
+    let ip_to_str_fn = lua.create_function(|lua, ip: String| {
         let addr: IpAddr = ip
             .parse()
             .map_err(|e| mlua::Error::RuntimeError(format!("Invalid IP address '{ip}': {e}")))?;
@@ -162,28 +162,33 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
             IpAddr::V4(v4) => v4.octets().to_vec(),
             IpAddr::V6(v6) => v6.octets().to_vec(),
         };
-        Ok(bytes)
+        // Return as a Lua string (raw bytes), not a table — callers expect a
+        // string suitable for string.pack(), string.len(), etc.
+        lua.create_string(&bytes)
     })?;
     ip_ops.set("ip_to_str", ip_to_str_fn)?;
 
     // Register str_to_ip(str) function - convert binary string to IP
-    let str_to_ip_fn = lua.create_function(|_, bytes: Vec<u8>| match bytes.len() {
-        4 => {
-            let arr: [u8; 4] = bytes.try_into().map_err(|_err| {
-                mlua::Error::RuntimeError("Failed to convert bytes to IPv4".to_string())
-            })?;
-            Ok(Ipv4Addr::from(arr).to_string())
+    let str_to_ip_fn = lua.create_function(|_, bytes: mlua::String| {
+        let bytes = bytes.as_bytes().to_vec();
+        match bytes.len() {
+            4 => {
+                let arr: [u8; 4] = bytes.try_into().map_err(|_err| {
+                    mlua::Error::RuntimeError("Failed to convert bytes to IPv4".to_string())
+                })?;
+                Ok(Ipv4Addr::from(arr).to_string())
+            }
+            16 => {
+                let arr: [u8; 16] = bytes.try_into().map_err(|_err| {
+                    mlua::Error::RuntimeError("Failed to convert bytes to IPv6".to_string())
+                })?;
+                Ok(Ipv6Addr::from(arr).to_string())
+            }
+            _ => Err(mlua::Error::RuntimeError(format!(
+                "Invalid byte length for IP address: {} (expected 4 or 16)",
+                bytes.len()
+            ))),
         }
-        16 => {
-            let arr: [u8; 16] = bytes.try_into().map_err(|_err| {
-                mlua::Error::RuntimeError("Failed to convert bytes to IPv6".to_string())
-            })?;
-            Ok(Ipv6Addr::from(arr).to_string())
-        }
-        _ => Err(mlua::Error::RuntimeError(format!(
-            "Invalid byte length for IP address: {} (expected 4 or 16)",
-            bytes.len()
-        ))),
     })?;
     ip_ops.set("str_to_ip", str_to_ip_fn)?;
 
