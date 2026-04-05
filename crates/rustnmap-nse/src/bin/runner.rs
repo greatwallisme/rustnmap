@@ -12,7 +12,7 @@
 //! - 2: Script timeout (killed by resource limit)
 //! - 3: Invalid arguments
 
-use std::io::{self, Read};
+use std::io::{self, Read, Write as IoWrite};
 use std::net::IpAddr;
 use std::process::ExitCode;
 
@@ -58,7 +58,6 @@ struct RunnerArgs {
 }
 
 /// Parse command line arguments.
-#[expect(clippy::print_stderr, reason = "command-line tool help output")]
 fn parse_args() -> Option<RunnerArgs> {
     let args: Vec<String> = std::env::args().collect();
 
@@ -97,10 +96,8 @@ fn parse_args() -> Option<RunnerArgs> {
                 service = args.get(i).cloned();
             }
             "--help" | "-h" => {
-                eprintln!(
-                    "Usage: rustnmap-nse-runner --target IP [--timeout-ms MS] [--file SCRIPT] [--port PORT] [--protocol PROTO] [--service SVC]"
-                );
-                eprintln!("       Reads script from stdin if --file not specified.");
+                let usage = "Usage: rustnmap-nse-runner --target IP [--timeout-ms MS] [--file SCRIPT] [--port PORT] [--protocol PROTO] [--service SVC]\n       Reads script from stdin if --file not specified.\n";
+                let _ = io::stderr().write_all(usage.as_bytes());
                 return None;
             }
             _ => {}
@@ -121,7 +118,6 @@ fn parse_args() -> Option<RunnerArgs> {
 }
 
 /// Set CPU time limit for the process.
-#[allow(clippy::print_stderr, reason = "system warning message")]
 fn set_cpu_limit(timeout_ms: u64) {
     let cpu_limit: u64 = timeout_ms / 1000 + 5;
     // SAFETY: setrlimit is a POSIX system call that sets resource limits.
@@ -134,7 +130,7 @@ fn set_cpu_limit(timeout_ms: u64) {
             rlim_max: cpu_limit,
         };
         if libc::setrlimit(libc::RLIMIT_CPU, &rlim) != 0 {
-            eprintln!("Warning: Failed to set CPU time limit");
+            let _ = io::stderr().write_all(b"Warning: Failed to set CPU time limit\n");
         }
     }
 }
@@ -151,18 +147,16 @@ fn read_script_source(script_file: Option<&String>) -> io::Result<String> {
 }
 
 /// Output result as JSON to stdout.
-#[allow(
-    clippy::print_stdout,
-    clippy::print_stderr,
-    reason = "JSON output and error reporting"
-)]
 fn output_result(result: &RunnerOutput) {
     match serde_json::to_string(result) {
         Ok(json) => {
-            println!("{json}");
+            let mut out = json;
+            out.push('\n');
+            let _ = io::stdout().write_all(out.as_bytes());
         }
         Err(e) => {
-            eprintln!("Failed to serialize result: {e}");
+            let msg = format!("Failed to serialize result: {e}\n");
+            let _ = io::stderr().write_all(msg.as_bytes());
         }
     }
 }
@@ -407,8 +401,8 @@ fn create_host_table(lua: &Lua, target_ip: IpAddr) -> Result<mlua::Table, String
     // For IPv4: 4 bytes, for IPv6: 16 bytes. Uses string.char() to create
     // an 8-bit clean Lua string from raw byte values.
     let bin_ip_octets: Vec<String> = match target_ip {
-        IpAddr::V4(v4) => v4.octets().iter().map(|b| b.to_string()).collect(),
-        IpAddr::V6(v6) => v6.octets().iter().map(|b| b.to_string()).collect(),
+        IpAddr::V4(v4) => v4.octets().iter().map(ToString::to_string).collect(),
+        IpAddr::V6(v6) => v6.octets().iter().map(ToString::to_string).collect(),
     };
     let bin_ip_lua: mlua::String = lua
         .load(format!("return string.char({})", bin_ip_octets.join(", ")))

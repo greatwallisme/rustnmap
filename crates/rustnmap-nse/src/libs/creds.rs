@@ -307,12 +307,28 @@ fn create_account_class(lua: &mlua::Lua) -> Result<Table> {
     account_table.set(LT, lt_fn)?;
 
     // Account:new(username, password, state)
+    // Note: Lua `:` method call adds `self` (the Account class table) as the
+    // first implicit argument, matching nmap's OOP pattern.
     let new_fn = lua.create_function(
-        |lua, (username, password, state): (Option<String>, Option<String>, u32)| {
+        |lua, (_self, username, password, state): (Value, Option<String>, Option<String>, Value)| {
             let account = lua.create_table()?;
             account.set("username", username)?;
             account.set("password", password)?;
-            account.set("state", state_msg(state))?;
+            // State may be an integer (creds.State.VALID) or a string (custom message)
+            let state_str = match state {
+                Value::Integer(n) => state_msg(u32::try_from(n).unwrap_or(0)).to_string(),
+                Value::Number(n) => {
+                    #[expect(
+                        clippy::cast_possible_truncation,
+                        reason = "Lua state values are small integers; f64 to i64 is safe here"
+                    )]
+                    let n_int = n as i64;
+                    state_msg(u32::try_from(n_int).unwrap_or(0)).to_string()
+                }
+                Value::String(s) => s.to_str().map(|s| s.to_string()).unwrap_or_default(),
+                _ => String::new(),
+            };
+            account.set("state", state_str)?;
 
             // Get Account class from globals and create a proper metatable
             let creds_table: Table = lua.globals().get("creds")?;
@@ -338,10 +354,22 @@ fn create_credentials_class(lua: &mlua::Lua) -> Result<Table> {
     // Define the add method
     let add_fn = lua.create_function(
         |lua, (this, user, pass, state): (Table, Option<String>, Option<String>, u32)| {
-            let host: Table = this.get("_host")?;
+            let host_val: Value = this.get("_host")?;
             let port_number: Option<u16> = this.get("_port_number")?;
             let _service: Option<String> = this.get("_service")?;
             let tags: Table = this.get("_tags")?;
+
+            // Convert host Value to Table for registry storage.
+            // Accept both Table and String (e.g., when host is an IP string).
+            let host: Table = match &host_val {
+                Value::Table(t) => t.clone(),
+                Value::String(s) => {
+                    let t = lua.create_table()?;
+                    t.set("ip", s.to_str()?.to_string())?;
+                    t
+                }
+                _ => lua.create_table()?,
+            };
 
             // Handle empty password
             let pass = if pass.as_ref().is_some_and(String::is_empty) {
@@ -371,7 +399,7 @@ fn create_credentials_class(lua: &mlua::Lua) -> Result<Table> {
         reason = "if let pattern with early return is clearer here"
     )]
     let get_credentials_fn = lua.create_function(|lua, (this, state): (Table, Option<u32>)| {
-        let host: Table = this.get("_host")?;
+        let host_val: Value = this.get("_host")?;
         let port_number: Option<u16> = this.get("_port_number")?;
         let _service: Option<String> = this.get("_service")?;
         let tags: Table = this.get("_tags")?;
@@ -425,7 +453,13 @@ fn create_credentials_class(lua: &mlua::Lua) -> Result<Table> {
             }
 
             // Check host match
-            let host_ip: Option<String> = host.get("ip").ok().flatten();
+            let host_ip: Option<String> = if let Value::Table(t) = &host_val {
+                t.get("ip").ok().flatten()
+            } else if let Value::String(s) = &host_val {
+                s.to_str().ok().map(|s| s.to_string())
+            } else {
+                None
+            };
             let host_str: Option<String> = host_ip.clone();
             let cred_host_ip: Option<String> = if let Value::Table(t) = cred_host {
                 t.get("ip").ok().flatten()
@@ -585,8 +619,13 @@ fn create_credentials_class(lua: &mlua::Lua) -> Result<Table> {
     credentials_table.set(TOSTRING, tostring_fn)?;
 
     // Credentials:new(tags, host, port)
+    // Note: Lua `:` method call adds `self` (the Credentials class table) as
+    // the first implicit argument.  The Rust callback must capture it so the
+    // remaining positional arguments line up correctly:
+    //   creds.Credentials:new(SCRIPT_NAME, host, port)
+    //   => new(Credentials_class, SCRIPT_NAME, host, port)
     let new_fn =
-        lua.create_function(|lua, (tags, host, port): (Value, Table, Option<Table>)| {
+        lua.create_function(|lua, (_self, tags, host, port): (Value, Value, Value, Option<Table>)| {
             let credentials = lua.create_table()?;
 
             // Normalize tags to a table

@@ -49,6 +49,7 @@ services:
       - ./configs/nginx/ssl:/etc/nginx/ssl:ro
       - ./configs/nginx/html:/usr/share/nginx/html:ro
       - ./configs/nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./configs/nginx/auth/.htpasswd:/etc/nginx/.htpasswd:ro
     healthcheck:
       test: ["CMD-SHELL", "nc -z 127.0.0.1 80 && nc -z 127.0.0.1 443"]
       interval: 5s

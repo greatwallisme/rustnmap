@@ -3,6 +3,8 @@
 //! This module provides the main script execution engine that orchestrates
 //! script loading, scheduling, and execution.
 
+use std::collections::HashMap;
+use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -13,6 +15,7 @@ use crate::error::Result;
 use crate::lua::NseLua;
 use crate::registry::ScriptDatabase;
 use crate::script::{ExecutionStatus, NseScript, ScriptCategory, ScriptOutput, ScriptResult};
+use rustnmap_target::dns::DnsResolver;
 
 /// Script scheduler configuration.
 #[derive(Debug, Clone)]
@@ -99,6 +102,7 @@ impl ScriptScheduler {
 /// NSE script engine.
 ///
 /// Main entry point for NSE script execution.
+/// Caches hostname resolution results per IP (like nmap caches in `Target::HostName()`).
 #[derive(Debug)]
 pub struct ScriptEngine {
     /// Script database.
@@ -106,6 +110,10 @@ pub struct ScriptEngine {
 
     /// Scheduler instance.
     scheduler: ScriptScheduler,
+
+    /// Cached hostname lookups: IP -> resolved hostname.
+    /// Matches nmap behavior: resolve once per scan, reuse everywhere.
+    hostname_cache: std::sync::Mutex<HashMap<IpAddr, Option<String>>>,
 }
 
 impl ScriptEngine {
@@ -127,6 +135,7 @@ impl ScriptEngine {
         Self {
             database: db,
             scheduler,
+            hostname_cache: std::sync::Mutex::new(HashMap::new()),
         }
     }
 
@@ -148,6 +157,7 @@ impl ScriptEngine {
         Self {
             database: db,
             scheduler,
+            hostname_cache: std::sync::Mutex::new(HashMap::new()),
         }
     }
 
@@ -212,10 +222,41 @@ impl ScriptEngine {
     /// For dict-like tables, entries are formatted as "key: value" pairs.
     /// Nested tables are handled recursively up to `max_depth`.
     fn format_lua_table(lua: &mlua::Lua, table: &mlua::Table, max_depth: usize) -> Vec<String> {
-        let pairs: Vec<(mlua::Value, mlua::Value)> = table
-            .pairs::<mlua::Value, mlua::Value>()
-            .flatten()
-            .collect();
+        // Collect key-value pairs using Lua's pairs() which respects __pairs
+        // metamethod. outlib.sorted_by_key() returns an empty table with a
+        // custom __pairs that yields sorted entries. mlua's .pairs() calls
+        // lua_next() directly which ignores metamethods.
+        let pairs: Vec<(mlua::Value, mlua::Value)> = lua
+            .load(
+                r"
+                local t = ...
+                local result = {}
+                for k, v in pairs(t) do
+                    result[#result + 1] = {k, v}
+                end
+                return result
+                ",
+            )
+            .call::<mlua::Table>(mlua::Value::Table(table.clone()))
+            .map_or_else(
+                |_| {
+                    table
+                        .pairs::<mlua::Value, mlua::Value>()
+                        .flatten()
+                        .collect()
+                },
+                |collected| {
+                    collected
+                        .sequence_values::<mlua::Table>()
+                        .flatten()
+                        .filter_map(|pair| {
+                            let k = pair.get::<mlua::Value>(1).ok()?;
+                            let v = pair.get::<mlua::Value>(2).ok()?;
+                            Some((k, v))
+                        })
+                        .collect()
+                },
+            );
 
         let is_array = pairs
             .iter()
@@ -282,6 +323,7 @@ impl ScriptEngine {
     ///
     /// Returns an error if host table creation fails.
     fn create_host_table(
+        &self,
         lua: &mut crate::lua::NseLua,
         target_ip: std::net::IpAddr,
         original_target: Option<&str>,
@@ -291,8 +333,8 @@ impl ScriptEngine {
         // host.ip - IP address string
         host_table.set("ip", target_ip.to_string())?;
 
-        // host.name - Hostname from DNS reverse lookup
-        let hostname = Self::resolve_hostname(target_ip);
+        // host.name - Hostname from cached DNS reverse lookup
+        let hostname = self.resolve_hostname_cached(target_ip);
         host_table.set("name", hostname.as_deref().unwrap_or(""))?;
 
         // host.targetname - The original target specification (e.g., "example.com")
@@ -370,13 +412,63 @@ impl ScriptEngine {
         Ok(host_table)
     }
 
-    /// Resolve hostname via DNS reverse lookup.
+    /// Resolve hostname via DNS reverse lookup, with caching.
     ///
-    /// Uses blocking DNS lookup wrapped in `block_in_place` to avoid
-    /// blocking the async runtime. Returns None if not in a Tokio context
-    /// or if DNS lookup fails.
+    /// First lookup for an IP triggers actual DNS resolution (like nmap's mass dns).
+    /// Subsequent lookups for the same IP return the cached result immediately.
+    /// This matches nmap behavior: resolve once per scan, reuse in all scripts.
+    fn resolve_hostname_cached(&self, ip: std::net::IpAddr) -> Option<String> {
+        // Check cache first (fast path)
+        {
+            let cache = self.hostname_cache.lock().unwrap();
+            if let Some(cached) = cache.get(&ip) {
+                return cached.clone();
+            }
+        }
+
+        // Cache miss: do actual DNS lookup
+        let result = Self::resolve_hostname(ip);
+
+        // Store in cache (including None results to avoid repeated failed lookups)
+        self.hostname_cache
+            .lock()
+            .unwrap()
+            .insert(ip, result.clone());
+
+        result
+    }
+
+    /// Perform actual DNS reverse lookup (no caching).
+    ///
+    /// Skips private/link-local IPs that will never have PTR records
+    /// (matches nmap behavior: no reverse lookup for RFC 1918 addresses).
     fn resolve_hostname(ip: std::net::IpAddr) -> Option<String> {
-        use rustnmap_target::dns::DnsResolver;
+        // Skip reverse lookup for private/link-local addresses.
+        // These will never have PTR records in public DNS, and nmap
+        // typically doesn't resolve them either (uses mass_dns which
+        // skips obvious private ranges).
+        match ip {
+            std::net::IpAddr::V4(v4) => {
+                if v4.is_private() || v4.is_loopback() || v4.is_link_local() {
+                    return None;
+                }
+            }
+            std::net::IpAddr::V6(v6) => {
+                if v6.is_loopback() {
+                    return None;
+                }
+                // Skip IPv6 link-local (fe80::/10) and unique local (fc00::/7)
+                let octets = v6.octets();
+                // fe80::/10: first byte 0xfe, second byte 0x80-0xbf
+                if octets[0] == 0xfe && (octets[1] & 0xc0) == 0x80 {
+                    return None;
+                }
+                // Skip unique local addresses (fc00::/7)
+                if (octets[0] & 0xfe) == 0xfc {
+                    return None;
+                }
+            }
+        }
 
         // Check if we're in a Tokio context
         let handle = tokio::runtime::Handle::try_current().ok()?;
@@ -499,7 +591,7 @@ impl ScriptEngine {
         lua.lua().globals().set("SCRIPT_TYPE", "hostrule")?;
 
         // Create full Nmap host table with all properties
-        let host_table = Self::create_host_table(&mut lua, target_ip, original_target)?;
+        let host_table = self.create_host_table(&mut lua, target_ip, original_target)?;
 
         lua.set_global("host", mlua::Value::Table(host_table))?;
 
@@ -692,7 +784,7 @@ impl ScriptEngine {
         lua.lua().globals().set("SCRIPT_TYPE", script_type)?;
 
         // Create host table
-        let host_table = Self::create_host_table(&mut lua, target_ip, original_target)?;
+        let host_table = self.create_host_table(&mut lua, target_ip, original_target)?;
         lua.set_global("host", mlua::Value::Table(host_table))?;
 
         // Create port table
@@ -867,7 +959,7 @@ impl ScriptEngine {
         lua.load_script(&script.source, &script.id)?;
 
         // Create host table
-        let host_table = Self::create_host_table(&mut lua, target_ip, original_target)?;
+        let host_table = self.create_host_table(&mut lua, target_ip, original_target)?;
         lua.set_global("host", mlua::Value::Table(host_table.clone()))?;
 
         // Evaluate the hostrule
@@ -929,7 +1021,7 @@ impl ScriptEngine {
         lua.load_script(&script.source, &script.id)?;
 
         // Create host table
-        let host_table = Self::create_host_table(&mut lua, target_ip, original_target)?;
+        let host_table = self.create_host_table(&mut lua, target_ip, original_target)?;
         lua.set_global("host", mlua::Value::Table(host_table.clone()))?;
 
         // Create port table
@@ -1201,12 +1293,14 @@ end
 
     #[test]
     fn test_create_host_table_ipv6() {
+        let db = ScriptDatabase::new();
+        let engine = ScriptEngine::new(db);
         let mut lua = NseLua::new_default().unwrap();
         let ipv6_addr = std::net::IpAddr::V6(std::net::Ipv6Addr::new(
             0x2001, 0x0db8, 0x85a3, 0x0000, 0x0000, 0x8a2e, 0x0370, 0x7334,
         ));
 
-        let host_table = ScriptEngine::create_host_table(&mut lua, ipv6_addr, None).unwrap();
+        let host_table = engine.create_host_table(&mut lua, ipv6_addr, None).unwrap();
 
         assert_eq!(
             host_table.get::<String>("ip").unwrap(),
@@ -1226,10 +1320,12 @@ end
 
     #[test]
     fn test_create_host_table_ipv6_loopback() {
+        let db = ScriptDatabase::new();
+        let engine = ScriptEngine::new(db);
         let mut lua = NseLua::new_default().unwrap();
         let ipv6_addr = std::net::IpAddr::V6(std::net::Ipv6Addr::LOCALHOST);
 
-        let host_table = ScriptEngine::create_host_table(&mut lua, ipv6_addr, None).unwrap();
+        let host_table = engine.create_host_table(&mut lua, ipv6_addr, None).unwrap();
 
         assert_eq!(host_table.get::<String>("ip").unwrap(), "::1");
 

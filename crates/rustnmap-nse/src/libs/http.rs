@@ -946,10 +946,21 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     let http_table = lua.create_table()?;
 
     // Register GET function
+    // NSE scripts may pass `path` as a string ("/index.html") or as a table
+    // ({path="/index.html"}). Handle both forms.
     let get_fn = lua.create_function(
-        |lua, (host, port, path, options): (Value, Value, String, Option<Table>)| {
+        |lua, (host, port, path_val, options): (Value, Value, Value, Option<Table>)| {
             let (host_str, port_num) = extract_host_port(host, port);
             let opts = parse_options(options);
+            let path = match &path_val {
+                Value::String(s) => s.to_str().map_or_else(|_| "/".to_string(), |v| v.to_string()),
+                Value::Table(t) => t
+                    .get::<Option<String>>("path")
+                    .ok()
+                    .flatten()
+                    .unwrap_or_else(|| "/".to_string()),
+                _ => "/".to_string(),
+            };
 
             debug!("http.get({}, {}, {})", host_str, port_num, path);
 
@@ -969,16 +980,25 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     // Register POST function
     let post_fn = lua.create_function(
         |lua,
-         (host, port, path, options, _ignored, postdata): (
+         (host, port, path_val, options, _ignored, postdata): (
             Value,
             Value,
-            String,
+            Value,
             Option<Table>,
             Option<Value>,
             Option<Value>,
         )| {
             let (host_str, port_num) = extract_host_port(host, port);
             let mut opts = parse_options(options.clone());
+            let path = match &path_val {
+                Value::String(s) => s.to_str().map_or_else(|_| "/".to_string(), |v| v.to_string()),
+                Value::Table(t) => t
+                    .get::<Option<String>>("path")
+                    .ok()
+                    .flatten()
+                    .unwrap_or_else(|| "/".to_string()),
+                _ => "/".to_string(),
+            };
 
             let body = match postdata {
                 Some(Value::String(s)) => s.as_bytes().to_vec(),
@@ -1013,9 +1033,18 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
 
     // Register HEAD function
     let head_fn = lua.create_function(
-        |lua, (host, port, path, options): (Value, Value, String, Option<Table>)| {
+        |lua, (host, port, path_val, options): (Value, Value, Value, Option<Table>)| {
             let (host_str, port_num) = extract_host_port(host, port);
             let opts = parse_options(options);
+            let path = match &path_val {
+                Value::String(s) => s.to_str().map_or_else(|_| "/".to_string(), |v| v.to_string()),
+                Value::Table(t) => t
+                    .get::<Option<String>>("path")
+                    .ok()
+                    .flatten()
+                    .unwrap_or_else(|| "/".to_string()),
+                _ => "/".to_string(),
+            };
 
             debug!("http.head({}, {}, {})", host_str, port_num, path);
 

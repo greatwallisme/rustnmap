@@ -15,7 +15,7 @@ use futures_util::future::join_all;
 use rustnmap_common::MacAddr;
 use rustnmap_common::ScanConfig as ScannerConfig;
 use rustnmap_evasion::DecoyScheduler;
-use rustnmap_net::raw_socket::{parse_arp_reply, ArpPacketBuilder, RawSocket};
+use rustnmap_net::raw_socket::{parse_arp_reply, ArpPacketBuilder};
 use rustnmap_output::models::PortState;
 use rustnmap_output::models::{HostResult, HostStatus, PortResult, ScanResult, ScanStatistics};
 use rustnmap_scan::adaptive_delay::AdaptiveDelay;
@@ -176,38 +176,254 @@ const fn max_cwnd(template: rustnmap_scan::scanner::TimingTemplate) -> u32 {
 /// # Returns
 ///
 /// `Some(MacAddr)` if ARP reply is received, `None` otherwise.
-fn get_mac_address_via_arp(
-    target_ip: std::net::Ipv4Addr,
-    local_addr: std::net::Ipv4Addr,
-    timeout: std::time::Duration,
-) -> Option<MacAddr> {
-    // Use broadcast MAC for ARP requests
-    let src_mac = MacAddr::broadcast();
+/// Gets the MAC address of the local network interface that has the given IPv4 address.
+///
+/// Uses SIOCGIFHWADDR ioctl after looking up the interface name from the
+/// network interface list via `getifaddrs`.
+fn get_interface_mac(local_addr: std::net::Ipv4Addr) -> Option<MacAddr> {
+    let interface_name = get_interface_name_for_addr(local_addr)?;
 
-    let socket = RawSocket::with_protocol(1).ok()?;
+    // SAFETY: socket() returns a valid fd or -1; we check fd < 0 before use
+    let fd = unsafe { libc::socket(libc::AF_INET, libc::SOCK_DGRAM, 0) };
+    if fd < 0 {
+        return None;
+    }
 
-    let packet = ArpPacketBuilder::new(src_mac, local_addr, target_ip).build();
+    // SAFETY: mem::zeroed() is safe for ifreq which contains only primitive types and arrays
+    let mut ifreq: libc::ifreq = unsafe { std::mem::zeroed() };
+    let if_name = &mut ifreq.ifr_name;
+    for (i, &byte) in interface_name.as_bytes().iter().enumerate() {
+        if i >= if_name.len() {
+            break;
+        }
+        #[expect(clippy::cast_possible_wrap, reason = "ASCII values fit in i8")]
+        {
+            if_name[i] = byte as i8;
+        }
+    }
 
-    let dst_sockaddr = SocketAddr::new(IpAddr::V4(target_ip), 0);
+    // SAFETY: fd is valid and owned by us; ifreq is properly initialized
+    let ret = unsafe { libc::ioctl(fd, libc::SIOCGIFHWADDR, &mut ifreq) };
+    // SAFETY: fd is valid and being closed
+    unsafe { libc::close(fd) };
 
-    socket.send_packet(&packet, &dst_sockaddr).ok()?;
+    if ret < 0 {
+        return None;
+    }
 
-    let mut recv_buf = vec![0u8; 65535];
+    // SAFETY: ioctl has populated ifru_hwaddr with valid data
+    let sa_data = unsafe { ifreq.ifr_ifru.ifru_hwaddr.sa_data };
+    Some(MacAddr::new([
+        #[expect(clippy::cast_sign_loss, reason = "MAC address bytes are unsigned")]
+        {
+            sa_data[0] as u8
+        },
+        #[expect(clippy::cast_sign_loss, reason = "MAC address bytes are unsigned")]
+        {
+            sa_data[1] as u8
+        },
+        #[expect(clippy::cast_sign_loss, reason = "MAC address bytes are unsigned")]
+        {
+            sa_data[2] as u8
+        },
+        #[expect(clippy::cast_sign_loss, reason = "MAC address bytes are unsigned")]
+        {
+            sa_data[3] as u8
+        },
+        #[expect(clippy::cast_sign_loss, reason = "MAC address bytes are unsigned")]
+        {
+            sa_data[4] as u8
+        },
+        #[expect(clippy::cast_sign_loss, reason = "MAC address bytes are unsigned")]
+        {
+            sa_data[5] as u8
+        },
+    ]))
+}
 
-    match socket.recv_packet(recv_buf.as_mut_slice(), Some(timeout)) {
-        Ok(len) if len > 0 => {
-            if let Some((mac_addr, sender_ip)) = parse_arp_reply(&recv_buf[..len]) {
-                let octets = target_ip.octets();
-                if sender_ip
-                    == rustnmap_common::Ipv4Addr::new(octets[0], octets[1], octets[2], octets[3])
-                {
-                    return Some(mac_addr);
+/// Finds the network interface name that has the given local IPv4 address.
+///
+/// Uses `getifaddrs` to iterate all network interfaces and finds the one whose
+/// IPv4 address matches `local_addr`.
+fn get_interface_name_for_addr(local_addr: std::net::Ipv4Addr) -> Option<String> {
+    let mut addrs: *mut libc::ifaddrs = std::ptr::null_mut();
+    // SAFETY: getifaddrs writes to a valid pointer; returns 0 on success
+    let result = unsafe { libc::getifaddrs(std::ptr::addr_of_mut!(addrs)) };
+    if result != 0 {
+        return None;
+    }
+
+    let mut current = addrs;
+    let target_bytes = local_addr.octets();
+    let mut found_name: Option<String> = None;
+
+    while !current.is_null() {
+        // SAFETY: current points to a valid linked list node from getifaddrs
+        let ifa = unsafe { &*current };
+        let ifa_addr = ifa.ifa_addr;
+
+        if !ifa_addr.is_null() {
+            // SAFETY: ifa_addr is non-null and points to a valid sockaddr
+            let family = unsafe { (*ifa_addr).sa_family };
+            if i32::from(family) == libc::AF_INET {
+                // SAFETY: family check confirms this is a sockaddr_in
+                #[expect(clippy::cast_ptr_alignment, reason = "AF_INET confirms sockaddr_in layout")]
+                let sockaddr_in = unsafe { &*(ifa_addr as *const libc::sockaddr_in) };
+                let addr_bytes = sockaddr_in.sin_addr.s_addr.to_ne_bytes();
+                if addr_bytes == target_bytes {
+                    // SAFETY: ifa_name is a null-terminated C string from getifaddrs
+                    let name = unsafe { std::ffi::CStr::from_ptr(ifa.ifa_name) };
+                    if let Ok(name_str) = name.to_str() {
+                        found_name = Some(name_str.to_string());
+                        break;
+                    }
                 }
             }
-            None
         }
-        _ => None,
+
+        current = ifa.ifa_next;
     }
+
+    // SAFETY: addrs was allocated by getifaddrs and must be freed by freeifaddrs
+    unsafe { libc::freeifaddrs(addrs) };
+    found_name
+}
+
+/// Resolves a target's MAC address using ARP over an `AF_PACKET` socket.
+///
+/// ARP is an Ethernet-level protocol, not an IP protocol.
+/// Therefore it requires `AF_PACKET` with `sockaddr_ll`, not `AF_INET` raw sockets.
+///
+/// # Arguments
+///
+/// * `target_ip` - The target IPv4 address to resolve
+/// * `_local_addr` - Unused (kept for API compatibility). Source IP is determined per-target.
+/// * `timeout` - Timeout for the ARP reply
+///
+/// # Returns
+///
+/// `Some(MacAddr)` if ARP reply is received, `None` otherwise.
+fn get_mac_address_via_arp(
+    target_ip: std::net::Ipv4Addr,
+    _local_addr: std::net::Ipv4Addr,
+    timeout: std::time::Duration,
+) -> Option<MacAddr> {
+    // Determine the source address for this specific target, which correctly
+    // handles multi-homed hosts (e.g., Docker bridges vs external interfaces).
+    let src_ip = get_source_address_for_target(target_ip);
+
+    // Get the interface name and its MAC address for the source IP
+    let iface_name = get_interface_name_for_addr(src_ip)?;
+    let src_mac = get_interface_mac(src_ip).unwrap_or_else(MacAddr::broadcast);
+
+    // Get interface index for sockaddr_ll binding
+    let c_iface = std::ffi::CString::new(iface_name.clone()).ok()?;
+    // SAFETY: if_nametoindex is thread-safe; c_iface is a valid null-terminated string
+    let if_index = unsafe { libc::if_nametoindex(c_iface.as_ptr()) };
+    if if_index == 0 {
+        return None;
+    }
+
+    // Create AF_PACKET socket (not AF_INET) - ARP is an Ethernet-level protocol.
+    // AF_PACKET=17, SOCK_RAW=3, ETH_P_ARP=`0x0806` (network byte order)
+    let eth_p_arp: i32 = i32::from(0x0806u16.to_be());
+    // SAFETY: socket() returns a valid fd or -1; we check fd < 0 below
+    let fd = unsafe { libc::socket(17, 3, eth_p_arp) };
+    if fd < 0 {
+        return None;
+    }
+
+    // Bind to the specific interface using sockaddr_ll
+    // SAFETY: mem::zeroed() is safe for sockaddr_ll which is POD
+    let mut addr: libc::sockaddr_ll = unsafe { std::mem::zeroed() };
+    addr.sll_family = 17u16; // AF_PACKET
+    addr.sll_protocol = 0x0806u16.to_be();
+    addr.sll_ifindex = i32::try_from(if_index).unwrap_or(0);
+    let addr_size = u32::try_from(std::mem::size_of::<libc::sockaddr_ll>()).unwrap_or(0);
+    // SAFETY: fd is valid; addr is a properly initialized sockaddr_ll
+    let bind_result = unsafe {
+        libc::bind(
+            fd,
+            std::ptr::addr_of!(addr).cast(),
+            addr_size,
+        )
+    };
+    if bind_result < 0 {
+        // SAFETY: fd is valid and being closed on error path
+        unsafe { libc::close(fd) };
+        return None;
+    }
+
+    // Set receive timeout via SO_RCVTIMEO
+    let tv = libc::timeval {
+        tv_sec: i64::try_from(timeout.as_secs()).unwrap_or(i64::MAX),
+        tv_usec: i64::from(timeout.subsec_micros()),
+    };
+    let tv_size = u32::try_from(std::mem::size_of::<libc::timeval>()).unwrap_or(0);
+    // SAFETY: fd is valid; tv is a properly initialized timeval
+    unsafe {
+        libc::setsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_RCVTIMEO,
+            std::ptr::addr_of!(tv).cast(),
+            tv_size,
+        )
+    };
+
+    // Build the ARP request packet (Ethernet frame + ARP payload)
+    let packet = ArpPacketBuilder::new(src_mac, src_ip, target_ip).build();
+
+    // Build sockaddr_ll for sendto (destination = broadcast)
+    // SAFETY: mem::zeroed() is safe for sockaddr_ll which is POD
+    let mut dst_addr: libc::sockaddr_ll = unsafe { std::mem::zeroed() };
+    dst_addr.sll_family = 17u16; // AF_PACKET
+    dst_addr.sll_protocol = 0x0806u16.to_be();
+    dst_addr.sll_ifindex = i32::try_from(if_index).unwrap_or(0);
+    dst_addr.sll_halen = 6;
+    dst_addr.sll_addr = [0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0, 0];
+
+    // SAFETY: fd is valid and bound; packet contains a valid Ethernet frame;
+    // dst_addr is a properly initialized sockaddr_ll with broadcast destination
+    let sent = unsafe {
+        libc::sendto(
+            fd,
+            packet.as_ptr().cast(),
+            packet.len(),
+            0,
+            std::ptr::addr_of!(dst_addr).cast(),
+            addr_size,
+        )
+    };
+    if sent < 0 {
+        // SAFETY: fd is valid and being closed on error path
+        unsafe { libc::close(fd) };
+        return None;
+    }
+
+    // Read ARP reply
+    let mut recv_buf = vec![0u8; 65535];
+    // SAFETY: fd is valid and bound; recv_buf is a valid mutable slice
+    let recv_result = unsafe {
+        libc::recv(fd, recv_buf.as_mut_ptr().cast(), recv_buf.len(), 0)
+    };
+    // SAFETY: fd is being closed after use
+    unsafe { libc::close(fd) };
+
+    if recv_result > 0 {
+        #[expect(clippy::cast_sign_loss, reason = "recv returns non-negative on success")]
+        let len = recv_result as usize;
+        if let Some((mac_addr, sender_ip)) = parse_arp_reply(&recv_buf[..len]) {
+            let octets = target_ip.octets();
+            if sender_ip
+                == rustnmap_common::Ipv4Addr::new(octets[0], octets[1], octets[2], octets[3])
+            {
+                return Some(mac_addr);
+            }
+        }
+    }
+
+    None
 }
 
 /// Scan phase enumeration.

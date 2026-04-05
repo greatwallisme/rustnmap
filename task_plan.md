@@ -1,13 +1,65 @@
-# Task Plan: NSE Script Compatibility Fix
+# Task Plan: NSE Performance Optimization
 
 ## Goal
-Fix all NSE script failures found in Docker comparison testing.
-Starting point: 20/46 scripts PASS (43.4%) on 2026-04-02.
+Fix NSE scripts that are slower than nmap. Starting point: 46/46 PASS but ~20 scripts slower.
+Benchmark report: `benchmarks/reports/nse_comparison_report_20260405_044043.txt`
 
 ## Rules
 - Do NOT blindly change code without understanding root cause
 - Verify each fix individually before moving to the next
 - Track actual test results, not assumptions
+
+## Root Cause Summary (from findings.md)
+
+| Category | Scripts Affected | Root Cause | Fix Scope |
+|----------|-----------------|------------|-----------|
+| Banner timeout | SSH/SMTP/POP3 banner (0.09-0.10x) | `receive_all()` waits full socket timeout after initial data | comm.rs |
+| Comm default timeout | NTP (0.24x) | `DEFAULT_TIMEOUT_MS=30s`, nmap uses ~7s | comm.rs |
+| UDP scan engine | SNMP/NTP (0.06-0.24x) | UDP scan 11.4s vs nmap 0.03s | scan engine (separate) |
+| Service detection | FCrDNS (0.01x) | -sV scans all 1000 ports | scan engine (separate) |
+| Moderate slowness | MySQL/Redis/VNC (0.54-0.68x) | Lua VM init overhead per script | engine.rs |
+
+---
+
+## Phase 1: comm.rs Timeout Optimization - IN PROGRESS
+
+### Fix 1.1: `receive_all()` linger timeout
+**Problem**: After reading initial banner data, `receive_all()` waits the FULL socket timeout (5s) before returning.
+Nmap's nsock uses event-driven I/O that detects "no more data" quickly (~100ms).
+
+**Fix**: After first successful read, reduce timeout to a short "linger" window (150ms).
+If no more data arrives in 150ms, return what we have.
+
+**Impact**: Banner scripts (SSH, SMTP, POP3) should improve from 0.09-0.10x to ~0.8-1.0x
+
+### Fix 1.2: Reduce `DEFAULT_TIMEOUT_MS` from 30s to 7s
+**Problem**: NSE scripts that time out (e.g., NTP mode6 control) wait 30s vs nmap's ~7s.
+
+**Fix**: Change `DEFAULT_TIMEOUT_MS` from 30_000 to 7_000.
+
+**Impact**: NTP script should improve from 0.24x to ~0.6x
+
+## Phase 2: Lua VM Reuse (engine.rs) - PENDING
+
+**Problem**: Every portrule eval + script execution creates a brand new Lua VM + registers 30 libs.
+With ~100 scripts, that's 100+ VM initializations.
+
+**Fix**: Cache and reuse Lua VMs across evaluations. Only reload the specific script.
+
+**Impact**: All scripts gain ~0.1-0.3s per evaluation
+
+## Phase 3: Benchmark Verification - PENDING
+
+Re-run benchmark to verify improvements.
+
+---
+
+## Previous Plan: NSE Script Compatibility Fix (COMPLETE)
+
+### Goal (completed 2026-04-05)
+Fix all NSE script failures found in Docker comparison testing.
+Starting point: 20/46 scripts PASS (43.4%) on 2026-04-02.
+Result: 46/46 PASS (100%)
 
 ---
 

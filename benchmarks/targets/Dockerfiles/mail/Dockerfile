@@ -14,6 +14,11 @@ RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/g' /etc/apk/repositories
 RUN adduser -D -s /bin/sh testuser && \
     echo "testuser:test123" | chpasswd
 
+# Create passwd-file for dovecot auth (Alpine lacks PAM)
+RUN mkdir -p /etc/dovecot/auth && \
+    echo "testuser:{PLAIN}test123::::::" > /etc/dovecot/auth/passwdfile && \
+    chmod 600 /etc/dovecot/auth/passwdfile
+
 # Generate self-signed SSL certificate
 RUN mkdir -p /etc/dovecot/ssl && \
     openssl req -x509 -newkey rsa:2048 -keyout /etc/dovecot/ssl/dovecot.key \
@@ -29,7 +34,7 @@ protocols = imap pop3
 # Listen on all interfaces
 listen = *
 
-# Disable SSL for plaintext ports (STARTTLS available)
+# SSL
 ssl = required
 ssl_cert = </etc/dovecot/ssl/dovecot.crt
 ssl_key = </etc/dovecot/ssl/dovecot.key
@@ -38,9 +43,10 @@ ssl_key = </etc/dovecot/ssl/dovecot.key
 disable_plaintext_auth = no
 auth_mechanisms = plain login
 
-# Passdb
+# Passdb - use passwd-file instead of PAM (not available on Alpine)
 passdb {
-  driver = pam
+  driver = passwd-file
+  args = /etc/dovecot/auth/passwdfile
 }
 
 userdb {

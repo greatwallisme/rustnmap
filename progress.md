@@ -1,6 +1,54 @@
 # Progress: NSE Script Compatibility Testing
 
-> **Updated**: 2026-04-05
+> **Updated**: 2026-04-04
+
+---
+
+## Session Summary (2026-04-04) - Full NSE Comparison Benchmark
+
+### Benchmark Results (46 tests against Docker range)
+| Metric | Result |
+|--------|--------|
+| Total Tests | 46 |
+| PASS | 34 (73.9%) |
+| FAIL | 2 |
+| SKIP | 10 |
+| WARN | 8 |
+
+### Comparison with Previous Runs
+| Date | PASS | FAIL | SKIP | Rate |
+|------|------|------|------|------|
+| Apr 3 | 26 | 8 | 12 | 56.5% |
+| **Apr 4** | **34** | **2** | **10** | **73.9%** |
+| Improvement | +8 PASS | -6 FAIL | -2 SKIP | +17.4% |
+
+### FAIL Root Causes (2 - both RUSTNMAP CODE BUGS)
+1. **SSL Enum Ciphers**: `format_lua_table()` in engine.rs uses Rust `table.pairs()` which ignores `__pairs` metamethods. Tables from `outlib.sorted_by_key` have no raw entries, so iteration returns empty. Runner uses Lua-side format_table and works correctly.
+2. **Banner (POP3)**: `port.version.service_fp` not populated from version detection. banner.nse checks version cache first, falls through to `comm.get_banner` which times out on slow POP3.
+
+### SKIP Classification
+- **8 TARGET CONFIG**: FTP broken, VNC filtered, no CORS/cookies, MySQL has password, no default accounts
+- **2 SLOW SERVICE**: IMAP/POP3 extremely slow (>10s greeting), both tools skip
+
+### Resource Usage
+| Metric | nmap | rustnmap | Ratio |
+|--------|------|----------|-------|
+| Peak Memory (median) | 45.7 MB | 113.3 MB | 2.5x |
+| User CPU (median) | 0.40s | 0.76s | 1.9x |
+| Sys CPU (median) | 0.05s | 0.18s | 3.6x |
+| Speed (typical) | baseline | 2-3x slower | 0.3-0.5x |
+
+### High-CPU Scripts
+| Script | User CPU | Sys CPU | Root Cause |
+|--------|----------|---------|-----------|
+| HTTP Methods | 5.31s | 2.10s | format_lua_table iteration overhead |
+| SMB Security Mode | 5.27s | 2.08s | SMB protocol function overhead |
+| POP3 Capabilities | 4.27s | 1.81s | Repeated connection attempts on slow POP3 |
+
+### Next Steps (Priority Order)
+1. **Fix engine format_lua_table** - Replace Rust-side with Lua-side format_table (fixes ssl-enum-ciphers)
+2. **Populate port.version.service_fp** - Pass version detection results to NSE port table (fixes banner on slow services)
+3. **Fix output formatting** - Address WARN scripts (HTTP Methods duplicates, SSH Hostkey raw keys, MySQL capability names)
 
 ---
 

@@ -21,12 +21,23 @@ pub struct DnsResolver {
 impl DnsResolver {
     /// Creates a new DNS resolver with system configuration.
     ///
+    /// Uses reduced timeout (2s) and single attempt to avoid blocking
+    /// scans on unresponsive DNS servers (matches nmap `mass_dns` behavior).
+    ///
     /// # Errors
     ///
     /// Returns an error if the resolver cannot be created.
     pub fn new() -> Result<Self> {
-        let resolver =
-            TokioAsyncResolver::tokio(ResolverConfig::default(), ResolverOpts::default());
+        let mut opts = ResolverOpts::default();
+        // Reduce timeout from default 5s to 2s (nmap mass_dns default is ~7s total
+        // but uses parallel batch queries; our sequential lookup should be faster)
+        opts.timeout = std::time::Duration::from_secs(2);
+        // Single attempt instead of default 2 (nmap mass_dns sends once, retries
+        // only for specific error conditions)
+        opts.attempts = 1;
+        opts.num_concurrent_reqs = 1;
+
+        let resolver = TokioAsyncResolver::tokio(ResolverConfig::default(), opts);
 
         Ok(Self { resolver })
     }

@@ -118,52 +118,50 @@ fn strsplit_impl(lua: &Lua, pattern: &str, text: &str) -> mlua::Result<Table> {
 
     let result = lua.create_table()?;
 
-    // Use Lua's string.find to find pattern matches
+    // Use Lua's string.find and string.sub to implement strsplit
+    // matching nmap's stringaux.strsplit behavior exactly.
     let string_mod: Table = lua.globals().get("string")?;
+    let find_fn: mlua::Function = string_mod.get("find")?;
+    let sub_fn: mlua::Function = string_mod.get("sub")?;
 
-    // Use i64 for positions to match Lua's number type
     let mut pos: i64 = 1;
     let mut idx: i64 = 1;
     let text_len = i64::try_from(text.len()).unwrap_or(i64::MAX);
 
-    // Get find function
-    let find_fn: mlua::Function = string_mod.get("find")?;
-
     while pos <= text_len {
-        // Call string.find(text, pattern, pos)
-        let find_result: Value = find_fn.call((text, pattern, pos))?;
+        // Call string.find(text, pattern, pos) — returns (first, last) or nil
+        let find_result: mlua::MultiValue = find_fn.call((text, pattern, pos))?;
 
-        match find_result {
-            Value::Nil => {
+        let mut iter = find_result.into_iter();
+        let first_val = iter.next();
+
+        match first_val {
+            None | Some(Value::Nil) => {
                 // No more matches - add remaining text
-                let sub_fn: mlua::Function = string_mod.get("sub")?;
                 let remaining: String = sub_fn.call((text, pos))?;
                 result.set(idx, remaining)?;
                 break;
             }
-            Value::Integer(first) => {
-                // Single return value (no captures) - this shouldn't happen for find
-                let sub_fn: mlua::Function = string_mod.get("sub")?;
-                let remaining: String = sub_fn.call((text, pos, first - 1))?;
-                result.set(idx, remaining)?;
-                idx += 1;
-                pos = first + 1;
-            }
-            Value::Table(t) => {
-                // Multiple return values: first, last, ...
-                let first: i64 = t.get(1)?;
-                let last: i64 = t.get(2)?;
+            Some(Value::Integer(first)) => {
+                let last: i64 = iter
+                    .next()
+                    .and_then(|v| {
+                        if let Value::Integer(n) = v {
+                            Some(n)
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or(first);
 
                 // Get substring before match
-                let sub_fn: mlua::Function = string_mod.get("sub")?;
                 let before: String = sub_fn.call((text, pos, first - 1))?;
                 result.set(idx, before)?;
                 idx += 1;
                 pos = last + 1;
             }
             _ => {
-                // Unexpected return type
-                let sub_fn: mlua::Function = string_mod.get("sub")?;
+                // Unexpected return type - add remaining text
                 let remaining: String = sub_fn.call((text, pos))?;
                 result.set(idx, remaining)?;
                 break;

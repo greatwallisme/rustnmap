@@ -1874,6 +1874,114 @@ impl HostDiscovery {
         timestamp_ping.discover(target)
     }
 
+    /// Gets the MAC address of the local network interface that has the given IPv4 address.
+    fn get_interface_mac(local_addr: Ipv4Addr) -> Option<MacAddr> {
+        let interface_name = Self::get_interface_name_for_addr(local_addr)?;
+
+        // SAFETY: socket() returns a valid fd or -1; we check fd < 0 before use
+        let fd = unsafe { libc::socket(libc::AF_INET, libc::SOCK_DGRAM, 0) };
+        if fd < 0 {
+            return None;
+        }
+
+        // SAFETY: mem::zeroed() is safe for ifreq which contains only primitive types and arrays
+        let mut ifreq: libc::ifreq = unsafe { std::mem::zeroed() };
+        let if_name = &mut ifreq.ifr_name;
+        for (i, &byte) in interface_name.as_bytes().iter().enumerate() {
+            if i >= if_name.len() {
+                break;
+            }
+            #[expect(clippy::cast_possible_wrap, reason = "ASCII values fit in i8")]
+            {
+                if_name[i] = byte as i8;
+            }
+        }
+
+        // SAFETY: fd is valid and owned by us; ifreq is properly initialized
+        let ret = unsafe { libc::ioctl(fd, libc::SIOCGIFHWADDR, &mut ifreq) };
+        // SAFETY: fd is valid and being closed
+        unsafe { libc::close(fd) };
+
+        if ret < 0 {
+            return None;
+        }
+
+        // SAFETY: ioctl has populated ifru_hwaddr with valid data
+        let sa_data = unsafe { ifreq.ifr_ifru.ifru_hwaddr.sa_data };
+        Some(MacAddr::new([
+            #[expect(clippy::cast_sign_loss, reason = "MAC address bytes are unsigned")]
+            {
+                sa_data[0] as u8
+            },
+            #[expect(clippy::cast_sign_loss, reason = "MAC address bytes are unsigned")]
+            {
+                sa_data[1] as u8
+            },
+            #[expect(clippy::cast_sign_loss, reason = "MAC address bytes are unsigned")]
+            {
+                sa_data[2] as u8
+            },
+            #[expect(clippy::cast_sign_loss, reason = "MAC address bytes are unsigned")]
+            {
+                sa_data[3] as u8
+            },
+            #[expect(clippy::cast_sign_loss, reason = "MAC address bytes are unsigned")]
+            {
+                sa_data[4] as u8
+            },
+            #[expect(clippy::cast_sign_loss, reason = "MAC address bytes are unsigned")]
+            {
+                sa_data[5] as u8
+            },
+        ]))
+    }
+
+    /// Finds the network interface name that has the given local IPv4 address.
+    fn get_interface_name_for_addr(local_addr: Ipv4Addr) -> Option<String> {
+        let mut addrs: *mut libc::ifaddrs = std::ptr::null_mut();
+        // SAFETY: getifaddrs writes to a valid pointer; returns 0 on success
+        let result = unsafe { libc::getifaddrs(std::ptr::addr_of_mut!(addrs)) };
+        if result != 0 {
+            return None;
+        }
+
+        let mut current = addrs;
+        let target_bytes = local_addr.octets();
+        let mut found_name: Option<String> = None;
+
+        while !current.is_null() {
+            // SAFETY: current points to a valid linked list node from getifaddrs
+            let ifa = unsafe { &*current };
+            let ifa_addr = ifa.ifa_addr;
+
+            if !ifa_addr.is_null() {
+                // SAFETY: ifa_addr is non-null and points to a valid sockaddr
+                let family = unsafe { (*ifa_addr).sa_family };
+                if i32::from(family) == libc::AF_INET {
+                    // SAFETY: family check confirms this is a sockaddr_in;
+                    // cast_ptr_alignment: sockaddr_in is the correct interpretation for AF_INET
+                    #[expect(clippy::cast_ptr_alignment, reason = "AF_INET confirms sockaddr_in layout")]
+                    let sockaddr_in = unsafe { &*(ifa_addr as *const libc::sockaddr_in) };
+                    let addr_bytes = sockaddr_in.sin_addr.s_addr.to_ne_bytes();
+                    if addr_bytes == target_bytes {
+                        // SAFETY: ifa_name is a null-terminated C string from getifaddrs
+                        let name = unsafe { std::ffi::CStr::from_ptr(ifa.ifa_name) };
+                        if let Ok(name_str) = name.to_str() {
+                            found_name = Some(name_str.to_string());
+                            break;
+                        }
+                    }
+                }
+            }
+
+            current = ifa.ifa_next;
+        }
+
+        // SAFETY: addrs was allocated by getifaddrs and must be freed by freeifaddrs
+        unsafe { libc::freeifaddrs(addrs) };
+        found_name
+    }
+
     /// Discovers if a host is up using ARP for local networks.
     ///
     /// Uses ARP requests to discover hosts on the same LAN.
@@ -1891,8 +1999,8 @@ impl HostDiscovery {
     /// Returns an error if the discovery cannot be performed due to network
     /// issues or permissions.
     pub fn discover_arp(&self, target: &Target) -> Result<HostState, ScanError> {
-        let src_mac = MacAddr::broadcast();
         let src_ip = self.get_local_ipv4_address();
+        let src_mac = Self::get_interface_mac(src_ip).unwrap_or_else(MacAddr::broadcast);
         let timeout = self.config.initial_rtt;
 
         let arp_ping = ArpPing::new(src_mac, src_ip, timeout, self.retries)?;

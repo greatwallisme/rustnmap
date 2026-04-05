@@ -73,7 +73,8 @@ pub struct NseSocket {
 
 impl NseSocket {
     /// Create a new TCP socket from a stream.
-    fn new_tcp(stream: TcpStream, peer_addr: SocketAddr, hostname: Option<String>) -> Self {
+    #[expect(clippy::must_use_candidate, reason = "Constructor returns new socket instance")]
+    pub fn new_tcp(stream: TcpStream, peer_addr: SocketAddr, hostname: Option<String>) -> Self {
         Self {
             transport: Some(SocketTransport::Tcp(stream)),
             timeout: Duration::from_millis(DEFAULT_TIMEOUT_MS),
@@ -814,6 +815,10 @@ fn parse_opts(opts: Option<Table>) -> mlua::Result<ConnectionOpts> {
             }
             options.proto = proto;
         }
+        if let Ok(recv_before) = opts.get("recv_before") {
+            let recv_before: bool = recv_before;
+            options.recv_before = recv_before;
+        }
     }
 
     Ok(options)
@@ -832,6 +837,9 @@ struct ConnectionOpts {
     ssl: bool,
     /// Protocol ("tcp", "udp").
     proto: String,
+    /// Receive data before sending first payload.
+    /// When true, the connection reads a banner/greeting before sending any data.
+    recv_before: bool,
 }
 
 impl Default for ConnectionOpts {
@@ -842,6 +850,7 @@ impl Default for ConnectionOpts {
             lines: None,
             ssl: false,
             proto: "tcp".to_string(),
+            recv_before: false,
         }
     }
 }
@@ -1126,20 +1135,31 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
 
             match opencon_impl(&host, port, &options, sni_hostname.as_deref()) {
                 Ok(mut socket) => {
-                    // If data is provided, send it and read a single chunk
-                    // Nmap's opencon sends data and calls sd:receive() (one chunk)
+                    // Match nmap's comm.lua opencon behavior:
+                    // 1. If recv_before: read banner/greeting BEFORE sending any data
+                    // 2. If data is non-empty: send data, then read response
+                    // 3. If data is empty/nil: response = early_resp (the banner)
                     // Returns: socket, response, early_response
-                    let response: Option<Vec<u8>> = if let Some(ref data) = data_param {
-                        if socket.send(&data.as_bytes()).is_err() {
-                            return Ok(mlua::MultiValue::from_vec(vec![
-                                Value::Nil,
-                                Value::String(lua.create_string("send failed")?),
-                            ]));
-                        }
-                        // Read a single chunk (like Nmap's sd:receive())
+                    let early_resp: Option<Vec<u8>> = if options.recv_before {
                         socket.receive(8192).ok()
                     } else {
                         None
+                    };
+
+                    let response: Option<Vec<u8>> = if let Some(ref data) = data_param {
+                        if data.as_bytes().is_empty() {
+                            early_resp.clone()
+                        } else {
+                            if socket.send(&data.as_bytes()).is_err() {
+                                return Ok(mlua::MultiValue::from_vec(vec![
+                                    Value::Nil,
+                                    Value::String(lua.create_string("send failed")?),
+                                ]));
+                            }
+                            socket.receive(8192).ok()
+                        }
+                    } else {
+                        early_resp.clone()
                     };
 
                     let socket_val = Value::UserData(lua.create_userdata(socket)?);
@@ -1150,11 +1170,18 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
                         }
                         None => Value::Nil,
                     };
+                    let early_resp_val = match early_resp {
+                        Some(ref r) => {
+                            let s = String::from_utf8_lossy(r).into_owned();
+                            Value::String(lua.create_string(&s)?)
+                        }
+                        None => Value::Nil,
+                    };
                     // Nmap's opencon returns: status_and_socket, response, early_response
                     Ok(mlua::MultiValue::from_vec(vec![
                         socket_val,
                         response_val,
-                        Value::Nil, // early_response
+                        early_resp_val,
                     ]))
                 }
                 Err(e) => {
@@ -1170,8 +1197,13 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     comm_table.set("opencon", opencon_fn)?;
 
     // Register tryssl(host, port, [data], [opts]) function
-    // Accepts host as string or table (with host.ip), port as number or table (with port.number),
-    // optional data string to send after connection, and optional opts table
+    //
+    // Implements nmap's comm.tryssl behavior:
+    //   1. Determine protocol order via bestoption logic (try port.protocol first, then "ssl")
+    //   2. Try each protocol in order until one succeeds
+    //   3. Return (socket, response, proto_used, early_resp)
+    //
+    // This differs from opencon which just uses the given proto directly.
     let tryssl_fn = lua.create_function(
         |lua,
          (host_param, port_param, data_param, opts): (
@@ -1215,18 +1247,23 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
                 _ => None,
             };
 
-            // Extract port number from either integer or port table
-            let port = match port_param {
-                Value::Integer(n) => u16::try_from(n).map_err(|e| {
-                    mlua::Error::RuntimeError(format!("port number out of range: {e}"))
-                })?,
-                Value::Table(ref t) => {
+            // Extract port number and port protocol from port parameter
+            let (port, port_protocol) = match &port_param {
+                Value::Integer(n) => {
+                    let p = u16::try_from(*n).map_err(|e| {
+                        mlua::Error::RuntimeError(format!("port number out of range: {e}"))
+                    })?;
+                    (p, None)
+                }
+                Value::Table(t) => {
                     let number: i64 = t.get("number").map_err(|e| {
                         mlua::Error::RuntimeError(format!("port table missing 'number' field: {e}"))
                     })?;
-                    u16::try_from(number).map_err(|e| {
+                    let p = u16::try_from(number).map_err(|e| {
                         mlua::Error::RuntimeError(format!("port.number out of range: {e}"))
-                    })?
+                    })?;
+                    let proto: Option<String> = t.get("protocol").ok().flatten();
+                    (p, proto)
                 }
                 other => {
                     return Err(mlua::Error::RuntimeError(format!(
@@ -1236,50 +1273,91 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
                 }
             };
 
-            let mut options =
-                parse_opts(opts).map_err(|e| mlua::Error::RuntimeError(e.to_string()))?;
-            options.ssl = true;
+            let options =
+                parse_opts(opts.clone()).map_err(|e| mlua::Error::RuntimeError(e.to_string()))?;
 
-            match opencon_impl(&host, port, &options, sni_hostname.as_deref()) {
-                Ok(mut socket) => {
-                    // Determine protocol string
-                    let proto = if socket.is_ssl { "ssl" } else { "tcp" };
+            // Determine protocol order (nmap's bestoption logic):
+            //   - For SSL ports (443, 995, 993, etc.): try "ssl" first, then "tcp"
+            //   - For non-SSL ports: try port.protocol (usually "tcp") first, then "ssl"
+            let is_ssl_port = matches!(
+                port,
+                443 | 465 | 585 | 636 | 853 | 993 | 995 | 5061 | 8443
+            );
 
-                    // If data is provided, send it and read a single chunk of response
-                    // Nmap's tryssl uses sd:receive() which reads one chunk, NOT the
-                    // full response. The caller (e.g. http.pipeline_go) uses next_response()
-                    // to parse the response incrementally from the partial data.
-                    let response: Option<Vec<u8>> = if let Some(ref data) = data_param {
-                        if socket.send(&data.as_bytes()).is_err() {
-                            return Ok(mlua::MultiValue::new()); // Return empty on error
-                        }
-                        // Read a single chunk (like Nmap's sd:receive())
-                        socket.receive(8192).ok()
-                    } else {
-                        None
-                    };
-
-                    // Return multiple values: socket, response, proto, early_response (nil)
-                    // Nmap scripts expect: local socket, response = comm.tryssl(...)
-                    let socket_val = Value::UserData(lua.create_userdata(socket)?);
-                    let response_val = match response {
-                        Some(ref r) => {
-                            let s = String::from_utf8_lossy(r).into_owned();
-                            Value::String(lua.create_string(&s)?)
-                        }
-                        None => Value::Nil,
-                    };
-                    let proto_val = Value::String(lua.create_string(proto)?);
-
-                    Ok(mlua::MultiValue::from_vec(vec![
-                        socket_val,
-                        response_val,
-                        proto_val,
-                        Value::Nil, // early_response not implemented
-                    ]))
+            let proto_order: Vec<&str> = if is_ssl_port || options.ssl {
+                vec!["ssl", "tcp"]
+            } else {
+                let primary = port_protocol.as_deref().unwrap_or("tcp");
+                if primary == "ssl" {
+                    vec!["ssl", "tcp"]
+                } else {
+                    vec![primary, "ssl"]
                 }
-                Err(_) => Ok(mlua::MultiValue::new()), // Return empty MultiValue on error
-            }
+            };
+
+            // Try each protocol in order until one succeeds
+            for proto in &proto_order {
+                let mut try_opts = options.clone();
+                try_opts.proto = (*proto).to_string();
+                try_opts.ssl = proto == &"ssl";
+
+                if let Ok(mut socket) =
+                    opencon_impl(&host, port, &try_opts, sni_hostname.as_deref())
+                {
+                    let proto_str = if socket.is_ssl { "ssl" } else { "tcp" };
+
+                        // Match nmap's comm.lua opencon behavior:
+                        // 1. If recv_before: read banner/greeting BEFORE sending any data
+                        // 2. If data is non-empty: send data, then read response
+                        // 3. If data is empty/nil: response = early_resp (the banner)
+                        let early_resp: Option<Vec<u8>> = if try_opts.recv_before {
+                            socket.receive(8192).ok()
+                        } else {
+                            None
+                        };
+
+                        let response: Option<Vec<u8>> =
+                            if let Some(ref data) = data_param {
+                                if data.as_bytes().is_empty() {
+                                    early_resp.clone()
+                                } else {
+                                    if socket.send(&data.as_bytes()).is_err() {
+                                        continue; // Try next protocol
+                                    }
+                                    socket.receive(8192).ok()
+                                }
+                            } else {
+                                early_resp.clone()
+                            };
+
+                        let socket_val = Value::UserData(lua.create_userdata(socket)?);
+                        let response_val = match response {
+                            Some(ref r) => {
+                                let s = String::from_utf8_lossy(r).into_owned();
+                                Value::String(lua.create_string(&s)?)
+                            }
+                            None => Value::Nil,
+                        };
+                        let proto_val = Value::String(lua.create_string(proto_str)?);
+                        let early_resp_val = match early_resp {
+                            Some(ref r) => {
+                                let s = String::from_utf8_lossy(r).into_owned();
+                                Value::String(lua.create_string(&s)?)
+                            }
+                            None => Value::Nil,
+                        };
+
+                        return Ok(mlua::MultiValue::from_vec(vec![
+                            socket_val,
+                            response_val,
+                            proto_val,
+                            early_resp_val,
+                        ]));
+                    }
+                }
+
+            // All protocols failed
+            Ok(mlua::MultiValue::new())
         },
     )?;
     comm_table.set("tryssl", tryssl_fn)?;
@@ -1472,6 +1550,7 @@ mod tests {
         assert_eq!(opts.lines, None);
         assert!(!opts.ssl);
         assert_eq!(opts.proto, "tcp");
+        assert!(!opts.recv_before);
     }
 
     #[test]
@@ -1483,6 +1562,29 @@ mod tests {
         let opts = parse_opts(Some(table)).unwrap();
 
         assert_eq!(opts.lines, Some(10));
+    }
+
+    #[test]
+    fn test_parse_opts_recv_before() {
+        let lua = NseLua::new_default().unwrap();
+        let table = lua.lua().create_table().unwrap();
+        table.set("recv_before", true).unwrap();
+
+        let opts = parse_opts(Some(table)).unwrap();
+
+        assert!(opts.recv_before);
+    }
+
+    #[test]
+    fn test_parse_opts_recv_before_default_false() {
+        let lua = NseLua::new_default().unwrap();
+        let table = lua.lua().create_table().unwrap();
+        // Table without recv_before set
+        table.set("timeout", 5000i64).unwrap();
+
+        let opts = parse_opts(Some(table)).unwrap();
+
+        assert!(!opts.recv_before);
     }
 
     #[test]
@@ -1566,6 +1668,7 @@ mod tests {
             lines: Some(5),
             ssl: true,
             proto: "udp".to_string(),
+            recv_before: false,
         };
 
         let cloned = opts.clone();
