@@ -36,11 +36,38 @@ use mlua::{Table, UserData, UserDataMethods, Value};
 use crate::error::Result;
 use crate::lua::NseLua;
 
-/// Default connection timeout in milliseconds.
+/// Default maximum socket timeout in milliseconds.
+///
+/// Upper bound for all operations. Individual timeouts are calculated from
+/// timing template via `stdnse.get_timeout()`.
 const DEFAULT_TIMEOUT_MS: u64 = 30_000;
+
+/// Request timeout added on top of connect timeout (milliseconds).
+///
+/// Matches nmap's `REQUEST_TIMEOUT` in `nselib/comm.lua:35`.
+/// For justification, see `totalwaitms` in `nmap-service-probes`.
+const REQUEST_TIMEOUT_MS: u64 = 6_000;
+
+/// Default connect timeout in milliseconds when no host times are available.
+///
+/// Matches nmap's `stdnse.get_timeout()` default (`max_timeout` = 8000).
+const DEFAULT_CONNECT_TIMEOUT_MS: u64 = 8_000;
 
 /// Default banner read timeout in milliseconds.
 const DEFAULT_BANNER_TIMEOUT_MS: u64 = 5_000;
+
+/// Linger timeout after first successful read in `receive_all()`.
+///
+/// After reading the first chunk of data, nmap's nsock event loop detects
+/// "no more data" quickly via non-blocking I/O callbacks. We approximate
+/// this by switching to a short timeout (150ms) after the first read:
+/// if no more data arrives within 150ms, the server has finished sending.
+///
+/// This is safe because:
+/// - Initial wait still uses the full socket timeout (e.g. 5s for banner)
+/// - Only the *subsequent* reads use the short linger timeout
+/// - If the server is still sending data, it will arrive within RTT (<<150ms on LAN)
+const LINGER_TIMEOUT_MS: u64 = 150;
 
 /// Underlying transport for an NSE socket.
 #[derive(Debug)]
@@ -139,18 +166,32 @@ impl NseSocket {
     }
 
     /// Receive all available data until timeout or closure.
+    ///
+    /// Matches nmap's nsock event-driven behavior: after the first successful
+    /// read, switches to a short linger timeout to detect "no more data" quickly.
+    /// Without this, banner scripts wait the full socket timeout (5-30s) after
+    /// reading the initial banner data.
     fn receive_all(&mut self) -> std::io::Result<Vec<u8>> {
         match self.transport {
             Some(SocketTransport::Tcp(ref mut stream)) => {
                 let mut result = Vec::new();
                 let mut buffer = [0u8; 4096];
+                let linger = Duration::from_millis(LINGER_TIMEOUT_MS);
 
                 stream.set_read_timeout(Some(self.timeout))?;
 
                 loop {
                     match stream.read(&mut buffer) {
                         Ok(0) => break, // Connection closed
-                        Ok(n) => result.extend_from_slice(&buffer[..n]),
+                        Ok(n) => {
+                            result.extend_from_slice(&buffer[..n]);
+                            // After first read, switch to short linger timeout.
+                            // nmap's nsock detects "no more data" via non-blocking
+                            // callbacks almost instantly. We approximate this with
+                            // a short timeout: if no data arrives in 150ms, the
+                            // server has finished sending.
+                            stream.set_read_timeout(Some(linger))?;
+                        }
                         Err(e) if e.kind() == std::io::ErrorKind::TimedOut => break,
                         Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
                         Err(e) => return Err(e),
@@ -792,9 +833,28 @@ fn parse_opts(opts: Option<Table>) -> mlua::Result<ConnectionOpts> {
     let mut options = ConnectionOpts::default();
 
     if let Some(opts) = opts {
+        // Match nmap's comm.lua get_timeouts() logic:
+        // 1. opts.timeout overrides both connect and request timeouts
+        // 2. opts.connect_timeout overrides just connect timeout
+        // 3. opts.request_timeout overrides just request timeout
+        // 4. Otherwise use defaults (connect=8s, request=connect+6s)
         if let Ok(timeout) = opts.get("timeout") {
             let timeout: i64 = timeout;
-            options.timeout = Duration::from_millis(timeout.max(0) as u64);
+            let ms = timeout.max(0) as u64;
+            options.connect_timeout = Duration::from_millis(ms);
+            // When timeout is specified, request_timeout = timeout (not timeout + 6s)
+            options.request_timeout = Duration::from_millis(ms);
+        }
+        if let Ok(connect_timeout) = opts.get("connect_timeout") {
+            let ct: i64 = connect_timeout;
+            options.connect_timeout = Duration::from_millis(ct.max(0) as u64);
+        }
+        if let Ok(request_timeout) = opts.get("request_timeout") {
+            let rt: i64 = request_timeout;
+            // nmap: request_timeout is added to connect_timeout
+            // Unless opts.timeout was specified (which overrides both)
+            options.request_timeout =
+                options.connect_timeout + Duration::from_millis(rt.max(0) as u64);
         }
         if let Ok(bytes) = opts.get("bytes") {
             let bytes: i64 = bytes;
@@ -825,10 +885,17 @@ fn parse_opts(opts: Option<Table>) -> mlua::Result<ConnectionOpts> {
 }
 
 /// Connection options.
+///
+/// Mirrors nmap's `nselib/comm.lua` timeout model:
+/// - `connect_timeout`: Socket timeout during connection. Default: `stdnse.get_timeout(host)` = 8s (T3).
+/// - `request_timeout`: Socket timeout for request/response after connect.
+///   Default: `connect_timeout + REQUEST_TIMEOUT` = 8s + 6s = 14s (T3).
 #[derive(Debug, Clone)]
 struct ConnectionOpts {
-    /// Connection/read timeout.
-    timeout: Duration,
+    /// Timeout for the connection phase.
+    connect_timeout: Duration,
+    /// Timeout for request/response phase (after connect).
+    request_timeout: Duration,
     /// Number of bytes to read.
     bytes: Option<usize>,
     /// Number of lines to read.
@@ -844,8 +911,11 @@ struct ConnectionOpts {
 
 impl Default for ConnectionOpts {
     fn default() -> Self {
+        let connect_timeout = Duration::from_millis(DEFAULT_CONNECT_TIMEOUT_MS);
+        let request_timeout = connect_timeout + Duration::from_millis(REQUEST_TIMEOUT_MS);
         Self {
-            timeout: Duration::from_millis(DEFAULT_TIMEOUT_MS),
+            connect_timeout,
+            request_timeout,
             bytes: None,
             lines: None,
             ssl: false,
@@ -900,16 +970,26 @@ fn opencon_impl_blocking(
         } else {
             UdpSocket::bind("0.0.0.0:0")?
         };
-        udp.set_read_timeout(Some(opts.timeout))?;
-        udp.set_write_timeout(Some(opts.timeout))?;
+        // Connection phase uses connect_timeout
+        udp.set_read_timeout(Some(opts.connect_timeout))?;
+        udp.set_write_timeout(Some(opts.connect_timeout))?;
         udp.connect(target)?;
-        NseSocket::new_udp(udp, target, Some(host.to_string()))
+        // Switch to request_timeout after connect (nmap pattern)
+        udp.set_read_timeout(Some(opts.request_timeout))?;
+        udp.set_write_timeout(Some(opts.request_timeout))?;
+        let mut sock = NseSocket::new_udp(udp, target, Some(host.to_string()));
+        sock.timeout = opts.request_timeout;
+        sock
     } else {
         // TCP (default)
-        let stream = TcpStream::connect_timeout(&target, opts.timeout)?;
-        stream.set_read_timeout(Some(opts.timeout))?;
-        stream.set_write_timeout(Some(opts.timeout))?;
-        NseSocket::new_tcp(stream, target, Some(host.to_string()))
+        // Connection phase uses connect_timeout
+        let stream = TcpStream::connect_timeout(&target, opts.connect_timeout)?;
+        // Switch to request_timeout after connect (nmap: sock:set_timeout(request_timeout))
+        stream.set_read_timeout(Some(opts.request_timeout))?;
+        stream.set_write_timeout(Some(opts.request_timeout))?;
+        let mut sock = NseSocket::new_tcp(stream, target, Some(host.to_string()));
+        sock.timeout = opts.request_timeout;
+        sock
     };
 
     if opts.ssl {
@@ -924,9 +1004,10 @@ fn opencon_impl_blocking(
 fn get_banner_impl(host: &str, port: u16, opts: &ConnectionOpts) -> std::io::Result<Vec<u8>> {
     let mut socket = opencon_impl(host, port, opts, None)?;
 
-    // Set a shorter timeout for banner grabbing
+    // Set a shorter timeout for banner grabbing.
+    // nmap uses connect_timeout for banner phase, capped at DEFAULT_BANNER_TIMEOUT_MS.
     let banner_timeout = Duration::from_millis(DEFAULT_BANNER_TIMEOUT_MS);
-    socket.timeout = banner_timeout.min(opts.timeout);
+    socket.timeout = banner_timeout.min(opts.connect_timeout);
 
     // Use receive_all to read all data until timeout
     // A single receive() may miss data sent in multiple packets
@@ -1499,14 +1580,14 @@ mod tests {
         let _lua = NseLua::new_default().unwrap();
         let opts = parse_opts(None).unwrap();
 
-        assert_eq!(opts.timeout, Duration::from_millis(DEFAULT_TIMEOUT_MS));
+        assert_eq!(opts.connect_timeout, Duration::from_millis(DEFAULT_CONNECT_TIMEOUT_MS));
+        assert_eq!(opts.request_timeout, Duration::from_millis(DEFAULT_CONNECT_TIMEOUT_MS + REQUEST_TIMEOUT_MS));
         assert_eq!(opts.bytes, None);
         assert_eq!(opts.lines, None);
         assert!(!opts.ssl);
         assert_eq!(opts.proto, "tcp");
-    }
-
-    #[test]
+        assert!(!opts.recv_before);
+    }    #[test]
     fn test_parse_opts_custom() {
         let lua = NseLua::new_default().unwrap();
         let table = lua.lua().create_table().unwrap();
@@ -1517,7 +1598,9 @@ mod tests {
 
         let opts = parse_opts(Some(table)).unwrap();
 
-        assert_eq!(opts.timeout, Duration::from_millis(5000));
+        // When opts.timeout is set,5000, it overrides both connect and request timeouts
+        assert_eq!(opts.connect_timeout, Duration::from_millis(5000));
+        assert_eq!(opts.request_timeout, Duration::from_millis(5000));
         assert_eq!(opts.bytes, Some(1024));
         assert!(opts.ssl);
         assert_eq!(opts.proto, "udp");
@@ -1545,7 +1628,8 @@ mod tests {
     #[test]
     fn test_connection_opts_default() {
         let opts = ConnectionOpts::default();
-        assert_eq!(opts.timeout, Duration::from_millis(DEFAULT_TIMEOUT_MS));
+        assert_eq!(opts.connect_timeout, Duration::from_millis(DEFAULT_CONNECT_TIMEOUT_MS));
+        assert_eq!(opts.request_timeout, Duration::from_millis(DEFAULT_CONNECT_TIMEOUT_MS + REQUEST_TIMEOUT_MS));
         assert_eq!(opts.bytes, None);
         assert_eq!(opts.lines, None);
         assert!(!opts.ssl);
@@ -1595,7 +1679,9 @@ mod tests {
 
         let opts = parse_opts(Some(table)).unwrap();
 
-        assert_eq!(opts.timeout, Duration::from_millis(0));
+        // When timeout=0, both connect and request timeouts should be 0
+        assert_eq!(opts.connect_timeout, Duration::from_millis(0));
+        assert_eq!(opts.request_timeout, Duration::from_millis(0));
     }
 
     #[test]
@@ -1609,7 +1695,8 @@ mod tests {
         let opts = parse_opts(Some(table)).unwrap();
 
         // Negative values should be clamped to 0
-        assert_eq!(opts.timeout, Duration::from_millis(0));
+        assert_eq!(opts.connect_timeout, Duration::from_millis(0));
+        assert_eq!(opts.request_timeout, Duration::from_millis(0));
         assert_eq!(opts.bytes, Some(0));
         assert_eq!(opts.lines, Some(0));
     }
@@ -1663,7 +1750,8 @@ mod tests {
     #[test]
     fn test_connection_opts_clone() {
         let opts = ConnectionOpts {
-            timeout: Duration::from_secs(10),
+            connect_timeout: Duration::from_secs(10),
+            request_timeout: Duration::from_secs(16),
             bytes: Some(2048),
             lines: Some(5),
             ssl: true,
@@ -1672,7 +1760,8 @@ mod tests {
         };
 
         let cloned = opts.clone();
-        assert_eq!(opts.timeout, cloned.timeout);
+        assert_eq!(opts.connect_timeout, cloned.connect_timeout);
+        assert_eq!(opts.request_timeout, cloned.request_timeout);
         assert_eq!(opts.bytes, cloned.bytes);
         assert_eq!(opts.lines, cloned.lines);
         assert_eq!(opts.ssl, cloned.ssl);
@@ -1743,7 +1832,7 @@ mod tests {
         let opts = parse_opts(Some(table)).unwrap();
 
         // Defaults should be preserved for unset options
-        assert_eq!(opts.timeout, Duration::from_millis(DEFAULT_TIMEOUT_MS));
+        assert_eq!(opts.connect_timeout, Duration::from_millis(DEFAULT_CONNECT_TIMEOUT_MS));
         assert!(opts.lines.is_none());
         assert!(opts.ssl);
     }

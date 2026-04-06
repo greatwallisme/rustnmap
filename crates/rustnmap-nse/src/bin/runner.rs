@@ -421,6 +421,26 @@ fn create_host_table(lua: &Lua, target_ip: IpAddr) -> Result<mlua::Table, String
         .set("registry", registry_table)
         .map_err(|e| format!("Failed to set host.registry: {e}"))?;
 
+    // host.times - Timing statistics (T3 defaults, used by stdnse.get_timeout)
+    let times_table = lua
+        .create_table()
+        .map_err(|e| format!("Failed to create host.times table: {e}"))?;
+    times_table
+        .set("srtt", 1000)
+        .map_err(|e| format!("Failed to set times.srtt: {e}"))?;
+    times_table
+        .set("rttvar", 500)
+        .map_err(|e| format!("Failed to set times.rttvar: {e}"))?;
+    times_table
+        .set("to", 3000)
+        .map_err(|e| format!("Failed to set times.to: {e}"))?;
+    times_table
+        .set("timeout", 3.0)
+        .map_err(|e| format!("Failed to set times.timeout: {e}"))?;
+    host_table
+        .set("times", times_table)
+        .map_err(|e| format!("Failed to set host.times: {e}"))?;
+
     // Interface table for address-info and similar scripts
     let iface_table = lua
         .create_table()

@@ -583,4 +583,180 @@ To confirm whether the 5s is from:
 
 Check: if POP3 Capabilities (0.04s NSE) and POP3 Banner (5.3s NSE) run the same portrule evaluation, then the 5s difference is the banner script itself waiting for data.
 
-Actually POP3 Capabilities returned data quickly (CAPA response), while POP3 Banner waited for more data. This confirms the 5s is the **comm socket read timeout** inside the banner script, not portrule overhead.
+Actually POP3 Capabilities returned data quickly (CAPA response), while POP3 Banner waited for more data. This confirms 5s is the **comm socket read timeout** inside the banner script
+not portrule overhead.
+
+---
+
+## Nmap NSE Architecture Deep Dive (2026-04-05)
+
+### Nmap's Architecture: Single Lua VM + Coroutine + nsock Event Loop
+
+**Key insight**: nmap uses **ONE Lua VM** for ALL scripts. All scripts share the same global state, libraries, and nsock I/O subsystem.
+
+**Phase 1: Script Loading** (`get_chosen_scripts`, line 717)
+- Each script is loaded once into a `Script` object
+- `Script.new(filename)` creates a **coroutine** (`co = create(script_closure)`) and resumes it once to populate `env.action`, `env.portrule`, etc.
+- The script's top-level code runs in this coroutine, setting up globals via the shared `_G` metatable
+- The `script_closure_generator` is stored for later use when creating execution threads
+
+**Phase 2: Thread Creation** (`Script:new_thread`, line 462)
+- For each (script, host[, port]) combination, creates a **new Lua coroutine**
+- The coroutine runs:
+  ```lua
+  local function main(...)
+    local _ENV = env  -- script-specific environment
+    script_closure_generator(_ENV)()  -- re-run script top-level code
+    if forced or _ENV[rule](...) then  -- evaluate portrule/hostrule
+      yield(ACTION_STARTING)  -- signal to run loop
+      return action(...)       -- execute the action
+    end
+  end
+  ```
+- **Rule evaluation and action execution happen in the SAME coroutine**
+
+**Phase 3: Run Loop** (`run()`, line 892)
+- All threads run concurrently via Lua coroutines + nsock event loop
+- `nsock` provides non-blocking async I/O (socket ops yield the coroutine)
+- When I/O completes, nsock wakes the waiting coroutine
+- `CONCURRENCY_LIMIT = 1000` threads can run simultaneously
+- `loop(50)` at line 1078 gives nsock 50ms to process pending I/O callbacks
+
+**Phase 4: Thread Iteration** (`threads_iters.NSE_SCAN`, line 1388)
+```lua
+for j, host in ipairs(hosts) do
+  for _, script in ipairs(scripts) do
+    local thread = script:new_thread("hostrule", host_copy(host))
+    if thread then yield(thread) end
+  end
+  for port in cnse.ports(host) do
+    for _, script in ipairs(scripts) do
+      local thread = script:new_thread("portrule", host_copy(host), tcopy(port))
+      if thread then yield(thread) end
+    end
+  end
+end
+```
+- Threads are created lazily via coroutine-based iterator
+- `new_thread` creates a coroutine but does NOT start it
+- The `run()` loop starts threads up to `CONCURRENCY_LIMIT`
+- If the rule doesn't match, the coroutine simply returns without yielding `ACTION_STARTING`, so it's silently cleaned up
+
+### Key Architectural Differences (nmap vs rustnmap)
+
+| Aspect | nmap | rustnmap |
+|--------|------|----------|
+| Lua VMs per scan | **1** | **100+** (one per portrule eval + one per script execution) |
+| Script loading | Once, shared closure generator | Every portrule eval re-loads full source |
+| Rule evaluation | In-coroutine, ~0.1ms per rule | Full VM init (~50ms per rule) |
+| Action execution | Same coroutine as rule eval | Separate ProcessExecutor spawn |
+| I/O model | nsock async (yield/resume) | Blocking socket with timeout |
+| Concurrency | 1000 coroutines in 1 thread | Sequential per-host/port |
+
+### Performance Impact Calculation
+
+For a single SSH port scan with `default` scripts (~100 scripts):
+
+**nmap**:
+- Load 100 scripts once: ~100ms total
+- Evaluate 100 portrules (coroutine resume): ~10ms total
+- Execute 1 matching script action: ~200ms
+- **Total NSE: ~300ms**
+
+**rustnmap**:
+- Evaluate 100 portrules (new VM each): 100 x 50ms = **5,000ms**
+- Execute 1 matching script (new VM + process): ~200ms
+- **Total NSE: ~5,200ms** (17x slower)
+
+### Required Fix: Single-VM Coroutine Architecture
+
+The fix is to refactor the NSE engine to match nmap's architecture:
+
+1. **Load all scripts into ONE Lua VM** at startup (like `get_chosen_scripts`)
+2. **For each port, evaluate all portrules via coroutines** (like `new_thread` + resume)
+3. **Execute matching scripts in the same coroutine** (rule + action in one flow)
+4. **Replace blocking socket I/O with async yield/resume** (nsock pattern)
+
+This is a significant refactor but matches nmap's proven architecture.
+
+---
+
+## Nmap Timeout Model Research (2026-04-05)
+
+### Nmap's comm.lua Timeout Architecture
+
+Nmap uses a precise two-phase timeout model for all NSE communication:
+
+```
+comm.lua:get_timeouts(host, opts)
+  connect_timeout = opts.connect_timeout OR opts.timeout OR stdnse.get_timeout(host)
+  request_timeout = opts.request_timeout OR opts.timeout OR REQUEST_TIMEOUT(6000ms)
+  request_timeout = request_timeout + connect_timeout  // unless opts.timeout was set
+```
+
+### stdnse.get_timeout(host, max_timeout, min_timeout)
+
+```lua
+-- nmap nselib/stdnse.lua:1084
+function get_timeout(host, max_timeout, min_timeout)
+  max_timeout = max_timeout or 8000
+  local t = type(host) == "table" and host.times and host.times.timeout
+  if not t then return max_timeout end
+  t = t * (max_timeout + 6000) / 7
+  min_timeout = min_timeout or 1000
+  if t < min_timeout then return min_timeout
+  elseif t > max_timeout then return max_timeout end
+  return t
+end
+```
+
+### host.times.timeout Calculation
+
+`host.times.timeout` = `(srtt + 4 * rttvar) / 1000` (in seconds)
+- T3 default: srtt=1000ms, rttvar=500ms -> timeout = (1000 + 4*500)/1000 = 3.0s
+- get_timeout(host) with timeout=3.0: t = 3.0 * (8000+6000)/7 = 6000ms
+
+### Timeout Values by Timing Template
+
+| Template | initial_rtt | srtt | rttvar | host.times.timeout | get_timeout() | connect_timeout | request_timeout |
+|----------|-------------|------|--------|---------------------|--------------|-----------------|-----------------|
+| T0 | 300000ms | 300000ms | 150000ms | 900.0s | 8000ms (clamped) | 8000ms | 14000ms |
+| T1 | 15000ms | 15000ms | 7500ms | 45.0s | 8000ms (clamped) | 8000ms | 14000ms |
+| T2 | 1000ms | 1000ms | 500ms | 3.0s | 6000ms | 6000ms | 12000ms |
+| T3 (default) | 1000ms | 1000ms | 500ms | 3.0s | 6000ms | 6000ms | 12000ms |
+| T4 | 500ms | 500ms | 250ms | 1.5s | 3214ms | 3214ms | 9214ms |
+| T5 | 250ms | 250ms | 125ms | 0.75s | 1714ms | 1714ms | 7714ms |
+
+### Connection Phase (setup_connect)
+
+```lua
+sock:set_timeout(connect_timeout)
+sock:connect(host, port, "tcp")
+sock:set_timeout(request_timeout)  -- switch to longer timeout after connect
+```
+
+### Key Insight: Why Two Timeouts?
+
+- `connect_timeout`: TCP handshake only, typically fast on LAN (SYN+SYN+ACK < 1ms)
+- `request_timeout`: Full request/response cycle, includes server processing time
+- `REQUEST_TIMEOUT = 6000ms`: Extra time for server processing (from nmap-service-probes totalwaitms)
+
+### Implementation Applied (2026-04-05)
+
+1. **`receive_all()` linger timeout**: After first successful read, switch to 150ms timeout
+   - Matches nmap's nsock event-driven behavior
+   - Safe: initial wait still uses full timeout, only subsequent reads are shortened
+   - Impact: Banner scripts (SSH/SMTP/POP3) improve from 0.09-0.10x to ~0.8-1.0x
+
+2. **`stdnse.get_timeout()`**: Implemented in stdnse.rs
+   - Accepts host, max_timeout, min_timeout parameters
+   - Uses host.times.timeout with nmap formula
+   - Returns clamped value in [min_timeout, max_timeout]
+
+3. **`ConnectionOpts` split**: connect_timeout + request_timeout
+   - parse_opts() supports opts.timeout, opts.connect_timeout, opts.request_timeout
+   - Default: connect_timeout=8s, request_timeout=14s (T3)
+   - opencon_impl_blocking(): connect with connect_timeout, then switch to request_timeout
+
+4. **`host.times` populated**: engine.rs and runner.rs
+   - Default T3 values: srtt=1000, rttvar=500, to=3000, timeout=3.0

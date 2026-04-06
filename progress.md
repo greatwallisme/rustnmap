@@ -1,6 +1,58 @@
 # Progress: NSE Script Compatibility Testing
 
-> **Updated**: 2026-04-04
+> **Updated**: 2026-04-05
+
+---
+
+## Session Summary (2026-04-05) - 100% Pass Rate + Performance Architecture Study
+
+### Benchmark Results (46 tests against Docker range)
+| Metric | Result |
+|--------|--------|
+| Total Tests | 46 |
+| PASS | 46 (100%) |
+| FAIL | 0 |
+| SKIP | 0 |
+
+### Pass Rate History
+| Date | PASS | FAIL | SKIP | Rate |
+|------|------|------|------|------|
+| Mar 31 | 8 | 25 | 13 | 17.3% |
+| Apr 2 | 20 | 13 | 13 | 43.4% |
+| Apr 3 | 26 | 8 | 12 | 56.5% |
+| Apr 4 | 34 | 2 | 10 | 73.9% |
+| **Apr 5** | **46** | **0** | **0** | **100%** |
+
+### Performance Study: nmap Source Architecture Analysis
+
+Studied `reference/nmap/nse_main.lua` to understand why nmap is faster.
+
+**Root cause of ALL NSE-side slowness**: Our engine creates a new Lua VM per portrule eval.
+Nmap uses ONE Lua VM + Lua coroutines for the entire scan.
+
+Key findings from nmap source:
+1. `Script.new()` loads each script once, extracts `action`/`portrule` function refs
+2. `Script:new_thread()` creates a coroutine per (script, host, port) that evaluates rule AND action
+3. `run()` manages 1000+ concurrent coroutines via nsock event loop
+4. nsock provides async I/O - scripts yield on socket ops, get resumed on data arrival
+5. Rule + action execute in the SAME coroutine (no VM boundary between them)
+
+**Performance impact**: 100 portrule evaluations:
+- nmap: ~10ms (coroutine resumes)
+- rustnmap: ~5000ms (100 new Lua VMs + library registration)
+
+See `findings.md` "Nmap NSE Architecture Deep Dive" section for full analysis.
+See `task_plan.md` Phase 1-3 for proposed architecture fix.
+
+### Bugs Fixed (post-100% pass rate)
+
+1. **creds.Credentials:new self parameter**: Lua `:` method call adds implicit `self` arg.
+   Our Rust implementations didn't account for this, shifting all params by one.
+   Fix: Added `_self` parameter to both `Credentials:new` and `Account:new`.
+   - **Files**: `creds.rs`
+
+2. **Clippy warnings cleanup**: Removed redundant `continue`, added `#[must_use]`, dereferenced `&&str`.
+   - **Files**: `comm.rs`, `ftp.rs`
 
 ---
 

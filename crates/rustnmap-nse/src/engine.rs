@@ -403,10 +403,19 @@ impl ScriptEngine {
         host_table.set("registry", registry_table)?;
 
         // host.times - Timing statistics
+        // nmap populates these from scan RTT estimates (timing.cc).
+        // Default T3 values: srtt=1000ms, rttvar=500ms
+        // host.times.timeout = (srtt + 4*rttvar) / 1000 (in seconds)
+        // = (1000 + 4*500) / 1000 = 3.0
+        // This is used by stdnse.get_timeout() to calculate comm timeouts.
         let times_table = lua.create_table()?;
-        times_table.set("srtt", 0)?;
-        times_table.set("rttvar", 0)?;
-        times_table.set("to", 0)?;
+        times_table.set("srtt", 1000)?;
+        times_table.set("rttvar", 500)?;
+        times_table.set("to", 3000)?;
+        // timeout in seconds, used by stdnse.get_timeout():
+        //   t = host.times.timeout * (max_timeout + 6000) / 7
+        // With timeout=3.0, max=8000: t = 3.0 * 14000/7 = 6000ms
+        times_table.set("timeout", 3.0)?;
         host_table.set("times", times_table)?;
 
         Ok(host_table)

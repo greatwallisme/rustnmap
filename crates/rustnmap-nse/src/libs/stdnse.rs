@@ -891,6 +891,58 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     stdnse_table.set("parse_timespec", parse_timespec_fn)?;
 
     // -------------------------------------------------------------------------
+    // stdnse.get_timeout(host, [max_timeout], [min_timeout])
+    //
+    // Calculate a timeout value based on host timing statistics.
+    // Mirrors nmap's stdnse.lua get_timeout():
+    //   t = host.times.timeout * (max_timeout + 6000) / 7
+    //   clamped to [min_timeout, max_timeout]
+    //
+    // If host is nil/not-a-table or host.times.timeout is absent,
+    // returns max_timeout (default 8000ms).
+    //
+    // # Arguments
+    //   host        - Host table (may be nil)
+    //   max_timeout - Maximum timeout in ms (default 8000)
+    //   min_timeout - Minimum timeout in ms (default 1000)
+    //
+    // # Returns
+    //   Timeout in milliseconds
+    // -------------------------------------------------------------------------
+    let get_timeout_fn = lua.create_function(
+        |_, (host, max_timeout, min_timeout): (Value, Option<u64>, Option<u64>)| {
+            let max_to = max_timeout.unwrap_or(8000);
+            let min_to = min_timeout.unwrap_or(1000);
+
+            // Extract host.times.timeout if available
+            let t: Option<f64> = match &host {
+                Value::Table(host_tbl) => host_tbl
+                    .get::<Option<mlua::Table>>("times")
+                    .ok()
+                    .flatten()
+                    .and_then(|times| times.get("timeout").ok()),
+                _ => None,
+            };
+
+            let Some(t) = t else {
+                return Ok(max_to);
+            };
+
+            // nmap formula: t = host.times.timeout * (max_timeout + 6000) / 7
+            // host.times.timeout is in seconds (e.g., 1.3 for T3 default)
+            #[expect(clippy::cast_precision_loss, reason = "timeout values are small (<30s), fit in f64 mantissa")]
+            let calculated = t * (max_to as f64 + 6000.0) / 7.0;
+
+            // Clamp to [min_to, max_to]
+            #[expect(clippy::cast_precision_loss, reason = "timeout values are small (<30s), fit in f64 mantissa")]
+            let result = calculated.clamp(min_to as f64, max_to as f64);
+
+            Ok(result as u64)
+        },
+    )?;
+    stdnse_table.set("get_timeout", get_timeout_fn)?;
+
+    // -------------------------------------------------------------------------
     // stdnse.seeall(env)
     //
     // Option function for use with stdnse.module. Sets __index = _G on the
