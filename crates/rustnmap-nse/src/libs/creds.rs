@@ -624,8 +624,8 @@ fn create_credentials_class(lua: &mlua::Lua) -> Result<Table> {
     // remaining positional arguments line up correctly:
     //   creds.Credentials:new(SCRIPT_NAME, host, port)
     //   => new(Credentials_class, SCRIPT_NAME, host, port)
-    let new_fn =
-        lua.create_function(|lua, (_self, tags, host, port): (Value, Value, Value, Option<Table>)| {
+    let new_fn = lua.create_function(
+        |lua, (_self, tags, host, port): (Value, Value, Value, Option<Table>)| {
             let credentials = lua.create_table()?;
 
             // Normalize tags to a table
@@ -677,7 +677,8 @@ fn create_credentials_class(lua: &mlua::Lua) -> Result<Table> {
             credentials.set("_port_number", port_number)?;
 
             Ok(credentials)
-        })?;
+        },
+    )?;
 
     credentials_table.set(NEW, new_fn)?;
 

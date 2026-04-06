@@ -930,11 +930,17 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
 
             // nmap formula: t = host.times.timeout * (max_timeout + 6000) / 7
             // host.times.timeout is in seconds (e.g., 1.3 for T3 default)
-            #[expect(clippy::cast_precision_loss, reason = "timeout values are small (<30s), fit in f64 mantissa")]
+            #[expect(
+                clippy::cast_precision_loss,
+                reason = "timeout values are small (<30s), fit in f64 mantissa"
+            )]
             let calculated = t * (max_to as f64 + 6000.0) / 7.0;
 
             // Clamp to [min_to, max_to]
-            #[expect(clippy::cast_precision_loss, reason = "timeout values are small (<30s), fit in f64 mantissa")]
+            #[expect(
+                clippy::cast_precision_loss,
+                reason = "timeout values are small (<30s), fit in f64 mantissa"
+            )]
             let result = calculated.clamp(min_to as f64, max_to as f64);
 
             Ok(result as u64)

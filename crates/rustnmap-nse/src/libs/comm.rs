@@ -100,7 +100,10 @@ pub struct NseSocket {
 
 impl NseSocket {
     /// Create a new TCP socket from a stream.
-    #[expect(clippy::must_use_candidate, reason = "Constructor returns new socket instance")]
+    #[expect(
+        clippy::must_use_candidate,
+        reason = "Constructor returns new socket instance"
+    )]
     pub fn new_tcp(stream: TcpStream, peer_addr: SocketAddr, hostname: Option<String>) -> Self {
         Self {
             transport: Some(SocketTransport::Tcp(stream)),
@@ -1360,10 +1363,7 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
             // Determine protocol order (nmap's bestoption logic):
             //   - For SSL ports (443, 995, 993, etc.): try "ssl" first, then "tcp"
             //   - For non-SSL ports: try port.protocol (usually "tcp") first, then "ssl"
-            let is_ssl_port = matches!(
-                port,
-                443 | 465 | 585 | 636 | 853 | 993 | 995 | 5061 | 8443
-            );
+            let is_ssl_port = matches!(port, 443 | 465 | 585 | 636 | 853 | 993 | 995 | 5061 | 8443);
 
             let proto_order: Vec<&str> = if is_ssl_port || options.ssl {
                 vec!["ssl", "tcp"]
@@ -1387,55 +1387,54 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
                 {
                     let proto_str = if socket.is_ssl { "ssl" } else { "tcp" };
 
-                        // Match nmap's comm.lua opencon behavior:
-                        // 1. If recv_before: read banner/greeting BEFORE sending any data
-                        // 2. If data is non-empty: send data, then read response
-                        // 3. If data is empty/nil: response = early_resp (the banner)
-                        let early_resp: Option<Vec<u8>> = if try_opts.recv_before {
-                            socket.receive(8192).ok()
+                    // Match nmap's comm.lua opencon behavior:
+                    // 1. If recv_before: read banner/greeting BEFORE sending any data
+                    // 2. If data is non-empty: send data, then read response
+                    // 3. If data is empty/nil: response = early_resp (the banner)
+                    let early_resp: Option<Vec<u8>> = if try_opts.recv_before {
+                        socket.receive(8192).ok()
+                    } else {
+                        None
+                    };
+
+                    let response: Option<Vec<u8>> = if let Some(ref data) = data_param {
+                        if data.as_bytes().is_empty() {
+                            early_resp.clone()
                         } else {
-                            None
-                        };
-
-                        let response: Option<Vec<u8>> =
-                            if let Some(ref data) = data_param {
-                                if data.as_bytes().is_empty() {
-                                    early_resp.clone()
-                                } else {
-                                    if socket.send(&data.as_bytes()).is_err() {
-                                        continue; // Try next protocol
-                                    }
-                                    socket.receive(8192).ok()
-                                }
-                            } else {
-                                early_resp.clone()
-                            };
-
-                        let socket_val = Value::UserData(lua.create_userdata(socket)?);
-                        let response_val = match response {
-                            Some(ref r) => {
-                                let s = String::from_utf8_lossy(r).into_owned();
-                                Value::String(lua.create_string(&s)?)
+                            if socket.send(&data.as_bytes()).is_err() {
+                                continue; // Try next protocol
                             }
-                            None => Value::Nil,
-                        };
-                        let proto_val = Value::String(lua.create_string(proto_str)?);
-                        let early_resp_val = match early_resp {
-                            Some(ref r) => {
-                                let s = String::from_utf8_lossy(r).into_owned();
-                                Value::String(lua.create_string(&s)?)
-                            }
-                            None => Value::Nil,
-                        };
+                            socket.receive(8192).ok()
+                        }
+                    } else {
+                        early_resp.clone()
+                    };
 
-                        return Ok(mlua::MultiValue::from_vec(vec![
-                            socket_val,
-                            response_val,
-                            proto_val,
-                            early_resp_val,
-                        ]));
-                    }
+                    let socket_val = Value::UserData(lua.create_userdata(socket)?);
+                    let response_val = match response {
+                        Some(ref r) => {
+                            let s = String::from_utf8_lossy(r).into_owned();
+                            Value::String(lua.create_string(&s)?)
+                        }
+                        None => Value::Nil,
+                    };
+                    let proto_val = Value::String(lua.create_string(proto_str)?);
+                    let early_resp_val = match early_resp {
+                        Some(ref r) => {
+                            let s = String::from_utf8_lossy(r).into_owned();
+                            Value::String(lua.create_string(&s)?)
+                        }
+                        None => Value::Nil,
+                    };
+
+                    return Ok(mlua::MultiValue::from_vec(vec![
+                        socket_val,
+                        response_val,
+                        proto_val,
+                        early_resp_val,
+                    ]));
                 }
+            }
 
             // All protocols failed
             Ok(mlua::MultiValue::new())
@@ -1580,14 +1579,21 @@ mod tests {
         let _lua = NseLua::new_default().unwrap();
         let opts = parse_opts(None).unwrap();
 
-        assert_eq!(opts.connect_timeout, Duration::from_millis(DEFAULT_CONNECT_TIMEOUT_MS));
-        assert_eq!(opts.request_timeout, Duration::from_millis(DEFAULT_CONNECT_TIMEOUT_MS + REQUEST_TIMEOUT_MS));
+        assert_eq!(
+            opts.connect_timeout,
+            Duration::from_millis(DEFAULT_CONNECT_TIMEOUT_MS)
+        );
+        assert_eq!(
+            opts.request_timeout,
+            Duration::from_millis(DEFAULT_CONNECT_TIMEOUT_MS + REQUEST_TIMEOUT_MS)
+        );
         assert_eq!(opts.bytes, None);
         assert_eq!(opts.lines, None);
         assert!(!opts.ssl);
         assert_eq!(opts.proto, "tcp");
         assert!(!opts.recv_before);
-    }    #[test]
+    }
+    #[test]
     fn test_parse_opts_custom() {
         let lua = NseLua::new_default().unwrap();
         let table = lua.lua().create_table().unwrap();
@@ -1628,8 +1634,14 @@ mod tests {
     #[test]
     fn test_connection_opts_default() {
         let opts = ConnectionOpts::default();
-        assert_eq!(opts.connect_timeout, Duration::from_millis(DEFAULT_CONNECT_TIMEOUT_MS));
-        assert_eq!(opts.request_timeout, Duration::from_millis(DEFAULT_CONNECT_TIMEOUT_MS + REQUEST_TIMEOUT_MS));
+        assert_eq!(
+            opts.connect_timeout,
+            Duration::from_millis(DEFAULT_CONNECT_TIMEOUT_MS)
+        );
+        assert_eq!(
+            opts.request_timeout,
+            Duration::from_millis(DEFAULT_CONNECT_TIMEOUT_MS + REQUEST_TIMEOUT_MS)
+        );
         assert_eq!(opts.bytes, None);
         assert_eq!(opts.lines, None);
         assert!(!opts.ssl);
@@ -1832,7 +1844,10 @@ mod tests {
         let opts = parse_opts(Some(table)).unwrap();
 
         // Defaults should be preserved for unset options
-        assert_eq!(opts.connect_timeout, Duration::from_millis(DEFAULT_CONNECT_TIMEOUT_MS));
+        assert_eq!(
+            opts.connect_timeout,
+            Duration::from_millis(DEFAULT_CONNECT_TIMEOUT_MS)
+        );
         assert!(opts.lines.is_none());
         assert!(opts.ssl);
     }

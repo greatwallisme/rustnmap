@@ -465,76 +465,78 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     // Register auth function
     // ftp.auth(socket, buffer, username, password)
     // Matches Nmap's signature where buffer is the second argument (ignored in our impl).
-    let auth_fn = lua.create_function(
-        |_lua, (socket, _buffer, username, password): (
-            Value,
-            Option<Value>,
-            String,
-            Option<String>,
-        )| {
-            let Value::Table(table) = socket else {
-                return Err(mlua::Error::RuntimeError(
-                    "Expected socket table".to_string(),
-                ));
-            };
+    let auth_fn =
+        lua.create_function(
+            |_lua,
+             (socket, _buffer, username, password): (
+                Value,
+                Option<Value>,
+                String,
+                Option<String>,
+            )| {
+                let Value::Table(table) = socket else {
+                    return Err(mlua::Error::RuntimeError(
+                        "Expected socket table".to_string(),
+                    ));
+                };
 
-            let conn_id: usize = table.get("_conn_id")?;
+                let conn_id: usize = table.get("_conn_id")?;
 
-            let mut conn = {
-                let mut conns = FTP_CONNECTIONS.lock().unwrap();
-                conns.remove(&conn_id).ok_or_else(|| {
-                    mlua::Error::RuntimeError("Invalid FTP connection".to_string())
-                })?
-            };
+                let mut conn = {
+                    let mut conns = FTP_CONNECTIONS.lock().unwrap();
+                    conns.remove(&conn_id).ok_or_else(|| {
+                        mlua::Error::RuntimeError("Invalid FTP connection".to_string())
+                    })?
+                };
 
-            // Send USER command
-            conn.send_command(&format!("USER {username}\r\n"))?;
-            let (code, _) = read_reply(&mut conn)?;
+                // Send USER command
+                conn.send_command(&format!("USER {username}\r\n"))?;
+                let (code, _) = read_reply(&mut conn)?;
 
-            let final_code = if code == 331 {
-                // 331: User name okay, need password
-                let pass = password.as_deref().unwrap_or("");
-                conn.send_command(&format!("PASS {pass}\r\n"))?;
-                let (pass_code, _pass_msg) = read_reply(&mut conn)?;
+                let final_code = if code == 331 {
+                    // 331: User name okay, need password
+                    let pass = password.as_deref().unwrap_or("");
+                    conn.send_command(&format!("PASS {pass}\r\n"))?;
+                    let (pass_code, _pass_msg) = read_reply(&mut conn)?;
 
-                // Handle account if needed (332: Need account for login)
-                if pass_code == 332 {
-                    conn.send_command(&format!("ACCT {username}\r\n"))?;
-                    let (acct_code, _acct_msg) = read_reply(&mut conn)?;
+                    // Handle account if needed (332: Need account for login)
+                    if pass_code == 332 {
+                        conn.send_command(&format!("ACCT {username}\r\n"))?;
+                        let (acct_code, _acct_msg) = read_reply(&mut conn)?;
 
-                    // Check if we need password after account
-                    if acct_code == 331 {
-                        conn.send_command(&format!("PASS {pass}\r\n"))?;
-                        let (final_code, _) = read_reply(&mut conn)?;
-                        final_code
+                        // Check if we need password after account
+                        if acct_code == 331 {
+                            conn.send_command(&format!("PASS {pass}\r\n"))?;
+                            let (final_code, _) = read_reply(&mut conn)?;
+                            final_code
+                        } else {
+                            acct_code
+                        }
                     } else {
-                        acct_code
+                        pass_code
                     }
                 } else {
-                    pass_code
+                    code
+                };
+
+                // Store connection back
+                {
+                    let mut conns = FTP_CONNECTIONS.lock().unwrap();
+                    conns.insert(conn_id, conn)
+                };
+
+                // Return (status, code, message)
+                if (200..300).contains(&final_code) {
+                    Ok((true, final_code, "Login successful".to_string()))
+                } else {
+                    Ok((
+                        false,
+                        final_code,
+                        format!("Login failed (code {final_code})"),
+                    ))
                 }
-            } else {
-                code
-            };
-
-            // Store connection back
-            {
-                let mut conns = FTP_CONNECTIONS.lock().unwrap();
-                conns.insert(conn_id, conn)
-            };
-
-            // Return (status, code, message)
-            if (200..300).contains(&final_code) {
-                Ok((true, final_code, "Login successful".to_string()))
-            } else {
-                Ok((
-                    false,
-                    final_code,
-                    format!("Login failed (code {final_code})"),
-                ))
-            }
-        },
-    )?;
+            },
+        )?;
     ftp_table.set("auth", auth_fn)?;
 
     // Register starttls function
@@ -574,123 +576,103 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     // Register pasv function
     // Returns an NseSocket connected to the data port, matching nmap's behavior
     // where ftp.pasv returns a real socket with receive_buf/receive/close methods.
-    let pasv_fn = lua.create_function(
-        |_lua, (socket, _buffer): (Value, Value)| {
-            let Value::Table(table) = socket else {
-                return Err(mlua::Error::RuntimeError(
-                    "Expected socket table".to_string(),
-                ));
-            };
+    let pasv_fn = lua.create_function(|_lua, (socket, _buffer): (Value, Value)| {
+        let Value::Table(table) = socket else {
+            return Err(mlua::Error::RuntimeError(
+                "Expected socket table".to_string(),
+            ));
+        };
 
-            let conn_id: usize = table.get("_conn_id")?;
+        let conn_id: usize = table.get("_conn_id")?;
 
-            let mut conn = {
-                let mut conns = FTP_CONNECTIONS.lock().unwrap();
-                conns
-                    .remove(&conn_id)
-                    .ok_or_else(|| {
-                        mlua::Error::RuntimeError("Invalid FTP connection".to_string())
-                    })?
-            };
+        let mut conn = {
+            let mut conns = FTP_CONNECTIONS.lock().unwrap();
+            conns
+                .remove(&conn_id)
+                .ok_or_else(|| mlua::Error::RuntimeError("Invalid FTP connection".to_string()))?
+        };
 
-            // Check if IPv6
-            let is_ipv6 = conn.host.contains(':');
+        // Check if IPv6
+        let is_ipv6 = conn.host.contains(':');
 
-            let (data_port, data_host) = if is_ipv6 {
-                // Try EPSV first (RFC 2428)
-                conn.send_command("EPSV\r\n")?;
-                let (code, message) = read_reply(&mut conn)?;
+        let (data_port, data_host) = if is_ipv6 {
+            // Try EPSV first (RFC 2428)
+            conn.send_command("EPSV\r\n")?;
+            let (code, message) = read_reply(&mut conn)?;
 
-                if code == 229 {
-                    // Parse EPSV response: |||port|
-                    let re = regex::Regex::new(r"\(\|\|\|(\d+)\|\)").unwrap();
-                    if let Some(caps) = re.captures(&message) {
-                        let port: u16 = caps[1].parse().unwrap_or(20_000);
-                        (port, conn.host.clone())
-                    } else {
-                        return Err(mlua::Error::RuntimeError(format!(
-                            "Cannot parse EPSV response: {message}"
-                        )));
-                    }
+            if code == 229 {
+                // Parse EPSV response: |||port|
+                let re = regex::Regex::new(r"\(\|\|\|(\d+)\|\)").unwrap();
+                if let Some(caps) = re.captures(&message) {
+                    let port: u16 = caps[1].parse().unwrap_or(20_000);
+                    (port, conn.host.clone())
                 } else {
                     return Err(mlua::Error::RuntimeError(format!(
-                        "EPSV failed: {message}"
+                        "Cannot parse EPSV response: {message}"
                     )));
                 }
             } else {
-                // Use PASV (RFC 959)
-                conn.send_command("PASV\r\n")?;
-                let (code, message) = read_reply(&mut conn)?;
+                return Err(mlua::Error::RuntimeError(format!("EPSV failed: {message}")));
+            }
+        } else {
+            // Use PASV (RFC 959)
+            conn.send_command("PASV\r\n")?;
+            let (code, message) = read_reply(&mut conn)?;
 
-                if code == 227 {
-                    // Parse PASV response: (h1,h2,h3,h4,p1,p2)
-                    let re =
-                        regex::Regex::new(r"\((\d+),(\d+),(\d+),(\d+),(\d+),(\d+)\)").unwrap();
-                    if let Some(caps) = re.captures(&message) {
-                        let h1: u8 = caps[1].parse().unwrap_or(0);
-                        let h2: u8 = caps[2].parse().unwrap_or(0);
-                        let h3: u8 = caps[3].parse().unwrap_or(0);
-                        let h4: u8 = caps[4].parse().unwrap_or(0);
-                        let p1: u8 = caps[5].parse().unwrap_or(0);
-                        let p2: u8 = caps[6].parse().unwrap_or(0);
+            if code == 227 {
+                // Parse PASV response: (h1,h2,h3,h4,p1,p2)
+                let re = regex::Regex::new(r"\((\d+),(\d+),(\d+),(\d+),(\d+),(\d+)\)").unwrap();
+                if let Some(caps) = re.captures(&message) {
+                    let h1: u8 = caps[1].parse().unwrap_or(0);
+                    let h2: u8 = caps[2].parse().unwrap_or(0);
+                    let h3: u8 = caps[3].parse().unwrap_or(0);
+                    let h4: u8 = caps[4].parse().unwrap_or(0);
+                    let p1: u8 = caps[5].parse().unwrap_or(0);
+                    let p2: u8 = caps[6].parse().unwrap_or(0);
 
-                        let port = (u16::from(p1) << 8) | u16::from(p2);
-                        let host = format!("{h1}.{h2}.{h3}.{h4}");
-                        (port, host)
-                    } else {
-                        return Err(mlua::Error::RuntimeError(format!(
-                            "Cannot parse PASV response: {message}"
-                        )));
-                    }
+                    let port = (u16::from(p1) << 8) | u16::from(p2);
+                    let host = format!("{h1}.{h2}.{h3}.{h4}");
+                    (port, host)
                 } else {
                     return Err(mlua::Error::RuntimeError(format!(
-                        "PASV failed: {message}"
+                        "Cannot parse PASV response: {message}"
                     )));
                 }
-            };
+            } else {
+                return Err(mlua::Error::RuntimeError(format!("PASV failed: {message}")));
+            }
+        };
 
-            // Store command connection back
-            let mut conns = FTP_CONNECTIONS.lock().unwrap();
-            conns.insert(conn_id, conn);
+        // Store command connection back
+        let mut conns = FTP_CONNECTIONS.lock().unwrap();
+        conns.insert(conn_id, conn);
 
-            // Connect to the data port and return a real NseSocket
-            let data_addr: std::net::SocketAddr =
-                format!("{data_host}:{data_port}")
-                    .parse()
-                    .map_err(|e: std::net::AddrParseError| {
-                        mlua::Error::RuntimeError(format!("Invalid data address: {e}"))
-                    })?;
-
-            let data_stream =
-                std::net::TcpStream::connect_timeout(
-                    &data_addr,
-                    Duration::from_millis(DEFAULT_TIMEOUT_MS),
-                )
-                .map_err(|e| {
-                        mlua::Error::RuntimeError(format!(
-                            "Data connection failed to {data_addr}: {e}"
-                        ))
-                    })?;
-            data_stream
-                .set_read_timeout(Some(Duration::from_millis(DEFAULT_TIMEOUT_MS)))
-                .map_err(|e| {
-                    mlua::Error::RuntimeError(format!("Set timeout failed: {e}"))
-                })?;
-            data_stream
-                .set_write_timeout(Some(Duration::from_millis(DEFAULT_TIMEOUT_MS)))
-                .map_err(|e| {
-                    mlua::Error::RuntimeError(format!("Set timeout failed: {e}"))
+        // Connect to the data port and return a real NseSocket
+        let data_addr: std::net::SocketAddr =
+            format!("{data_host}:{data_port}")
+                .parse()
+                .map_err(|e: std::net::AddrParseError| {
+                    mlua::Error::RuntimeError(format!("Invalid data address: {e}"))
                 })?;
 
-            let nse_socket = super::comm::NseSocket::new_tcp(
-                data_stream,
-                data_addr,
-                Some(data_host),
-            );
+        let data_stream = std::net::TcpStream::connect_timeout(
+            &data_addr,
+            Duration::from_millis(DEFAULT_TIMEOUT_MS),
+        )
+        .map_err(|e| {
+            mlua::Error::RuntimeError(format!("Data connection failed to {data_addr}: {e}"))
+        })?;
+        data_stream
+            .set_read_timeout(Some(Duration::from_millis(DEFAULT_TIMEOUT_MS)))
+            .map_err(|e| mlua::Error::RuntimeError(format!("Set timeout failed: {e}")))?;
+        data_stream
+            .set_write_timeout(Some(Duration::from_millis(DEFAULT_TIMEOUT_MS)))
+            .map_err(|e| mlua::Error::RuntimeError(format!("Set timeout failed: {e}")))?;
 
-            Ok(nse_socket)
-        },
-    )?;
+        let nse_socket = super::comm::NseSocket::new_tcp(data_stream, data_addr, Some(data_host));
+
+        Ok(nse_socket)
+    })?;
     ftp_table.set("pasv", pasv_fn)?;
 
     // Set the ftp table in globals

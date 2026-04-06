@@ -953,7 +953,9 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
             let (host_str, port_num) = extract_host_port(host, port);
             let opts = parse_options(options);
             let path = match &path_val {
-                Value::String(s) => s.to_str().map_or_else(|_| "/".to_string(), |v| v.to_string()),
+                Value::String(s) => s
+                    .to_str()
+                    .map_or_else(|_| "/".to_string(), |v| v.to_string()),
                 Value::Table(t) => t
                     .get::<Option<String>>("path")
                     .ok()
@@ -991,7 +993,9 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
             let (host_str, port_num) = extract_host_port(host, port);
             let mut opts = parse_options(options.clone());
             let path = match &path_val {
-                Value::String(s) => s.to_str().map_or_else(|_| "/".to_string(), |v| v.to_string()),
+                Value::String(s) => s
+                    .to_str()
+                    .map_or_else(|_| "/".to_string(), |v| v.to_string()),
                 Value::Table(t) => t
                     .get::<Option<String>>("path")
                     .ok()
@@ -1037,7 +1041,9 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
             let (host_str, port_num) = extract_host_port(host, port);
             let opts = parse_options(options);
             let path = match &path_val {
-                Value::String(s) => s.to_str().map_or_else(|_| "/".to_string(), |v| v.to_string()),
+                Value::String(s) => s
+                    .to_str()
+                    .map_or_else(|_| "/".to_string(), |v| v.to_string()),
                 Value::Table(t) => t
                     .get::<Option<String>>("path")
                     .ok()

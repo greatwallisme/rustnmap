@@ -271,6 +271,26 @@ impl NseLua {
         })
     }
 
+    /// Snapshot all global variable names in the Lua state.
+    ///
+    /// Returns a sorted list of all keys in `_G`. Used by `NseVm` to establish
+    /// a baseline after library registration, so that per-script globals can be
+    /// identified and cleared between executions.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if global enumeration fails.
+    pub fn snapshot_global_names(&self) -> Result<Vec<String>> {
+        self.lua
+            .load("local n={}; for k,_ in pairs(_G) do n[#n+1]=k end; table.sort(n); return n")
+            .set_name("snapshot_global_names")
+            .eval::<Vec<String>>()
+            .map_err(|e| Error::LuaError {
+                script: "runtime".to_string(),
+                message: format!("failed to snapshot global names: {e}"),
+            })
+    }
+
     /// Get current memory usage in bytes.
     ///
     /// # Returns

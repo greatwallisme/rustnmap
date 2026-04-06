@@ -77,6 +77,7 @@ pub mod process_executor;
 pub mod registry;
 pub mod script;
 pub mod selector;
+pub mod vm;
 
 // Re-exports for convenience
 pub use engine::{ScriptEngine, ScriptScheduler};

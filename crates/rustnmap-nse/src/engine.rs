@@ -12,7 +12,6 @@ use tokio::sync::Semaphore;
 use tracing::debug;
 
 use crate::error::Result;
-use crate::lua::NseLua;
 use crate::registry::ScriptDatabase;
 use crate::script::{ExecutionStatus, NseScript, ScriptCategory, ScriptOutput, ScriptResult};
 use rustnmap_target::dns::DnsResolver;
@@ -103,6 +102,10 @@ impl ScriptScheduler {
 ///
 /// Main entry point for NSE script execution.
 /// Caches hostname resolution results per IP (like nmap caches in `Target::HostName()`).
+///
+/// Uses a single shared Lua VM (matching nmap's one-`lua_State *L_NSE` pattern)
+/// for all synchronous script operations. Libraries are registered once at engine
+/// creation; per-script state is cleared between executions via baseline snapshot.
 #[derive(Debug)]
 pub struct ScriptEngine {
     /// Script database.
@@ -114,6 +117,14 @@ pub struct ScriptEngine {
     /// Cached hostname lookups: IP -> resolved hostname.
     /// Matches nmap behavior: resolve once per scan, reuse everywhere.
     hostname_cache: std::sync::Mutex<HashMap<IpAddr, Option<String>>>,
+
+    /// Shared Lua VM for all synchronous script operations.
+    ///
+    /// Created once at engine initialization with all NSE libraries registered.
+    /// Per-script globals (`host`, `port`, `SCRIPT_NAME`, `action`, etc.) are cleared
+    /// between executions. This matches nmap's single-VM architecture where
+    /// `L_NSE` persists across all script runs.
+    shared_vm: std::sync::Mutex<crate::vm::NseVm>,
 }
 
 impl ScriptEngine {
@@ -126,16 +137,24 @@ impl ScriptEngine {
     /// # Returns
     ///
     /// A new script engine with default scheduler configuration.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the shared NSE VM cannot be created (should never happen
+    /// in normal operation).
     #[must_use]
     pub fn new(database: ScriptDatabase) -> Self {
         let db = Arc::new(database);
         let config = SchedulerConfig::default();
         let scheduler = ScriptScheduler::new(Arc::clone(&db), config);
+        let shared_vm =
+            std::sync::Mutex::new(crate::vm::NseVm::new().expect("Failed to create shared NSE VM"));
 
         Self {
             database: db,
             scheduler,
             hostname_cache: std::sync::Mutex::new(HashMap::new()),
+            shared_vm,
         }
     }
 
@@ -149,15 +168,23 @@ impl ScriptEngine {
     /// # Returns
     ///
     /// A new script engine with the given configuration.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the shared NSE VM cannot be created (should never happen
+    /// in normal operation).
     #[must_use]
     pub fn with_config(database: ScriptDatabase, config: SchedulerConfig) -> Self {
         let db = Arc::new(database);
         let scheduler = ScriptScheduler::new(Arc::clone(&db), config);
+        let shared_vm =
+            std::sync::Mutex::new(crate::vm::NseVm::new().expect("Failed to create shared NSE VM"));
 
         Self {
             database: db,
             scheduler,
             hostname_cache: std::sync::Mutex::new(HashMap::new()),
+            shared_vm,
         }
     }
 
@@ -581,12 +608,20 @@ impl ScriptEngine {
         original_target: Option<&str>,
     ) -> Result<ScriptResult> {
         let start = std::time::Instant::now();
-        let mut lua = NseLua::new_default()?;
 
-        // Register NSE standard libraries (nmap, stdnse, comm, shortport)
-        // These libraries are implemented in Rust and exposed to Lua via mlua FFI
-        // This MUST be done before loading the script, as scripts use require() to access them
-        crate::libs::register_all(&mut lua)?;
+        // Acquire shared VM and reset per-script state.
+        // Matches nmap's pattern: scripts share one lua_State, per-script
+        // globals are overwritten between executions.
+        let mut vm = self
+            .shared_vm
+            .lock()
+            .map_err(|e| crate::error::Error::ExecutionError {
+                script_id: script.id.clone(),
+                message: format!("failed to lock shared VM: {e}"),
+            })?;
+        vm.reset_for_script()?;
+
+        let lua = vm.lua();
 
         // Set SCRIPT_NAME global BEFORE loading the script, since some scripts
         // reference it at module level (e.g., ssl-heartbleed uses it in get_script_args)
@@ -600,7 +635,7 @@ impl ScriptEngine {
         lua.lua().globals().set("SCRIPT_TYPE", "hostrule")?;
 
         // Create full Nmap host table with all properties
-        let host_table = self.create_host_table(&mut lua, target_ip, original_target)?;
+        let host_table = self.create_host_table(lua, target_ip, original_target)?;
 
         lua.set_global("host", mlua::Value::Table(host_table))?;
 
@@ -768,11 +803,18 @@ impl ScriptEngine {
         service: Option<&str>,
     ) -> Result<ScriptResult> {
         let start = std::time::Instant::now();
-        let mut lua = NseLua::new_default()?;
 
-        // Register NSE standard libraries (nmap, stdnse, comm, shortport, http, ssh2, ssl, etc.)
-        // This MUST be done before loading the script, as scripts use require() to access them
-        crate::libs::register_all(&mut lua)?;
+        // Acquire shared VM and reset per-script state
+        let mut vm = self
+            .shared_vm
+            .lock()
+            .map_err(|e| crate::error::Error::ExecutionError {
+                script_id: script.id.clone(),
+                message: format!("failed to lock shared VM: {e}"),
+            })?;
+        vm.reset_for_script()?;
+
+        let lua = vm.lua();
 
         // Set SCRIPT_NAME BEFORE loading the script, since some scripts reference
         // SCRIPT_NAME at module level (e.g., ssl-heartbleed uses it in get_script_args)
@@ -793,12 +835,11 @@ impl ScriptEngine {
         lua.lua().globals().set("SCRIPT_TYPE", script_type)?;
 
         // Create host table
-        let host_table = self.create_host_table(&mut lua, target_ip, original_target)?;
+        let host_table = self.create_host_table(lua, target_ip, original_target)?;
         lua.set_global("host", mlua::Value::Table(host_table))?;
 
         // Create port table
-        let port_table =
-            Self::create_port_table(&mut lua, port, protocol, port_state, service, None)?;
+        let port_table = Self::create_port_table(lua, port, protocol, port_state, service, None)?;
         lua.set_global("port", mlua::Value::Table(port_table))?;
 
         // Execute the action function if it exists
@@ -958,17 +999,22 @@ impl ScriptEngine {
             return Ok(false);
         }
 
-        let mut lua = NseLua::new_default()?;
+        let mut vm = self
+            .shared_vm
+            .lock()
+            .map_err(|e| crate::error::Error::ExecutionError {
+                script_id: script.id.clone(),
+                message: format!("failed to lock shared VM: {e}"),
+            })?;
+        vm.reset_for_script()?;
 
-        // Register NSE standard libraries (nmap, stdnse, comm, shortport, http, ssh2, ssl, etc.)
-        // This MUST be done before loading the script, as scripts use require() to access them
-        crate::libs::register_all(&mut lua)?;
+        let lua = vm.lua();
 
         // Load the script
         lua.load_script(&script.source, &script.id)?;
 
         // Create host table
-        let host_table = self.create_host_table(&mut lua, target_ip, original_target)?;
+        let host_table = self.create_host_table(lua, target_ip, original_target)?;
         lua.set_global("host", mlua::Value::Table(host_table.clone()))?;
 
         // Evaluate the hostrule
@@ -1016,11 +1062,16 @@ impl ScriptEngine {
             return Ok(false);
         }
 
-        let mut lua = NseLua::new_default()?;
+        let mut vm = self
+            .shared_vm
+            .lock()
+            .map_err(|e| crate::error::Error::ExecutionError {
+                script_id: script.id.clone(),
+                message: format!("failed to lock shared VM: {e}"),
+            })?;
+        vm.reset_for_script()?;
 
-        // Register NSE standard libraries (nmap, stdnse, comm, shortport, http, ssh2, ssl, etc.)
-        // This MUST be done before loading the script, as scripts use require() to access them
-        crate::libs::register_all(&mut lua)?;
+        let lua = vm.lua();
 
         // Set SCRIPT_NAME BEFORE loading the script, since some scripts reference
         // SCRIPT_NAME at module level (e.g., ssl-heartbleed uses it in get_script_args)
@@ -1030,12 +1081,11 @@ impl ScriptEngine {
         lua.load_script(&script.source, &script.id)?;
 
         // Create host table
-        let host_table = self.create_host_table(&mut lua, target_ip, original_target)?;
+        let host_table = self.create_host_table(lua, target_ip, original_target)?;
         lua.set_global("host", mlua::Value::Table(host_table.clone()))?;
 
         // Create port table
-        let port_table =
-            Self::create_port_table(&mut lua, port, protocol, port_state, service, None)?;
+        let port_table = Self::create_port_table(lua, port, protocol, port_state, service, None)?;
         lua.set_global("port", mlua::Value::Table(port_table.clone()))?;
 
         // Evaluate the portrule
@@ -1049,6 +1099,7 @@ impl ScriptEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::lua::NseLua;
 
     #[test]
     fn test_scheduler_config_default() {
