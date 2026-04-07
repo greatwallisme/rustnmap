@@ -334,7 +334,11 @@ impl NseScript {
 }
 
 /// Simple glob pattern matching for script selection.
-fn match_pattern(text: &str, pattern: &str) -> bool {
+///
+/// Supports `*` (any sequence) and `?` (single character) wildcards.
+/// Used by both [`NseScript::matches_pattern`] and [`crate::selector::ScriptSelector::select_from_index`].
+#[must_use]
+pub fn match_pattern(text: &str, pattern: &str) -> bool {
     let mut pi = 0;
     let mut ti = 0;
     let pat_bytes = pattern.as_bytes();

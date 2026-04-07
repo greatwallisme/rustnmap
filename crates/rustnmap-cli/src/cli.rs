@@ -477,75 +477,41 @@ async fn handle_profile_scan(args: &Args, profile_path: &std::path::Path) -> Res
         }
     }
 
-    // Load MAC prefix database for vendor lookups
-    let mac_db_path = db_dir.join("nmap-mac-prefixes");
-    if mac_db_path.exists() {
-        info!(
-            "Loading MAC prefix database from: {}",
-            mac_db_path.display()
-        );
-        match rustnmap_fingerprint::MacPrefixDatabase::load_from_file(&mac_db_path).await {
-            Ok(db) => {
-                info!(
-                    "MAC prefix database loaded successfully ({} entries)",
-                    db.len()
-                );
-                fp_db.set_mac_db(db);
+    // Load MAC prefix database only when host discovery is enabled
+    // (MAC addresses are obtained during ARP-based host discovery)
+    if config.host_discovery {
+        let mac_db_path = db_dir.join("nmap-mac-prefixes");
+        if mac_db_path.exists() {
+            info!(
+                "Loading MAC prefix database from: {}",
+                mac_db_path.display()
+            );
+            match rustnmap_fingerprint::MacPrefixDatabase::load_from_file(&mac_db_path).await {
+                Ok(db) => {
+                    info!(
+                        "MAC prefix database loaded successfully ({} entries)",
+                        db.len()
+                    );
+                    fp_db.set_mac_db(db);
+                }
+                Err(e) => {
+                    warn!("Failed to load MAC prefix database: {e}");
+                }
             }
-            Err(e) => {
-                warn!("Failed to load MAC prefix database: {e}");
-            }
+        } else {
+            debug!(
+                "MAC prefix database not found at: {}",
+                mac_db_path.display()
+            );
         }
-    } else {
-        debug!(
-            "MAC prefix database not found at: {}",
-            mac_db_path.display()
-        );
     }
 
     // Create database context for output
     // Note: Service names are looked up using rustnmap_common::ServiceDatabase::global()
-    let mut db_context = DatabaseContext::new();
-
-    // Load protocols database for protocol number-to-name mappings
-    let protocols_db_path = db_dir.join("nmap-protocols");
-    if protocols_db_path.exists() {
-        info!(
-            "Loading protocols database from: {}",
-            protocols_db_path.display()
-        );
-        match rustnmap_fingerprint::ProtocolDatabase::load_from_file(&protocols_db_path).await {
-            Ok(db) => {
-                info!("Protocols database loaded successfully");
-                db_context.protocols = Some(Arc::new(db));
-            }
-            Err(e) => {
-                warn!("Failed to load protocols database: {e}");
-            }
-        }
-    } else {
-        debug!(
-            "Protocols database not found at: {}",
-            protocols_db_path.display()
-        );
-    }
-
-    // Load RPC database for RPC program number mappings
-    let rpc_db_path = db_dir.join("nmap-rpc");
-    if rpc_db_path.exists() {
-        info!("Loading RPC database from: {}", rpc_db_path.display());
-        match rustnmap_fingerprint::RpcDatabase::load_from_file(&rpc_db_path).await {
-            Ok(db) => {
-                info!("RPC database loaded successfully");
-                db_context.rpc = Some(Arc::new(db));
-            }
-            Err(e) => {
-                warn!("Failed to load RPC database: {e}");
-            }
-        }
-    } else {
-        debug!("RPC database not found at: {}", rpc_db_path.display());
-    }
+    // Note: protocols and RPC databases are not loaded at startup - they are unused
+    // in output functions (all output paths use _db_context with underscore prefix).
+    // These can be loaded lazily if needed in the future.
+    let db_context = DatabaseContext::new();
 
     let fingerprint_db = Arc::new(fp_db);
 
@@ -557,16 +523,29 @@ async fn handle_profile_scan(args: &Args, profile_path: &std::path::Path) -> Res
         })?);
     let output_sink: Arc<dyn OutputSink> = Arc::new(DefaultOutputSink::new());
 
-    // Load NSE scripts from default directory
-    let scripts_dir = std::path::PathBuf::from(datadir.as_ref()).join("scripts");
+    // Load NSE scripts only when script scanning is enabled.
+    // Phase 1: Build lightweight index from script directory.
+    // Phase 2: Lazy-load only scripts matching the selector.
     let mut nse_registry = NseRegistry::new();
-    if scripts_dir.exists() {
-        if let Err(e) = nse_registry.load_from_directory(&scripts_dir) {
-            warn!(
-                "Failed to load NSE scripts from {}: {}",
-                scripts_dir.display(),
-                e
-            );
+    if config.nse_scripts {
+        let scripts_dir = std::path::PathBuf::from(datadir.as_ref()).join("scripts");
+        if scripts_dir.exists() {
+            if let Err(e) = nse_registry.load_from_directory(&scripts_dir) {
+                warn!(
+                    "Failed to load NSE scripts from {}: {}",
+                    scripts_dir.display(),
+                    e
+                );
+            } else {
+                // Phase 2: lazy-load only scripts matching the selector
+                let selector_expr = config.nse_selector.as_deref().unwrap_or("default");
+                if let Err(e) = nse_registry.load_matching_scripts(selector_expr) {
+                    warn!(
+                        "Failed to load matching NSE scripts for selector '{}': {}",
+                        selector_expr, e
+                    );
+                }
+            }
         }
     }
     let nse_registry = Arc::new(nse_registry);
@@ -898,75 +877,41 @@ async fn run_normal_scan(args: &Args) -> Result<()> {
         }
     }
 
-    // Load MAC prefix database for vendor lookups
-    let mac_db_path = db_dir.join("nmap-mac-prefixes");
-    if mac_db_path.exists() {
-        info!(
-            "Loading MAC prefix database from: {}",
-            mac_db_path.display()
-        );
-        match rustnmap_fingerprint::MacPrefixDatabase::load_from_file(&mac_db_path).await {
-            Ok(db) => {
-                info!(
-                    "MAC prefix database loaded successfully ({} entries)",
-                    db.len()
-                );
-                fp_db.set_mac_db(db);
+    // Load MAC prefix database only when host discovery is enabled
+    // (MAC addresses are obtained during ARP-based host discovery)
+    if config.host_discovery {
+        let mac_db_path = db_dir.join("nmap-mac-prefixes");
+        if mac_db_path.exists() {
+            info!(
+                "Loading MAC prefix database from: {}",
+                mac_db_path.display()
+            );
+            match rustnmap_fingerprint::MacPrefixDatabase::load_from_file(&mac_db_path).await {
+                Ok(db) => {
+                    info!(
+                        "MAC prefix database loaded successfully ({} entries)",
+                        db.len()
+                    );
+                    fp_db.set_mac_db(db);
+                }
+                Err(e) => {
+                    warn!("Failed to load MAC prefix database: {e}");
+                }
             }
-            Err(e) => {
-                warn!("Failed to load MAC prefix database: {e}");
-            }
+        } else {
+            debug!(
+                "MAC prefix database not found at: {}",
+                mac_db_path.display()
+            );
         }
-    } else {
-        debug!(
-            "MAC prefix database not found at: {}",
-            mac_db_path.display()
-        );
     }
 
     // Create database context for output
     // Note: Service names are looked up using rustnmap_common::ServiceDatabase::global()
-    let mut db_context = DatabaseContext::new();
-
-    // Load protocols database for protocol number-to-name mappings
-    let protocols_db_path = db_dir.join("nmap-protocols");
-    if protocols_db_path.exists() {
-        info!(
-            "Loading protocols database from: {}",
-            protocols_db_path.display()
-        );
-        match rustnmap_fingerprint::ProtocolDatabase::load_from_file(&protocols_db_path).await {
-            Ok(db) => {
-                info!("Protocols database loaded successfully");
-                db_context.protocols = Some(Arc::new(db));
-            }
-            Err(e) => {
-                warn!("Failed to load protocols database: {e}");
-            }
-        }
-    } else {
-        debug!(
-            "Protocols database not found at: {}",
-            protocols_db_path.display()
-        );
-    }
-
-    // Load RPC database for RPC program number mappings
-    let rpc_db_path = db_dir.join("nmap-rpc");
-    if rpc_db_path.exists() {
-        info!("Loading RPC database from: {}", rpc_db_path.display());
-        match rustnmap_fingerprint::RpcDatabase::load_from_file(&rpc_db_path).await {
-            Ok(db) => {
-                info!("RPC database loaded successfully");
-                db_context.rpc = Some(Arc::new(db));
-            }
-            Err(e) => {
-                warn!("Failed to load RPC database: {e}");
-            }
-        }
-    } else {
-        debug!("RPC database not found at: {}", rpc_db_path.display());
-    }
+    // Note: protocols and RPC databases are not loaded at startup - they are unused
+    // in output functions (all output paths use _db_context with underscore prefix).
+    // These can be loaded lazily if needed in the future.
+    let db_context = DatabaseContext::new();
 
     let fingerprint_db = Arc::new(fp_db);
 
@@ -978,16 +923,29 @@ async fn run_normal_scan(args: &Args) -> Result<()> {
         })?);
     let output_sink: Arc<dyn OutputSink> = Arc::new(DefaultOutputSink::new());
 
-    // Load NSE scripts from default directory
-    let scripts_dir = std::path::PathBuf::from(datadir.as_ref()).join("scripts");
+    // Load NSE scripts only when script scanning is enabled.
+    // Phase 1: Build lightweight index from script directory.
+    // Phase 2: Lazy-load only scripts matching the selector.
     let mut nse_registry = NseRegistry::new();
-    if scripts_dir.exists() {
-        if let Err(e) = nse_registry.load_from_directory(&scripts_dir) {
-            warn!(
-                "Failed to load NSE scripts from {}: {}",
-                scripts_dir.display(),
-                e
-            );
+    if config.nse_scripts {
+        let scripts_dir = std::path::PathBuf::from(datadir.as_ref()).join("scripts");
+        if scripts_dir.exists() {
+            if let Err(e) = nse_registry.load_from_directory(&scripts_dir) {
+                warn!(
+                    "Failed to load NSE scripts from {}: {}",
+                    scripts_dir.display(),
+                    e
+                );
+            } else {
+                // Phase 2: lazy-load only scripts matching the selector
+                let selector_expr = config.nse_selector.as_deref().unwrap_or("default");
+                if let Err(e) = nse_registry.load_matching_scripts(selector_expr) {
+                    warn!(
+                        "Failed to load matching NSE scripts for selector '{}': {}",
+                        selector_expr, e
+                    );
+                }
+            }
         }
     }
     let nse_registry = Arc::new(nse_registry);

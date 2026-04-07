@@ -50,24 +50,28 @@ const REQUEST_TIMEOUT_MS: u64 = 6_000;
 
 /// Default connect timeout in milliseconds when no host times are available.
 ///
-/// Matches nmap's `stdnse.get_timeout()` default (`max_timeout` = 8000).
-const DEFAULT_CONNECT_TIMEOUT_MS: u64 = 8_000;
+/// Matches nmap's `stdnse.get_timeout()` default behavior:
+/// `host.times.timeout * (max_timeout + 6000) / 7`
+/// With default `timeout=3.0` and `max_timeout=8000`: `3.0 * 14000/7 = 6000ms`
+const DEFAULT_CONNECT_TIMEOUT_MS: u64 = 6_000;
 
 /// Default banner read timeout in milliseconds.
-const DEFAULT_BANNER_TIMEOUT_MS: u64 = 5_000;
+///
+/// Matches nmap behavior: banner timeout is capped at `connect_timeout`.
+const DEFAULT_BANNER_TIMEOUT_MS: u64 = 6_000;
 
 /// Linger timeout after first successful read in `receive_all()`.
 ///
 /// After reading the first chunk of data, nmap's nsock event loop detects
 /// "no more data" quickly via non-blocking I/O callbacks. We approximate
-/// this by switching to a short timeout (150ms) after the first read:
-/// if no more data arrives within 150ms, the server has finished sending.
+/// this by switching to a short timeout after the first read:
+/// if no more data arrives within 30ms, the server has finished sending.
 ///
 /// This is safe because:
 /// - Initial wait still uses the full socket timeout (e.g. 5s for banner)
 /// - Only the *subsequent* reads use the short linger timeout
-/// - If the server is still sending data, it will arrive within RTT (<<150ms on LAN)
-const LINGER_TIMEOUT_MS: u64 = 150;
+/// - If the server is still sending data, it will arrive within RTT (<<30ms on LAN)
+const LINGER_TIMEOUT_MS: u64 = 30;
 
 /// Underlying transport for an NSE socket.
 #[derive(Debug)]
@@ -158,6 +162,43 @@ impl NseSocket {
             Some(SocketTransport::Udp(ref udp)) => {
                 let mut buffer = vec![0u8; max_bytes];
                 let n = udp.recv(&mut buffer)?;
+                buffer.truncate(n);
+                Ok(buffer)
+            }
+            None => Err(std::io::Error::new(
+                std::io::ErrorKind::NotConnected,
+                "socket not connected",
+            )),
+        }
+    }
+
+    /// Receive data with a temporary timeout override.
+    ///
+    /// Temporarily changes the socket read timeout, performs a single receive,
+    /// then restores the original timeout. Used for banner linger reads.
+    fn receive_with_timeout(
+        &mut self,
+        max_bytes: usize,
+        timeout: Duration,
+    ) -> std::io::Result<Vec<u8>> {
+        match self.transport {
+            Some(SocketTransport::Tcp(ref mut stream)) => {
+                let original = stream.read_timeout()?;
+                stream.set_read_timeout(Some(timeout))?;
+                let mut buffer = vec![0u8; max_bytes];
+                let result = stream.read(&mut buffer);
+                stream.set_read_timeout(original)?;
+                let n = result?;
+                buffer.truncate(n);
+                Ok(buffer)
+            }
+            Some(SocketTransport::Udp(ref udp)) => {
+                let original = udp.read_timeout()?;
+                udp.set_read_timeout(Some(timeout))?;
+                let mut buffer = vec![0u8; max_bytes];
+                let result = udp.recv(&mut buffer);
+                udp.set_read_timeout(original)?;
+                let n = result?;
                 buffer.truncate(n);
                 Ok(buffer)
             }
@@ -1012,12 +1053,24 @@ fn get_banner_impl(host: &str, port: u16, opts: &ConnectionOpts) -> std::io::Res
     let banner_timeout = Duration::from_millis(DEFAULT_BANNER_TIMEOUT_MS);
     socket.timeout = banner_timeout.min(opts.connect_timeout);
 
-    // Use receive_all to read all data until timeout
-    // A single receive() may miss data sent in multiple packets
-    let buffer = socket.receive_all()?;
+    // Banner grabbing: read initial data from the service.
+    // nmap's nsock uses non-blocking I/O with event callbacks that return
+    // as soon as the first chunk arrives. We approximate this with a single
+    // receive() call - most banners (SSH, SMTP, FTP, POP3) arrive in one packet.
+    // If the first read returns data, we do one more short read to catch any
+    // trailing data, using a minimal linger timeout.
+    let mut result = socket.receive(8192)?;
+    if !result.is_empty() {
+        // Try one more read with a very short timeout to catch split banners.
+        let linger = Duration::from_millis(LINGER_TIMEOUT_MS);
+        match socket.receive_with_timeout(8192, linger) {
+            Ok(more) if !more.is_empty() => result.extend_from_slice(&more),
+            _ => {}
+        }
+    }
     socket.close();
 
-    Ok(buffer)
+    Ok(result)
 }
 
 /// Exchange data with host:port (send then receive).

@@ -82,8 +82,8 @@ pub mod vm;
 // Re-exports for convenience
 pub use engine::{ScriptEngine, ScriptScheduler};
 pub use error::{Error, Result};
-pub use registry::ScriptDatabase;
-pub use script::{NseScript, ScriptCategory, ScriptOutput};
+pub use registry::{ScriptDatabase, ScriptIndexEntry};
+pub use script::{match_pattern, NseScript, ScriptCategory, ScriptOutput};
 pub use selector::ScriptSelector;
 
 /// NSE engine version for compatibility checking.

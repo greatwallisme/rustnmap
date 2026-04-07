@@ -126,6 +126,20 @@ All 46/46 PASS. Performance breakdown by speedup:
 
 ---
 
+## Bug Fix: UDP IHL Byte Offset (2026-04-05, COMPLETE)
+
+**Root Cause**: `parse_udp_response()` in `ultrascan.rs` used IHL field value (5) as byte offset
+instead of multiplying by 4 (IHL=5 words = 20 bytes). This caused src_port to be read from
+IP header bytes 5-6 (identification field) instead of bytes 20-21 (actual UDP source port).
+Responses couldn't match outstanding probes, so ALL UDP responses were silently dropped.
+
+**Also Fixed**: `start_icmp_receiver_task` now receives `src_addr` parameter instead
+of using `self.local_addr`, ensuring the address check matches the BPF filter address.
+
+**Impact**: UDP scan on SNMP port 161: 11.40s (`open|filtered`) -> 0.34s (`open`)
+
+---
+
 ## Previous Plan: NSE Script Compatibility Fix (COMPLETE)
 
 ### Goal (completed 2026-04-05)

@@ -3,10 +3,15 @@
 //! Executes service probes and matches responses to detect
 //! service types and version information.
 
-use std::{collections::HashMap, net::SocketAddr, time::Duration};
+use std::{
+    collections::HashMap,
+    net::SocketAddr,
+    time::{Duration, Instant},
+};
 
 use pcre2::bytes::Regex;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpStream, UdpSocket};
 use tokio::time::timeout;
 use tracing::{debug, info, trace};
 
@@ -132,43 +137,71 @@ impl ServiceDetector {
 
     /// Detect service on a specific port.
     ///
+    /// Implements nmap's total time budget model (DEFAULT_SERVICEWAITMS):
+    /// all probes for a single port share one time budget (5 seconds).
+    /// Each subsequent probe gets `budget - elapsed`, matching nmap's
+    /// `probe_timemsleft()` logic in `service_scan.cc`.
+    ///
+    /// # Arguments
+    ///
+    /// * `target` - Target socket address
+    /// * `port` - Port number to probe
+    /// * `protocol` - Protocol string: "tcp" or "udp"
+    ///
     /// # Errors
+    ///
     /// Returns error if network operation fails or fingerprint matching fails.
-    pub async fn detect_service(&self, target: &SocketAddr, port: u16) -> Result<Vec<ServiceInfo>> {
-        info!("Starting service detection on {}:{}", target.ip(), port);
+    pub async fn detect_service_with_protocol(
+        &self,
+        target: &SocketAddr,
+        port: u16,
+        protocol: &str,
+    ) -> Result<Vec<ServiceInfo>> {
+        info!("Starting service detection on {}:{} ({})", target.ip(), port, protocol);
+        let is_udp = protocol.eq_ignore_ascii_case("udp");
 
-        // First try banner grabbing (null probe) for services that send banners immediately
+        // nmap's DEFAULT_SERVICEWAITMS = 5000ms: total time budget for ALL probes.
+        // Each probe's timeout = budget - elapsed_so_far.
+        let total_budget = self.default_timeout;
+        let start = Instant::now();
         let mut results = Vec::new();
 
-        match self.grab_banner(target, port).await {
-            Ok(Some(banner)) => {
-                trace!("Got banner: {} bytes", banner.len());
+        // Banner grabbing only works for TCP (services that send banners on connect).
+        // UDP services never send unsolicited data, so skip banner grab entirely.
+        // nmap calls this the "NULL probe" and it shares the same time budget.
+        if !is_udp {
+            let remaining = total_budget.saturating_sub(start.elapsed());
+            if !remaining.is_zero() {
+                match self.grab_banner_with_timeout(target, port, remaining).await {
+                    Ok(Some(banner)) => {
+                        trace!("Got banner: {} bytes", banner.len());
 
-                // Try to match banner against all probe rules (treat as GenericLines response)
-                let probes = self.select_probes(port);
-                for probe in &probes {
-                    let matches = Self::match_response(probe, &banner)?;
-                    for match_result in matches {
-                        results.push(ServiceInfo::from_match(match_result));
+                        // Try to match banner against all probe rules
+                        let probes = self.select_probes(port);
+                        for probe in &probes {
+                            let matches = Self::match_response(probe, &banner)?;
+                            for match_result in matches {
+                                results.push(ServiceInfo::from_match(match_result));
+                            }
+                        }
+
+                        // If we got confident results from banner, return early
+                        if results.iter().any(|r| r.confidence >= 8) {
+                            return Ok(results);
+                        }
+                    }
+                    Ok(None) => {
+                        debug!("No banner received from {}:{}", target.ip(), port);
+                    }
+                    Err(e) => {
+                        debug!("Banner grab failed: {}", e);
                     }
                 }
-
-                // If we got confident results from banner, return early
-                if results.iter().any(|r| r.confidence >= 8) {
-                    return Ok(results);
-                }
-            }
-            Ok(None) => {
-                debug!("No banner received from {}:{}", target.ip(), port);
-            }
-            Err(e) => {
-                debug!("Banner grab failed: {}", e);
             }
         }
 
         // Get applicable probes for this port at configured intensity
         let probes = self.select_probes(port);
-
         debug!("Selected {} probes for port {}", probes.len(), port);
 
         if probes.is_empty() {
@@ -179,11 +212,22 @@ impl ServiceDetector {
             return Ok(results);
         }
 
-        // Execute probes in order
+        // Execute probes in order, sharing the remaining time budget
         for probe in &probes {
-            debug!("Sending probe '{}' to port {}", probe.name, port);
+            let remaining = total_budget.saturating_sub(start.elapsed());
+            if remaining.is_zero() {
+                debug!("Time budget exhausted, stopping probes for port {}", port);
+                break;
+            }
 
-            match self.send_probe(target, port, probe).await {
+            debug!(
+                "Sending probe '{}' to port {} ({}ms remaining)",
+                probe.name,
+                port,
+                remaining.as_millis()
+            );
+
+            match self.send_probe_with_timeout(target, port, probe, remaining).await {
                 Ok(Some(response)) => {
                     debug!(
                         "Got {} bytes from probe '{}' on port {}",
@@ -192,7 +236,6 @@ impl ServiceDetector {
                         port
                     );
 
-                    // Match response against all rules
                     let matches = Self::match_response(probe, &response)?;
 
                     debug!(
@@ -230,8 +273,6 @@ impl ServiceDetector {
     /// # Errors
     /// Returns error if connection times out or network operation fails.
     pub async fn grab_banner(&self, target: &SocketAddr, port: u16) -> Result<Option<Vec<u8>>> {
-        use tokio::io::AsyncReadExt;
-        use tokio::net::TcpStream;
 
         trace!("Grabbing banner from {}:{}", target.ip(), port);
 
@@ -270,6 +311,160 @@ impl ServiceDetector {
         }
     }
 
+    /// Grab banner with a specific timeout (for total time budget).
+    ///
+    /// Same as `grab_banner` but uses caller-specified timeout instead of
+    /// `default_timeout`, implementing nmap's shared time budget model.
+    async fn grab_banner_with_timeout(
+        &self,
+        target: &SocketAddr,
+        port: u16,
+        timeout_duration: Duration,
+    ) -> Result<Option<Vec<u8>>> {
+        trace!(
+            "Grabbing banner from {}:{} (timeout: {}ms)",
+            target.ip(),
+            port,
+            timeout_duration.as_millis()
+        );
+
+        let stream = timeout(
+            timeout_duration,
+            TcpStream::connect((target.ip(), port)),
+        )
+        .await
+        .map_err(|_| FingerprintError::Timeout {
+            address: target.ip().to_string(),
+            port,
+        })?;
+
+        let mut stream = stream?;
+
+        let mut buffer = vec![0u8; 4096];
+        let n = match timeout(timeout_duration, stream.read(&mut buffer)).await {
+            Ok(Ok(n)) => n,
+            Ok(Err(_)) => 0,
+            Err(_) => {
+                return Err(FingerprintError::Timeout {
+                    address: target.ip().to_string(),
+                    port,
+                });
+            }
+        };
+
+        if n > 0 {
+            buffer.truncate(n);
+            trace!("Banner grabbed: {} bytes", n);
+            Ok(Some(buffer))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Send a probe with a specific timeout (for total time budget).
+    async fn send_probe_with_timeout(
+        &self,
+        target: &SocketAddr,
+        port: u16,
+        probe: &ProbeDefinition,
+        timeout_duration: Duration,
+    ) -> Result<Option<Vec<u8>>> {
+        let payload = &probe.payload;
+
+        match probe.protocol {
+            Protocol::Tcp => {
+                self.send_tcp_probe_with_timeout(target, port, payload, timeout_duration)
+                    .await
+            }
+            Protocol::Udp => {
+                self.send_udp_probe_with_timeout(target, port, payload, timeout_duration)
+                    .await
+            }
+        }
+    }
+
+    /// Send TCP probe with specific timeout.
+    async fn send_tcp_probe_with_timeout(
+        &self,
+        target: &SocketAddr,
+        port: u16,
+        payload: &[u8],
+        timeout_duration: Duration,
+    ) -> Result<Option<Vec<u8>>> {
+        let stream = timeout(
+            timeout_duration,
+            TcpStream::connect((target.ip(), port)),
+        )
+        .await
+        .map_err(|_| FingerprintError::Timeout {
+            address: target.ip().to_string(),
+            port,
+        })?;
+
+        let mut stream = stream?;
+        stream
+            .write_all(payload)
+            .await
+            .map_err(|e: std::io::Error| FingerprintError::Network {
+                operation: "write probe".to_string(),
+                reason: e.to_string(),
+            })?;
+
+        let mut buffer = vec![0u8; 4096];
+        let n = match timeout(timeout_duration, stream.read(&mut buffer)).await {
+            Ok(Ok(n)) => n,
+            Ok(Err(_)) => 0,
+            Err(_) => {
+                return Err(FingerprintError::Timeout {
+                    address: target.ip().to_string(),
+                    port,
+                })
+            }
+        };
+
+        if n > 0 {
+            buffer.truncate(n);
+            Ok(Some(buffer))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Send UDP probe with specific timeout.
+    async fn send_udp_probe_with_timeout(
+        &self,
+        target: &SocketAddr,
+        _port: u16,
+        payload: &[u8],
+        timeout_duration: Duration,
+    ) -> Result<Option<Vec<u8>>> {
+        let socket = UdpSocket::bind("0.0.0.0:0")
+            .await
+            .map_err(|e| FingerprintError::Network {
+                operation: "bind UDP socket".to_string(),
+                reason: e.to_string(),
+            })?;
+
+        socket
+            .send_to(payload, *target)
+            .await
+            .map_err(|e| FingerprintError::Network {
+                operation: "send UDP probe".to_string(),
+                reason: e.to_string(),
+            })?;
+
+        let mut buffer = vec![0u8; 4096];
+        let result = timeout(timeout_duration, socket.recv_from(&mut buffer)).await;
+
+        match result {
+            Ok(Ok((n, _))) if n > 0 => {
+                buffer.truncate(n);
+                Ok(Some(buffer))
+            }
+            _ => Ok(None),
+        }
+    }
+
     /// Select probes for a port based on intensity level.
     fn select_probes(&self, port: u16) -> Vec<&ProbeDefinition> {
         let mut probes: Vec<&ProbeDefinition> = self.db.probes_for_port(port);
@@ -298,111 +493,6 @@ impl ServiceDetector {
             1..=3 => 5,
             4..=6 => 7,
             _ => 9,
-        }
-    }
-
-    /// Send a single probe and await response.
-    async fn send_probe(
-        &self,
-        target: &SocketAddr,
-        port: u16,
-        probe: &ProbeDefinition,
-    ) -> Result<Option<Vec<u8>>> {
-        let payload = &probe.payload;
-
-        match probe.protocol {
-            Protocol::Tcp => self.send_tcp_probe(target, port, payload).await,
-            Protocol::Udp => self.send_udp_probe(target, port, payload).await,
-        }
-    }
-
-    /// Send TCP probe to target.
-    async fn send_tcp_probe(
-        &self,
-        target: &SocketAddr,
-        port: u16,
-        payload: &[u8],
-    ) -> Result<Option<Vec<u8>>> {
-        use tokio::io::AsyncReadExt;
-        use tokio::net::TcpStream;
-
-        // Connect and send
-        let stream = timeout(
-            self.default_timeout,
-            TcpStream::connect((target.ip(), port)),
-        )
-        .await
-        .map_err(|_| FingerprintError::Timeout {
-            address: target.ip().to_string(),
-            port,
-        })?;
-
-        // Send payload
-        let mut stream = stream?;
-        stream
-            .write_all(payload)
-            .await
-            .map_err(|e: std::io::Error| FingerprintError::Network {
-                operation: "write probe".to_string(),
-                reason: e.to_string(),
-            })?;
-
-        // Read response
-        let mut buffer = vec![0u8; 4096];
-        let n = match timeout(self.default_timeout, stream.read(&mut buffer)).await {
-            Ok(Ok(n)) => n,
-            Ok(Err(_)) => 0,
-            Err(_) => {
-                return Err(FingerprintError::Timeout {
-                    address: target.ip().to_string(),
-                    port,
-                })
-            }
-        };
-
-        if n > 0 {
-            buffer.truncate(n);
-            Ok(Some(buffer))
-        } else {
-            Ok(None)
-        }
-    }
-
-    /// Send UDP probe to target.
-    async fn send_udp_probe(
-        &self,
-        target: &SocketAddr,
-        _port: u16,
-        payload: &[u8],
-    ) -> Result<Option<Vec<u8>>> {
-        use tokio::net::UdpSocket;
-
-        let socket = UdpSocket::bind("0.0.0.0:0")
-            .await
-            .map_err(|e| FingerprintError::Network {
-                operation: "bind UDP socket".to_string(),
-                reason: e.to_string(),
-            })?;
-
-        // Send probe
-        socket
-            .send_to(payload, *target)
-            .await
-            .map_err(|e| FingerprintError::Network {
-                operation: "send UDP probe".to_string(),
-                reason: e.to_string(),
-            })?;
-
-        // Try to receive response
-        let mut buffer = vec![0u8; 4096];
-        let result = timeout(self.default_timeout, socket.recv_from(&mut buffer)).await;
-
-        match result {
-            Ok(Ok((n, _))) if n > 0 => {
-                buffer.truncate(n);
-                Ok(Some(buffer))
-            }
-            _ => Ok(None),
         }
     }
 

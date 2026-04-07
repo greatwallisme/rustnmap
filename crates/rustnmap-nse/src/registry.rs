@@ -2,20 +2,56 @@
 //!
 //! This module provides the script database that manages loading,
 //! caching, and selecting NSE scripts.
+//!
+//! # Two-Phase Loading (nmap-style script.db)
+//!
+//! Phase 1 builds a lightweight index by scanning the first 2 KB of each `.nse`
+//! file to extract the `categories = {...}` line. No full source is read and no
+//! Lua function extraction happens.
+//!
+//! Phase 2 lazy-loads only the scripts that match the user's `--script` selector
+//! by reading the full file and parsing all metadata + function sources.
 
 use std::collections::HashMap;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
 use crate::script::{NseScript, ScriptCategory};
+use crate::selector::ScriptSelector;
+
+/// Maximum bytes to read from a script file when building the lightweight index.
+///
+/// The `categories = {...}` line is always near the top of NSE files.
+/// 2 KB is generous; most category lines appear within the first 200 bytes.
+const INDEX_SCAN_BYTES: usize = 2048;
+
+/// Lightweight index entry built from a quick scan of each `.nse` file header.
+///
+/// Contains only the filename and categories -- no source code parsing.
+/// Used by [`ScriptSelector::select_from_index`] to decide which scripts
+/// deserve a full load.
+#[derive(Debug, Clone)]
+pub struct ScriptIndexEntry {
+    /// Full filesystem path to the `.nse` file.
+    pub file_path: PathBuf,
+    /// Script ID (filename without `.nse` extension).
+    pub basename: String,
+    /// Script categories parsed from the `categories = {...}` line.
+    pub categories: Vec<ScriptCategory>,
+}
 
 /// NSE script database.
 ///
 /// Manages available scripts, their metadata, and provides
 /// selection based on categories, patterns, and targets.
+///
+/// Uses a two-phase loading strategy:
+/// 1. [`ScriptDatabase::from_directory`] builds a lightweight index.
+/// 2. [`ScriptDatabase::load_scripts_by_selector`] lazy-loads matching scripts.
 #[derive(Debug)]
 pub struct ScriptDatabase {
-    /// All loaded scripts indexed by ID.
+    /// Fully loaded scripts indexed by ID.
     scripts: HashMap<String, NseScript>,
 
     /// Scripts indexed by category.
@@ -29,6 +65,9 @@ pub struct ScriptDatabase {
 
     /// Base directory for scripts.
     base_dir: PathBuf,
+
+    /// Lightweight index of all discovered `.nse` files (Phase 1).
+    script_index: Vec<ScriptIndexEntry>,
 }
 
 impl ScriptDatabase {
@@ -41,10 +80,18 @@ impl ScriptDatabase {
             by_port: HashMap::new(),
             by_service: HashMap::new(),
             base_dir: PathBuf::new(),
+            script_index: Vec::new(),
         }
     }
 
     /// Load scripts from a directory.
+    ///
+    /// **Phase 1 only** -- builds a lightweight index by reading the first
+    /// [`INDEX_SCAN_BYTES`] bytes of each `.nse` file. No full source is
+    /// parsed and no Lua functions are extracted.
+    ///
+    /// Call [`ScriptDatabase::load_scripts_by_selector`] afterwards to
+    /// lazy-load only the scripts that match the user's selector.
     ///
     /// # Arguments
     ///
@@ -52,33 +99,32 @@ impl ScriptDatabase {
     ///
     /// # Returns
     ///
-    /// A database containing all loaded scripts.
+    /// A database containing the script index (no fully loaded scripts).
     ///
     /// # Errors
     ///
-    /// Returns an error if the directory cannot be read or
-    /// if a script file cannot be parsed.
+    /// Returns an error if the directory cannot be read.
     pub fn from_directory(dir: &Path) -> Result<Self> {
         let mut db = Self {
             base_dir: dir.to_path_buf(),
             ..Self::new()
         };
 
-        db.load_directory(dir)?;
+        db.build_index(dir)?;
         Ok(db)
     }
 
-    /// Load all scripts from a directory recursively.
-    fn load_directory(&mut self, dir: &Path) -> Result<()> {
-        // Use block_in_place to yield to async runtime during directory traversal
-        tokio::task::block_in_place(|| self.load_directory_blocking(dir))
+    /// Build the lightweight index by scanning directory entries.
+    ///
+    /// For each `.nse` file, reads only the first [`INDEX_SCAN_BYTES`] bytes
+    /// to extract the `categories = {...}` line. Does NOT read the full file
+    /// or parse Lua function sources.
+    fn build_index(&mut self, dir: &Path) -> Result<()> {
+        tokio::task::block_in_place(|| self.build_index_blocking(dir))
     }
 
-    /// Blocking implementation of directory loading.
-    ///
-    /// This function performs the actual blocking file system operations.
-    /// It is called within `block_in_place` to avoid blocking the async runtime.
-    fn load_directory_blocking(&mut self, dir: &Path) -> Result<()> {
+    /// Blocking implementation of index building.
+    fn build_index_blocking(&mut self, dir: &Path) -> Result<()> {
         let entries = std::fs::read_dir(dir)
             .map_err(|e| Error::ScriptLoadError(dir.display().to_string(), e))?;
 
@@ -88,12 +134,106 @@ impl ScriptDatabase {
             let path = entry.path();
 
             if path.is_dir() {
-                // Recursively load subdirectories
-                self.load_directory(&path)?;
+                // Recursively index subdirectories
+                self.build_index(&path)?;
             } else if path.extension().is_some_and(|e| e == "nse") {
-                // Load NSE script file
-                self.load_script(&path)?;
+                if let Some(index_entry) = Self::build_index_entry(&path)? {
+                    self.script_index.push(index_entry);
+                }
             }
+        }
+
+        Ok(())
+    }
+
+    /// Build a single index entry by reading the first [`INDEX_SCAN_BYTES`] bytes.
+    ///
+    /// Extracts only the `categories = {...}` metadata from the file header.
+    /// If the categories line cannot be found, defaults to `[Safe]`.
+    fn build_index_entry(path: &Path) -> Result<Option<ScriptIndexEntry>> {
+        let file = std::fs::File::open(path)
+            .map_err(|e| Error::ScriptLoadError(path.display().to_string(), e))?;
+
+        // Read up to INDEX_SCAN_BYTES from the beginning of the file.
+        let mut buf = vec![0u8; INDEX_SCAN_BYTES];
+        let bytes_read = std::io::Read::read(&mut file.take(INDEX_SCAN_BYTES as u64), &mut buf)
+            .map_err(|e| Error::ScriptLoadError(path.display().to_string(), e))?;
+
+        let header = String::from_utf8_lossy(&buf[..bytes_read]);
+
+        let basename = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("unknown")
+            .to_string();
+
+        // Extract categories from the partial header content.
+        let categories = if let Some(cats_str) = Self::extract_field(&header, "categories") {
+            Self::parse_categories(&cats_str)?
+        } else {
+            // Default to safe category when categories line is not in the first 2KB.
+            vec![ScriptCategory::Safe]
+        };
+
+        Ok(Some(ScriptIndexEntry {
+            file_path: path.to_path_buf(),
+            basename,
+            categories,
+        }))
+    }
+
+    /// Lazy-load scripts that match the given selector.
+    ///
+    /// **Phase 2** -- uses the lightweight index to determine which scripts
+    /// match, then reads and parses only those files fully. Clears any
+    /// previously loaded scripts first.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a matching script file cannot be read or parsed.
+    pub fn load_scripts_by_selector(&mut self, selector: &ScriptSelector) -> Result<()> {
+        // Clear any previously loaded scripts.
+        self.scripts.clear();
+        self.by_category.clear();
+        self.by_port.clear();
+        self.by_service.clear();
+
+        // Collect paths first to avoid holding an immutable borrow over self.
+        let paths: Vec<PathBuf> = selector
+            .select_from_index(&self.script_index)
+            .iter()
+            .map(|entry| entry.file_path.clone())
+            .collect();
+
+        for path in paths {
+            self.load_script(&path)?;
+        }
+
+        Ok(())
+    }
+
+    /// Load all scripts from the index (equivalent to selector "all").
+    ///
+    /// Convenience method for loading every discovered script.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any script file cannot be read or parsed.
+    pub fn load_all_from_index(&mut self) -> Result<()> {
+        self.scripts.clear();
+        self.by_category.clear();
+        self.by_port.clear();
+        self.by_service.clear();
+
+        // Collect paths first to avoid borrow conflict.
+        let paths: Vec<PathBuf> = self
+            .script_index
+            .iter()
+            .map(|entry| entry.file_path.clone())
+            .collect();
+
+        for path in paths {
+            self.load_script(&path)?;
         }
 
         Ok(())
@@ -234,7 +374,7 @@ impl ScriptDatabase {
     }
 
     /// Parse category list from Lua syntax.
-    fn parse_categories(input: &str) -> Result<Vec<ScriptCategory>> {
+    pub(crate) fn parse_categories(input: &str) -> Result<Vec<ScriptCategory>> {
         let mut categories = Vec::new();
 
         // Remove braces and whitespace
@@ -403,10 +543,31 @@ impl ScriptDatabase {
         self.scripts.len()
     }
 
-    /// Check if the database is empty.
+    /// Check if the database has no loaded scripts.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.scripts.is_empty()
+    }
+
+    /// Get the number of indexed scripts (Phase 1).
+    ///
+    /// This counts entries in the lightweight index, regardless of whether
+    /// the full scripts have been lazy-loaded yet.
+    #[must_use]
+    pub fn index_len(&self) -> usize {
+        self.script_index.len()
+    }
+
+    /// Check if the lightweight index is empty.
+    #[must_use]
+    pub fn is_index_empty(&self) -> bool {
+        self.script_index.is_empty()
+    }
+
+    /// Get the lightweight script index.
+    #[must_use]
+    pub fn index(&self) -> &[ScriptIndexEntry] {
+        &self.script_index
     }
 
     /// Get the base directory for scripts.
@@ -462,6 +623,9 @@ impl ScriptDatabase {
 
     /// Reload scripts from the base directory.
     ///
+    /// Rebuilds the lightweight index from disk. Does NOT lazy-load any
+    /// scripts; call [`Self::load_scripts_by_selector`] afterwards.
+    ///
     /// # Errors
     ///
     /// Returns an error if the directory cannot be read.
@@ -478,12 +642,13 @@ impl ScriptDatabase {
         self.by_category.clear();
         self.by_port.clear();
         self.by_service.clear();
+        self.script_index.clear();
 
         // Clone base_dir to avoid borrow issues
         let base_dir = self.base_dir.clone();
 
-        // Reload from base directory
-        self.load_directory(&base_dir)?;
+        // Rebuild index from base directory
+        self.build_index(&base_dir)?;
         Ok(())
     }
 
@@ -775,6 +940,8 @@ author = "Test Author"
         assert!(db.is_empty());
         assert_eq!(db.len(), 0);
         assert!(db.all_scripts().is_empty());
+        assert!(db.is_index_empty());
+        assert_eq!(db.index_len(), 0);
     }
 
     #[test]
@@ -857,5 +1024,101 @@ author = "Test Author"
 
         // Non-existent script
         assert!(!db.script_file_exists("nonexistent-script-12345"));
+    }
+
+    #[test]
+    fn test_two_phase_loading_with_selector() {
+        // Create a temp directory with a test .nse file
+        let temp_dir = std::env::temp_dir().join("nse_two_phase_test");
+        let _ = std::fs::create_dir_all(&temp_dir);
+
+        let script_content = r#"
+description = [[Test script for two-phase loading]]
+categories = {"safe", "discovery"}
+author = "Test"
+portrule = function(host, port)
+    return port.number == 80
+end
+action = function(host, port)
+    return "Test output"
+end
+"#;
+        let script_path = temp_dir.join("test-safe.nse");
+        std::fs::write(&script_path, script_content).unwrap();
+
+        // Also write a script that should NOT be selected
+        let vuln_content = r#"
+description = [[Vuln test script]]
+categories = {"vuln", "intrusive"}
+action = function(host, port)
+    return "Vuln output"
+end
+"#;
+        let vuln_path = temp_dir.join("test-vuln.nse");
+        std::fs::write(&vuln_path, vuln_content).unwrap();
+
+        // Phase 1: Build index
+        let mut db = ScriptDatabase::from_directory(&temp_dir).unwrap();
+
+        // Index should have 2 entries but no loaded scripts
+        assert_eq!(db.index_len(), 2);
+        assert!(db.is_empty()); // no loaded scripts yet
+        assert_eq!(db.len(), 0);
+
+        // Phase 2: Lazy-load only "safe" category scripts
+        let selector = ScriptSelector::parse("safe").unwrap();
+        db.load_scripts_by_selector(&selector).unwrap();
+
+        // Only the safe script should be loaded
+        assert_eq!(db.len(), 1);
+        assert!(db.get("test-safe").is_some());
+        assert!(db.get("test-vuln").is_none());
+
+        // Cleanup
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_load_all_from_index() {
+        let temp_dir = std::env::temp_dir().join("nse_load_all_test");
+        let _ = std::fs::create_dir_all(&temp_dir);
+
+        let content = r#"
+description = [[Test]]
+categories = {"safe"}
+action = function(host, port) return "ok" end
+"#;
+        std::fs::write(temp_dir.join("a.nse"), content).unwrap();
+        std::fs::write(temp_dir.join("b.nse"), content).unwrap();
+
+        let mut db = ScriptDatabase::from_directory(&temp_dir).unwrap();
+        assert_eq!(db.index_len(), 2);
+        assert!(db.is_empty());
+
+        db.load_all_from_index().unwrap();
+        assert_eq!(db.len(), 2);
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_index_entry_categories_extraction() {
+        let temp_dir = std::env::temp_dir().join("nse_index_cats_test");
+        let _ = std::fs::create_dir_all(&temp_dir);
+
+        let content = r#"categories = {"auth", "brute", "intrusive"}"#;
+        std::fs::write(temp_dir.join("test-cats.nse"), content).unwrap();
+
+        let db = ScriptDatabase::from_directory(&temp_dir).unwrap();
+        assert_eq!(db.index_len(), 1);
+
+        let entry = &db.index()[0];
+        assert_eq!(entry.basename, "test-cats");
+        assert_eq!(entry.categories.len(), 3);
+        assert!(entry.categories.contains(&ScriptCategory::Auth));
+        assert!(entry.categories.contains(&ScriptCategory::Brute));
+        assert!(entry.categories.contains(&ScriptCategory::Intrusive));
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }

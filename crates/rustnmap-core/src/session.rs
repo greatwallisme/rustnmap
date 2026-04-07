@@ -635,6 +635,11 @@ impl FingerprintDatabase {
 }
 
 /// NSE script registry.
+///
+/// Uses a two-phase loading strategy matching nmap's script.db approach:
+/// 1. [`NseRegistry::load_from_directory`] builds a lightweight index.
+/// 2. [`NseRegistry::load_matching_scripts`] lazy-loads only scripts
+///    that match the user's `--script` selector.
 #[derive(Debug)]
 pub struct NseRegistry {
     /// Script database.
@@ -667,16 +672,16 @@ impl NseRegistry {
         self.script_db.register_script(script);
     }
 
-    /// Returns the number of scripts.
+    /// Returns the number of fully loaded scripts.
     #[must_use]
     pub fn len(&self) -> usize {
         self.script_db.len()
     }
 
-    /// Returns true if the registry is empty.
+    /// Returns true if no scripts are loaded and the index is empty.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.script_db.is_empty()
+        self.script_db.is_empty() && self.script_db.is_index_empty()
     }
 
     /// Returns a reference to the script database.
@@ -700,7 +705,12 @@ impl NseRegistry {
         rustnmap_nse::ScriptEngine::new(new_db)
     }
 
-    /// Loads scripts from a directory.
+    /// Phase 1: Build a lightweight index from a script directory.
+    ///
+    /// Reads only the first 2 KB of each `.nse` file to extract the
+    /// `categories = {...}` line. No full source is parsed.
+    ///
+    /// Call [`Self::load_matching_scripts`] afterwards to lazy-load scripts.
     ///
     /// # Errors
     ///
@@ -718,6 +728,38 @@ impl NseRegistry {
                 "Failed to load scripts: {e}"
             ))),
         }
+    }
+
+    /// Phase 2: Lazy-load only scripts matching the selector expression.
+    ///
+    /// Uses the lightweight index to determine which scripts match, then
+    /// reads and parses only those files fully. Must be called after
+    /// [`Self::load_from_directory`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the selector cannot be parsed or a matching
+    /// script file cannot be read.
+    pub fn load_matching_scripts(
+        &mut self,
+        selector_expr: &str,
+    ) -> crate::error::Result<()> {
+        if self.script_db.is_index_empty() {
+            // Index was never built -- nothing to load.
+            return Ok(());
+        }
+
+        let selector = rustnmap_nse::ScriptSelector::parse(selector_expr).map_err(|e| {
+            crate::error::CoreError::nse(format!("Invalid selector '{selector_expr}': {e}"))
+        })?;
+
+        self.script_db
+            .load_scripts_by_selector(&selector)
+            .map_err(|e| {
+                crate::error::CoreError::nse(format!(
+                    "Failed to load matching scripts: {e}"
+                ))
+            })
     }
 }
 

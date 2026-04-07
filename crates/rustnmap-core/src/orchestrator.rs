@@ -2470,9 +2470,14 @@ impl ScanOrchestrator {
                 if port_result.state == PortState::Open {
                     let target_addr = SocketAddr::new(host_result.ip, port_result.number);
 
-                    // Run detection for this port using async await
+                    // Run detection for this port, passing protocol to skip banner grab for UDP
+                    let protocol = if port_result.protocol == rustnmap_output::models::Protocol::Udp {
+                        "udp"
+                    } else {
+                        "tcp"
+                    };
                     match detector
-                        .detect_service(&target_addr, port_result.number)
+                        .detect_service_with_protocol(&target_addr, port_result.number, protocol)
                         .await
                     {
                         Ok(services) => {

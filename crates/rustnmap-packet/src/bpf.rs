@@ -448,6 +448,26 @@ impl BpfFilter {
         Self::new(Self::build_icmp_dst_filter(addr))
     }
 
+    /// Creates a BPF filter that accepts both ICMP and UDP packets destined to
+    /// the specified IPv4 address.
+    ///
+    /// Nmap's pcap captures both ICMP unreachable and UDP data responses in a
+    /// single receive loop. Without UDP capture, responsive UDP services (SNMP,
+    /// DNS, NTP) appear as `open|filtered` and require retries that add 10+ seconds
+    /// per port.
+    ///
+    /// Filter logic:
+    /// ```text
+    /// if ethertype != IPv4: reject
+    /// if protocol == ICMP and dst_ip == addr: accept
+    /// if protocol == UDP  and dst_ip == addr: accept
+    /// reject
+    /// ```
+    #[must_use]
+    pub fn icmp_or_udp_dst(addr: u32) -> Self {
+        Self::new(Self::build_icmp_or_udp_dst_filter(addr))
+    }
+
     /// Creates a filter for TCP SYN packets.
     #[must_use]
     pub fn tcp_syn() -> Self {
@@ -680,6 +700,44 @@ impl BpfFilter {
             // Not matching, reject
             BpfInstruction::ret_reject(),
             // Accept packet (return full packet length)
+            BpfInstruction::ret_accept(),
+        ]
+    }
+
+    /// Builds a combined ICMP-or-UDP destination filter.
+    ///
+    /// Captures both ICMP unreachable responses (closed/filtered ports)
+    /// and UDP data responses (open ports) in a single BPF program.
+    /// This mirrors nmap's pcap approach of capturing both response types.
+    fn build_icmp_or_udp_dst_filter(addr: u32) -> Vec<BpfInstruction> {
+        vec![
+            // Load EtherType (bytes 12-13)
+            BpfInstruction::load_half(ETH_HLEN),
+            // Check if IPv4 (0x0800) - jump to IP processing if true
+            BpfInstruction::jump_eq(u32::from(ETHERTYPE_IP), 0, 8),
+            // Not IPv4, reject
+            BpfInstruction::ret_reject(),
+            // Load IP protocol (byte at offset 23 = 14 + 9)
+            BpfInstruction::load_byte(ETH_HLEN + IP_PROTO_OFFSET),
+            // Check if ICMP (1) - jump to ICMP path if true
+            BpfInstruction::jump_eq(IPPROTO_ICMP, 0, 3),
+            // Check if UDP (17) - jump to UDP path if true
+            BpfInstruction::jump_eq(IPPROTO_UDP, 0, 1),
+            // Neither ICMP nor UDP, reject
+            BpfInstruction::ret_reject(),
+            // --- ICMP path ---
+            // Load destination IP (offset 30, 4 bytes)
+            BpfInstruction::load_word(ETH_HLEN + IP_DST_OFFSET),
+            // Check if matches our address - accept or reject
+            BpfInstruction::jump_eq(addr, 0, 1),
+            BpfInstruction::ret_reject(),
+            BpfInstruction::ret_accept(),
+            // --- UDP path ---
+            // Load destination IP (offset 30, 4 bytes)
+            BpfInstruction::load_word(ETH_HLEN + IP_DST_OFFSET),
+            // Check if matches our address - accept or reject
+            BpfInstruction::jump_eq(addr, 0, 1),
+            BpfInstruction::ret_reject(),
             BpfInstruction::ret_accept(),
         ]
     }

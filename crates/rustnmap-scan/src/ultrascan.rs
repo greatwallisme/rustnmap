@@ -527,28 +527,52 @@ struct UdpOutstandingProbe {
     retry_count: u32,
 }
 
-/// Parsed ICMP response information.
+/// Parsed scan response for UDP scanning.
+///
+/// Generalized to carry both ICMP unreachable and UDP data responses.
+/// Nmap's pcap captures both types in a single receive loop.
 #[derive(Debug, Clone)]
-struct IcmpResponse {
-    /// Original destination IP (the target we probed).
-    orig_dst_ip: Ipv4Addr,
-    /// Original destination port (the port we probed).
-    orig_dst_port: Port,
-    /// ICMP type (3 = Destination Unreachable).
+struct ScanResponse {
+    /// Type of response.
+    kind: ScanResponseType,
+    /// Target IP address (the host we probed).
+    target_ip: Ipv4Addr,
+    /// Target port number (the port we probed).
+    port: Port,
+    /// ICMP type (only meaningful for ICMP responses, e.g. 3 = Destination Unreachable).
     icmp_type: u8,
-    /// ICMP code (3 = Port Unreachable).
+    /// ICMP code (only meaningful for ICMP responses, e.g. 3 = Port Unreachable).
     icmp_code: u8,
 }
 
-impl IcmpResponse {
-    /// Determines the port state from ICMP type and code.
+/// Type of scan response.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScanResponseType {
+    /// ICMP unreachable response (port closed or filtered).
+    Icmp,
+    /// UDP data response (service replied with data -- port is open).
+    Udp,
+}
+
+impl ScanResponse {
+    /// Determines the port state from the response type and ICMP codes.
+    ///
+    /// - ICMP Port Unreachable (type 3, code 3) → `Closed`
+    /// - Other ICMP → `Filtered`
+    /// - UDP data response → `Open`
     #[must_use]
-    const fn port_state(&self) -> PortState {
-        if self.icmp_type == ICMP_TYPE_DEST_UNREACH && self.icmp_code == ICMP_CODE_PORT_UNREACH {
-            PortState::Closed
-        } else {
-            // Other ICMP types (filtered, admin prohibited, etc.)
-            PortState::Filtered
+    fn port_state(&self) -> PortState {
+        match self.kind {
+            ScanResponseType::Udp => PortState::Open,
+            ScanResponseType::Icmp => {
+                if self.icmp_type == ICMP_TYPE_DEST_UNREACH
+                    && self.icmp_code == ICMP_CODE_PORT_UNREACH
+                {
+                    PortState::Closed
+                } else {
+                    PortState::Filtered
+                }
+            }
         }
     }
 }
@@ -1605,29 +1629,36 @@ impl ParallelScanEngine {
         // Resolve source address for this specific target
         let src_addr = self.source_addr_for_target(target);
 
-        // Create dedicated packet engine with ICMP BPF filter BEFORE starting receiver
-        // This ensures the filter is applied before any packets can arrive
+        // Create dedicated packet engine with BPF filter BEFORE starting receiver.
+        // This ensures the filter is applied before any packets can arrive.
         let scanner_engine = create_stealth_engine(Some(src_addr), self.config.clone());
 
         if let Some(ref engine) = scanner_engine {
-            // Enable BPF filter to capture only ICMP packets destined to local IP
-            // This prevents kernel buffer overflow under network load
-            let filter = BpfFilter::icmp_dst(u32::from(src_addr));
+            // Enable BPF filter to capture both ICMP and UDP responses destined to local IP.
+            // Nmap's pcap captures both types in a single receive loop -- UDP services
+            // that respond with data indicate open ports, while ICMP unreachable indicates
+            // closed/filtered. Without UDP capture, responsive UDP ports appear as
+            // open|filtered and require retries that add 10+ seconds per port.
+            let filter = BpfFilter::icmp_or_udp_dst(u32::from(src_addr));
             let _ = engine.lock().await.set_filter(&filter);
 
             // Start the packet engine
             let _ = engine.lock().await.start().await;
         }
 
-        // Channel for received ICMP responses
-        let (icmp_tx, mut icmp_rx) = mpsc::unbounded_channel();
+        // Channel for received scan responses (both ICMP and UDP)
+        let (response_tx, mut response_rx) = mpsc::unbounded_channel();
 
         // Ready signal to ensure receiver is polling before we send probes
         let (ready_tx, ready_rx) = oneshot::channel();
 
-        // Start ICMP receiver task with packet engine
+        // Start ICMP receiver task with packet engine.
+        // Pass src_addr (the address used for BPF filter and probes) so the receiver
+        // can correctly verify destination IP matches. Using self.local_addr would
+        // fail when the engine is constructed with a different address than what
+        // source_addr_for_target() resolves (e.g., Docker bridge vs host IP).
         let receiver_handle =
-            self.start_icmp_receiver_task(scanner_engine, icmp_tx.clone(), ready_tx);
+            Self::start_icmp_receiver_task(scanner_engine, response_tx.clone(), ready_tx, src_addr);
 
         // Wait for receiver to be ready (with timeout to prevent deadlock)
         if tokio::time::timeout(Duration::from_millis(200), ready_rx)
@@ -1741,18 +1772,18 @@ impl ParallelScanEngine {
             };
             let mut wait_duration = initial_wait;
 
-            // Drain all available ICMP responses
+            // Drain all available scan responses (both ICMP and UDP)
             loop {
-                match tokio_timeout(wait_duration, icmp_rx.recv()).await {
-                    Ok(Some(icmp_resp)) => {
-                        // Match ICMP response to outstanding probe
-                        let probe_key = (icmp_resp.orig_dst_ip, icmp_resp.orig_dst_port);
+                match tokio_timeout(wait_duration, response_rx.recv()).await {
+                    Ok(Some(resp)) => {
+                        // Match response to outstanding probe
+                        let probe_key = (resp.target_ip, resp.port);
                         if let Some(probe) = outstanding.remove(&probe_key) {
                             // Calculate RTT
                             let rtt = probe.sent_time.elapsed();
                             self.congestion.record_expected();
                             self.congestion.on_packet_acked(Some(rtt));
-                            results.insert(probe.port, icmp_resp.port_state());
+                            results.insert(probe.port, resp.port_state());
                         }
                         // Continue draining with short timeout
                         wait_duration = Duration::from_millis(10);
@@ -1803,22 +1834,21 @@ impl ParallelScanEngine {
             }
         }
 
-        // Final wait for any remaining ICMP responses
-        // nmap approach: use timing-based wait, not fixed 2000ms
-        // For T4/T5: use probe_timeout (typically 100-300ms)
-        // For T0-T3: use probe_timeout (can be longer)
-        // Only wait if there are outstanding probes that might still receive responses
+        // Final wait for any remaining scan responses (ICMP or UDP).
+        // nmap approach: use timing-based wait, not fixed 2000ms.
+        // For T4/T5: use probe_timeout (typically 100-300ms).
+        // For T0-T3: use probe_timeout (can be longer).
+        // Only wait if there are outstanding probes that might still receive responses.
         if !outstanding.is_empty() {
             let probe_timeout = self.congestion.recommended_timeout();
             let final_wait = probe_timeout;
             let final_start = Instant::now();
             while final_start.elapsed() < final_wait {
-                match tokio_timeout(Duration::from_millis(10), icmp_rx.recv()).await {
-                    Ok(Some(icmp_resp)) => {
-                        // Match ICMP response to outstanding probe
-                        let probe_key = (icmp_resp.orig_dst_ip, icmp_resp.orig_dst_port);
+                match tokio_timeout(Duration::from_millis(10), response_rx.recv()).await {
+                    Ok(Some(resp)) => {
+                        let probe_key = (resp.target_ip, resp.port);
                         if let Some(probe) = outstanding.remove(&probe_key) {
-                            results.insert(probe.port, icmp_resp.port_state());
+                            results.insert(probe.port, resp.port_state());
                         }
                     }
                     Ok(None) => {
@@ -1840,7 +1870,7 @@ impl ParallelScanEngine {
         }
 
         // Signal receiver to stop
-        drop(icmp_tx);
+        drop(response_tx);
         let _ = tokio::time::timeout(Duration::from_millis(200), receiver_handle).await;
 
         Ok(results)
@@ -1858,8 +1888,13 @@ impl ParallelScanEngine {
         let src_port = Self::generate_source_port();
         let src_addr = self.source_addr_for_target(target);
 
-        // Build UDP packet
-        let packet = UdpPacketBuilder::new(src_addr, target, src_port, port).build();
+        // Get service-specific payload for this port (like nmap's get_udp_payload)
+        let payload = crate::udp_payload::get_udp_payload(port);
+
+        // Build UDP packet with payload
+        let packet = UdpPacketBuilder::new(src_addr, target, src_port, port)
+            .payload(payload)
+            .build();
 
         // Send the packet
         let dst_sockaddr = SocketAddr::new(std::net::IpAddr::V4(target), port);
@@ -1897,10 +1932,12 @@ impl ParallelScanEngine {
         probe.retry_count += 1;
         probe.sent_time = Instant::now();
 
-        // Rebuild and resend
+        // Rebuild and resend with service-specific payload
         let src_addr = self.source_addr_for_target(probe.target);
-        let packet =
-            UdpPacketBuilder::new(src_addr, probe.target, probe.src_port, probe.port).build();
+        let payload = crate::udp_payload::get_udp_payload(probe.port);
+        let packet = UdpPacketBuilder::new(src_addr, probe.target, probe.src_port, probe.port)
+            .payload(payload)
+            .build();
 
         let dst_sockaddr = SocketAddr::new(std::net::IpAddr::V4(probe.target), probe.port);
         self.socket
@@ -1963,18 +2000,19 @@ impl ParallelScanEngine {
         }
     }
 
-    /// Starts the ICMP receiver task for UDP scanning.
+    /// Starts the scan response receiver task for UDP scanning.
     ///
-    /// Uses `PACKET_MMAP` V2 with BPF filter for ICMP reception.
-    /// This matches nmap's approach of using libpcap with a BPF filter to capture
-    /// only ICMP packets destined to the local IP address.
+    /// Uses `PACKET_MMAP` V2 with combined BPF filter (ICMP + UDP).
+    /// Nmap's pcap captures both ICMP unreachable and UDP data responses
+    /// in a single receive loop. ICMP indicates closed/filtered ports;
+    /// UDP data response indicates open port immediately.
     fn start_icmp_receiver_task(
-        &self,
         scanner_engine: Option<Arc<Mutex<ScannerPacketEngine>>>,
-        icmp_tx: mpsc::UnboundedSender<IcmpResponse>,
+        response_tx: mpsc::UnboundedSender<ScanResponse>,
         ready_tx: oneshot::Sender<()>,
+        src_addr: Ipv4Addr,
     ) -> JoinHandle<()> {
-        let local_addr = self.local_addr;
+        let local_addr = src_addr;
 
         // Use tokio::spawn for async receiver with PACKET_MMAP V2
         tokio::spawn(async move {
@@ -1985,7 +2023,7 @@ impl ParallelScanEngine {
 
                 loop {
                     // Check if channel is closed before receiving
-                    if icmp_tx.is_closed() {
+                    if response_tx.is_closed() {
                         break;
                     }
 
@@ -2007,23 +2045,26 @@ impl ParallelScanEngine {
                                 &data[..]
                             };
 
-                            // BPF filter already ensured this is ICMP destined to us
-                            // But we still need to parse and validate the ICMP response
-                            if let Some(icmp) = Self::parse_icmp_response(ip_data, local_addr) {
-                                if icmp_tx.send(icmp).is_err() {
+                            // BPF filter accepts both ICMP and UDP destined to us.
+                            // Try ICMP first (most common), then UDP data response.
+                            let response = Self::parse_icmp_response(ip_data, local_addr)
+                                .or_else(|| Self::parse_udp_response(ip_data, local_addr));
+
+                            if let Some(resp) = response {
+                                if response_tx.send(resp).is_err() {
                                     break; // Channel closed
                                 }
                             }
                         }
                         Ok(None) => {
                             // Timeout - check if channel is still open and continue waiting
-                            if icmp_tx.is_closed() {
+                            if response_tx.is_closed() {
                                 break;
                             }
                         }
                         Err(_) => {
                             // Error receiving - check if channel is still open
-                            if icmp_tx.is_closed() {
+                            if response_tx.is_closed() {
                                 break;
                             }
                             // Brief pause before retry
@@ -2035,11 +2076,11 @@ impl ParallelScanEngine {
         })
     }
 
-    /// Parses an ICMP response from raw packet data.
+    /// Parses an ICMP response from raw IP packet data.
     ///
-    /// Returns `Some(IcmpResponse)` if this is an ICMP Port Unreachable
-    /// message that matches one of our probes.
-    fn parse_icmp_response(data: &[u8], local_addr: Ipv4Addr) -> Option<IcmpResponse> {
+    /// Returns `Some(ScanResponse)` with `kind: Icmp` if this is an ICMP Destination
+    /// Unreachable message that matches one of our probes.
+    fn parse_icmp_response(data: &[u8], local_addr: Ipv4Addr) -> Option<ScanResponse> {
         // Minimum: IP header (20) + ICMP header (8) + inner IP header (20) + inner UDP header (8)
         if data.len() < 56 {
             return None;
@@ -2123,11 +2164,74 @@ impl ParallelScanEngine {
             data[inner_ip_start + 19],
         );
 
-        Some(IcmpResponse {
-            orig_dst_ip,
-            orig_dst_port,
+        Some(ScanResponse {
+            kind: ScanResponseType::Icmp,
+            target_ip: orig_dst_ip,
+            port: orig_dst_port,
             icmp_type,
             icmp_code,
+        })
+    }
+
+    /// Parses a UDP data response from raw IP packet data.
+    ///
+    /// When a UDP service responds to our probe with actual data (not ICMP),
+    /// the port is definitively open. This matches nmap's behavior where
+    /// any UDP response marks the port as `open`.
+    ///
+    /// Returns `Some(ScanResponse)` with `kind: Udp` if this is a UDP
+    /// packet destined to our local address from a target we probed.
+    fn parse_udp_response(data: &[u8], local_addr: Ipv4Addr) -> Option<ScanResponse> {
+        // Minimum: IP header (20) + UDP header (8)
+        if data.len() < 28 {
+            return None;
+        }
+
+        // Check IP header
+        let version_ihl = data[0];
+        let version = version_ihl >> 4;
+        if version != 4 {
+            return None;
+        }
+
+        // Check protocol field (byte 9) - must be UDP (17)
+        let protocol = data[9];
+        if protocol != 17 {
+            return None;
+        }
+
+        // Calculate IP header length in bytes (IHL is in 32-bit words)
+        let ip_hdr_len = usize::from(version_ihl & 0x0F) * 4;
+        if data.len() < ip_hdr_len + 8 {
+            return None;
+        }
+
+        // Parse UDP header (after IP header)
+        let udp_start = ip_hdr_len;
+
+        // Verify destination IP matches our local address
+        let dst_ip = Ipv4Addr::new(
+            data[16],
+            data[17],
+            data[18],
+            data[19],
+        );
+        if local_addr != Ipv4Addr::UNSPECIFIED && dst_ip != local_addr {
+            return None;
+        }
+
+        // Source IP is the target we probed
+        let src_ip = Ipv4Addr::new(data[12], data[13], data[14], data[15]);
+
+        // Source port of the UDP response is the the port we probed.
+        let src_port = u16::from_be_bytes([data[udp_start], data[udp_start + 1]]);
+
+        Some(ScanResponse {
+            kind: ScanResponseType::Udp,
+            target_ip: src_ip,
+            port: src_port,
+            icmp_type: 0,
+            icmp_code: 0,
         })
     }
 }

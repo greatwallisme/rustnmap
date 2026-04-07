@@ -20,6 +20,7 @@ pub mod stealth_scans;
 pub mod syn_scan;
 pub mod timeout;
 pub mod udp_scan;
+pub mod udp_payload;
 pub mod ultrascan;
 
 // Re-exports

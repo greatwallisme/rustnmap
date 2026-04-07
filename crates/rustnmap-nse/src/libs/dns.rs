@@ -55,7 +55,15 @@ use crate::lua::NseLua;
 const DNS_PORT: u16 = 53;
 
 /// Default timeout for DNS queries in milliseconds.
-const DEFAULT_TIMEOUT_MS: u64 = 5_000;
+///
+/// Matches nmap's default of 10 seconds but but gets 3 retries.
+const DEFAULT_TIMEOUT_MS: u64 = 10_000;
+
+/// Maximum number of retries for DNS queries.
+const MAX_RETRIES: u8 = 2;
+
+/// Per-requery timeout (shorter than default for retries).
+const RETRY_TIMEOUT_MS: u64 = 2_000;
 
 /// Build a DNS query packet.
 fn build_query(domain: &str, qtype: u16, txn_id: u16) -> Vec<u8> {
@@ -152,43 +160,56 @@ fn parse_rr(data: &[u8], offset: usize) -> std::io::Result<(String, u16, u32, Ve
     Ok((String::new(), rtype, ttl, rdata, rdata_start + rdlength))
 }
 
-/// Perform DNS query over UDP.
+/// Perform DNS query over UDP with retry logic.
+///
+/// Matches nmap's behavior: sends query, waits for response, retries on timeout.
+/// nmap uses 1 retry by default, but nsock retries with exponential backoff.
+/// We use up to `MAX_RETRIES` retries with shorter per-attempt timeout.
 fn dns_query_impl(
     domain: &str,
     qtype: u16,
     dns_server: &str,
     timeout_ms: u64,
 ) -> std::io::Result<Vec<u8>> {
-    let txn_id = rand::random::<u16>();
-    let query = build_query(domain, qtype, txn_id);
-
-    let socket = UdpSocket::bind("0.0.0.0:0")?;
-    socket.set_read_timeout(Some(Duration::from_millis(timeout_ms)))?;
-
     let server_addr = format!("{dns_server}:{DNS_PORT}");
-    socket.send_to(&query, &server_addr)?;
 
-    let mut response = vec![0u8; 4096];
-    let (len, _) = socket.recv_from(&mut response)?;
-    response.truncate(len);
+    for attempt in 0..=MAX_RETRIES {
+        let txn_id = rand::random::<u16>();
+        let query = build_query(domain, qtype, txn_id);
 
-    // Verify transaction ID matches
-    if response.len() < 2 {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "Response too short",
-        ));
+        let socket = UdpSocket::bind("0.0.0.0:0")?;
+        // Use shorter timeout for retries to fail fast
+        let attempt_timeout = if attempt == 0 {
+            timeout_ms
+        } else {
+            RETRY_TIMEOUT_MS.min(timeout_ms)
+        };
+        socket.set_read_timeout(Some(Duration::from_millis(attempt_timeout)))?;
+
+        socket.send_to(&query, &server_addr)?;
+
+        let mut response = vec![0u8; 4096];
+        if let Ok((len, _)) = socket.recv_from(&mut response) {
+            response.truncate(len);
+
+            // Verify transaction ID matches
+            if response.len() < 2 {
+                continue; // Retry on invalid response
+            }
+
+            let resp_id = u16::from_be_bytes([response[0], response[1]]);
+            if resp_id != txn_id {
+                continue; // Retry on ID mismatch
+            }
+
+            return Ok(response);
+        }
     }
 
-    let resp_id = u16::from_be_bytes([response[0], response[1]]);
-    if resp_id != txn_id {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "Transaction ID mismatch",
-        ));
-    }
-
-    Ok(response)
+    Err(std::io::Error::new(
+        std::io::ErrorKind::TimedOut,
+        format!("DNS query for {domain} timed out after {MAX_RETRIES} retries"),
+    ))
 }
 
 /// Format DNS record data based on type.
@@ -325,6 +346,24 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
             return Ok(Value::Nil);
         };
         debug!("dns.reverse({ip})");
+
+        // Skip reverse lookup for private/link-local addresses.
+        // These will never have PTR records in public DNS, and nmap's
+        // mass_dns skips obvious private ranges.
+        if let Ok(addr) = ip.parse::<std::net::IpAddr>() {
+            match addr {
+                std::net::IpAddr::V4(v4) => {
+                    if v4.is_private() || v4.is_loopback() || v4.is_link_local() {
+                        return Ok(Value::Nil);
+                    }
+                }
+                std::net::IpAddr::V6(v6) => {
+                    if v6.is_loopback() {
+                        return Ok(Value::Nil);
+                    }
+                }
+            }
+        }
 
         // Build PTR domain from IP
         let Some(ptr_domain) = build_ptr_domain(&ip) else {

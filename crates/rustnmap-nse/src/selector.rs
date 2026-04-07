@@ -18,6 +18,8 @@
 //! # }
 //! ```
 
+use crate::registry::ScriptIndexEntry;
+use crate::script::match_pattern;
 use crate::{ScriptCategory, ScriptDatabase};
 
 /// Error during script selector parsing.
@@ -349,6 +351,106 @@ impl ScriptSelector {
             }
         }
     }
+
+    /// Select index entries matching this selector (nmap-style script.db).
+    ///
+    /// Works like [`Self::select`] but on the lightweight index instead
+    /// of the full database. Used during Phase 2 to decide which scripts
+    /// to lazy-load.
+    ///
+    /// # Arguments
+    ///
+    /// * `index` - Lightweight script index built during Phase 1
+    ///
+    /// # Returns
+    ///
+    /// Vector of references to matching index entries.
+    #[must_use]
+    pub fn select_from_index<'a>(
+        &self,
+        index: &'a [ScriptIndexEntry],
+    ) -> Vec<&'a ScriptIndexEntry> {
+        match self {
+            Self::All => index.iter().collect(),
+            Self::Category(categories) => index
+                .iter()
+                .filter(|entry| entry.matches_categories(categories))
+                .collect(),
+            Self::Pattern(pattern) => index
+                .iter()
+                .filter(|entry| entry.matches_pattern(pattern))
+                .collect(),
+            Self::And(left, right) => {
+                let left_set: std::collections::HashSet<_> =
+                    left.select_from_index(index)
+                        .into_iter()
+                        .map(|e| e.basename.clone())
+                        .collect();
+                let right_set: std::collections::HashSet<_> =
+                    right.select_from_index(index)
+                        .into_iter()
+                        .map(|e| e.basename.clone())
+                        .collect();
+
+                left_set
+                    .intersection(&right_set)
+                    .filter_map(|basename| index.iter().find(|e| e.basename == *basename))
+                    .collect()
+            }
+            Self::Or(left, right) => {
+                let mut result = std::collections::HashSet::new();
+
+                for entry in left.select_from_index(index) {
+                    result.insert(entry.basename.clone());
+                }
+                for entry in right.select_from_index(index) {
+                    result.insert(entry.basename.clone());
+                }
+
+                result
+                    .into_iter()
+                    .filter_map(|basename| index.iter().find(|e| e.basename == basename))
+                    .collect()
+            }
+            Self::Not(operand) => {
+                let excluded: std::collections::HashSet<_> = operand
+                    .select_from_index(index)
+                    .into_iter()
+                    .map(|e| e.basename.clone())
+                    .collect();
+
+                index
+                    .iter()
+                    .filter(|entry| !excluded.contains(&entry.basename))
+                    .collect()
+            }
+        }
+    }
+}
+
+/// Pattern matching helpers for [`ScriptIndexEntry`].
+impl ScriptIndexEntry {
+    /// Check if the index entry matches any of the given categories.
+    fn matches_categories(&self, categories: &[ScriptCategory]) -> bool {
+        if categories.is_empty() {
+            return true;
+        }
+        self.categories.iter().any(|c| categories.contains(c))
+    }
+
+    /// Check if the index entry basename matches a name pattern.
+    ///
+    /// Mirrors [`crate::NseScript::matches_pattern`] logic: strips `.nse`,
+    /// supports glob wildcards (`*`, `?`), and falls back to exact/substring.
+    fn matches_pattern(&self, pattern: &str) -> bool {
+        let normalized = pattern.strip_suffix(".nse").unwrap_or(pattern);
+
+        if normalized.contains('*') || normalized.contains('?') {
+            match_pattern(&self.basename, normalized)
+        } else {
+            self.basename == normalized || self.basename.contains(normalized)
+        }
+    }
 }
 
 /// Token in selector expression.
@@ -370,6 +472,15 @@ enum Token {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+
+    fn make_entry(basename: &str, categories: &[ScriptCategory]) -> ScriptIndexEntry {
+        ScriptIndexEntry {
+            file_path: PathBuf::from(format!("/scripts/{basename}.nse")),
+            basename: basename.to_string(),
+            categories: categories.to_vec(),
+        }
+    }
 
     #[test]
     fn test_parse_all() {
@@ -433,5 +544,95 @@ mod tests {
         // Should be treated as pattern, not error
         let selector = ScriptSelector::parse("unknown-script").unwrap();
         assert!(matches!(selector, ScriptSelector::Pattern(_)));
+    }
+
+    #[test]
+    fn test_select_from_index_all() {
+        let index = vec![
+            make_entry("banner", &[ScriptCategory::Default]),
+            make_entry("http-title", &[ScriptCategory::Default, ScriptCategory::Discovery]),
+        ];
+        let selector = ScriptSelector::parse("all").unwrap();
+        let result = selector.select_from_index(&index);
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn test_select_from_index_category() {
+        let index = vec![
+            make_entry("vuln-script", &[ScriptCategory::Vuln, ScriptCategory::Intrusive]),
+            make_entry("safe-script", &[ScriptCategory::Safe]),
+            make_entry("auth-script", &[ScriptCategory::Auth]),
+        ];
+        let selector = ScriptSelector::parse("vuln").unwrap();
+        let result = selector.select_from_index(&index);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].basename, "vuln-script");
+    }
+
+    #[test]
+    fn test_select_from_index_pattern() {
+        let index = vec![
+            make_entry("http-title", &[ScriptCategory::Default]),
+            make_entry("http-headers", &[ScriptCategory::Discovery]),
+            make_entry("ssh-auth", &[ScriptCategory::Auth]),
+        ];
+        let selector = ScriptSelector::parse("http-*").unwrap();
+        let result = selector.select_from_index(&index);
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn test_select_from_index_not() {
+        let index = vec![
+            make_entry("safe-one", &[ScriptCategory::Safe]),
+            make_entry("safe-two", &[ScriptCategory::Safe]),
+            make_entry("vuln-one", &[ScriptCategory::Vuln]),
+        ];
+        let selector = ScriptSelector::parse("not vuln").unwrap();
+        let result = selector.select_from_index(&index);
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn test_select_from_index_and() {
+        let index = vec![
+            make_entry("vuln-safe", &[ScriptCategory::Vuln, ScriptCategory::Safe]),
+            make_entry("vuln-only", &[ScriptCategory::Vuln]),
+            make_entry("safe-only", &[ScriptCategory::Safe]),
+        ];
+        let selector = ScriptSelector::parse("vuln and safe").unwrap();
+        let result = selector.select_from_index(&index);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].basename, "vuln-safe");
+    }
+
+    #[test]
+    fn test_select_from_index_or() {
+        let index = vec![
+            make_entry("auth-script", &[ScriptCategory::Auth]),
+            make_entry("vuln-script", &[ScriptCategory::Vuln]),
+            make_entry("safe-script", &[ScriptCategory::Safe]),
+        ];
+        let selector = ScriptSelector::parse("auth,vuln").unwrap();
+        let result = selector.select_from_index(&index);
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn test_index_entry_matches_pattern_exact() {
+        let entry = make_entry("http-title", &[ScriptCategory::Default]);
+        assert!(entry.matches_pattern("http-title"));
+        assert!(entry.matches_pattern("http-title.nse"));
+        assert!(entry.matches_pattern("http"));
+        assert!(!entry.matches_pattern("ssh-auth"));
+    }
+
+    #[test]
+    fn test_index_entry_matches_pattern_glob() {
+        let entry = make_entry("http-vuln-cve2020", &[ScriptCategory::Vuln]);
+        assert!(entry.matches_pattern("http-*"));
+        assert!(entry.matches_pattern("*cve*"));
+        assert!(!entry.matches_pattern("ssh-*"));
     }
 }
