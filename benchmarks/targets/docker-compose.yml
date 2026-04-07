@@ -214,19 +214,18 @@ services:
   # VNC - x11vnc + Xvfb
   # ============================================================
   vnc:
-    image: registry.cn-shanghai.aliyuncs.com/greatwallisme/ubuntu-desktop-lxde-vnc:focal
+    build:
+      context: .
+      dockerfile: Dockerfiles/vnc/Dockerfile
     container_name: rustnmap-vnc
     hostname: vnc.rustnmap.test
     networks:
       rustnmap-test:
         ipv4_address: ${IP_VNC}
-    environment:
-      - VNC_PASSWORD=${VNC_PASSWORD}
-      - RESOLUTION=1024x768
     healthcheck:
-      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/127.0.0.1/5900' 2>/dev/null"]
-      interval: 10s
-      timeout: 5s
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 5900"]
+      interval: 5s
+      timeout: 3s
       retries: 30
 
   # ============================================================

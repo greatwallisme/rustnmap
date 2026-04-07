@@ -887,13 +887,19 @@ impl ParallelScanEngine {
     ) -> Result<HashMap<Port, PortState>, rustnmap_common::ScanError> {
         let start_time = Instant::now();
 
-        // Create a per-target packet engine with the correct source address
-        // for this target. The pre-created self.packet_engine may be on the
-        // wrong interface for multi-homed hosts (e.g., Docker bridge vs
-        // external interface).
+        // Determine source address for this target.
+        // If it matches our pre-created engine's local_addr, reuse the existing engine
+        // to avoid the expensive per-target AF_PACKET socket + ring buffer setup.
+        // Only create a new engine for multi-homed hosts where routing differs.
         let src_addr = self.source_addr_for_target(target);
-        let target_packet_engine =
-            create_stealth_engine_with_target(Some(src_addr), Some(target), self.config.clone());
+        let target_packet_engine = if src_addr == self.local_addr {
+            // Source address matches our pre-created engine's interface — reuse it.
+            // The pre-created engine was set up with self.local_addr in new().
+            None // None causes start_receiver_task to use self.packet_engine as fallback
+        } else {
+            // Different interface needed (multi-homed host) — create per-target engine.
+            create_stealth_engine_with_target(Some(src_addr), Some(target), self.config.clone())
+        };
 
         // Channel for received packets from the receiver task
         let (packet_tx, mut packet_rx) = mpsc::unbounded_channel();
@@ -1252,9 +1258,10 @@ impl ParallelScanEngine {
         // Explicitly drop the sender to signal the receiver task to stop
         drop(packet_tx);
 
-        // Wait for receiver task to complete with timeout
-        // Use a short timeout since the receiver should exit quickly when channel is closed
-        let _ = tokio::time::timeout(Duration::from_millis(200), receiver_handle).await;
+        // Wait for receiver task to complete with timeout.
+        // The receiver checks channel closure every 10ms (recv_with_timeout), so
+        // 50ms is sufficient for it to notice and exit.
+        let _ = tokio::time::timeout(Duration::from_millis(50), receiver_handle).await;
 
         #[cfg(feature = "diagnostic")]
         {
@@ -1330,7 +1337,7 @@ impl ParallelScanEngine {
                         match engine
                             .lock()
                             .await
-                            .recv_with_timeout(Duration::from_millis(100))
+                            .recv_with_timeout(Duration::from_millis(10))
                             .await
                         {
                             Ok(Some(data)) => {
@@ -1871,7 +1878,7 @@ impl ParallelScanEngine {
 
         // Signal receiver to stop
         drop(response_tx);
-        let _ = tokio::time::timeout(Duration::from_millis(200), receiver_handle).await;
+        let _ = tokio::time::timeout(Duration::from_millis(50), receiver_handle).await;
 
         Ok(results)
     }
@@ -2019,7 +2026,7 @@ impl ParallelScanEngine {
             // Use the pre-created packet engine with BPF filter
             if let Some(engine) = scanner_engine {
                 let mut ready_tx = Some(ready_tx);
-                let timeout = Duration::from_millis(100);
+                let timeout = Duration::from_millis(10);
 
                 loop {
                     // Check if channel is closed before receiving
