@@ -74,8 +74,9 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
         };
         Ok(result)
     })?;
-    ip_ops.set("compare", compare_fn.clone())?;
-    ip_ops.set("compare_ip", compare_fn)?; // Nmap-compatible alias
+    ip_ops.set("compare", compare_fn)?;
+    // compare_ip is provided by ipOps.lua with full operator support ("eq", "lt", etc.)
+    // Do NOT register from Rust to avoid overriding the Lua version.
 
     // Register is_private(ip) function
     let is_private_fn = lua.create_function(|_, ip: String| {

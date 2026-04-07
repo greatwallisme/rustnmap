@@ -512,6 +512,8 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     stdnse_table.set("tohex", tohex_fn)?;
 
     // Register fromhex(hexstr) function
+    // Returns a Lua binary string (BString), not a table, so that ASN1
+    // encoders and other Lua code can concatenate the result with `..`.
     let fromhex_fn = lua.create_function(|_, hexstr: String| {
         let hex = hexstr.replace([' ', '\t'], "");
         let mut result = Vec::with_capacity(hex.len() / 2);
@@ -525,7 +527,7 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
             }
         }
 
-        Ok(result)
+        Ok(mlua::BString::from(result))
     })?;
     stdnse_table.set("fromhex", fromhex_fn)?;
 
@@ -1268,29 +1270,29 @@ mod tests {
         let mut lua = NseLua::new_default().unwrap();
         register(&mut lua).unwrap();
 
-        // Test basic conversion
-        let bytes: Vec<u8> = lua
+        // Test basic conversion - returns BString (binary Lua string)
+        let bytes: mlua::BString = lua
             .lua()
             .load("return stdnse.fromhex('00010203')")
             .eval()
             .unwrap();
-        assert_eq!(bytes, vec![0x00, 0x01, 0x02, 0x03]);
+        assert_eq!(&*bytes, &[0x00, 0x01, 0x02, 0x03]);
 
         // Test with spaces
-        let bytes_space: Vec<u8> = lua
+        let bytes_space: mlua::BString = lua
             .lua()
             .load("return stdnse.fromhex('00 01 02 03')")
             .eval()
             .unwrap();
-        assert_eq!(bytes_space, vec![0x00, 0x01, 0x02, 0x03]);
+        assert_eq!(&*bytes_space, &[0x00, 0x01, 0x02, 0x03]);
 
         // Test uppercase
-        let bytes_upper: Vec<u8> = lua
+        let bytes_upper: mlua::BString = lua
             .lua()
             .load("return stdnse.fromhex('ABCDEF')")
             .eval()
             .unwrap();
-        assert_eq!(bytes_upper, vec![0xAB, 0xCD, 0xEF]);
+        assert_eq!(&*bytes_upper, &[0xAB, 0xCD, 0xEF]);
     }
 
     #[test]
@@ -1304,12 +1306,12 @@ mod tests {
             .load(format!("return stdnse.tohex('{original}')"))
             .eval()
             .unwrap();
-        let decoded: Vec<u8> = lua
+        let decoded: mlua::BString = lua
             .lua()
             .load(format!("return stdnse.fromhex('{hex}')"))
             .eval()
             .unwrap();
-        assert_eq!(String::from_utf8(decoded).unwrap(), original);
+        assert_eq!(&*decoded, original.as_bytes());
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]

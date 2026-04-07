@@ -119,6 +119,7 @@ services:
       -w "RUSTNMAP"
       -g "server string = RustNmap Samba Test Server"
       -g "netbios name = RUSTNMAP-SMB"
+      -g "server min protocol = NT1"
     healthcheck:
       test: ["CMD-SHELL", "nc -z 127.0.0.1 445"]
       interval: 5s

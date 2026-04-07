@@ -30,24 +30,31 @@ use std::string::FromUtf16Error;
 
 /// Register the unicode library with the Lua runtime.
 ///
+/// Registers `utf8to16` and `utf16to8` using `BString` for binary-safe
+/// Lua string handling. In nmap's Lua runtime, binary data (such as
+/// UTF-16LE encoded bytes) is passed as Lua strings, not tables.
+///
 /// # Errors
 ///
 /// Returns an error if library registration fails.
 pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     let lua = nse_lua.lua_mut();
 
-    // Create the unicode table
+    // Create the unicode table.
+    // Since "unicode" is a DUAL_MODULE, the Lua unicode.lua file provides the
+    // complete implementation including utf8to16, utf16to8, decode, encode,
+    // transcode, cp437_enc, etc. The Lua utf8to16/utf16to8 use the transcode()
+    // function which handles all edge cases correctly (e.g. utf16to8 does NOT
+    // stop at null terminators - it converts all bytes).
+    //
+    // We do NOT register Rust utf8to16/utf16to8 here because:
+    // 1. DUAL_MODULE merge copies Rust globals INTO the Lua table (Rust overwrites Lua)
+    // 2. Our Rust utf16to8 stops at null terminators, but the Lua version doesn't
+    // 3. This would break SMB negotiate response parsing where data may contain nulls
+    //
+    // The Rust internal functions utf8_to_utf16le/utf16le_to_utf8 remain available
+    // for other Rust modules (e.g. smbauth.rs compute functions).
     let unicode_table = lua.create_table()?;
-
-    // Register utf8to16 function
-    let utf8to16_fn = lua.create_function(|_lua, s: String| Ok(utf8_to_utf16le(&s)))?;
-    unicode_table.set("utf8to16", utf8to16_fn)?;
-
-    // Register utf16to8 function
-    let utf16to8_fn = lua.create_function(|_lua, s: Vec<u8>| {
-        utf16le_to_utf8(&s).map_err(|e| mlua::Error::external(e.to_string()))
-    })?;
-    unicode_table.set("utf16to8", utf16to8_fn)?;
 
     // Set the unicode table in globals
     lua.globals().set("unicode", unicode_table)?;

@@ -267,7 +267,10 @@ fn get_interface_name_for_addr(local_addr: std::net::Ipv4Addr) -> Option<String>
             let family = unsafe { (*ifa_addr).sa_family };
             if i32::from(family) == libc::AF_INET {
                 // SAFETY: family check confirms this is a sockaddr_in
-                #[expect(clippy::cast_ptr_alignment, reason = "AF_INET confirms sockaddr_in layout")]
+                #[expect(
+                    clippy::cast_ptr_alignment,
+                    reason = "AF_INET confirms sockaddr_in layout"
+                )]
                 let sockaddr_in = unsafe { &*(ifa_addr as *const libc::sockaddr_in) };
                 let addr_bytes = sockaddr_in.sin_addr.s_addr.to_ne_bytes();
                 if addr_bytes == target_bytes {
@@ -341,13 +344,7 @@ fn get_mac_address_via_arp(
     addr.sll_ifindex = i32::try_from(if_index).unwrap_or(0);
     let addr_size = u32::try_from(std::mem::size_of::<libc::sockaddr_ll>()).unwrap_or(0);
     // SAFETY: fd is valid; addr is a properly initialized sockaddr_ll
-    let bind_result = unsafe {
-        libc::bind(
-            fd,
-            std::ptr::addr_of!(addr).cast(),
-            addr_size,
-        )
-    };
+    let bind_result = unsafe { libc::bind(fd, std::ptr::addr_of!(addr).cast(), addr_size) };
     if bind_result < 0 {
         // SAFETY: fd is valid and being closed on error path
         unsafe { libc::close(fd) };
@@ -404,14 +401,15 @@ fn get_mac_address_via_arp(
     // Read ARP reply
     let mut recv_buf = vec![0u8; 65535];
     // SAFETY: fd is valid and bound; recv_buf is a valid mutable slice
-    let recv_result = unsafe {
-        libc::recv(fd, recv_buf.as_mut_ptr().cast(), recv_buf.len(), 0)
-    };
+    let recv_result = unsafe { libc::recv(fd, recv_buf.as_mut_ptr().cast(), recv_buf.len(), 0) };
     // SAFETY: fd is being closed after use
     unsafe { libc::close(fd) };
 
     if recv_result > 0 {
-        #[expect(clippy::cast_sign_loss, reason = "recv returns non-negative on success")]
+        #[expect(
+            clippy::cast_sign_loss,
+            reason = "recv returns non-negative on success"
+        )]
         let len = recv_result as usize;
         if let Some((mac_addr, sender_ip)) = parse_arp_reply(&recv_buf[..len]) {
             let octets = target_ip.octets();
@@ -495,6 +493,14 @@ impl std::fmt::Display for ScanPhase {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.name())
     }
+}
+
+/// Work item for parallel service detection.
+#[derive(Clone)]
+struct ServiceProbeWork {
+    target_addr: SocketAddr,
+    port: u16,
+    protocol: &'static str,
 }
 
 /// Scan pipeline configuration.
@@ -2462,73 +2468,107 @@ impl ScanOrchestrator {
         };
         let service_db = service_db.clone();
 
-        let detector = rustnmap_fingerprint::ServiceDetector::new(service_db)
-            .with_timeout(std::time::Duration::from_secs(5));
-
-        for host_result in host_results.iter_mut() {
-            for port_result in &mut host_result.ports {
+        // Phase 1: Collect work items (target_addr, port, protocol) from open ports.
+        // This must happen before spawning tasks to avoid lifetime issues with
+        // borrowing host_results across await points.
+        let mut work_items: Vec<ServiceProbeWork> = Vec::new();
+        let mut work_indices: Vec<(usize, usize)> = Vec::new(); // (host_idx, port_idx)
+        for (hi, host_result) in host_results.iter().enumerate() {
+            for (pi, port_result) in host_result.ports.iter().enumerate() {
                 if port_result.state == PortState::Open {
                     let target_addr = SocketAddr::new(host_result.ip, port_result.number);
-
-                    // Run detection for this port, passing protocol to skip banner grab for UDP
-                    let protocol = if port_result.protocol == rustnmap_output::models::Protocol::Udp {
+                    let protocol = if port_result.protocol == rustnmap_output::models::Protocol::Udp
+                    {
                         "udp"
                     } else {
                         "tcp"
                     };
-                    match detector
-                        .detect_service_with_protocol(&target_addr, port_result.number, protocol)
+                    work_items.push(ServiceProbeWork {
+                        target_addr,
+                        port: port_result.number,
+                        protocol,
+                    });
+                    work_indices.push((hi, pi));
+                }
+            }
+        }
+
+        if work_items.is_empty() {
+            info!("No open ports to probe, skipping service detection");
+            return Ok(());
+        }
+
+        // Phase 2: Spawn concurrent probe tasks.
+        // nmap uses nsock for parallel I/O with up to MAX_SERIAL_SERVICE_PROBES (300)
+        // concurrent probes. We use tokio tasks for the same effect.
+        let detector = rustnmap_fingerprint::ServiceDetector::new(service_db)
+            .with_timeout(std::time::Duration::from_secs(5));
+
+        let tasks: Vec<_> = work_items
+            .into_iter()
+            .map(|work| {
+                let det = detector.clone();
+                tokio::spawn(async move {
+                    det.detect_service_with_protocol(&work.target_addr, work.port, work.protocol)
                         .await
-                    {
-                        Ok(services) => {
-                            if let Some(service_info) = services.first() {
-                                debug!(
-                                    ip = %host_result.ip,
-                                    port = port_result.number,
-                                    service = %service_info.name,
-                                    product = ?service_info.product,
-                                    version = ?service_info.version,
-                                    confidence = service_info.confidence,
-                                    "Service detected"
-                                );
+                        .map_err(|e| e.to_string())
+                })
+            })
+            .collect();
 
-                                // Convert fingerprint ServiceInfo to output ServiceInfo
-                                port_result.service = Some(rustnmap_output::models::ServiceInfo {
-                                    name: service_info.name.clone(),
-                                    product: service_info.product.clone(),
-                                    version: service_info.version.clone(),
-                                    extrainfo: service_info.info.clone(),
-                                    hostname: service_info.hostname.clone(),
-                                    ostype: service_info.os_type.clone(),
-                                    devicetype: service_info.device_type.clone(),
-                                    method: "probed".to_string(),
-                                    confidence: service_info.confidence,
-                                    cpe: service_info
-                                        .cpe
-                                        .clone()
-                                        .map(|c| vec![c])
-                                        .unwrap_or_default(),
-                                });
+        // Phase 3: Await all probes and apply results back to host_results.
+        let join_results = join_all(tasks).await;
 
-                                // Debug: print what was stored
-                                debug!(
-                                    "Stored service info for port {}: service={}, product={:?}, version={:?}",
-                                    port_result.number,
-                                    port_result.service.as_ref().map_or("None", |s| s.name.as_str()),
-                                    port_result.service.as_ref().and_then(|s| s.product.as_ref()),
-                                    port_result.service.as_ref().and_then(|s| s.version.as_ref())
-                                );
-                            }
-                        }
-                        Err(e) => {
-                            debug!(
-                                ip = %host_result.ip,
-                                port = port_result.number,
-                                error = %e,
-                                "Service detection failed"
-                            );
-                        }
+        for (idx, join_result) in join_results.into_iter().enumerate() {
+            let (hi, pi) = work_indices[idx];
+
+            match join_result {
+                Ok(Ok(services)) => {
+                    if let Some(service_info) = services.first() {
+                        debug!(
+                            ip = %host_results[hi].ip,
+                            port = host_results[hi].ports[pi].number,
+                            service = %service_info.name,
+                            product = ?service_info.product,
+                            version = ?service_info.version,
+                            confidence = service_info.confidence,
+                            "Service detected"
+                        );
+
+                        host_results[hi].ports[pi].service =
+                            Some(rustnmap_output::models::ServiceInfo {
+                                name: service_info.name.clone(),
+                                product: service_info.product.clone(),
+                                version: service_info.version.clone(),
+                                extrainfo: service_info.info.clone(),
+                                hostname: service_info.hostname.clone(),
+                                ostype: service_info.os_type.clone(),
+                                devicetype: service_info.device_type.clone(),
+                                method: "probed".to_string(),
+                                confidence: service_info.confidence,
+                                cpe: service_info
+                                    .cpe
+                                    .clone()
+                                    .map(|c| vec![c])
+                                    .unwrap_or_default(),
+                            });
                     }
+                }
+                Ok(Err(e)) => {
+                    debug!(
+                        ip = %host_results[hi].ip,
+                        port = host_results[hi].ports[pi].number,
+                        error = %e,
+                        "Service detection failed"
+                    );
+                }
+                Err(e) => {
+                    debug!(
+                        ip = %host_results[hi].ip,
+                        port = host_results[hi].ports[pi].number,
+                        error = %e,
+                        "Service detection task panicked"
+                    );
                 }
             }
         }

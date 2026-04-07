@@ -98,7 +98,7 @@ impl ServiceInfo {
 ///
 /// Manages probe execution and response matching for service
 /// version detection.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ServiceDetector {
     /// Probe database.
     db: ProbeDatabase,
@@ -157,7 +157,12 @@ impl ServiceDetector {
         port: u16,
         protocol: &str,
     ) -> Result<Vec<ServiceInfo>> {
-        info!("Starting service detection on {}:{} ({})", target.ip(), port, protocol);
+        info!(
+            "Starting service detection on {}:{} ({})",
+            target.ip(),
+            port,
+            protocol
+        );
         let is_udp = protocol.eq_ignore_ascii_case("udp");
 
         // nmap's DEFAULT_SERVICEWAITMS = 5000ms: total time budget for ALL probes.
@@ -177,7 +182,7 @@ impl ServiceDetector {
                         trace!("Got banner: {} bytes", banner.len());
 
                         // Try to match banner against all probe rules
-                        let probes = self.select_probes(port);
+                        let probes = self.select_probes(port, protocol);
                         for probe in &probes {
                             let matches = Self::match_response(probe, &banner)?;
                             for match_result in matches {
@@ -201,7 +206,7 @@ impl ServiceDetector {
         }
 
         // Get applicable probes for this port at configured intensity
-        let probes = self.select_probes(port);
+        let probes = self.select_probes(port, protocol);
         debug!("Selected {} probes for port {}", probes.len(), port);
 
         if probes.is_empty() {
@@ -227,7 +232,10 @@ impl ServiceDetector {
                 remaining.as_millis()
             );
 
-            match self.send_probe_with_timeout(target, port, probe, remaining).await {
+            match self
+                .send_probe_with_timeout(target, port, probe, remaining)
+                .await
+            {
                 Ok(Some(response)) => {
                     debug!(
                         "Got {} bytes from probe '{}' on port {}",
@@ -273,7 +281,6 @@ impl ServiceDetector {
     /// # Errors
     /// Returns error if connection times out or network operation fails.
     pub async fn grab_banner(&self, target: &SocketAddr, port: u16) -> Result<Option<Vec<u8>>> {
-
         trace!("Grabbing banner from {}:{}", target.ip(), port);
 
         // Connect to target
@@ -328,15 +335,12 @@ impl ServiceDetector {
             timeout_duration.as_millis()
         );
 
-        let stream = timeout(
-            timeout_duration,
-            TcpStream::connect((target.ip(), port)),
-        )
-        .await
-        .map_err(|_| FingerprintError::Timeout {
-            address: target.ip().to_string(),
-            port,
-        })?;
+        let stream = timeout(timeout_duration, TcpStream::connect((target.ip(), port)))
+            .await
+            .map_err(|_| FingerprintError::Timeout {
+                address: target.ip().to_string(),
+                port,
+            })?;
 
         let mut stream = stream?;
 
@@ -391,15 +395,12 @@ impl ServiceDetector {
         payload: &[u8],
         timeout_duration: Duration,
     ) -> Result<Option<Vec<u8>>> {
-        let stream = timeout(
-            timeout_duration,
-            TcpStream::connect((target.ip(), port)),
-        )
-        .await
-        .map_err(|_| FingerprintError::Timeout {
-            address: target.ip().to_string(),
-            port,
-        })?;
+        let stream = timeout(timeout_duration, TcpStream::connect((target.ip(), port)))
+            .await
+            .map_err(|_| FingerprintError::Timeout {
+                address: target.ip().to_string(),
+                port,
+            })?;
 
         let mut stream = stream?;
         stream
@@ -466,8 +467,17 @@ impl ServiceDetector {
     }
 
     /// Select probes for a port based on intensity level.
-    fn select_probes(&self, port: u16) -> Vec<&ProbeDefinition> {
+    fn select_probes(&self, port: u16, protocol: &str) -> Vec<&ProbeDefinition> {
         let mut probes: Vec<&ProbeDefinition> = self.db.probes_for_port(port);
+
+        // nmap separates TCP and UDP service probes completely.
+        // TCP ports only get TCP probes, UDP ports only get UDP probes.
+        let target_protocol = if protocol.eq_ignore_ascii_case("udp") {
+            Protocol::Udp
+        } else {
+            Protocol::Tcp
+        };
+        probes.retain(|p| p.protocol == target_protocol);
 
         // Filter by intensity - only include probes at or below our intensity
         // Intensity 1 = rarity 1-3, Intensity 9 = all probes
@@ -917,7 +927,7 @@ mod tests {
     fn test_select_probes_with_empty_database() {
         let db = ProbeDatabase::empty();
         let detector = ServiceDetector::new(db);
-        let probes = detector.select_probes(80);
+        let probes = detector.select_probes(80, "tcp");
         assert!(probes.is_empty());
     }
 
@@ -940,13 +950,13 @@ Ports 80
 
         // Test with intensity 3 (max rarity 5)
         let detector = ServiceDetector::new(db.clone()).with_intensity(3);
-        let probes = detector.select_probes(80);
+        let probes = detector.select_probes(80, "tcp");
         assert_eq!(probes.len(), 2); // Common and Uncommon
         assert!(probes.iter().all(|p| p.rarity <= 5));
 
         // Test with intensity 9 (max rarity 9)
         let detector = ServiceDetector::new(db).with_intensity(9);
-        let probes = detector.select_probes(80);
+        let probes = detector.select_probes(80, "tcp");
         assert_eq!(probes.len(), 3); // All probes
     }
 
@@ -968,7 +978,7 @@ Ports 80
         let db = ProbeDatabase::parse(content).unwrap();
 
         let detector = ServiceDetector::new(db).with_intensity(9);
-        let probes = detector.select_probes(80);
+        let probes = detector.select_probes(80, "tcp");
 
         assert_eq!(probes.len(), 3);
         assert_eq!(probes[0].name, "Alpha"); // rarity 1
@@ -990,7 +1000,7 @@ Ports 80
         let db = ProbeDatabase::parse(content).unwrap();
 
         let detector = ServiceDetector::new(db).with_intensity(9);
-        let probes = detector.select_probes(80);
+        let probes = detector.select_probes(80, "tcp");
 
         assert_eq!(probes.len(), 2);
         assert_eq!(probes[0].name, "Alpha"); // Same rarity, alphabetical

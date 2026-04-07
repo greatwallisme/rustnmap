@@ -291,8 +291,13 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     // Set scan_type
     nmap_table.set("scan_type", config.scan_type.as_str())?;
 
-    // Set timing_level
-    nmap_table.set("timing_level", config.timing_level as i64)?;
+    // Register timing_level() function - returns timing template level (0-5)
+    // nmap exposes this as a function, not a property, since scripts call nmap.timing_level()
+    let timing_level_fn = lua.create_function(|_, ()| {
+        let config = get_config_copy();
+        Ok(config.timing_level as i64)
+    })?;
+    nmap_table.set("timing_level", timing_level_fn)?;
 
     // Register verbosity() function
     let verbosity_fn = lua.create_function(|_, ()| {
@@ -333,15 +338,45 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     nmap_table.set("clock", clock_fn)?;
 
     // Register address_family() function - returns "inet" for IPv4 or "inet6" for IPv6
-    let address_family_fn = lua.create_function(|_, host: mlua::Table| {
-        let ip_str: String = host.get("ip")?;
-        if ip_str.contains(':') {
-            Ok("inet6")
-        } else {
-            Ok("inet")
+    // Can be called with no args (uses scan config) or with a host table
+    let address_family_fn = lua.create_function(|_, host: Option<mlua::Table>| {
+        match host {
+            Some(h) => {
+                let ip_str: String = h.get("ip")?;
+                if ip_str.contains(':') {
+                    Ok("inet6")
+                } else {
+                    Ok("inet")
+                }
+            }
+            None => {
+                // No host argument - default to inet (IPv4) since most scans are IPv4
+                Ok("inet")
+            }
         }
     })?;
     nmap_table.set("address_family", address_family_fn)?;
+
+    // Register get_dns_servers() function - returns list of DNS server IPs
+    // Reads from /etc/resolv.conf, matching nmap's behavior
+    let get_dns_servers_fn = lua.create_function(|lua, ()| {
+        let servers = lua.create_table()?;
+        if let Ok(contents) = std::fs::read_to_string("/etc/resolv.conf") {
+            let mut idx = 1i64;
+            for line in contents.lines() {
+                let trimmed = line.trim();
+                if let Some(addr) = trimmed.strip_prefix("nameserver") {
+                    let addr = addr.trim();
+                    if !addr.is_empty() {
+                        servers.set(idx, addr)?;
+                        idx += 1;
+                    }
+                }
+            }
+        }
+        Ok(servers)
+    })?;
+    nmap_table.set("get_dns_servers", get_dns_servers_fn)?;
 
     // Register log_write(level, message) function
     let log_write_fn = lua.create_function(|_, (level, message): (String, String)| {
@@ -516,6 +551,11 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
                     let p_num: u16 = pt.get("number").unwrap_or(0);
                     let p_proto: String = pt.get("protocol").unwrap_or_else(|_| "tcp".to_string());
                     if p_num == port_num && p_proto == proto {
+                        // Ensure the port table has a "version" subtable.
+                        // Scripts like smb-os-discovery write to port.version.product.
+                        if pt.get::<mlua::Value>("version").is_err() {
+                            let _ = pt.set("version", lua.create_table()?);
+                        }
                         return Ok(mlua::Value::Table(pt));
                     }
                 }
@@ -541,6 +581,7 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
                         port_table.set("protocol", proto)?;
                         port_table.set("state", "open")?;
                         port_table.set("service", lua.create_table()?)?;
+                        port_table.set("version", lua.create_table()?)?;
                         return Ok(mlua::Value::Table(port_table));
                     }
                 }
@@ -861,6 +902,12 @@ impl mlua::UserData for NseSocket {
                     #[expect(clippy::cast_possible_truncation, reason = "try_from validates range")]
                     u16::try_from(*n as i64)
                         .map_err(|e| mlua::Error::RuntimeError(format!("Port out of range: {e}")))?
+                }
+                mlua::Value::String(s) => {
+                    let s = s.to_string_lossy();
+                    s.parse::<u16>().map_err(|e| {
+                        mlua::Error::RuntimeError(format!("Port string parse error: {e}"))
+                    })?
                 }
                 mlua::Value::Table(t) => {
                     // Extract protocol from port table (e.g., "udp", "tcp")
@@ -1321,6 +1368,12 @@ impl mlua::UserData for NseSocket {
                         )]
                         u16::try_from(*n as i64).map_err(|e| {
                             mlua::Error::RuntimeError(format!("sendto: port out of range: {e}"))
+                        })?
+                    }
+                    mlua::Value::String(s) => {
+                        let s = s.to_string_lossy();
+                        s.parse::<u16>().map_err(|e| {
+                            mlua::Error::RuntimeError(format!("sendto: port string parse error: {e}"))
                         })?
                     }
                     mlua::Value::Table(t) => {
@@ -2236,8 +2289,9 @@ mod tests {
         let scan_type: String = nmap.get("scan_type").unwrap();
         assert_eq!(scan_type, "syn");
 
-        // Check timing_level is set
-        let timing: i64 = nmap.get("timing_level").unwrap();
+        // Check timing_level function returns correct value
+        let timing_fn: mlua::Function = nmap.get("timing_level").unwrap();
+        let timing: i64 = timing_fn.call(()).unwrap();
         assert_eq!(timing, 3);
     }
 

@@ -398,7 +398,6 @@ fn value_to_bignum(value: &Value) -> mlua::Result<BigUint> {
 }
 
 /// DES CBC encryption.
-#[allow(dead_code, reason = "Will be used by encrypt function when registered")]
 #[expect(
     clippy::needless_range_loop,
     clippy::cast_possible_truncation,
@@ -462,7 +461,6 @@ fn des_cbc_encrypt(key: &[u8], iv: &[u8], data: &[u8], padding: bool) -> mlua::R
 }
 
 /// DES CBC decryption.
-#[allow(dead_code, reason = "Will be used by decrypt function when registered")]
 fn des_cbc_decrypt(key: &[u8], iv: &[u8], data: &[u8], padding: bool) -> mlua::Result<Vec<u8>> {
     if key.len() != 8 {
         return Err(mlua::Error::RuntimeError(format!(
@@ -520,7 +518,6 @@ fn des_cbc_decrypt(key: &[u8], iv: &[u8], data: &[u8], padding: bool) -> mlua::R
 }
 
 /// DES ECB encryption.
-#[allow(dead_code, reason = "Will be used by encrypt function when registered")]
 #[expect(
     clippy::needless_range_loop,
     clippy::cast_possible_truncation,
@@ -567,7 +564,6 @@ fn des_ecb_encrypt(key: &[u8], data: &[u8], padding: bool) -> mlua::Result<Vec<u
 }
 
 /// DES ECB decryption.
-#[allow(dead_code, reason = "Will be used by decrypt function when registered")]
 fn des_ecb_decrypt(key: &[u8], data: &[u8], padding: bool) -> mlua::Result<Vec<u8>> {
     if key.len() != 8 {
         return Err(mlua::Error::RuntimeError(format!(
@@ -610,10 +606,6 @@ fn des_ecb_decrypt(key: &[u8], data: &[u8], padding: bool) -> mlua::Result<Vec<u
 }
 
 /// Encrypt data with the specified algorithm.
-#[allow(
-    dead_code,
-    reason = "Will be registered when encrypt/decrypt functions are exposed"
-)]
 fn encrypt(
     algorithm: &str,
     key: &[u8],
@@ -638,10 +630,6 @@ fn encrypt(
 }
 
 /// Decrypt data with the specified algorithm.
-#[allow(
-    dead_code,
-    reason = "Will be registered when encrypt/decrypt functions are exposed"
-)]
 fn decrypt(
     algorithm: &str,
     key: &[u8],
@@ -956,6 +944,60 @@ pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     })?;
     openssl_table.set("supported_digests", supported_digests_fn)?;
 
+    // Register encrypt function: openssl.encrypt(algorithm, key, iv, data, [padding])
+    let encrypt_fn = lua.create_function(
+        |lua, (algorithm, key, iv, data, padding): (String, Value, Value, Value, Option<bool>)| {
+            let key_bytes = lua_string_to_bytes(&key).unwrap_or_default();
+            let iv_bytes = lua_string_to_bytes(&iv);
+            let data_bytes = lua_string_to_bytes(&data).unwrap_or_default();
+            let use_padding = padding.unwrap_or(true);
+
+            debug!(
+                "openssl.encrypt: algo={algorithm}, key_len={}, iv_len={}, data_len={}, padding={use_padding}",
+                key_bytes.len(),
+                iv_bytes.as_ref().map_or(0, Vec::len),
+                data_bytes.len()
+            );
+
+            let result = encrypt(
+                &algorithm,
+                &key_bytes,
+                iv_bytes.as_deref(),
+                &data_bytes,
+                use_padding,
+            )?;
+            bytes_to_lua_string(lua, &result)
+        },
+    )?;
+    openssl_table.set("encrypt", encrypt_fn)?;
+
+    // Register decrypt function: openssl.decrypt(algorithm, key, iv, data, [padding])
+    let decrypt_fn = lua.create_function(
+        |lua, (algorithm, key, iv, data, padding): (String, Value, Value, Value, Option<bool>)| {
+            let key_bytes = lua_string_to_bytes(&key).unwrap_or_default();
+            let iv_bytes = lua_string_to_bytes(&iv);
+            let data_bytes = lua_string_to_bytes(&data).unwrap_or_default();
+            let use_padding = padding.unwrap_or(true);
+
+            debug!(
+                "openssl.decrypt: algo={algorithm}, key_len={}, iv_len={}, data_len={}, padding={use_padding}",
+                key_bytes.len(),
+                iv_bytes.as_ref().map_or(0, Vec::len),
+                data_bytes.len()
+            );
+
+            let result = decrypt(
+                &algorithm,
+                &key_bytes,
+                iv_bytes.as_deref(),
+                &data_bytes,
+                use_padding,
+            )?;
+            bytes_to_lua_string(lua, &result)
+        },
+    )?;
+    openssl_table.set("decrypt", decrypt_fn)?;
+
     // Register the openssl table in the global namespace
     lua.globals().set("openssl", openssl_table)?;
 
@@ -1092,5 +1134,121 @@ mod tests {
         assert_eq!(hash.len(), 32);
 
         hash_digest("invalid", data).unwrap_err();
+    }
+
+    #[test]
+    fn test_des_ecb_encrypt_decrypt_roundtrip() {
+        let key = b"12345678";
+        let plaintext = b"testdata";
+        let encrypted = encrypt("DES", key, None, plaintext, false).unwrap();
+        assert_eq!(encrypted.len(), 8);
+        let decrypted = decrypt("DES", key, None, &encrypted, false).unwrap();
+        assert_eq!(decrypted, plaintext);
+    }
+
+    #[test]
+    fn test_des_ecb_encrypt_with_padding() {
+        let key = b"12345678";
+        let plaintext = b"hello"; // 5 bytes -> padded to 8
+        let encrypted = encrypt("DES", key, None, plaintext, true).unwrap();
+        assert_eq!(encrypted.len(), 8);
+        let decrypted = decrypt("DES", key, None, &encrypted, true).unwrap();
+        assert_eq!(decrypted, plaintext);
+    }
+
+    #[test]
+    fn test_des_ecb_encrypt_no_padding_unaligned() {
+        let key = b"12345678";
+        let plaintext = b"hello"; // 5 bytes, not aligned
+                                  // Without padding, partial block is output as-is (no encryption)
+        let result = encrypt("DES-ECB", key, None, plaintext, false).unwrap();
+        assert_eq!(result, plaintext);
+    }
+
+    #[test]
+    fn test_des_cbc_encrypt_decrypt_roundtrip() {
+        let key = b"12345678";
+        let iv = b"abcdefgh";
+        let plaintext = b"testdata";
+        let encrypted = encrypt("DES-CBC", key, Some(iv), plaintext, false).unwrap();
+        assert_eq!(encrypted.len(), 8);
+        let decrypted = decrypt("DES-CBC", key, Some(iv), &encrypted, false).unwrap();
+        assert_eq!(decrypted, plaintext);
+    }
+
+    #[test]
+    fn test_des_cbc_encrypt_with_padding() {
+        let key = b"12345678";
+        let iv = b"abcdefgh";
+        let plaintext = b"hello"; // 5 bytes -> padded to 8
+        let encrypted = encrypt("des-cbc", key, Some(iv), plaintext, true).unwrap();
+        assert_eq!(encrypted.len(), 8);
+        let decrypted = decrypt("des-cbc", key, Some(iv), &encrypted, true).unwrap();
+        assert_eq!(decrypted, plaintext);
+    }
+
+    #[test]
+    fn test_des_cbc_requires_iv() {
+        let key = b"12345678";
+        let plaintext = b"testdata";
+        let err = encrypt("DES-CBC", key, None, plaintext, false).unwrap_err();
+        assert!(
+            err.to_string().contains("IV"),
+            "Expected IV requirement error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_des_cbc_multi_block() {
+        let key = b"12345678";
+        let iv = b"abcdefgh";
+        let plaintext = b"1234567890123456"; // 16 bytes = 2 blocks
+        let encrypted = encrypt("DES-CBC", key, Some(iv), plaintext, false).unwrap();
+        assert_eq!(encrypted.len(), 16);
+        let decrypted = decrypt("DES-CBC", key, Some(iv), &encrypted, false).unwrap();
+        assert_eq!(decrypted, plaintext);
+    }
+
+    #[test]
+    fn test_encrypt_unsupported_algorithm() {
+        let err = encrypt("AES", b"key", None, b"data", false).unwrap_err();
+        assert!(
+            err.to_string().contains("Unsupported"),
+            "Expected unsupported error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_encrypt_decrypt_lua() {
+        let mut nse = crate::lua::NseLua::new_default().unwrap();
+        register(&mut nse).unwrap();
+
+        // Test DES ECB encrypt/decrypt roundtrip via Lua (openssl is a global)
+        let script = r#"
+            local key = "12345678"
+            local data = "testdata"
+            local encrypted = openssl.encrypt("DES", key, nil, data, false)
+            local decrypted = openssl.decrypt("DES", key, nil, encrypted, false)
+            return decrypted == data
+        "#;
+        let result: bool = nse.lua().load(script).eval().unwrap();
+        assert!(result, "DES ECB encrypt/decrypt roundtrip via Lua failed");
+    }
+
+    #[test]
+    fn test_encrypt_decrypt_lua_smb_pattern() {
+        let mut nse = crate::lua::NseLua::new_default().unwrap();
+        register(&mut nse).unwrap();
+
+        // Test the SMB authentication pattern: openssl.encrypt("DES", key, nil, "KGS!@#$%")
+        let script = r#"
+            local key = "\x4b\x47\x53\x21\x40\x23\x24\x25"
+            local data = "KGS!@#$%"
+            local encrypted = openssl.encrypt("DES", key, nil, data, false)
+            -- Verify encryption produces 8 bytes (one DES block)
+            return #encrypted == 8
+        "#;
+        let result: bool = nse.lua().load(script).eval().unwrap();
+        assert!(result, "SMB-style DES encrypt via Lua failed");
     }
 }

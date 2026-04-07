@@ -740,10 +740,7 @@ impl NseRegistry {
     ///
     /// Returns an error if the selector cannot be parsed or a matching
     /// script file cannot be read.
-    pub fn load_matching_scripts(
-        &mut self,
-        selector_expr: &str,
-    ) -> crate::error::Result<()> {
+    pub fn load_matching_scripts(&mut self, selector_expr: &str) -> crate::error::Result<()> {
         if self.script_db.is_index_empty() {
             // Index was never built -- nothing to load.
             return Ok(());
@@ -756,9 +753,7 @@ impl NseRegistry {
         self.script_db
             .load_scripts_by_selector(&selector)
             .map_err(|e| {
-                crate::error::CoreError::nse(format!(
-                    "Failed to load matching scripts: {e}"
-                ))
+                crate::error::CoreError::nse(format!("Failed to load matching scripts: {e}"))
             })
     }
 }

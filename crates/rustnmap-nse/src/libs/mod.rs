@@ -146,7 +146,7 @@ pub fn register_all(lua: &mut NseLua) -> Result<()> {
 /// Lua-only helpers (e.g. `http.parse_date`) alongside the Rust core
 /// functions.
 const DUAL_MODULES: &[&str] = &[
-    "http", "stdnse", "ipOps", "ftp", "smb", "smbauth", "ssh2", "ssl",
+    "http", "stdnse", "ipOps", "ftp", "smb", "smbauth", "ssh2", "ssl", "unicode", "dns",
 ];
 
 /// Register all NSE libraries in package.preload for `require()` support.

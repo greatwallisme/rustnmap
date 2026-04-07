@@ -38,15 +38,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// Type alias for HMAC-MD5
 type HmacMd5 = Hmac<Md5>;
 
-/// Type alias for `get_security_blob` function parameters.
-type GetSecurityBlobParams = (
-    Option<Vec<u8>>,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-);
-
 // NTLMSSP Message Types
 const NTLMSSP_NEGOTIATE: u32 = 0x0000_0001;
 const NTLMSSP_CHALLENGE: u32 = 0x0000_0002;
@@ -79,68 +70,24 @@ const NTLMSSP_NEGOTIATE_56: u32 = 0x8000_0000;
 
 /// Register the smbauth library with the Lua runtime.
 ///
+/// Only registers NTLMSSP constants. The full `smbauth` Lua module
+/// (in `nselib/smbauth.lua`) provides `get_security_blob`,
+/// `get_password_response`, and other authentication functions that
+/// operate on Lua binary strings. As a `DUAL_MODULE`, the Lua file
+/// loads first and provides the complete implementation; these Rust
+/// constants are merged in without overriding Lua functions.
+///
 /// # Errors
 ///
 /// Returns an error if library registration fails.
 pub fn register(nse_lua: &mut NseLua) -> Result<()> {
     let lua = nse_lua.lua_mut();
 
-    // Create the smbauth table
+    // Create the smbauth table with constants only.
+    // Lua smbauth.lua provides get_security_blob, get_password_response,
+    // calculate_signature, etc. via the DUAL_MODULE mechanism.
     let smbauth_table = lua.create_table()?;
 
-    // Register get_security_blob function
-    let get_security_blob_fn = lua.create_function(
-        |_lua, (security_blob, username, domain, password, hash_type): GetSecurityBlobParams| {
-            // If no security_blob, this is the initial NEGOTIATE message
-            // If no security_blob, this is the initial NEGOTIATE message
-            let security_blob = security_blob.unwrap_or_default();
-            if security_blob.is_empty() {
-                // Build initial NEGOTIATE message
-                let flags = NTLMSSP_NEGOTIATE_UNICODE
-                    | NTLMSSP_NEGOTIATE_NTLM
-                    | NTLMSSP_NEGOTIATE_ALWAYS_SIGN;
-                let domain_utf16 = domain.map(|d| unicode::utf8_to_utf16le(&d));
-                let workstation_utf16 = Some(unicode::utf8_to_utf16le("RUSTNMAP"));
-                Ok(build_negotiate_message(
-                    flags,
-                    domain_utf16.as_deref(),
-                    workstation_utf16.as_deref(),
-                ))
-            } else {
-                // Parse NTLMSSP CHALLENGE message
-                let challenge = parse_challenge_message(&security_blob)
-                    .map_err(|e| mlua::Error::RuntimeError(e.to_string()))?;
-
-                // Compute LM and NT responses
-                let (lm_response, nt_response) = compute_responses(
-                    &challenge,
-                    username.as_deref(),
-                    password.as_deref(),
-                    hash_type.as_deref(),
-                )
-                .map_err(|e| mlua::Error::RuntimeError(e.to_string()))?;
-
-                // Convert strings to UTF-16LE
-                let domain_utf16 = domain.map(|d| unicode::utf8_to_utf16le(&d));
-                let username_utf16 = username.map(|u| unicode::utf8_to_utf16le(&u));
-                let workstation_utf16 = Some(unicode::utf8_to_utf16le("RUSTNMAP"));
-
-                // Build AUTHENTICATE message
-                Ok(build_authenticate_message(
-                    &lm_response,
-                    &nt_response,
-                    domain_utf16.as_deref().unwrap_or_default(),
-                    username_utf16.as_deref().unwrap_or_default(),
-                    workstation_utf16.as_deref().unwrap_or_default(),
-                    None,
-                    challenge.flags,
-                ))
-            }
-        },
-    )?;
-    smbauth_table.set("get_security_blob", get_security_blob_fn)?;
-
-    // Set constants
     smbauth_table.set("NTLMSSP_NEGOTIATE", NTLMSSP_NEGOTIATE)?;
     smbauth_table.set("NTLMSSP_CHALLENGE", NTLMSSP_CHALLENGE)?;
     smbauth_table.set("NTLMSSP_AUTH", NTLMSSP_AUTH)?;

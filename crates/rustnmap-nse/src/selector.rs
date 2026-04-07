@@ -381,16 +381,16 @@ impl ScriptSelector {
                 .filter(|entry| entry.matches_pattern(pattern))
                 .collect(),
             Self::And(left, right) => {
-                let left_set: std::collections::HashSet<_> =
-                    left.select_from_index(index)
-                        .into_iter()
-                        .map(|e| e.basename.clone())
-                        .collect();
-                let right_set: std::collections::HashSet<_> =
-                    right.select_from_index(index)
-                        .into_iter()
-                        .map(|e| e.basename.clone())
-                        .collect();
+                let left_set: std::collections::HashSet<_> = left
+                    .select_from_index(index)
+                    .into_iter()
+                    .map(|e| e.basename.clone())
+                    .collect();
+                let right_set: std::collections::HashSet<_> = right
+                    .select_from_index(index)
+                    .into_iter()
+                    .map(|e| e.basename.clone())
+                    .collect();
 
                 left_set
                     .intersection(&right_set)
@@ -550,7 +550,10 @@ mod tests {
     fn test_select_from_index_all() {
         let index = vec![
             make_entry("banner", &[ScriptCategory::Default]),
-            make_entry("http-title", &[ScriptCategory::Default, ScriptCategory::Discovery]),
+            make_entry(
+                "http-title",
+                &[ScriptCategory::Default, ScriptCategory::Discovery],
+            ),
         ];
         let selector = ScriptSelector::parse("all").unwrap();
         let result = selector.select_from_index(&index);
@@ -560,7 +563,10 @@ mod tests {
     #[test]
     fn test_select_from_index_category() {
         let index = vec![
-            make_entry("vuln-script", &[ScriptCategory::Vuln, ScriptCategory::Intrusive]),
+            make_entry(
+                "vuln-script",
+                &[ScriptCategory::Vuln, ScriptCategory::Intrusive],
+            ),
             make_entry("safe-script", &[ScriptCategory::Safe]),
             make_entry("auth-script", &[ScriptCategory::Auth]),
         ];
