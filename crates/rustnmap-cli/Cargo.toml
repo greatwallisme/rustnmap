@@ -51,7 +51,7 @@ name = "rustnmap"
 path = "src/main.rs"
 
 [features]
-diagnostic = []
+diagnostic = ["rustnmap-core/diagnostic"]
 
 [lints]
 workspace = true

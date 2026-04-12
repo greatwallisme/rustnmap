@@ -58,7 +58,7 @@ impl Default for RingConfig {
         // Based on nmap's defaults
         Self {
             block_size: 65536, // 64 KiB
-            block_nr: 256,     // 256 blocks = 16 MiB total
+            block_nr: 64,      // 64 blocks = 4 MiB total (sufficient for scan workloads)
             frame_size: 4096,  // 4 KiB (jumbo frame + headers)
             frame_timeout: 64, // 64ms (nmap default)
             enable_rx: true,
@@ -550,7 +550,7 @@ mod tests {
     fn test_ring_config_default() {
         let config = RingConfig::default();
         assert_eq!(config.block_size, 65536);
-        assert_eq!(config.block_nr, 256);
+        assert_eq!(config.block_nr, 64);
         assert_eq!(config.frame_size, 4096);
         assert_eq!(config.frame_timeout, 64);
         assert!(config.enable_rx);
@@ -594,7 +594,7 @@ mod tests {
     #[test]
     fn test_ring_config_total_size() {
         let config = RingConfig::default();
-        assert_eq!(config.total_size(), 65536 * 256);
+        assert_eq!(config.total_size(), 65536 * 64);
     }
 
     #[test]

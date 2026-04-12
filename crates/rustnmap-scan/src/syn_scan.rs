@@ -242,6 +242,7 @@ impl TcpSynScanner {
             .seq(seq)
             .syn()
             .window(65535)
+            .badsum_if(self.config.badsum)
             .build();
 
         // Create destination socket address

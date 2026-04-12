@@ -8,6 +8,7 @@
 -  Develop enviroment is a debian system with root previledge, any commond can be executed without `sudo` or password.
 
 ## CRITICAL RULES (Never Violate)
+0. **Optimization Compliance** - All optimization work must not just reduce timeout to speed things up. Fix actual logic is absolutely right.
 1. **Design Compliance** - All development must strictly follow the designs in the doc/ design documents. No alternative implementations are allowed. If a design is found to be unimplementable, user confirmation is required before modifying the technical approach.
 2. **Zero warnings, zero errors** - Never relax clippy standards in Cargo.toml
 3. **Code Quality Hook** - Pay attention to hook error messages, never bypass

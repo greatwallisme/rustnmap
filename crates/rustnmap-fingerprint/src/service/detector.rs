@@ -6,6 +6,7 @@
 use std::{
     collections::HashMap,
     net::SocketAddr,
+    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -100,8 +101,8 @@ impl ServiceInfo {
 /// version detection.
 #[derive(Debug, Clone)]
 pub struct ServiceDetector {
-    /// Probe database.
-    db: ProbeDatabase,
+    /// Probe database shared across concurrent detection tasks via Arc.
+    db: Arc<ProbeDatabase>,
 
     /// Configurable timeout for probe responses.
     default_timeout: Duration,
@@ -115,7 +116,7 @@ impl ServiceDetector {
     #[must_use]
     pub fn new(db: ProbeDatabase) -> Self {
         Self {
-            db,
+            db: Arc::new(db),
             default_timeout: Duration::from_secs(5),
             intensity: 7,
         }
@@ -141,6 +142,10 @@ impl ServiceDetector {
     /// all probes for a single port share one time budget (5 seconds).
     /// Each subsequent probe gets `budget - elapsed`, matching nmap's
     /// `probe_timemsleft()` logic in `service_scan.cc`.
+    ///
+    /// Connection reuse: the TCP connection from the banner grab (NULL probe)
+    /// is reused for the first subsequent probe, matching nmap's optimization
+    /// in `service_scan.cc` lines 2095-2105.
     ///
     /// # Arguments
     ///
@@ -171,32 +176,36 @@ impl ServiceDetector {
         let start = Instant::now();
         let mut results = Vec::new();
 
+        // Track TCP connection for reuse after banner grab (nmap optimization)
+        let mut reusable_stream: Option<tokio::net::TcpStream> = None;
+
         // Banner grabbing only works for TCP (services that send banners on connect).
         // UDP services never send unsolicited data, so skip banner grab entirely.
         // nmap calls this the "NULL probe" and it shares the same time budget.
         if !is_udp {
             let remaining = total_budget.saturating_sub(start.elapsed());
             if !remaining.is_zero() {
-                match self.grab_banner_with_timeout(target, port, remaining).await {
-                    Ok(Some(banner)) => {
-                        trace!("Got banner: {} bytes", banner.len());
+                match self.grab_banner_and_keep_stream(target, port, remaining).await {
+                    Ok((banner_opt, stream_opt)) => {
+                        reusable_stream = stream_opt;
 
-                        // Try to match banner against all probe rules
-                        let probes = self.select_probes(port, protocol);
-                        for probe in &probes {
-                            let matches = Self::match_response(probe, &banner)?;
-                            for match_result in matches {
-                                results.push(ServiceInfo::from_match(match_result));
+                        if let Some(banner) = banner_opt {
+                            trace!("Got banner: {} bytes", banner.len());
+
+                            // Try to match banner against all probe rules
+                            let probes = self.select_probes(port, protocol);
+                            for probe in &probes {
+                                let matches = Self::match_response(probe, &banner)?;
+                                for match_result in matches {
+                                    results.push(ServiceInfo::from_match(match_result));
+                                }
+                            }
+
+                            // If we got confident results from banner, return early
+                            if results.iter().any(|r| r.confidence >= 8) {
+                                return Ok(results);
                             }
                         }
-
-                        // If we got confident results from banner, return early
-                        if results.iter().any(|r| r.confidence >= 8) {
-                            return Ok(results);
-                        }
-                    }
-                    Ok(None) => {
-                        debug!("No banner received from {}:{}", target.ip(), port);
                     }
                     Err(e) => {
                         debug!("Banner grab failed: {}", e);
@@ -217,7 +226,8 @@ impl ServiceDetector {
             return Ok(results);
         }
 
-        // Execute probes in order, sharing the remaining time budget
+        // Execute probes in order, sharing the remaining time budget.
+        // Reuse TCP connection from banner grab for first probe (nmap optimization).
         for probe in &probes {
             let remaining = total_budget.saturating_sub(start.elapsed());
             if remaining.is_zero() {
@@ -232,10 +242,16 @@ impl ServiceDetector {
                 remaining.as_millis()
             );
 
-            match self
-                .send_probe_with_timeout(target, port, probe, remaining)
-                .await
-            {
+            // Try to reuse existing connection for first probe, then open new ones
+            let response = if let Some(stream) = reusable_stream.take() {
+                self.send_probe_on_existing_stream(stream, probe, remaining)
+                    .await
+            } else {
+                self.send_probe_with_timeout(target, port, probe, remaining)
+                    .await
+            };
+
+            match response {
                 Ok(Some(response)) => {
                     debug!(
                         "Got {} bytes from probe '{}' on port {}",
@@ -318,53 +334,6 @@ impl ServiceDetector {
         }
     }
 
-    /// Grab banner with a specific timeout (for total time budget).
-    ///
-    /// Same as `grab_banner` but uses caller-specified timeout instead of
-    /// `default_timeout`, implementing nmap's shared time budget model.
-    async fn grab_banner_with_timeout(
-        &self,
-        target: &SocketAddr,
-        port: u16,
-        timeout_duration: Duration,
-    ) -> Result<Option<Vec<u8>>> {
-        trace!(
-            "Grabbing banner from {}:{} (timeout: {}ms)",
-            target.ip(),
-            port,
-            timeout_duration.as_millis()
-        );
-
-        let stream = timeout(timeout_duration, TcpStream::connect((target.ip(), port)))
-            .await
-            .map_err(|_| FingerprintError::Timeout {
-                address: target.ip().to_string(),
-                port,
-            })?;
-
-        let mut stream = stream?;
-
-        let mut buffer = vec![0u8; 4096];
-        let n = match timeout(timeout_duration, stream.read(&mut buffer)).await {
-            Ok(Ok(n)) => n,
-            Ok(Err(_)) => 0,
-            Err(_) => {
-                return Err(FingerprintError::Timeout {
-                    address: target.ip().to_string(),
-                    port,
-                });
-            }
-        };
-
-        if n > 0 {
-            buffer.truncate(n);
-            trace!("Banner grabbed: {} bytes", n);
-            Ok(Some(buffer))
-        } else {
-            Ok(None)
-        }
-    }
-
     /// Send a probe with a specific timeout (for total time budget).
     async fn send_probe_with_timeout(
         &self,
@@ -384,6 +353,94 @@ impl ServiceDetector {
                 self.send_udp_probe_with_timeout(target, port, payload, timeout_duration)
                     .await
             }
+        }
+    }
+
+    /// Grab banner while keeping the TCP stream for connection reuse.
+    ///
+    /// Returns (banner_option, stream_option). The stream can be reused
+    /// for the next probe, avoiding an extra TCP handshake.
+    /// Matches nmap's optimization in service_scan.cc lines 2095-2105.
+    async fn grab_banner_and_keep_stream(
+        &self,
+        target: &SocketAddr,
+        port: u16,
+        timeout_duration: Duration,
+    ) -> Result<(Option<Vec<u8>>, Option<tokio::net::TcpStream>)> {
+        trace!(
+            "Grabbing banner from {}:{} (timeout: {}ms)",
+            target.ip(),
+            port,
+            timeout_duration.as_millis()
+        );
+
+        let stream = timeout(timeout_duration, TcpStream::connect((target.ip(), port)))
+            .await
+            .map_err(|_| FingerprintError::Timeout {
+                address: target.ip().to_string(),
+                port,
+            })?;
+
+        let mut stream = stream?;
+
+        // Set read timeout to avoid blocking beyond budget
+        let mut buffer = vec![0u8; 4096];
+        let n = match timeout(timeout_duration, stream.read(&mut buffer)).await {
+            Ok(Ok(n)) => n,
+            Ok(Err(_)) => {
+                // Read error but connection is open -- return stream for reuse
+                return Ok((None, Some(stream)));
+            }
+            Err(_) => {
+                // Timeout on read -- connection still usable for sending probes
+                return Ok((None, Some(stream)));
+            }
+        };
+
+        if n > 0 {
+            buffer.truncate(n);
+            trace!("Banner grabbed: {} bytes", n);
+            Ok((Some(buffer), Some(stream)))
+        } else {
+            // No data but connection open
+            Ok((None, Some(stream)))
+        }
+    }
+
+    /// Send a probe on an existing TCP stream (connection reuse).
+    ///
+    /// This avoids the TCP handshake overhead (~1 RTT) for the first probe
+    /// after the banner grab, matching nmap's connection reuse optimization.
+    async fn send_probe_on_existing_stream(
+        &self,
+        mut stream: tokio::net::TcpStream,
+        probe: &ProbeDefinition,
+        timeout_duration: Duration,
+    ) -> Result<Option<Vec<u8>>> {
+        let payload = &probe.payload;
+
+        stream
+            .write_all(payload)
+            .await
+            .map_err(|e: std::io::Error| FingerprintError::Network {
+                operation: "write probe on existing stream".to_string(),
+                reason: e.to_string(),
+            })?;
+
+        let mut buffer = vec![0u8; 4096];
+        let n = match timeout(timeout_duration, stream.read(&mut buffer)).await {
+            Ok(Ok(n)) => n,
+            Ok(Err(_)) => 0,
+            Err(_) => {
+                return Ok(None);
+            }
+        };
+
+        if n > 0 {
+            buffer.truncate(n);
+            Ok(Some(buffer))
+        } else {
+            Ok(None)
         }
     }
 

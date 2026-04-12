@@ -7,7 +7,7 @@ use criterion::{criterion_group, criterion_main, Criterion, Throughput};
 use rustnmap_common::Ipv4Addr;
 use rustnmap_fingerprint::os::{
     database::OsFamily, EcnFingerprint, FingerprintDatabase, IpIdSeqClass, IsnClass,
-    OpsFingerprint, OsFingerprint, OsMatch, SeqFingerprint, TimestampRate,
+    OpsFingerprint, OsFingerprint, OsMatch, SeqFingerprint,
 };
 use rustnmap_fingerprint::service::ProbeDatabase;
 use rustnmap_net::raw_socket::TcpPacketBuilder;
@@ -138,7 +138,8 @@ fn bench_os_fingerprint_construction(c: &mut Criterion) {
             fp.seq = Some(SeqFingerprint {
                 class: IsnClass::Random,
                 timestamp: true,
-                timestamp_rate: Some(TimestampRate::Rate100),
+                ts_val: 0xA,
+                ts_val: 0xA,
                 gcd: 1,
                 isr: 0,
                 sp: 0,
@@ -200,7 +201,7 @@ fn bench_os_fingerprint_database(c: &mut Criterion) {
         fp.seq = Some(SeqFingerprint {
             class: IsnClass::Random,
             timestamp: true,
-            timestamp_rate: Some(TimestampRate::Rate100),
+            ts_val: 0xA,
             gcd: 1,
             isr: 0,
             sp: 0,
@@ -327,7 +328,7 @@ fn bench_fingerprint_comparison(c: &mut Criterion) {
         let seq1 = SeqFingerprint {
             class: IsnClass::Random,
             timestamp: true,
-            timestamp_rate: Some(TimestampRate::Rate100),
+            ts_val: 0xA,
             gcd: 1,
             isr: 0,
             sp: 0,
@@ -349,7 +350,7 @@ fn bench_fingerprint_comparison(c: &mut Criterion) {
         let seq1 = SeqFingerprint {
             class: IsnClass::Random,
             timestamp: true,
-            timestamp_rate: Some(TimestampRate::Rate100),
+            ts_val: 0xA,
             gcd: 1,
             isr: 0,
             sp: 0,
@@ -362,7 +363,7 @@ fn bench_fingerprint_comparison(c: &mut Criterion) {
         let seq2 = SeqFingerprint {
             class: IsnClass::Incremental { increment: 1 },
             timestamp: false,
-            timestamp_rate: None,
+            ts_val: 0,
             gcd: 1,
             isr: 0,
             sp: 0,

@@ -28,7 +28,7 @@
 //! let detector = ServiceDetector::new(db);
 //!
 //! let target: SocketAddr = "127.0.0.1:80".parse().unwrap();
-//! let results = detector.detect_service(&target, 80).await?;
+//! let results = detector.detect_service_with_protocol(&target, 80, "tcp").await?;
 //!
 //! if let Some(service) = results.first() {
 //!     tracing::info!("Service: {} {}", service.name, service.version.as_ref().unwrap_or(&"?".into()));
@@ -104,7 +104,7 @@ pub use database::{
 pub use error::FingerprintError;
 pub use os::{
     EcnFingerprint, FingerprintDatabase, IcmpTestResult, IpIdPattern, IpIdSeqClass, IsnClass,
-    OpsFingerprint, OsDetector, OsFingerprint, OsMatch, SeqFingerprint, TestResult, TimestampRate,
+    OpsFingerprint, OsDetector, OsFingerprint, OsMatch, SeqFingerprint, TestResult,
     UdpTestResult,
 };
 pub use service::{ProbeDatabase, ProbeDefinition, ServiceDetector, ServiceInfo};

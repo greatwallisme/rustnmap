@@ -70,6 +70,12 @@ struct InternalCongestionStats {
     /// This is used for the first probe before any RTT measurement.
     /// See nmap timing.cc:82: `to->timeout = o.initialRttTimeout() * 1000;`
     initial_rtt: Duration,
+    /// Minimum RTT timeout from config.
+    ///
+    /// All probe timeouts are clamped to this floor, matching nmap's
+    /// `box(minRttTimeout, maxRttTimeout, timeout)` in timing.cc:153.
+    /// T0-T4: 100ms, T5: 50ms.
+    min_rtt: Duration,
     /// Maximum RTT timeout from config.
     ///
     /// This is the maximum allowed timeout for any probe.
@@ -114,12 +120,14 @@ impl InternalCongestionStats {
         clippy::cast_possible_truncation,
         reason = "RTT values are bounded to reasonable network latencies (< 30s)"
     )]
-    fn new(initial_rtt: Duration, max_rtt: Duration) -> Self {
+    fn new(initial_rtt: Duration, min_rtt: Duration, max_rtt: Duration) -> Self {
         let srtt_micros = initial_rtt.as_micros() as u64;
-        // Nmap: rttvar = box(5000, 2000000, srtt) = clamp(srtt, 5ms, 2000ms)
-        let rttvar_micros = srtt_micros.clamp(5_000, 2_000_000);
+        // Nmap timing.cc:124: rttvar = box(5000, 2000000, srtt) = clamp(srtt, 5ms, 2s)
+        // Before first measurement, use srtt/2 per RFC 6298 Section 2.3
+        let rttvar_micros = (srtt_micros / 2).clamp(5_000, 2_000_000);
         Self {
             initial_rtt,
+            min_rtt,
             max_rtt,
             srtt_micros: std::sync::atomic::AtomicU64::new(srtt_micros),
             rttvar_micros: std::sync::atomic::AtomicU64::new(rttvar_micros),
@@ -182,32 +190,41 @@ impl InternalCongestionStats {
     /// - Lower bound: `MIN_RTT_TIMEOUT` (100ms) from nmap
     /// - Upper bound: `max_rtt` from timing template config
     ///
-    /// For the first probe (before any RTT measurement), returns `initial_rtt` directly.
-    /// This matches nmap's behavior: `to->timeout = o.initialRttTimeout() * 1000;`
-    /// (see timing.cc:82).
+    /// For the first probe (before any RTT measurement), returns
+    /// `box(min_rtt, max_rtt, initial_rtt)` matching nmap's timeout
+    /// initialization in timing.cc:153:
+    ///   `to->timeout = box(minRttTimeout, maxRttTimeout, timeout)`
     ///
-    /// The upper bound uses `max_rtt` from config instead of a fixed constant,
-    /// allowing T5 (Insane) to properly use 300ms max timeout.
+    /// This ensures measured RTT from host discovery (which can be <1ms
+    /// for local targets) is clamped to at least `min_rtt` (100ms for T3,
+    /// 50ms for T5), preventing premature timeout on non-responsive probes.
     fn recommended_timeout(&self) -> Duration {
         use std::sync::atomic::Ordering;
-        // Check if this is the first measurement
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "RTT values are bounded to reasonable network latencies (< 30s)"
+        )]
+        let min_micros = self.min_rtt.as_micros() as u64;
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "max_rtt is in milliseconds, fits in u64"
+        )]
+        let max_micros = self.max_rtt.as_micros() as u64;
+
         if self.first_measurement.load(Ordering::Relaxed) {
-            // First probe: use initial_rtt directly (nmap timing.cc:82)
-            // Also clamp to max_rtt to ensure initial timeout doesn't exceed max
-            self.initial_rtt.min(self.max_rtt)
+            // First probe: use initial_rtt clamped by min/max (nmap timing.cc:153)
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "initial_rtt is bounded to reasonable network latencies"
+            )]
+            let initial_micros = self.initial_rtt.as_micros() as u64;
+            Duration::from_micros(initial_micros.clamp(min_micros, max_micros))
         } else {
             // Subsequent probes: use SRTT + 4*RTTVAR
             let srtt = self.srtt_micros.load(Ordering::Relaxed);
             let rttvar = self.rttvar_micros.load(Ordering::Relaxed);
             let timeout_micros = srtt.saturating_add(4 * rttvar);
-            // Clamp to nmap's MIN_RTT_TIMEOUT (100ms) and config's max_rtt
-            #[expect(
-                clippy::cast_possible_truncation,
-                reason = "max_rtt is in milliseconds, fits in u64"
-            )]
-            let max_micros = self.max_rtt.as_micros() as u64;
-            let clamped = timeout_micros.clamp(100_000, max_micros);
-            Duration::from_micros(clamped)
+            Duration::from_micros(timeout_micros.clamp(min_micros, max_micros))
         }
     }
 
@@ -309,7 +326,7 @@ impl InternalCongestionController {
     /// From nmap `timing.cc:276-279`:
     /// - `timing_level` < 4: `ca_incr` = 1
     /// - `timing_level` >= 4: `ca_incr` = 2
-    fn new(max_cwnd: usize, timing_level: u8, initial_rtt: Duration, max_rtt: Duration) -> Self {
+    fn new(max_cwnd: usize, timing_level: u8, initial_rtt: Duration, min_rtt: Duration, max_rtt: Duration) -> Self {
         // Nmap timing.cc:272 - group_initial_cwnd = box(low_cwnd, max_cwnd, 10)
         // low_cwnd=1, max_cwnd=300, box() returns 10 since 1 < 10 < 300
         const GROUP_INITIAL_CWND: usize = 10;
@@ -322,7 +339,7 @@ impl InternalCongestionController {
         let ca_incr = if timing_level < 4 { 1 } else { 2 };
 
         Self {
-            stats: std::sync::Arc::new(InternalCongestionStats::new(initial_rtt, max_rtt)),
+            stats: std::sync::Arc::new(InternalCongestionStats::new(initial_rtt, min_rtt, max_rtt)),
             cwnd: std::sync::atomic::AtomicUsize::new(GROUP_INITIAL_CWND),
             ssthresh: std::sync::atomic::AtomicUsize::new(INITIAL_SSTHRESH),
             ca_ack_counter: std::sync::atomic::AtomicUsize::new(0),
@@ -484,18 +501,12 @@ pub const DEFAULT_MAX_PARALLELISM: usize = 300;
 
 /// Maximum number of probes to send per batch before waiting for responses.
 ///
-/// This matches nmap's batch limit from `scan_engine.cc:326-327`:
+/// This matches nmap's batch limit from `scan_engine.cc:374-382`:
 /// ```cpp
 /// // Limit sends between waits to avoid overflowing pcap buffer
-/// recentsends = USI->gstats->probes_sent - USI->gstats->probes_sent_at_last_wait;
 /// if (recentsends >= 50)
 ///     return false;
 /// ```
-///
-/// This is critical for performance because:
-/// 1. Prevents pcap buffer overflow
-/// 2. Ensures regular response processing
-/// 3. Improves congestion control responsiveness
 const BATCH_SIZE: usize = 50;
 
 /// Default timeout for the entire scan operation.
@@ -677,6 +688,10 @@ pub struct ParallelScanEngine {
     socket: StdArc<RawSocket>,
     /// Packet engine for zero-copy packet capture using `PACKET_MMAP` V2.
     packet_engine: Option<Arc<Mutex<ScannerPacketEngine>>>,
+    /// Pre-created loopback engine for scanning own IP.
+    /// When scanning our own IP, kernel routes via loopback internally,
+    /// so we need a loopback-bound engine to capture responses.
+    loopback_engine: Option<Arc<Mutex<ScannerPacketEngine>>>,
     /// Scanner configuration for timing parameters.
     config: ScanConfig,
     /// Congestion controller for adaptive timing.
@@ -737,6 +752,9 @@ impl ParallelScanEngine {
         // Create ScannerPacketEngine for zero-copy packet capture using PACKET_MMAP V2.
         let packet_engine = create_stealth_engine(Some(local_addr), config.clone());
 
+        // Loopback engine is lazily created on first own-IP scan (see scan_ports).
+        // Pre-creation adds ~500ms startup overhead for a rarely-used path.
+
         let max_parallel = DEFAULT_MAX_PARALLELISM;
 
         // Create internal congestion controller for adaptive timing
@@ -745,6 +763,7 @@ impl ParallelScanEngine {
             max_parallel,
             config.timing_level,
             config.initial_rtt,
+            config.min_rtt,
             config.max_rtt,
         ));
 
@@ -761,6 +780,7 @@ impl ParallelScanEngine {
             local_addr,
             socket,
             packet_engine,
+            loopback_engine: None,
             config,
             congestion,
             rate_limiter,
@@ -787,6 +807,7 @@ impl ParallelScanEngine {
             value,
             self.config.timing_level,
             self.config.initial_rtt,
+            self.config.min_rtt,
             self.config.max_rtt,
         ));
         self
@@ -887,28 +908,41 @@ impl ParallelScanEngine {
     ) -> Result<HashMap<Port, PortState>, rustnmap_common::ScanError> {
         let start_time = Instant::now();
 
-        // Determine source address for this target.
-        // If it matches our pre-created engine's local_addr, reuse the existing engine
-        // to avoid the expensive per-target AF_PACKET socket + ring buffer setup.
-        // Only create a new engine for multi-homed hosts where routing differs.
+        // Resolve source address for this target.
         let src_addr = self.source_addr_for_target(target);
-        let target_packet_engine = if src_addr == self.local_addr {
-            // Source address matches our pre-created engine's interface — reuse it.
-            // The pre-created engine was set up with self.local_addr in new().
-            None // None causes start_receiver_task to use self.packet_engine as fallback
+
+        // Select packet engine: reuse pre-created if same interface, else create per-target.
+        // When scanning our own IP (src_addr == target), the kernel routes via loopback
+        // internally, so we must use a loopback engine — the ens33 engine would never
+        // see loopback responses, causing all ports to appear filtered.
+        // The loopback engine is lazily created on first own-IP scan to avoid ~500ms
+        // startup overhead for the common case (scanning remote hosts).
+        let packet_engine = if src_addr == self.local_addr && src_addr == target {
+            // Scanning ourselves — lazily create loopback engine
+            if self.loopback_engine.is_some() {
+                self.loopback_engine.clone()
+            } else {
+                let lo_engine = create_stealth_engine_with_target(
+                    Some(Ipv4Addr::LOCALHOST),
+                    Some(Ipv4Addr::LOCALHOST),
+                    self.config.clone(),
+                );
+                if let Some(ref engine) = lo_engine {
+                    let _ = engine.lock().await.start().await;
+                }
+                lo_engine
+            }
+        } else if src_addr == self.local_addr {
+            self.packet_engine.clone()
         } else {
-            // Different interface needed (multi-homed host) — create per-target engine.
             create_stealth_engine_with_target(Some(src_addr), Some(target), self.config.clone())
         };
 
-        // Channel for received packets from the receiver task
-        let (packet_tx, mut packet_rx) = mpsc::unbounded_channel();
-
-        // Clone the sender for the receiver task
-        // We'll keep the original and drop it when done to signal completion
-        let receiver_handle = self.start_receiver_task(packet_tx.clone(), target_packet_engine);
-
-        // Store packet_tx for later drop - when dropped, receiver will detect closure
+        // Start the packet engine with background task for ring buffer draining.
+        // Apply BPF filter to prevent outgoing SYNs from flooding the ring buffer.
+        if let Some(ref engine) = packet_engine {
+            let _ = engine.lock().await.start().await;
+        }
 
         // Outstanding probes: (target, port) -> probe info
         let mut outstanding: HashMap<(Ipv4Addr, Port), OutstandingProbe> = HashMap::new();
@@ -916,27 +950,26 @@ impl ParallelScanEngine {
         let mut ports_iter = ports.iter().copied().peekable();
         let mut retry_probes: Vec<OutstandingProbe> = Vec::new();
 
+        // Diagnostic counters
+        let mut diag_raw_recv: u64 = 0;
+        let mut diag_parsed: u64 = 0;
+        let mut diag_matched: u64 = 0;
+        let mut diag_ack_fail: u64 = 0;
+        let mut diag_unmatched: u64 = 0;
+
         // Track probes sent in current batch (nmap batch limit: 50)
-        // See scan_engine.cc:326-327
         let mut probes_sent_this_batch: usize = 0;
 
         // Adaptive retry tracking (nmap scan_engine.cc:675-683)
-        // max_successful_tryno: highest retry count that received a response
-        // allowedTryno = MAX(1, max_successful_tryno + 1), capped by config.max_retries
-        // This prevents wasting time retrying filtered ports 10 times when all
-        // responsive ports answered on the first try.
         let mut max_successful_tryno: u32 = 0;
 
         #[cfg(feature = "diagnostic")]
         let mut total_send_time = Duration::ZERO;
         #[cfg(feature = "diagnostic")]
         let mut total_wait_time = Duration::ZERO;
-        // Track loop iterations for congestion control (needed for on_packet_lost)
         let mut loop_iterations: usize = 0;
         #[cfg(feature = "diagnostic")]
         let mut packets_received = 0;
-
-        // Temporary timing instrumentation (only when diagnostic feature is enabled)
         #[cfg(feature = "diagnostic")]
         let mut diag_send_total = Duration::ZERO;
         #[cfg(feature = "diagnostic")]
@@ -952,51 +985,17 @@ impl ParallelScanEngine {
         #[cfg(feature = "diagnostic")]
         let mut diag_total_timeouts: usize = 0;
 
-        // Main scan loop
+        // nmap single-loop architecture: send → receive → match → timeout → retry
+        // No separate receiver task. Direct packet engine reads eliminate channel latency
+        // and the race condition between check_timeouts and asynchronous packet forwarding.
         while ports_iter.peek().is_some() || !outstanding.is_empty() {
             loop_iterations += 1;
 
             #[cfg(feature = "diagnostic")]
-            // Get adaptive parallelism from congestion controller (diagnostic only)
             let current_cwnd = self.congestion.cwnd();
 
-            #[cfg(feature = "diagnostic")]
-            if loop_iterations <= 5 || loop_iterations.is_multiple_of(100) {
-                let timeout = self.congestion.recommended_timeout();
-                eprintln!(
-                    "[DIAG] iter={loop_iterations} cwnd={current_cwnd} outstanding={} ports_left={} timeout={}ms elapsed={}ms",
-                    outstanding.len(),
-                    ports_iter.size_hint().0,
-                    timeout.as_millis(),
-                    start_time.elapsed().as_millis(),
-                );
-            }
-
-            #[cfg(feature = "diagnostic")]
-            if loop_iterations == 1 || loop_iterations.is_multiple_of(50) {
-                use std::io::Write;
-                if let Ok(mut file) = std::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open("/tmp/rustnmap_diagnostic.txt")
-                {
-                    let _ = writeln!(
-                        file,
-                        "Iteration {}: cwnd={}, outstanding={}, ports_left={}",
-                        loop_iterations,
-                        current_cwnd,
-                        outstanding.len(),
-                        if ports_iter.peek().is_some() {
-                            "yes"
-                        } else {
-                            "no"
-                        }
-                    );
-                }
-            }
             // Check for scan timeout
             if start_time.elapsed() > self.scan_timeout {
-                // Time out remaining outstanding probes
                 for probe in outstanding.values() {
                     results.entry(probe.port).or_insert(PortState::Filtered);
                 }
@@ -1007,39 +1006,15 @@ impl ParallelScanEngine {
             let current_cwnd = self.congestion.cwnd();
 
             #[cfg(feature = "diagnostic")]
-            if loop_iterations == 1 || loop_iterations.is_multiple_of(50) {
-                use std::io::Write;
-                if let Ok(mut file) = std::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open("/tmp/rustnmap_diagnostic.txt")
-                {
-                    let _ = writeln!(
-                        file,
-                        "Iteration {loop_iterations}: cwnd={current_cwnd}, outstanding={}, ports_left={}",
-                        outstanding.len(),
-                        ports_iter.peek().map_or("no", |_| "yes")
-                    );
-                }
-            }
-
-            #[cfg(feature = "diagnostic")]
             let send_start = Instant::now();
 
-            #[cfg(feature = "diagnostic")]
-            let diag_send_start = Instant::now();
-
-            // Send more probes if we haven't reached congestion window
-            // AND we haven't reached the batch limit (nmap: 50 probes per batch)
+            // Send more probes up to cwnd/batch limit
             while outstanding.len() < current_cwnd
                 && outstanding.len() < self.max_parallelism
                 && probes_sent_this_batch < BATCH_SIZE
             {
-                // Check rate limiter before sending
                 if let Some(wait_time) = self.rate_limiter.check_rate() {
-                    // Wait for rate limit
                     tokio::time::sleep(wait_time).await;
-                    // Re-check parallelism after waiting
                     if outstanding.len() >= current_cwnd
                         || outstanding.len() >= self.max_parallelism
                         || probes_sent_this_batch >= BATCH_SIZE
@@ -1049,11 +1024,8 @@ impl ParallelScanEngine {
                 }
 
                 if let Some(port) = ports_iter.next() {
-                    // Enforce scan_delay before sending each probe
-                    // This implements nmap's enforce_scan_delay() from timing.cc:172-206
                     self.enforce_scan_delay().await;
-                    self.send_probe(target, port, &mut outstanding)?;
-                    // Record packet sent for congestion stats and rate limiting
+                    self.send_probe(target, port, src_addr, &mut outstanding)?;
                     self.congestion.on_packet_sent();
                     self.rate_limiter.record_sent();
                     probes_sent_this_batch += 1;
@@ -1069,128 +1041,125 @@ impl ParallelScanEngine {
             #[cfg(feature = "diagnostic")]
             {
                 total_send_time += send_start.elapsed();
-                diag_send_total += diag_send_start.elapsed();
+                diag_send_total += send_start.elapsed();
             };
 
-            // Wait for packets and drain all available responses (nmap waitForResponses pattern)
-            // Calculate optimal wait time:
-            // - If we have more ports to send, use short wait (send more probes soon)
-            // - If all probes sent, wait until the earliest probe timeout
-            let has_more_ports = ports_iter.peek().is_some();
-            let probe_timeout = self.congestion.recommended_timeout();
+            // Receive and process responses directly from packet engine.
+            //
+            // This is nmap's single-loop architecture: the same thread that sends
+            // probes also receives responses. No channel, no separate task, no race.
+            //
+            // Nmap scan_engine.cc:2535-2563 (waitForResponses):
+            //   1. pcap_select() with timeout based on earliest probe expiration
+            //   2. Process all available packets
+            //   3. Return when no more packets or probes need checking
+            //
+            // Receive and process responses from the bounded channel.
+            // The background task drains the PACKET_MMAP ring buffer into the channel.
+            // BPF filter ensures only TCP responses enter the ring buffer (no outgoing SYNs).
+            if let Some(ref engine) = packet_engine {
+                let mut eng = engine.lock().await;
+                let drain_start = Instant::now();
+                let probe_timeout = self.congestion.recommended_timeout();
 
-            // Find the earliest timeout among outstanding probes
-            let earliest_timeout = outstanding
-                .values()
-                .map(|p| {
-                    let elapsed = p.sent_time.elapsed();
-                    if elapsed >= probe_timeout {
-                        Duration::ZERO // Already timed out
-                    } else {
-                        probe_timeout - elapsed
+                // Calculate drain deadline from earliest probe expiration (nmap calcTimeout).
+                let earliest_remaining = if outstanding.is_empty() {
+                    Duration::from_millis(2)
+                } else {
+                    outstanding
+                        .values()
+                        .map(|p| {
+                            let elapsed = p.sent_time.elapsed();
+                            if elapsed >= probe_timeout {
+                                Duration::ZERO
+                            } else {
+                                probe_timeout - elapsed
+                            }
+                        })
+                        .min()
+                        .unwrap_or(Duration::from_millis(5))
+                        .max(Duration::from_millis(2))
+                };
+                let drain_deadline = drain_start + earliest_remaining.min(Duration::from_millis(200));
+
+                // First packet: wait up to 5ms for kernel → ring buffer → channel propagation.
+                // Subsequent packets: near-zero wait (already queued).
+                let mut first_recv = true;
+
+                loop {
+                    if Instant::now() >= drain_deadline {
+                        break;
                     }
-                })
-                .min()
-                .unwrap_or(Duration::from_millis(100));
+                    // Break when all probes responded — don't wait for deadline
+                    // if there are more ports to send. Nmap's waitForResponses()
+                    // returns when probes_outstanding() == 0 regardless of
+                    // remaining ports. This prevents 200ms dead-air per batch.
+                    if outstanding.is_empty() {
+                        break;
+                    }
 
-            let initial_wait = if has_more_ports {
-                // Still have ports to scan - use short wait to send more probes
-                // Reduced from 10ms to 1ms for faster polling
-                Duration::from_millis(1)
-            } else if !outstanding.is_empty() {
-                // All probes sent, wait for earliest timeout (but not longer than 100ms per iteration)
-                earliest_timeout.min(Duration::from_millis(100))
-            } else {
-                // No outstanding probes - short wait
-                Duration::from_millis(1)
-            };
-            let mut wait_duration = initial_wait;
+                    let wait = if first_recv {
+                        Duration::from_millis(5)
+                    } else {
+                        Duration::from_micros(500)
+                    };
 
-            #[cfg(feature = "diagnostic")]
-            let wait_start = Instant::now();
-            #[cfg(feature = "diagnostic")]
-            let diag_wait_start = Instant::now();
+                    if let Ok(Some(data)) = eng.recv_with_timeout(wait).await {
+                        diag_raw_recv += 1;
+                        first_recv = false;
 
-            let wait_phase_start = Instant::now(); // Track total time in this wait phase
+                        if let Some(packet) = Self::parse_packet(&data) {
+                            diag_parsed += 1;
+                            #[cfg(feature = "diagnostic")]
+                            {
+                                packets_received += 1;
+                            }
 
-            loop {
-                // nmap's 200ms upper limit: even if packets keep arriving, return after 200ms
-                // See scan_engine_raw.cc:1626 - prevents infinite waiting
-                if wait_phase_start.elapsed() > Duration::from_millis(200) {
-                    break;
-                }
-
-                match tokio_timeout(wait_duration, packet_rx.recv()).await {
-                    Ok(Some(packet)) => {
-                        // Track packets received for diagnostics
-                        #[cfg(feature = "diagnostic")]
-                        #[expect(
-                            clippy::semicolon_outside_block,
-                            reason = "cfg-guarded diagnostic statement"
-                        )]
-                        {
-                            packets_received += 1;
-                        }
-                        // Match the packet to an outstanding probe
-                        let probe_key = (packet.src_ip, packet.src_port);
-                        if let Some(probe) = outstanding.remove(&probe_key) {
-                            // For SYN-ACK responses, verify the ACK matches our sequence number.
-                            // For RST responses, seq is typically 0 -- only validate ACK.
-                            let expected_ack = probe.seq.wrapping_add(1);
-                            let rst_received = (packet.flags & 0x04) != 0;
-                            let valid_response = if rst_received {
-                                // RST packets: accept if ACK matches (seq may be 0)
-                                packet.ack == expected_ack
-                            } else {
-                                // SYN-ACK and other responses: validate both ACK and non-zero seq
-                                packet.ack == expected_ack && packet.seq() != 0
-                            };
-                            if valid_response {
-                                // Calculate RTT for this probe
-                                let rtt = probe.sent_time.elapsed();
-                                // Track highest successful retry count (nmap allowedTryno)
-                                if probe.retry_count > max_successful_tryno {
-                                    max_successful_tryno = probe.retry_count;
+                            let probe_key = (packet.src_ip, packet.src_port);
+                            if let Some(probe) = outstanding.remove(&probe_key) {
+                                let expected_ack = probe.seq.wrapping_add(1);
+                                let rst_received = (packet.flags & 0x04) != 0;
+                                let valid_response = if rst_received {
+                                    packet.ack == expected_ack
+                                } else {
+                                    packet.ack == expected_ack && packet.seq() != 0
+                                };
+                                if valid_response {
+                                    let rtt = probe.sent_time.elapsed();
+                                    if probe.retry_count > max_successful_tryno {
+                                        max_successful_tryno = probe.retry_count;
+                                    }
+                                    self.congestion.record_expected();
+                                    self.congestion.on_packet_acked(Some(rtt));
+                                    results.insert(packet.src_port, packet.port_state());
+                                    diag_matched += 1;
+                                } else {
+                                    diag_ack_fail += 1;
+                                    outstanding.insert(probe_key, probe);
                                 }
-                                // Record that we expected a reply (got one!)
-                                // See nmap scan_engine.cc:1608-1612 (ultrascan_adjust_timing)
-                                self.congestion.record_expected();
-                                // Record successful response with RTT for congestion control
-                                self.congestion.on_packet_acked(Some(rtt));
-                                results.insert(packet.src_port, packet.port_state());
                             } else {
-                                // Unexpected ACK or invalid seq - put the probe back
-                                outstanding.insert(probe_key, probe);
+                                diag_unmatched += 1;
                             }
                         }
-                        // If we can't find a matching probe, this packet is unrelated traffic - ignore
-
-                        // Keep short timeout for draining remaining packets (nmap uses 2ms)
-                        // This is critical for performance - don't increase to 10ms!
-                        wait_duration = Duration::from_millis(1);
-                    }
-                    Ok(None) => {
-                        // Channel closed, receiver task ended
-                        break;
-                    }
-                    Err(_) => {
-                        // Timeout - no more packets available
-                        break;
+                    } else {
+                        if first_recv {
+                            break;
+                        }
+                        if Instant::now() >= drain_deadline {
+                            break;
+                        }
                     }
                 }
             }
 
             #[cfg(feature = "diagnostic")]
             {
-                total_wait_time += wait_start.elapsed();
-                diag_wait_total += diag_wait_start.elapsed();
+                diag_wait_total += start_time.elapsed();
             };
 
             // Check for probe timeouts and handle retries
             #[cfg(feature = "diagnostic")]
             let diag_timeout_start = Instant::now();
-            #[cfg(feature = "diagnostic")]
-            let diag_outstanding_before = outstanding.len();
             self.check_timeouts(
                 &mut outstanding,
                 &mut retry_probes,
@@ -1200,37 +1169,29 @@ impl ParallelScanEngine {
             );
             #[cfg(feature = "diagnostic")]
             {
-                let diag_timed_out = diag_outstanding_before - outstanding.len();
-                diag_total_timeouts += diag_timed_out;
                 diag_timeout_total += diag_timeout_start.elapsed();
             };
 
-            // Reset batch counter only after sending a full batch and draining responses
-            // This matches nmap's behavior: reset after waitForResponses() when batch is complete
+            // Reset batch counter after full batch
             if probes_sent_this_batch >= BATCH_SIZE {
                 probes_sent_this_batch = 0;
             }
 
-            // Re-send retry probes
-            // Note: Retry probes are NOT limited by cwnd because they already timed out
-            // and need to be retried to reach max_retries. This matches nmap's behavior.
-            // Only max_parallelism limits retry probes to prevent resource exhaustion.
+            // Re-send retry probes (not limited by cwnd, only max_parallelism)
             #[cfg(feature = "diagnostic")]
             let diag_retry_start = Instant::now();
             for probe in retry_probes.drain(..) {
                 if outstanding.len() < self.max_parallelism {
-                    // Check rate limiter before resending
                     if let Some(wait_time) = self.rate_limiter.check_rate() {
                         tokio::time::sleep(wait_time).await;
                     }
-                    self.resend_probe(probe, &mut outstanding)?;
+                    self.resend_probe(probe, src_addr, &mut outstanding)?;
                     self.rate_limiter.record_sent();
                     #[cfg(feature = "diagnostic")]
                     {
                         diag_total_retries += 1;
                     }
                 } else {
-                    // Can't resend due to parallelism limit, mark as filtered
                     results.entry(probe.port).or_insert(PortState::Filtered);
                 }
             }
@@ -1255,151 +1216,9 @@ impl ParallelScanEngine {
             eprintln!("==============================\n");
         };
 
-        // Explicitly drop the sender to signal the receiver task to stop
-        drop(packet_tx);
-
-        // Wait for receiver task to complete with timeout.
-        // The receiver checks channel closure every 10ms (recv_with_timeout), so
-        // 50ms is sufficient for it to notice and exit.
-        let _ = tokio::time::timeout(Duration::from_millis(50), receiver_handle).await;
-
-        #[cfg(feature = "diagnostic")]
-        {
-            use std::io::Write;
-            let total_time = start_time.elapsed();
-            if let Ok(mut file) = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open("/tmp/rustnmap_diagnostic.txt")
-            {
-                let _ = writeln!(file, "\n=== TCP SYN Scan Timing ===");
-                let _ = writeln!(file, "Total: {total_time:?}");
-                let _ = writeln!(
-                    file,
-                    "Send: {:?} ({:.1}%)",
-                    total_send_time,
-                    (total_send_time.as_secs_f64() / total_time.as_secs_f64()) * 100.0
-                );
-                let _ = writeln!(
-                    file,
-                    "Wait: {:?} ({:.1}%)",
-                    total_wait_time,
-                    (total_wait_time.as_secs_f64() / total_time.as_secs_f64()) * 100.0
-                );
-                let _ = writeln!(file, "Iterations: {loop_iterations}");
-                let _ = writeln!(file, "Packets: {packets_received}");
-            }
-        }
+        let _ = (diag_raw_recv, diag_parsed, diag_matched, diag_ack_fail, diag_unmatched);
 
         Ok(results)
-    }
-
-    /// Starts the background receiver task.
-    ///
-    /// This task continuously receives packets using `ScannerPacketEngine` for zero-copy
-    /// `PACKET_MMAP` V2 capture. Falls back to raw socket if packet engine is not available.
-    fn start_receiver_task(
-        &self,
-        packet_tx: mpsc::UnboundedSender<ReceivedPacket>,
-        target_packet_engine: Option<Arc<Mutex<ScannerPacketEngine>>>,
-    ) -> JoinHandle<()> {
-        const MAX_BATCH: usize = 32;
-        let socket = StdArc::clone(&self.socket);
-        // Use per-target engine if available (correct interface), else fall back to pre-created
-        let packet_engine = target_packet_engine.or(self.packet_engine.clone());
-        tokio::spawn(async move {
-            loop {
-                // Check if channel is closed before blocking on recv
-                if packet_tx.is_closed() {
-                    break;
-                }
-
-                // Try ScannerPacketEngine first (zero-copy `PACKET_MMAP` V2)
-                // Fall back to raw socket if packet engine is not available
-                if let Some(ref engine) = packet_engine {
-                    // Use ScannerPacketEngine for zero-copy capture
-                    let engine = Arc::clone(engine);
-                    let tx_clone = packet_tx.clone();
-
-                    // Start the packet engine - ignore AlreadyStarted error
-                    let _ = engine.lock().await.start().await;
-
-                    // Process packets in a batch
-                    let mut batch_count = 0;
-
-                    while batch_count < MAX_BATCH {
-                        // Check if channel is still open
-                        if tx_clone.is_closed() {
-                            break;
-                        }
-
-                        // Lock the engine and receive with timeout
-                        match engine
-                            .lock()
-                            .await
-                            .recv_with_timeout(Duration::from_millis(10))
-                            .await
-                        {
-                            Ok(Some(data)) => {
-                                // Parse packet (handles Ethernet header internally)
-                                if let Some(packet) = Self::parse_packet(&data) {
-                                    if tx_clone.send(packet).is_err() {
-                                        break;
-                                    }
-                                }
-                                batch_count += 1;
-                            }
-                            Ok(None) => {
-                                // Timeout, continue
-                                break;
-                            }
-                            Err(_) => {
-                                // Error, break and let outer loop handle it
-                                break;
-                            }
-                        }
-                    }
-
-                    // Yield if no packets were received
-                    if batch_count == 0 {
-                        tokio::task::yield_now().await;
-                    }
-                } else {
-                    // Fall back to raw socket (L3 capture - may miss some TCP responses)
-                    let socket_clone = StdArc::clone(&socket);
-                    let tx_clone = packet_tx.clone();
-                    let result = tokio::task::spawn_blocking(move || {
-                        let mut recv_buf = vec![0u8; 65535];
-                        match socket_clone
-                            .recv_packet(&mut recv_buf, Some(Duration::from_millis(50)))
-                        {
-                            Ok(len) => Ok((len, recv_buf)),
-                            Err(e) => Err(e),
-                        }
-                    })
-                    .await;
-
-                    match result {
-                        Ok(Ok((len, recv_buf))) if len > 0 => {
-                            // Raw socket path: parse packet from buffer
-                            if let Some(packet) = Self::parse_packet(&recv_buf[..len]) {
-                                if tx_clone.send(packet).is_err() {
-                                    break;
-                                }
-                            }
-                        }
-                        Ok(Err(_)) | Err(_) => {
-                            // Fatal error or task was cancelled, stop receiving
-                            break;
-                        }
-                        _ => {
-                            // Timeout or no data, yield and continue
-                            tokio::task::yield_now().await;
-                        }
-                    }
-                }
-            }
-        })
     }
 
     /// Parses a received packet into a `ReceivedPacket`.
@@ -1442,21 +1261,24 @@ impl ParallelScanEngine {
     }
 
     /// Sends a single SYN probe to the target.
+    ///
+    /// Uses pre-resolved `src_addr` to avoid expensive per-probe UDP socket creation.
     fn send_probe(
         &self,
         target: Ipv4Addr,
         port: Port,
+        src_addr: Ipv4Addr,
         outstanding: &mut HashMap<(Ipv4Addr, Port), OutstandingProbe>,
     ) -> Result<(), rustnmap_common::ScanError> {
         let src_port = Self::generate_source_port();
         let seq = Self::generate_sequence_number();
-        let src_addr = self.source_addr_for_target(target);
 
         // Build TCP SYN packet
         let packet = TcpPacketBuilder::new(src_addr, target, src_port, port)
             .seq(seq)
             .syn()
             .window(65_535)
+            .badsum_if(self.config.badsum)
             .build();
 
         // Send the packet
@@ -1486,20 +1308,23 @@ impl ParallelScanEngine {
     }
 
     /// Re-sends a probe (for retries).
+    ///
+    /// Uses pre-resolved `src_addr` to avoid expensive per-probe UDP socket creation.
     fn resend_probe(
         &self,
         mut probe: OutstandingProbe,
+        src_addr: Ipv4Addr,
         outstanding: &mut HashMap<(Ipv4Addr, Port), OutstandingProbe>,
     ) -> Result<(), rustnmap_common::ScanError> {
         probe.retry_count += 1;
         probe.sent_time = Instant::now();
 
         // Rebuild and resend the packet
-        let src_addr = self.source_addr_for_target(probe.target);
         let packet = TcpPacketBuilder::new(src_addr, probe.target, probe.src_port, probe.port)
             .seq(probe.seq)
             .syn()
             .window(65_535)
+            .badsum_if(self.config.badsum)
             .build();
 
         let dst_sockaddr = SocketAddr::new(std::net::IpAddr::V4(probe.target), probe.port);
@@ -1573,27 +1398,37 @@ impl ParallelScanEngine {
         }
     }
 
-    /// Generates a random source port.
+    /// Generates a unique source port for each probe.
+    ///
+    /// Uses an atomic counter to produce monotonically increasing source ports,
+    /// wrapping within the ephemeral port range (60000-60999). Each probe gets
+    /// a distinct source port, matching nmap's behavior where every SYN uses a
+    /// different source port to avoid router/firewall rate limiting on repeated
+    /// connections from the same source port.
     #[must_use]
     fn generate_source_port() -> Port {
-        let offset = (std::process::id() % 1000) as u16;
-        SOURCE_PORT_START + offset
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static PORT_COUNTER: AtomicU32 = AtomicU32::new(0);
+        let idx = PORT_COUNTER.fetch_add(1, Ordering::Relaxed);
+        // Cycle through 1000 ports in the ephemeral range (60000-60999)
+        SOURCE_PORT_START + (idx % 1000) as u16
     }
 
     /// Generates a random initial sequence number.
+    ///
+    /// Uses a simple counter seeded with PID to avoid per-probe `SystemTime::now()` syscalls.
     #[must_use]
     fn generate_sequence_number() -> u32 {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "Lower bits provide sufficient entropy"
-        )]
-        let now_lower = now as u32;
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static SEQ_COUNTER: AtomicU32 = AtomicU32::new(0);
         let pid = std::process::id();
-        now_lower.wrapping_add(pid)
+        // One-time init: seed with PID-based value
+        if SEQ_COUNTER.load(Ordering::Relaxed) == 0 {
+            let seed = pid.wrapping_mul(2_654_435_761); // Knuth multiplicative hash
+            SEQ_COUNTER.store(seed, Ordering::Relaxed);
+        }
+        // Increment by a prime step for good distribution
+        SEQ_COUNTER.fetch_add(2_654_435_761, Ordering::Relaxed)
     }
 
     // ========================================================================
@@ -1730,7 +1565,7 @@ impl ParallelScanEngine {
                     // Note: For T4/T5, scan_delay is 0ms by default
                     // AdaptiveDelay will dynamically increase delay if packet loss is detected
                     self.enforce_scan_delay().await;
-                    self.send_udp_probe(target, port, &mut outstanding)?;
+                    self.send_udp_probe(target, port, src_addr, &mut outstanding)?;
                     self.congestion.on_packet_sent();
                     self.rate_limiter.record_sent();
                     probes_sent_this_batch += 1;
@@ -1770,10 +1605,10 @@ impl ParallelScanEngine {
             // is more efficient than long waits
             let initial_wait = if has_more_ports {
                 // Sending more probes - use short wait to stay responsive
-                Duration::from_millis(10)
+                Duration::from_millis(1)
             } else if !outstanding.is_empty() {
                 // All probes sent - use short poll, drain loop will extend as needed
-                Duration::from_millis(10)
+                Duration::from_millis(1)
             } else {
                 Duration::ZERO
             };
@@ -1830,7 +1665,7 @@ impl ParallelScanEngine {
                     if let Some(wait_time) = self.rate_limiter.check_rate() {
                         tokio::time::sleep(wait_time).await;
                     }
-                    self.resend_udp_probe(probe, &mut outstanding)?;
+                    self.resend_udp_probe(probe, src_addr, &mut outstanding)?;
                     self.rate_limiter.record_sent();
                 } else {
                     // Can't resend - mark as open|filtered
@@ -1884,16 +1719,18 @@ impl ParallelScanEngine {
     }
 
     /// Sends a single UDP probe to the target.
+    ///
+    /// Uses pre-resolved `src_addr` to avoid expensive per-probe UDP socket creation.
     fn send_udp_probe(
         &self,
         target: Ipv4Addr,
         port: Port,
+        src_addr: Ipv4Addr,
         outstanding: &mut HashMap<(Ipv4Addr, Port), UdpOutstandingProbe>,
     ) -> Result<(), rustnmap_common::ScanError> {
         use rustnmap_net::raw_socket::UdpPacketBuilder;
 
         let src_port = Self::generate_source_port();
-        let src_addr = self.source_addr_for_target(target);
 
         // Get service-specific payload for this port (like nmap's get_udp_payload)
         let payload = crate::udp_payload::get_udp_payload(port);
@@ -1901,6 +1738,7 @@ impl ParallelScanEngine {
         // Build UDP packet with payload
         let packet = UdpPacketBuilder::new(src_addr, target, src_port, port)
             .payload(payload)
+            .badsum_if(self.config.badsum)
             .build();
 
         // Send the packet
@@ -1929,9 +1767,12 @@ impl ParallelScanEngine {
     }
 
     /// Re-sends a UDP probe (for retries).
+    ///
+    /// Uses pre-resolved `src_addr` to avoid expensive per-probe UDP socket creation.
     fn resend_udp_probe(
         &self,
         mut probe: UdpOutstandingProbe,
+        src_addr: Ipv4Addr,
         outstanding: &mut HashMap<(Ipv4Addr, Port), UdpOutstandingProbe>,
     ) -> Result<(), rustnmap_common::ScanError> {
         use rustnmap_net::raw_socket::UdpPacketBuilder;
@@ -1940,10 +1781,10 @@ impl ParallelScanEngine {
         probe.sent_time = Instant::now();
 
         // Rebuild and resend with service-specific payload
-        let src_addr = self.source_addr_for_target(probe.target);
         let payload = crate::udp_payload::get_udp_payload(probe.port);
         let packet = UdpPacketBuilder::new(src_addr, probe.target, probe.src_port, probe.port)
             .payload(payload)
+            .badsum_if(self.config.badsum)
             .build();
 
         let dst_sockaddr = SocketAddr::new(std::net::IpAddr::V4(probe.target), probe.port);
@@ -2217,12 +2058,7 @@ impl ParallelScanEngine {
         let udp_start = ip_hdr_len;
 
         // Verify destination IP matches our local address
-        let dst_ip = Ipv4Addr::new(
-            data[16],
-            data[17],
-            data[18],
-            data[19],
-        );
+        let dst_ip = Ipv4Addr::new(data[16], data[17], data[18], data[19]);
         if local_addr != Ipv4Addr::UNSPECIFIED && dst_ip != local_addr {
             return None;
         }

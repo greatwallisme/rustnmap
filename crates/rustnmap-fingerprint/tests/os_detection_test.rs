@@ -4,7 +4,11 @@
 
 use std::net::{Ipv4Addr, SocketAddr};
 
-use rustnmap_fingerprint::os::{FingerprintDatabase, OsDetector};
+use rustnmap_fingerprint::os::{
+    EcnFingerprint, FingerprintDatabase, IcmpTestResult, IpIdPattern, IpIdSeqClass, IsnClass,
+    OpsFingerprint, OsDetector, OsFingerprint, SeqFingerprint, TestResult,
+    UdpTestResult,
+};
 
 /// Test that OS detector can be created with an empty database.
 #[test]
@@ -39,7 +43,6 @@ fn test_os_detector_configuration() {
 async fn test_os_detection_localhost() {
     // Skip test if running as non-root (raw sockets require CAP_NET_RAW)
     if !std::env::var("RUSTNMAP_INTEGRATION_TEST").is_ok_and(|v| v == "1") {
-        eprintln!("Skipping test_os_detection_localhost: set RUSTNMAP_INTEGRATION_TEST=1 to run");
         return;
     }
 
@@ -61,7 +64,7 @@ async fn test_os_detection_localhost() {
     assert!(matches.is_empty());
 }
 
-/// Test SEQ probe analysis with mock data.
+/// Test SEQ probe analysis with synthetic incremental ISN values.
 #[test]
 fn test_seq_analysis_incremental() {
     // Simulate incremental ISN pattern (Linux-like)
@@ -153,15 +156,10 @@ fn test_tcp_options_parsing() {
 /// Test OS fingerprint building with all fields.
 #[test]
 fn test_os_fingerprint_building() {
-    use rustnmap_fingerprint::os::{
-        EcnFingerprint, IcmpTestResult, IpIdPattern, IpIdSeqClass, IsnClass, OpsFingerprint,
-        OsFingerprint, SeqFingerprint, TestResult, TimestampRate, UdpTestResult,
-    };
-
     let seq_fp = SeqFingerprint {
         class: IsnClass::Random,
         timestamp: true,
-        timestamp_rate: Some(TimestampRate::Rate100),
+        ts_val: 0xA,
         gcd: 1,
         isr: 50,
         sp: 80,
@@ -183,6 +181,9 @@ fn test_os_fingerprint_building() {
         df: true,
         tos: 0,
         cwr: false,
+        ttl: Some(64),
+        window: Some(65535),
+        raw_options: Vec::new(),
     };
 
     let test_t1 = TestResult::new("T1")

@@ -92,6 +92,67 @@ use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 
+/// Shared ring buffer state for zero-copy packet lifetime management.
+///
+/// This lightweight struct holds only what `ZeroCopyPacket` needs to keep
+/// the mmap region alive and release frames. It avoids cloning the full
+/// `MmapPacketEngine` per packet.
+///
+/// # Safety
+///
+/// The `ring_ptr` and `frame_ptrs` remain valid as long as this Arc lives,
+/// because dropping the last Arc triggers munmap via the Drop impl.
+#[derive(Debug)]
+pub struct RingRef {
+    /// Memory-mapped ring buffer pointer.
+    pub(crate) ring_ptr: NonNull<u8>,
+    /// Ring buffer size in bytes.
+    pub(crate) ring_size: usize,
+    /// Frame pointers for frame release.
+    pub(crate) frame_ptrs: Vec<NonNull<Tpacket2Hdr>>,
+    /// Total number of frames.
+    pub(crate) frame_count: u32,
+}
+
+impl RingRef {
+    /// Releases a frame back to the kernel by its index.
+    pub fn release_frame(&self, frame_idx: u32) {
+        if (frame_idx as usize) >= self.frame_ptrs.len() {
+            return;
+        }
+        let frame_ptr = self.frame_ptrs[frame_idx as usize];
+        // SAFETY: frame_ptr is valid and within the mmap'd region
+        let hdr = unsafe { frame_ptr.as_ref() };
+        let status_ptr = std::ptr::addr_of!(hdr.tp_status).cast::<AtomicU32>();
+        // SAFETY: status_ptr points to the first field of Tpacket2Hdr,
+        // which is a naturally aligned u32 in kernel-shared memory.
+        unsafe {
+            (*status_ptr).store(TP_STATUS_KERNEL, Ordering::Release);
+        }
+    }
+}
+
+impl Drop for RingRef {
+    fn drop(&mut self) {
+        // This is only called when all Arc references (including those held by
+        // ZeroCopyPacket) are dropped. NonNull guarantees non-null by construction.
+        if self.ring_size > 0 {
+            // SAFETY: ring_ptr was obtained from mmap and is valid. ring_size
+            // matches the original mmap size. This is the matching munmap call.
+            unsafe {
+                libc::munmap(self.ring_ptr.as_ptr().cast::<c_void>(), self.ring_size);
+            }
+        }
+    }
+}
+
+// SAFETY: RingRef uses atomic operations for frame status access.
+// The mmap pointer and frame pointers are only accessed through safe abstractions.
+unsafe impl Send for RingRef {}
+// SAFETY: &RingRef provides read-only access to frame pointers and ring metadata.
+// Frame release uses atomic store (Ordering::Release), which is thread-safe.
+unsafe impl Sync for RingRef {}
+
 /// Maximum number of ENOMEM retry attempts.
 const ENOMEM_MAX_RETRIES: u32 = 10;
 
@@ -144,20 +205,11 @@ type RingSetupResult = Result<(NonNull<u8>, usize, Vec<NonNull<Tpacket2Hdr>>, u3
 pub struct MmapPacketEngine {
     /// Socket file descriptor.
     fd: OwnedFd,
-    /// Ring buffer configuration.
-    config: RingConfig,
-    /// Memory-mapped ring buffer pointer.
-    /// SAFETY: This pointer is valid for the lifetime of the engine.
-    ring_ptr: NonNull<u8>,
-    /// Ring buffer size in bytes.
-    ring_size: usize,
-    /// Frame pointers for zero-copy access.
-    /// Pre-computed pointers to each frame in the ring buffer.
-    frame_ptrs: Vec<NonNull<Tpacket2Hdr>>,
+    /// Shared ring buffer state for zero-copy packet lifetime management.
+    /// Created once at engine construction, cloned (Arc) per packet.
+    ring_ref: Arc<RingRef>,
     /// Current frame index for receive.
     rx_frame_idx: u32,
-    /// Total number of frames in the ring.
-    frame_count: u32,
     /// Interface index.
     if_index: u32,
     /// Interface name.
@@ -227,14 +279,21 @@ impl MmapPacketEngine {
         // Second bind with ETH_P_ALL enables actual packet reception.
         Self::bind_to_interface_with_protocol(&fd, if_index, ETH_P_ALL.to_be())?;
 
-        Ok(Self {
-            fd,
-            config,
+        // Create shared ring ref for zero-copy packet lifetime management.
+        // The ring_ref does NOT own the mmap -- the engine does via its Drop impl.
+        // When the engine is dropped, it munmaps. The ring_ref's Drop is a no-op
+        // to avoid double-munmap (see RingRef::drop).
+        let ring_ref = Arc::new(RingRef {
             ring_ptr,
             ring_size,
             frame_ptrs,
-            rx_frame_idx: 0,
             frame_count,
+        });
+
+        Ok(Self {
+            fd,
+            ring_ref,
+            rx_frame_idx: 0,
             if_index,
             if_name: if_name.to_string(),
             mac_addr,
@@ -651,16 +710,16 @@ impl MmapPacketEngine {
     /// Uses Acquire ordering to synchronize with kernel's Release store.
     fn frame_is_available(&self) -> bool {
         let frame_idx = self.rx_frame_idx as usize;
-        if frame_idx >= self.frame_ptrs.len() {
+        if frame_idx >= self.ring_ref.frame_ptrs.len() {
             return false;
         }
 
-        let frame_ptr = self.frame_ptrs[frame_idx];
+        let frame_ptr = self.ring_ref.frame_ptrs[frame_idx];
 
         // Check if pointer is within mmap'd region
         let frame_addr = frame_ptr.as_ptr() as usize;
-        let ring_start = self.ring_ptr.as_ptr() as usize;
-        let ring_end = ring_start + self.ring_size;
+        let ring_start = self.ring_ref.ring_ptr.as_ptr() as usize;
+        let ring_end = ring_start + self.ring_ref.ring_size;
 
         if frame_addr < ring_start || frame_addr >= ring_end {
             return false;
@@ -682,7 +741,7 @@ impl MmapPacketEngine {
     ///
     /// Uses Release ordering to synchronize with kernel's Acquire load.
     fn release_frame(&self) {
-        let frame_ptr = self.frame_ptrs[self.rx_frame_idx as usize];
+        let frame_ptr = self.ring_ref.frame_ptrs[self.rx_frame_idx as usize];
         // SAFETY: frame_ptr is valid and within the mmap'd region
         let hdr = unsafe { frame_ptr.as_ref() };
         // The first field of Tpacket2Hdr is tp_status (u32), which we
@@ -697,7 +756,7 @@ impl MmapPacketEngine {
 
     /// Advances to the next frame in the ring.
     fn advance_frame(&mut self) {
-        self.rx_frame_idx = (self.rx_frame_idx + 1) % self.frame_count;
+        self.rx_frame_idx = (self.rx_frame_idx + 1) % self.ring_ref.frame_count;
     }
 
     /// Returns the memory-mapped region pointer.
@@ -705,8 +764,8 @@ impl MmapPacketEngine {
     /// This is used by `ZeroCopyPacket` to verify that data pointers
     /// are within the valid region (in debug builds).
     #[must_use]
-    pub const fn ring_ptr(&self) -> *const u8 {
-        self.ring_ptr.as_ptr()
+    pub fn ring_ptr(&self) -> *const u8 {
+        self.ring_ref.ring_ptr.as_ptr()
     }
 
     /// Returns the memory-mapped region size in bytes.
@@ -714,8 +773,8 @@ impl MmapPacketEngine {
     /// This is used by `ZeroCopyPacket` to verify that data pointers
     /// are within the valid region (in debug builds).
     #[must_use]
-    pub const fn ring_size(&self) -> usize {
-        self.ring_size
+    pub fn ring_size(&self) -> usize {
+        self.ring_ref.ring_size
     }
 
     /// Releases a frame back to the kernel by its index.
@@ -738,13 +797,13 @@ impl MmapPacketEngine {
     pub fn release_frame_by_idx(&self, frame_idx: u32) {
         #[cfg(debug_assertions)]
         assert!(
-            frame_idx < self.frame_count,
+            frame_idx < self.ring_ref.frame_count,
             "frame_idx {} >= frame_count {}",
             frame_idx,
-            self.frame_count
+            self.ring_ref.frame_count
         );
 
-        let frame_ptr = self.frame_ptrs[frame_idx as usize];
+        let frame_ptr = self.ring_ref.frame_ptrs[frame_idx as usize];
         // SAFETY: frame_ptr is valid and within the mmap'd region
         let hdr = unsafe { frame_ptr.as_ref() };
 
@@ -791,7 +850,7 @@ impl MmapPacketEngine {
         let frame_idx = self.rx_frame_idx as usize;
 
         // Check bounds BEFORE accessing
-        if frame_idx >= self.frame_ptrs.len() {
+        if frame_idx >= self.ring_ref.frame_ptrs.len() {
             return Err(PacketError::InvalidConfig(format!(
                 "frame_idx {frame_idx} out of bounds"
             )));
@@ -801,7 +860,7 @@ impl MmapPacketEngine {
             return Ok(None);
         }
 
-        let frame_ptr = self.frame_ptrs[frame_idx];
+        let frame_ptr = self.ring_ref.frame_ptrs[frame_idx];
         // SAFETY: frame_ptr is valid and we've verified frame is available
         let hdr = unsafe { frame_ptr.as_ref() };
 
@@ -827,37 +886,10 @@ impl MmapPacketEngine {
         // The frame will be released when the ZeroCopyPacket is dropped
         self.advance_frame();
 
-        // Duplicate the socket file descriptor
-        // SAFETY: dup creates a new file descriptor referring to the same socket
-        let dup_fd = unsafe { libc::dup(self.fd.as_raw_fd()) };
-        if dup_fd < 0 {
-            return Err(PacketError::SocketOption {
-                option: "dup".to_string(),
-                source: io::Error::last_os_error(),
-            });
-        }
-        // SAFETY: dup_fd is valid (>= 0) and OwnedFd takes ownership
-        let dup_fd = unsafe { OwnedFd::from_raw_fd(dup_fd) };
-
-        // Create Arc reference to the engine
-        // This keeps the engine alive for the lifetime of the packet
-        let engine_arc = Arc::new(Self {
-            fd: dup_fd,
-            config: self.config,
-            ring_ptr: self.ring_ptr,
-            ring_size: self.ring_size,
-            frame_ptrs: self.frame_ptrs.clone(),
-            rx_frame_idx: 0, // New independent index
-            frame_count: self.frame_count,
-            if_index: self.if_index,
-            if_name: self.if_name.clone(),
-            mac_addr: self.mac_addr,
-            stats: EngineStats::default(),
-            running: AtomicBool::new(false),
-            packets_received: AtomicU64::new(0),
-            packets_dropped: AtomicU64::new(0),
-            bytes_received: AtomicU64::new(0),
-        });
+        // Clone the shared ring ref instead of the full engine.
+        // Arc::clone only increments the reference count (~10 CPU cycles)
+        // compared to the old approach of dup(fd) + full engine allocation.
+        let ring_ref = Arc::clone(&self.ring_ref);
 
         let (data, vlan_tci, vlan_tpid) = if has_vlan {
             // For VLAN-tagged packets, the kernel strips the VLAN tag and sets
@@ -877,23 +909,19 @@ impl MmapPacketEngine {
             // SAFETY: data_offset + data_len is within the frame by kernel contract
             let data_ptr = unsafe { frame_ptr.as_ptr().cast::<u8>().add(data_offset) };
             // SAFETY:
-            // - data_ptr points into the mmap region owned by engine_arc
-            // - The region remains valid for the lifetime of engine_arc
-            // - engine_arc is captured by ZeroCopyBytes
+            // - data_ptr points into the mmap region owned by ring_ref
+            // - The region remains valid for the lifetime of ring_ref
+            // - ring_ref is captured by ZeroCopyBytes
             // - data_len is the captured length
             let zc_bytes = unsafe {
-                crate::zero_copy::ZeroCopyBytes::borrowed(
-                    Arc::clone(&engine_arc),
-                    data_ptr,
-                    data_len,
-                )
+                crate::zero_copy::ZeroCopyBytes::borrowed(Arc::clone(&ring_ref), data_ptr, data_len)
             };
             (zc_bytes, None, None)
         };
 
         // Create the zero-copy packet
         let packet = crate::ZeroCopyPacket::new(
-            engine_arc,
+            ring_ref,
             current_frame_idx,
             data,
             std::time::Instant::now(),
@@ -922,7 +950,7 @@ impl MmapPacketEngine {
             return Ok(None);
         }
 
-        let frame_ptr = self.frame_ptrs[self.rx_frame_idx as usize];
+        let frame_ptr = self.ring_ref.frame_ptrs[self.rx_frame_idx as usize];
         // SAFETY: frame_ptr is valid and we've verified frame is available
         let hdr = unsafe { frame_ptr.as_ref() };
 
@@ -1035,9 +1063,9 @@ impl MmapPacketEngine {
 
 // NOTE: No explicit Drop impl for MmapPacketEngine.
 // The fd is automatically closed by OwnedFd's Drop.
-// IMPORTANT: The mmap region is NOT munmap-ed here because this engine may be
-// shared via Arc (e.g., in ZeroCopyPacket). The memory will be reclaimed when
-// the original engine and all Arc clones are dropped.
+// The mmap region is munmap-ed by RingRef::drop when the last Arc<RingRef> is
+// dropped (which may be held by in-flight ZeroCopyPackets). Field drop order
+// ensures ring_ref (and its mmap) drops BEFORE fd, matching kernel expectations.
 
 // SAFETY: MmapPacketEngine uses atomic operations for shared state and
 // the ring buffer pointer is only accessed through safe abstractions.

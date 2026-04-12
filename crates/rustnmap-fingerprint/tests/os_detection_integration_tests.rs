@@ -7,7 +7,11 @@
 use std::net::{Ipv4Addr, SocketAddr};
 use std::time::Duration;
 
-use rustnmap_fingerprint::os::{FingerprintDatabase, OsDetector};
+use rustnmap_fingerprint::os::{
+    EcnFingerprint, FingerprintDatabase, IcmpTestResult, IpIdPattern, IpIdSeqClass, IsnClass,
+    OpsFingerprint, OsDetector, OsFingerprint, SeqFingerprint, TestResult,
+    UdpTestResult,
+};
 
 // =============================================================================
 // OS Detector Configuration Tests
@@ -92,7 +96,6 @@ fn test_fingerprint_database_load_invalid_path() {
 async fn test_os_detection_localhost() {
     // Skip test if running as non-root (raw sockets require CAP_NET_RAW)
     if !std::env::var("RUSTNMAP_INTEGRATION_TEST").is_ok_and(|v| v == "1") {
-        eprintln!("Skipping test_os_detection_localhost: set RUSTNMAP_INTEGRATION_TEST=1 to run");
         return;
     }
 
@@ -132,7 +135,6 @@ async fn test_os_detection_with_target_ip() {
         ip.parse::<Ipv4Addr>().unwrap_or(Ipv4Addr::LOCALHOST)
     } else {
         // Skip test if no target IP configured
-        eprintln!("Skipping test: TEST_TARGET_IP not set");
         return;
     };
 
@@ -148,14 +150,7 @@ async fn test_os_detection_with_target_ip() {
 
     // Just verify the operation completes without panic
     // Result may be Ok(empty) or Err depending on network conditions
-    match result {
-        Ok(matches) => {
-            eprintln!("Found {} OS matches for {target}", matches.len());
-        }
-        Err(e) => {
-            eprintln!("OS detection failed (expected without root): {e}");
-        }
-    }
+    let _ = result;
 }
 
 /// Test OS detection timeout behavior.
@@ -186,7 +181,7 @@ async fn test_os_detection_timeout() {
 // SEQ Analysis Tests
 // =============================================================================
 
-/// Test SEQ (TCP ISN) analysis with mock data.
+/// Test SEQ (TCP ISN) analysis with synthetic incremental ISN values.
 #[test]
 fn test_seq_analysis_incremental() {
     // Simulate incremental ISN pattern (Linux-like)
@@ -372,15 +367,10 @@ fn test_tcp_options_mss_variations() {
 /// Test OS fingerprint building with all fields.
 #[test]
 fn test_os_fingerprint_complete() {
-    use rustnmap_fingerprint::os::{
-        EcnFingerprint, IcmpTestResult, IpIdPattern, IpIdSeqClass, IsnClass, OpsFingerprint,
-        OsFingerprint, SeqFingerprint, TestResult, TimestampRate, UdpTestResult,
-    };
-
     let seq_fp = SeqFingerprint {
         class: IsnClass::Random,
         timestamp: true,
-        timestamp_rate: Some(TimestampRate::Rate100),
+        ts_val: 0xA,
         gcd: 1,
         isr: 50,
         sp: 80,
@@ -402,6 +392,9 @@ fn test_os_fingerprint_complete() {
         df: true,
         tos: 0,
         cwr: false,
+        ttl: Some(64),
+        window: Some(65535),
+        raw_options: Vec::new(),
     };
 
     let test_t1 = TestResult::new("T1")
@@ -440,8 +433,6 @@ fn test_os_fingerprint_complete() {
 /// Test OS fingerprint with empty fields.
 #[test]
 fn test_os_fingerprint_empty() {
-    use rustnmap_fingerprint::os::OsFingerprint;
-
     let fingerprint = OsFingerprint::new();
 
     assert!(fingerprint.seq.is_none());
@@ -457,14 +448,10 @@ fn test_os_fingerprint_empty() {
 /// Test OS fingerprint with only sequence information.
 #[test]
 fn test_os_fingerprint_seq_only() {
-    use rustnmap_fingerprint::os::{
-        IpIdPattern, IpIdSeqClass, IsnClass, OsFingerprint, SeqFingerprint,
-    };
-
     let seq_fp = SeqFingerprint {
         class: IsnClass::Random,
         timestamp: false,
-        timestamp_rate: None,
+        ts_val: 0,
         gcd: 1,
         isr: 8,
         sp: 63,
@@ -525,5 +512,3 @@ async fn test_os_detection_unreachable_target() {
         assert!(matches.is_empty());
     } // Error is acceptable for unreachable target
 }
-
-// Rust guideline compliant 2026-02-15

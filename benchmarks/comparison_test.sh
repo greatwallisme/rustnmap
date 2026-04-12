@@ -36,7 +36,7 @@ mkdir -p "$REPORT_DIR"
 
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 LOG_FILE="${LOG_DIR}/comparison_${TIMESTAMP}.log"
-REPORT_FILE="${REPORT_DIR}/comparison_report_${TIMESTAMP}.txt"
+REPORT_FILE="${REPORT_DIR}/comparison_report_${TIMESTAMP}.md"
 
 # Test tracking
 TOTAL_TESTS=0
@@ -45,6 +45,7 @@ FAILED_TESTS=0
 SKIPPED_TESTS=0
 declare -a FAILED_TEST_NAMES
 declare -a SKIPPED_TEST_NAMES
+declare -a TEST_RESULTS
 
 # Parse port states from scan output
 parse_ports() {
@@ -52,7 +53,7 @@ parse_ports() {
     echo "$output" | grep -E '^[0-9]+/(tcp|udp)' | awk '{print $1, $2}' || true
 }
 
-# Compare scan results
+# Compare scan results (following nse_comparison_test.sh patterns)
 compare_scans() {
     local test_name="$1"
     local nmap_cmd="$2"
@@ -70,31 +71,72 @@ compare_scans() {
     local nmap_start=$(date +%s%3N)
     local nmap_output
     local nmap_exit=0
-    if nmap_output=$(eval "$nmap_cmd" 2>&1); then
-        : # success
-    else
-        nmap_exit=$?
-    fi
+    local nmap_time_output
+    nmap_output=$(/usr/bin/time -v sh -c "$nmap_cmd" 2>/tmp/nmap_time_$$) || nmap_exit=$?
+    nmap_time_output=$(cat /tmp/nmap_time_$$ 2>/dev/null || echo "")
+    rm -f /tmp/nmap_time_$$
     local nmap_end=$(date +%s%3N)
     local nmap_duration=$((nmap_end - nmap_start))
-    echo "[INFO] nmap completed in ${nmap_duration}ms (exit: $nmap_exit)" | tee -a "$LOG_FILE"
 
-    # Delay between scans (5 seconds for reliability)
-    sleep 5
+    # Extract nmap resource usage
+    local nmap_maxrss="N/A"
+    local nmap_cpu_pct="N/A"
+    local nmap_user_cpu="N/A"
+    local nmap_sys_cpu="N/A"
+    if [ -n "$nmap_time_output" ]; then
+        nmap_maxrss=$(echo "$nmap_time_output" | grep "Maximum resident set size" | awk '{print $NF}' | head -1)
+        nmap_cpu_pct=$(echo "$nmap_time_output" | grep "Percent of CPU this job got" | awk '{print $NF}' | head -1)
+        nmap_user_cpu=$(echo "$nmap_time_output" | grep "User time (seconds)" | awk '{print $NF}' | head -1)
+        nmap_sys_cpu=$(echo "$nmap_time_output" | grep "System time (seconds)" | awk '{print $NF}' | head -1)
+    fi
+    # Convert maxrss from KB to MB
+    if [[ "$nmap_maxrss" != "N/A" && -n "$nmap_maxrss" ]]; then
+        nmap_maxrss=$(echo "scale=1; ${nmap_maxrss} / 1024" | bc 2>/dev/null || echo "$nmap_maxrss")"MB"
+    fi
+
+    echo "[INFO] nmap completed in ${nmap_duration}ms (exit: $nmap_exit)" | tee -a "$LOG_FILE"
+    echo "[INFO] nmap resources: peak_mem=${nmap_maxrss}, cpu=${nmap_cpu_pct}%, user=${nmap_user_cpu}s, sys=${nmap_sys_cpu}s" | tee -a "$LOG_FILE"
+
+    # Delay between scans to avoid ICMP rate-limit interference.
+    # UDP scans trigger ICMP port-unreachable replies which are kernel
+    # rate-limited (net.ipv4.icmp_ratelimit). A short gap causes the
+    # second tool to be measured under rate-limiting conditions.
+    if echo "$nmap_cmd" | grep -qE '\-sU\b'; then
+        sleep 10
+    else
+        sleep 2
+    fi
 
     # Run rustnmap
     echo "[INFO] Running rustnmap..." | tee -a "$LOG_FILE"
     local rustnmap_start=$(date +%s%3N)
     local rustnmap_output
     local rustnmap_exit=0
-    if rustnmap_output=$(eval "$rustnmap_cmd" 2>&1); then
-        : # success
-    else
-        rustnmap_exit=$?
-    fi
+    local rustnmap_time_output
+    rustnmap_output=$(/usr/bin/time -v sh -c "$rustnmap_cmd" 2>/tmp/rustnmap_time_$$) || rustnmap_exit=$?
+    rustnmap_time_output=$(cat /tmp/rustnmap_time_$$ 2>/dev/null || echo "")
+    rm -f /tmp/rustnmap_time_$$
     local rustnmap_end=$(date +%s%3N)
     local rustnmap_duration=$((rustnmap_end - rustnmap_start))
+
+    # Extract rustnmap resource usage
+    local rustnmap_maxrss="N/A"
+    local rustnmap_cpu_pct="N/A"
+    local rustnmap_user_cpu="N/A"
+    local rustnmap_sys_cpu="N/A"
+    if [ -n "$rustnmap_time_output" ]; then
+        rustnmap_maxrss=$(echo "$rustnmap_time_output" | grep "Maximum resident set size" | awk '{print $NF}' | head -1)
+        rustnmap_cpu_pct=$(echo "$rustnmap_time_output" | grep "Percent of CPU this job got" | awk '{print $NF}' | head -1)
+        rustnmap_user_cpu=$(echo "$rustnmap_time_output" | grep "User time (seconds)" | awk '{print $NF}' | head -1)
+        rustnmap_sys_cpu=$(echo "$rustnmap_time_output" | grep "System time (seconds)" | awk '{print $NF}' | head -1)
+    fi
+    # Convert maxrss from KB to MB
+    if [[ "$rustnmap_maxrss" != "N/A" && -n "$rustnmap_maxrss" ]]; then
+        rustnmap_maxrss=$(echo "scale=1; ${rustnmap_maxrss} / 1024" | bc 2>/dev/null || echo "$rustnmap_maxrss")"MB"
+    fi
+
     echo "[INFO] rustnmap completed in ${rustnmap_duration}ms (exit: $rustnmap_exit)" | tee -a "$LOG_FILE"
+    echo "[INFO] rustnmap resources: peak_mem=${rustnmap_maxrss}, cpu=${rustnmap_cpu_pct}%, user=${rustnmap_user_cpu}s, sys=${rustnmap_sys_cpu}s" | tee -a "$LOG_FILE"
 
     # Calculate speedup
     local speedup="N/A"
@@ -107,6 +149,7 @@ compare_scans() {
         echo "[SKIP] $test_name (nmap failed as expected)" | tee -a "$LOG_FILE"
         SKIPPED_TESTS=$((SKIPPED_TESTS + 1))
         SKIPPED_TEST_NAMES+=("$test_name")
+        TEST_RESULTS+=("SKIP|$test_name|nmap failed as expected|N/A|N/A")
         echo "" | tee -a "$LOG_FILE"
         return
     fi
@@ -131,8 +174,6 @@ compare_scans() {
         local nmap_state="${nmap_ports[$port]:-unknown}"
         local rustnmap_state="${rustnmap_ports[$port]:-unknown}"
 
-        # Skip comparison if nmap shows "unknown" (port not scanned)
-        # This is a false positive - both tools are working correctly
         if [[ "$nmap_state" == "unknown" ]]; then
             continue
         fi
@@ -142,20 +183,39 @@ compare_scans() {
         fi
     done
 
-    # Report results
+    # Report results (following NSE script format)
     if [[ ${#mismatches[@]} -eq 0 ]]; then
         echo "[PASS] $test_name" | tee -a "$LOG_FILE"
         echo "  Speed: ${speedup}x (rustnmap=${rustnmap_duration}ms, nmap=${nmap_duration}ms)" | tee -a "$LOG_FILE"
+        echo "  Resources (nmap):     peak_mem=${nmap_maxrss}, cpu=${nmap_cpu_pct}%, user=${nmap_user_cpu}s, sys=${nmap_sys_cpu}s" | tee -a "$LOG_FILE"
+        echo "  Resources (rustnmap): peak_mem=${rustnmap_maxrss}, cpu=${rustnmap_cpu_pct}%, user=${rustnmap_user_cpu}s, sys=${rustnmap_sys_cpu}s" | tee -a "$LOG_FILE"
         PASSED_TESTS=$((PASSED_TESTS + 1))
+        # Show port output comparison (like NSE script shows script output comparison)
+        echo "  --- NMAP OUTPUT (ports) ---" | tee -a "$LOG_FILE"
+        echo "$nmap_output" | grep -E '^[0-9]+/(tcp|udp)|PORT.*STATE' | sed 's/^/  /' | tee -a "$LOG_FILE"
+        echo "  --- RUSTNMAP OUTPUT (ports) ---" | tee -a "$LOG_FILE"
+        echo "$rustnmap_output" | grep -E '^[0-9]+/(tcp|udp)|PORT.*STATE' | sed 's/^/  /' | tee -a "$LOG_FILE"
+        TEST_RESULTS+=("PASS|$test_name|All ports match|${speedup}x|nmap_mem=${nmap_maxrss} nmap_cpu=${nmap_cpu_pct} rustnmap_mem=${rustnmap_maxrss} rustnmap_cpu=${rustnmap_cpu_pct}")
     else
         echo "[FAIL] $test_name" | tee -a "$LOG_FILE"
         echo "  Speed: ${speedup}x (rustnmap=${rustnmap_duration}ms, nmap=${nmap_duration}ms)" | tee -a "$LOG_FILE"
+        echo "  Resources (nmap):     peak_mem=${nmap_maxrss}, cpu=${nmap_cpu_pct}%, user=${nmap_user_cpu}s, sys=${nmap_sys_cpu}s" | tee -a "$LOG_FILE"
+        echo "  Resources (rustnmap): peak_mem=${rustnmap_maxrss}, cpu=${rustnmap_cpu_pct}%, user=${rustnmap_user_cpu}s, sys=${rustnmap_sys_cpu}s" | tee -a "$LOG_FILE"
         echo "  State mismatches:" | tee -a "$LOG_FILE"
         for mismatch in "${mismatches[@]}"; do
             echo "    - $mismatch" | tee -a "$LOG_FILE"
         done
         FAILED_TESTS=$((FAILED_TESTS + 1))
         FAILED_TEST_NAMES+=("$test_name")
+        # Show full output on failure (like NSE script)
+        echo "  === NMAP OUTPUT ===" | tee -a "$LOG_FILE"
+        echo "$nmap_output" | sed 's/^/  /' | tee -a "$LOG_FILE"
+        echo "  === END NMAP OUTPUT ===" | tee -a "$LOG_FILE"
+        echo "  === RUSTNMAP OUTPUT ===" | tee -a "$LOG_FILE"
+        echo "$rustnmap_output" | sed 's/^/  /' | tee -a "$LOG_FILE"
+        echo "  === END RUSTNMAP OUTPUT ===" | tee -a "$LOG_FILE"
+        local mismatch_summary=$(echo "${mismatches[*]}" | tr '\n' '; ')
+        TEST_RESULTS+=("FAIL|$test_name|${mismatch_summary}|${speedup}x|nmap_mem=${nmap_maxrss} nmap_cpu=${nmap_cpu_pct} rustnmap_mem=${rustnmap_maxrss} rustnmap_cpu=${rustnmap_cpu_pct}")
     fi
     echo "" | tee -a "$LOG_FILE"
 }
@@ -318,9 +378,8 @@ run_timing_suite() {
 
     compare_scans \
         "Host Timeout" \
-        "$NMAP_BIN -sS --host-timeout 30000 -p $TEST_PORTS $TARGET_IP" \
-        "$RUSTNMAP_BIN -sS --host-timeout 30000 -p $TEST_PORTS $TARGET_IP" \
-        "true"  # Allow nmap failure
+        "$NMAP_BIN -sS --host-timeout 30s -p $TEST_PORTS $TARGET_IP" \
+        "$RUSTNMAP_BIN -sS --host-timeout 30s -p $TEST_PORTS $TARGET_IP"
 }
 
 # Test Suite: Output Formats (4 tests)
@@ -510,11 +569,11 @@ run_special_scans_suite() {
         "$NMAP_BIN -sY -p 7,80 $IP_SCTP" \
         "$RUSTNMAP_BIN -sY -p 7,80 $IP_SCTP"
 
-    # FTP Bounce scan (requires FTP server with port_promiscuous)
+    # FTP Bounce scan (requires FTP server - use anonymous:password@host syntax)
     compare_scans \
         "FTP Bounce Scan" \
-        "$NMAP_BIN -b -p 80 $IP_WEB" \
-        "$RUSTNMAP_BIN -b -p 80 $IP_WEB" \
+        "$NMAP_BIN -Pn -b anonymous:password@$IP_FTP:21 -p 80 $IP_WEB" \
+        "$RUSTNMAP_BIN -Pn -b anonymous:password@$IP_FTP:21 -p 80 $IP_WEB" \
         "true"
 
     # Idle/Zombie scan (requires zombie host with predictable IP ID)
@@ -575,14 +634,12 @@ run_traceroute_suite() {
     compare_scans \
         "Traceroute" \
         "$NMAP_BIN -sS --traceroute -p 80 $IP_WEB" \
-        "$RUSTNMAP_BIN -sS --traceroute -p 80 $IP_WEB" \
-        "true"
+        "$RUSTNMAP_BIN -sS --traceroute -p 80 $IP_WEB"
 
     compare_scans \
-        "Traceroute with Port" \
-        "$NMAP_BIN -sS --traceroute --traceroute-port 443 -p 443 $IP_WEB" \
-        "$RUSTNMAP_BIN -sS --traceroute --traceroute-port 443 -p 443 $IP_WEB" \
-        "true"
+        "Traceroute with Service" \
+        "$NMAP_BIN -sS --traceroute -p 443 $IP_WEB" \
+        "$RUSTNMAP_BIN -sS --traceroute -p 443 $IP_WEB"
 }
 
 # Test Suite: Firewall Detection (3 tests)
@@ -676,6 +733,13 @@ main() {
         echo "Failed: $FAILED_TESTS"
         echo "Skipped: $SKIPPED_TESTS"
         echo "Pass Rate: ${pass_rate}%"
+        echo ""
+        echo "Detailed Results:"
+        echo "Status|Test Name|Notes|Speedup|Resources"
+        echo "------|---------|------|--------|----------"
+        for result in "${TEST_RESULTS[@]}"; do
+            echo "$result"
+        done
         echo ""
         if [[ $FAILED_TESTS -gt 0 ]]; then
             echo "Failed tests:"

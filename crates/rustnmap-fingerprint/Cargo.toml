@@ -28,8 +28,12 @@ thiserror = { workspace = true }
 # Logging
 tracing = { workspace = true }
 
+# System calls for AF_PACKET socket
+libc = { workspace = true }
+
 # Network primitives
 rustnmap-net = { path = "../rustnmap-net" }
+rustnmap-packet = { path = "../rustnmap-packet" }
 
 # Common types
 rustnmap-common = { path = "../rustnmap-common" }

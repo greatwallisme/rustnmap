@@ -236,8 +236,9 @@ impl UdpScanner {
         let src_port = Self::generate_source_port();
 
         // Build UDP packet with empty payload
-        let packet =
-            UdpPacketBuilder::new(self.local_addr_v4, dst_addr, src_port, dst_port).build();
+        let packet = UdpPacketBuilder::new(self.local_addr_v4, dst_addr, src_port, dst_port)
+            .badsum_if(self.config.badsum)
+            .build();
 
         // Create destination socket address
         let dst_sockaddr = SocketAddr::new(std::net::IpAddr::V4(dst_addr), dst_port);
@@ -389,8 +390,9 @@ impl UdpScanner {
         let src_port = Self::generate_source_port();
 
         // Build UDP packet with empty payload
-        let packet =
-            UdpPacketBuilder::new(self.local_addr_v4, dst_addr, src_port, dst_port).build();
+        let packet = UdpPacketBuilder::new(self.local_addr_v4, dst_addr, src_port, dst_port)
+            .badsum_if(self.config.badsum)
+            .build();
 
         // Create destination socket address
         let dst_sockaddr = SocketAddr::new(std::net::IpAddr::V4(dst_addr), dst_port);

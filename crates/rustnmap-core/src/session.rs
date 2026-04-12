@@ -177,6 +177,10 @@ pub struct ScanConfig {
     pub first_phase_ports: Vec<u16>,
     /// DNS server address for local IP detection (default: 8.8.8.8:53).
     pub dns_server: String,
+    /// Skip port scan, only do host discovery (-sn / ping sweep).
+    pub no_port_scan: bool,
+    /// Send packets with bogus TCP/UDP/SCTP checksum (--badsum).
+    pub badsum: bool,
 }
 
 impl Default for ScanConfig {
@@ -211,6 +215,8 @@ impl Default for ScanConfig {
                 21, 22, 23, 25, 80, 110, 143, 443, 993, 995, 3306, 3389, 5432, 8080,
             ],
             dns_server: rustnmap_common::DEFAULT_DNS_SERVER.to_string(),
+            no_port_scan: false,
+            badsum: false,
         }
     }
 }

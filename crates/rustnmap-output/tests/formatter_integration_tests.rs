@@ -865,8 +865,8 @@ fn test_normal_formatter_format_script() {
     let output = formatter.format_script(&script).unwrap();
 
     assert!(output.contains("| http-title"));
-    assert!(output.contains("|_ Welcome Page"));
-    assert!(output.contains("|_ Version 1.0"));
+    assert!(output.contains("|   Welcome Page"));
+    assert!(output.contains("|_  Version 1.0"));
 }
 
 /// Test scan result with script elements on ports.

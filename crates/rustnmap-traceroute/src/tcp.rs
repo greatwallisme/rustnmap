@@ -17,7 +17,10 @@ use std::net::{SocketAddr, SocketAddrV4};
 pub struct TcpSynTraceroute {
     config: TracerouteConfig,
     local_addr: Ipv4Addr,
+    /// Socket for sending TCP probes and receiving TCP responses.
     socket: RawSocket,
+    /// Socket for receiving ICMP responses (Time Exceeded).
+    icmp_socket: RawSocket,
     /// Sequence number for probes.
     sequence: u32,
 }
@@ -27,7 +30,10 @@ pub struct TcpSynTraceroute {
 pub struct TcpAckTraceroute {
     config: TracerouteConfig,
     local_addr: Ipv4Addr,
+    /// Socket for sending TCP probes and receiving TCP responses.
     socket: RawSocket,
+    /// Socket for receiving ICMP responses (Time Exceeded).
+    icmp_socket: RawSocket,
     /// Sequence number for probes.
     sequence: u32,
 }
@@ -48,11 +54,16 @@ impl TcpSynTraceroute {
         let socket = RawSocket::with_protocol(6).map_err(|e| TracerouteError::SocketCreation {
             source: io::Error::other(e),
         })?;
+        // Use IPPROTO_ICMP (1) for receiving ICMP Time Exceeded responses
+        let icmp_socket = RawSocket::with_protocol(1).map_err(|e| TracerouteError::SocketCreation {
+            source: io::Error::other(e),
+        })?;
 
         Ok(Self {
             config,
             local_addr,
             socket,
+            icmp_socket,
             sequence: 0,
         })
     }
@@ -123,19 +134,19 @@ impl TcpSynTraceroute {
         let mut recv_buf = vec![0u8; 65535];
         let timeout = self.config.probe_timeout;
 
+        // First check TCP socket for SYN-ACK/RST responses
         match self
             .socket
             .recv_packet(recv_buf.as_mut_slice(), Some(timeout))
         {
             Ok(len) if len > 0 => {
-                // First try to parse as TCP response (SYN-ACK or RST from target)
                 if let Some(response) =
                     self.handle_tcp_response(&recv_buf[..len], target, dest_port)
                 {
                     return Ok(Some(response));
                 }
 
-                // Then try ICMP response (Time Exceeded from intermediate router)
+                // Also check for ICMP on TCP socket (Linux may deliver some)
                 if let Some(icmp_resp) = parse_icmp_response(&recv_buf[..len]) {
                     return Ok(self.handle_icmp_response(
                         icmp_resp,
@@ -145,6 +156,31 @@ impl TcpSynTraceroute {
                     ));
                 }
 
+                // Fall through to check ICMP socket
+            }
+            Ok(_) => {}
+            Err(e)
+                if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut =>
+            {}
+            Err(e) => return Err(TracerouteError::ReceiveFailed { source: e }),
+        }
+
+        // Check ICMP socket for Time Exceeded / Port Unreachable
+        let mut icmp_buf = vec![0u8; 65535];
+        let icmp_timeout = self.config.probe_timeout;
+        match self
+            .icmp_socket
+            .recv_packet(icmp_buf.as_mut_slice(), Some(icmp_timeout))
+        {
+            Ok(len) if len > 0 => {
+                if let Some(icmp_resp) = parse_icmp_response(&icmp_buf[..len]) {
+                    return Ok(self.handle_icmp_response(
+                        icmp_resp,
+                        target,
+                        dest_port,
+                        &icmp_buf[..len],
+                    ));
+                }
                 Ok(None)
             }
             Ok(_) => Ok(None),
@@ -280,11 +316,16 @@ impl TcpAckTraceroute {
         let socket = RawSocket::with_protocol(6).map_err(|e| TracerouteError::SocketCreation {
             source: io::Error::other(e),
         })?;
+        // Use IPPROTO_ICMP (1) for receiving ICMP Time Exceeded responses
+        let icmp_socket = RawSocket::with_protocol(1).map_err(|e| TracerouteError::SocketCreation {
+            source: io::Error::other(e),
+        })?;
 
         Ok(Self {
             config,
             local_addr,
             socket,
+            icmp_socket,
             sequence: 0,
         })
     }
@@ -345,19 +386,19 @@ impl TcpAckTraceroute {
         let mut recv_buf = vec![0u8; 65535];
         let timeout = self.config.probe_timeout;
 
+        // First check TCP socket for RST responses
         match self
             .socket
             .recv_packet(recv_buf.as_mut_slice(), Some(timeout))
         {
             Ok(len) if len > 0 => {
-                // First try to parse as TCP response
                 if let Some(response) =
                     self.handle_tcp_response(&recv_buf[..len], target, dest_port)
                 {
                     return Ok(Some(response));
                 }
 
-                // Then try ICMP response
+                // Also check for ICMP on TCP socket
                 if let Some(icmp_resp) = parse_icmp_response(&recv_buf[..len]) {
                     return Ok(self.handle_icmp_response(
                         icmp_resp,
@@ -367,6 +408,31 @@ impl TcpAckTraceroute {
                     ));
                 }
 
+                // Fall through to check ICMP socket
+            }
+            Ok(_) => {}
+            Err(e)
+                if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut =>
+            {}
+            Err(e) => return Err(TracerouteError::ReceiveFailed { source: e }),
+        }
+
+        // Check ICMP socket for Time Exceeded / Port Unreachable
+        let mut icmp_buf = vec![0u8; 65535];
+        let icmp_timeout = self.config.probe_timeout;
+        match self
+            .icmp_socket
+            .recv_packet(icmp_buf.as_mut_slice(), Some(icmp_timeout))
+        {
+            Ok(len) if len > 0 => {
+                if let Some(icmp_resp) = parse_icmp_response(&icmp_buf[..len]) {
+                    return Ok(self.handle_icmp_response(
+                        icmp_resp,
+                        target,
+                        dest_port,
+                        &icmp_buf[..len],
+                    ));
+                }
                 Ok(None)
             }
             Ok(_) => Ok(None),

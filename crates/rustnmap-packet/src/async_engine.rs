@@ -198,6 +198,29 @@ impl AsyncPacketEngine {
         })
     }
 
+    /// Starts the engine without spawning the background receiver task.
+    ///
+    /// This is for callers that want to read packets directly from the ring
+    /// buffer using `try_recv_direct()` instead of receiving through the
+    /// bounded channel. The background task would compete for the same ring
+    /// buffer frames, so it must not be spawned when direct reads are used.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the engine is already started or startup fails.
+    pub async fn start_no_background(&mut self) -> Result<()> {
+        if self.running.load(Ordering::Acquire) {
+            return Err(PacketError::AlreadyStarted);
+        }
+
+        // Start the inner engine
+        let mut engine = self.engine.lock().await;
+        engine.start().await?;
+
+        self.running.store(true, Ordering::Release);
+        Ok(())
+    }
+
     /// Returns a reference to the packet receiver for stream conversion.
     ///
     /// This method is used internally by `into_stream()` and can be used
@@ -270,6 +293,27 @@ impl AsyncPacketEngine {
             Ok(Some(result)) => result.map(Some),
             Ok(None) | Err(_) => Ok(None), // Channel closed or timeout elapsed
         }
+    }
+
+    /// Reads a packet directly from the `PACKET_MMAP` ring buffer.
+    ///
+    /// This bypasses the bounded channel and background task entirely,
+    /// providing the lowest possible latency for time-critical operations
+    /// like port scanning where probe timeout accuracy is essential.
+    ///
+    /// The background task may also be reading from the ring buffer concurrently,
+    /// so this method uses the same mutex to serialize access.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the engine is not started or a receive error occurs.
+    pub async fn try_recv_direct(&self) -> Result<Option<ZeroCopyPacket>> {
+        if !self.running.load(Ordering::Acquire) {
+            return Err(PacketError::NotStarted);
+        }
+
+        let mut engine = self.engine.lock().await;
+        engine.try_recv_zero_copy()
     }
 
     /// Converts the engine into a packet stream.

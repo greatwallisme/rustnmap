@@ -33,6 +33,8 @@ pub struct ScanConfig {
     /// Timing level (0-5) for T0-T5 templates.
     /// Used by congestion control to determine growth rate.
     pub timing_level: u8,
+    /// Send packets with bogus TCP/UDP/SCTP checksum (--badsum).
+    pub badsum: bool,
 }
 
 impl Default for ScanConfig {
@@ -48,6 +50,7 @@ impl Default for ScanConfig {
             min_rate: None,
             max_rate: None,
             timing_level: 3, // T3 Normal is default
+            badsum: false,
         }
     }
 }

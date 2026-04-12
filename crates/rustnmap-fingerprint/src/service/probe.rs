@@ -1,6 +1,7 @@
 //! Service probe definitions and pattern matching.
 
 use std::collections::HashMap;
+use std::sync;
 
 use pcre2::bytes::Regex;
 use serde::{Deserialize, Serialize};
@@ -51,7 +52,7 @@ pub enum Protocol {
 }
 
 /// Match rule for parsing probe responses.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize)]
 pub struct MatchRule {
     /// Regex pattern to match against response.
     pub pattern: String,
@@ -92,11 +93,44 @@ pub struct MatchRule {
     pub soft: bool,
 }
 
+/// Global regex cache keyed by pattern string.  Lives here rather than inside
+/// each `MatchRule` so that `MatchRule` can stay `Clone + Serialize`.
+/// Identical patterns across different probes share one compiled `Regex`.
+static REGEX_CACHE: sync::LazyLock<sync::RwLock<HashMap<String, sync::Arc<Regex>>>> =
+    sync::LazyLock::new(|| sync::RwLock::new(HashMap::new()));
+
 /// Template for extracting structured data from regex matches.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MatchTemplate {
     /// Template string with variable substitution markers.
     pub value: String,
+}
+
+impl std::fmt::Debug for MatchRule {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MatchRule")
+            .field("pattern", &self.pattern)
+            .field("service", &self.service)
+            .field("soft", &self.soft)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Clone for MatchRule {
+    fn clone(&self) -> Self {
+        Self {
+            pattern: self.pattern.clone(),
+            service: self.service.clone(),
+            product_template: self.product_template.clone(),
+            version_template: self.version_template.clone(),
+            info_template: self.info_template.clone(),
+            hostname_template: self.hostname_template.clone(),
+            os_type_template: self.os_type_template.clone(),
+            device_type_template: self.device_type_template.clone(),
+            cpe_template: self.cpe_template.clone(),
+            soft: self.soft,
+        }
+    }
 }
 
 /// Result of applying a match rule to a response.
@@ -185,15 +219,33 @@ impl ProbeDefinition {
 }
 
 impl MatchRule {
-    /// Compile the regex pattern for matching.
+    /// Get the compiled regex, compiling lazily on first access.
+    /// Uses a global cache keyed by pattern string so identical
+    /// patterns across probes share one compiled `Regex`.
     ///
     /// # Errors
     /// Returns error if the regex pattern is invalid.
-    pub fn compile_regex(&self) -> Result<Regex> {
-        Regex::new(&self.pattern).map_err(|e| crate::error::FingerprintError::InvalidRegex {
-            pattern: self.pattern.clone(),
-            reason: e.to_string(),
-        })
+    pub fn compile_regex(&self) -> Result<sync::Arc<Regex>> {
+        // Fast path: read lock
+        {
+            let cache = REGEX_CACHE.read().expect("regex cache lock poisoned");
+            if let Some(regex) = cache.get(&self.pattern) {
+                return Ok(sync::Arc::clone(regex));
+            }
+        }
+        // Slow path: compile and insert under write lock
+        let regex = Regex::new(&self.pattern).map_err(|e| {
+            crate::error::FingerprintError::InvalidRegex {
+                pattern: self.pattern.clone(),
+                reason: e.to_string(),
+            }
+        })?;
+        let arc = sync::Arc::new(regex);
+        let mut cache = REGEX_CACHE.write().expect("regex cache lock poisoned");
+        cache
+            .entry(self.pattern.clone())
+            .or_insert_with(|| sync::Arc::clone(&arc));
+        Ok(arc)
     }
 
     /// Apply this match rule to a response with captured groups.

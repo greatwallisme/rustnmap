@@ -88,6 +88,8 @@ pub struct Args {
     pub scan_ack: bool,
     /// TCP Window scan
     pub scan_window: bool,
+    /// FTP Bounce scan (-b username:password@host:port)
+    pub ftp_bounce: Option<String>,
     /// Scan type from -s option (S, T, U, F, N, X, M, A, W, V, C)
     pub scan_type: Option<String>,
 
@@ -148,6 +150,8 @@ pub struct Args {
     pub source_port: Option<u16>,
     /// Use specific data length
     pub data_length: Option<usize>,
+    /// Send packets with bogus TCP/UDP/SCTP checksum
+    pub badsum: bool,
     /// Append custom binary data to packets
     pub data_hex: Option<String>,
     /// Append custom string data to packets
@@ -214,6 +218,8 @@ pub struct Args {
     pub ping_type: Option<String>,
     /// Disable ping (skip host discovery)
     pub disable_ping: bool,
+    /// Ping scan - disable port scan (-sn, equivalent to nmap's noportscan)
+    pub no_port_scan: bool,
     /// Retry ratio for host discovery
     pub host_timeout: Option<u64>,
     /// Print the interacted URLs
@@ -353,6 +359,7 @@ impl Args {
                                 'M' => args.scan_maimon = true,
                                 'A' => args.scan_ack = true,
                                 'W' => args.scan_window = true,
+                                'n' | 'P' => args.no_port_scan = true,
                                 _ => {
                                     args.scan_type = Some(ch.to_string());
                                 }
@@ -505,7 +512,10 @@ impl Args {
                     args.osscan_guess = true;
                 }
 
-                // Decoys
+                // FTP Bounce scan
+                Arg::Short('b') => {
+                    args.ftp_bounce = Some(parser.value()?.string()?);
+                }
                 Arg::Short('D') | Arg::Long("decoys") => {
                     args.decoys = Some(parser.value()?.string()?);
                 }
@@ -563,6 +573,11 @@ impl Args {
                     }
                 }
 
+                // Bad checksum
+                Arg::Long("badsum") => {
+                    args.badsum = true;
+                }
+
                 // Data length
                 Arg::Long("data-length") => {
                     let len = parser.value()?.string()?;
@@ -586,7 +601,7 @@ impl Args {
                 // Scan delay
                 Arg::Long("scan-delay") => {
                     let delay = parser.value()?.string()?;
-                    if let Ok(val) = delay.parse::<u64>() {
+                    if let Some(val) = parse_time_to_ms(&delay) {
                         args.scan_delay = Some(val);
                     } else {
                         return Err(ParseError::InvalidValue("--scan-delay".to_string(), delay));
@@ -812,7 +827,7 @@ impl Args {
                 // Host timeout
                 Arg::Long("host-timeout") => {
                     let timeout = parser.value()?.string()?;
-                    if let Ok(val) = timeout.parse::<u64>() {
+                    if let Some(val) = parse_time_to_ms(&timeout) {
                         args.host_timeout = Some(val);
                     } else {
                         return Err(ParseError::InvalidValue(
@@ -1028,6 +1043,11 @@ impl Args {
     /// Returns the scan type based on provided flags.
     #[must_use]
     pub fn scan_type(&self) -> ScanType {
+        // Handle FTP bounce scan (-b)
+        if self.ftp_bounce.is_some() {
+            return ScanType::FtpBounce;
+        }
+
         // Handle -s TYPE option (nmap style)
         if let Some(ref scan_type_str) = self.scan_type {
             return match scan_type_str.to_uppercase().as_str() {
@@ -1087,6 +1107,64 @@ pub enum ScanType {
     Ack,
     /// TCP Window scan
     Window,
+    /// FTP Bounce scan
+    FtpBounce,
+}
+
+/// Parses a time specification string to milliseconds, matching nmap's `tval2msecs`.
+///
+/// Supports the following suffixes (case-insensitive):
+/// - `ms` - milliseconds (e.g., `"500ms"`)
+/// - `s` or no suffix - seconds (e.g., `"30s"` or `"30"`)
+/// - `m` - minutes (e.g., `"5m"`)
+/// - `h` - hours (e.g., `"1h"`)
+///
+/// # Errors
+///
+/// Returns `None` if the input is empty, contains no numeric portion,
+/// or uses an unrecognized suffix.
+fn parse_time_to_ms(spec: &str) -> Option<u64> {
+    let spec = spec.trim();
+    if spec.is_empty() {
+        return None;
+    }
+
+    // Find where the numeric portion ends
+    let num_end = spec
+        .find(|c: char| !c.is_ascii_digit() && c != '.')
+        .unwrap_or(spec.len());
+
+    if num_end == 0 {
+        return None;
+    }
+
+    let num_str = &spec[..num_end];
+    let suffix = spec[num_end..].to_ascii_lowercase();
+
+    let value: f64 = num_str.parse().ok()?;
+
+    let ms = match suffix.as_str() {
+        "ms" => value,
+        "" | "s" => value * 1_000.0,
+        "m" => value * 60_000.0,
+        "h" => value * 3_600_000.0,
+        _ => return None,
+    };
+
+    if ms < 0.0 || !ms.is_finite() {
+        return None;
+    }
+
+    // Safely convert to u64; values beyond u64 range are rejected.
+    // u64::MAX is approximately 1.8e19 which far exceeds any practical
+    // timeout value, so truncation at high values is acceptable.
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "range validated above; practical timeouts are small"
+    )]
+    let result = ms as u64;
+    Some(result)
 }
 
 #[cfg(test)]
@@ -1129,5 +1207,57 @@ mod tests {
         args.targets = vec!["192.168.1.1".to_string()];
         args.scan_connect = true;
         assert_eq!(args.scan_type(), ScanType::Connect);
+    }
+
+    #[test]
+    fn test_parse_time_to_ms_seconds_suffix() {
+        assert_eq!(parse_time_to_ms("30s"), Some(30_000));
+        assert_eq!(parse_time_to_ms("1s"), Some(1_000));
+        assert_eq!(parse_time_to_ms("0s"), Some(0));
+    }
+
+    #[test]
+    fn test_parse_time_to_ms_no_suffix() {
+        // No suffix defaults to seconds (matching nmap behavior)
+        assert_eq!(parse_time_to_ms("30"), Some(30_000));
+        assert_eq!(parse_time_to_ms("5"), Some(5_000));
+    }
+
+    #[test]
+    fn test_parse_time_to_ms_milliseconds() {
+        assert_eq!(parse_time_to_ms("500ms"), Some(500));
+        assert_eq!(parse_time_to_ms("100ms"), Some(100));
+    }
+
+    #[test]
+    fn test_parse_time_to_ms_minutes() {
+        assert_eq!(parse_time_to_ms("5m"), Some(300_000));
+        assert_eq!(parse_time_to_ms("1m"), Some(60_000));
+    }
+
+    #[test]
+    fn test_parse_time_to_ms_hours() {
+        assert_eq!(parse_time_to_ms("1h"), Some(3_600_000));
+    }
+
+    #[test]
+    fn test_parse_time_to_ms_case_insensitive() {
+        assert_eq!(parse_time_to_ms("30S"), Some(30_000));
+        assert_eq!(parse_time_to_ms("500MS"), Some(500));
+        assert_eq!(parse_time_to_ms("5M"), Some(300_000));
+        assert_eq!(parse_time_to_ms("1H"), Some(3_600_000));
+    }
+
+    #[test]
+    fn test_parse_time_to_ms_fractional() {
+        assert_eq!(parse_time_to_ms("1.5s"), Some(1_500));
+        assert_eq!(parse_time_to_ms("0.5m"), Some(30_000));
+    }
+
+    #[test]
+    fn test_parse_time_to_ms_invalid() {
+        assert_eq!(parse_time_to_ms(""), None);
+        assert_eq!(parse_time_to_ms("abc"), None);
+        assert_eq!(parse_time_to_ms("30x"), None);
     }
 }

@@ -36,6 +36,7 @@ fn test_config() -> ScanConfig {
         min_rate: None,
         max_rate: None,
         timing_level: 3, // T3 Normal
+        badsum: false,
     }
 }
 

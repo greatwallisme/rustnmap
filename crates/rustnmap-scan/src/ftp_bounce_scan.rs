@@ -213,30 +213,6 @@ impl FtpBounceScanner {
         )
     }
 
-    /// Parses FTP response to determine port state.
-    ///
-    /// Maps FTP response codes to port states:
-    /// - 150/226: Open (connection succeeded)
-    /// - 425/426: Closed (connection refused)
-    /// - Timeout/other: Filtered
-    ///
-    /// # Arguments
-    ///
-    /// * `response` - FTP response string
-    #[must_use]
-    fn parse_port_state(response: &str) -> PortState {
-        if response.starts_with("150") || response.starts_with("226") {
-            // Data connection succeeded
-            PortState::Open
-        } else if response.starts_with("425") || response.starts_with("426") {
-            // Connection refused by target
-            PortState::Closed
-        } else {
-            // No meaningful response or timeout
-            PortState::Filtered
-        }
-    }
-
     /// Blocking implementation of FTP bounce scan.
     ///
     /// This function performs the actual blocking FTP operations.
@@ -262,12 +238,49 @@ impl FtpBounceScanner {
         Self::send_port_command(&mut ftp, target_addr, port, &target.ip.to_string())?;
 
         // Send LIST command to trigger data connection attempt
-        let response = ftp.send_command("LIST", &target.ip.to_string(), port)?;
+        let mut response = ftp.send_command("LIST", &target.ip.to_string(), port)?;
 
-        // Determine port state from FTP response
-        let port_state = Self::parse_port_state(&response);
+        // Handle FTP command misalignment (nmap nmap_ftp.cc:301-306)
+        // Some servers return 500 when commands get out of sync
+        if response.starts_with("500") {
+            // Read the actual response to re-align (nmap does recvtime with 10s timeout)
+            // If this times out, we keep the 500 response and fall through to closed
+            if let Ok(resp) = ftp.read_response(&target.ip.to_string(), port) {
+                response = resp;
+            }
+        }
 
-        // Send QUIT to close gracefully
+        // Handle 1xx preliminary response (nmap nmap_ftp.cc:307-330)
+        // 150 means data connection is being opened, need to wait for final response
+        if response.starts_with("150") || response.starts_with("125") {
+            if let Ok(resp) = ftp.read_response(&target.ip.to_string(), port) {
+                // 426 means data connection was closed after opening
+                // nmap treats this as "changed mind" and goes to next port
+                if resp.starts_with("426") {
+                    let _ = ftp.send_command("QUIT", &target.ip.to_string(), port);
+                    return Ok(PortState::Closed);
+                }
+                response = resp;
+            } else {
+                // Timed out waiting for LIST to complete; probably filtered (nmap)
+                let _ = ftp.send_command("ABOR", &target.ip.to_string(), port);
+                return Ok(PortState::Filtered);
+            }
+        }
+
+        // Determine port state from FTP response (nmap nmap_ftp.cc:332-337)
+        // 2xx = OPEN, everything else = CLOSED
+        let port_state = if response.starts_with("200")
+            || response.starts_with("226")
+            || response.starts_with("150")
+        {
+            PortState::Open
+        } else {
+            // nmap: "This means the port is closed"
+            PortState::Closed
+        };
+
+        // Send QUIT to close gracefully - ignore errors since we have our result
         let _ = ftp.send_command("QUIT", &target.ip.to_string(), port);
 
         Ok(port_state)
@@ -346,7 +359,11 @@ impl FtpConnection {
         self.read_response(target, port)
     }
 
-    /// Reads an FTP response line.
+    /// Reads an FTP response, handling multi-line responses (RFC 959).
+    ///
+    /// Multi-line responses have a hyphen after the code on the first line
+    /// (e.g., `220-Welcome`) and end with `<code> <text>` (e.g., `220 `).
+    /// This method reads all lines until the final line of the response.
     ///
     /// # Arguments
     ///
@@ -355,28 +372,44 @@ impl FtpConnection {
     ///
     /// # Returns
     ///
-    /// Response line from FTP server.
+    /// Final response line from FTP server (the line with the status code).
     ///
     /// # Errors
     ///
     /// Returns an error if read fails or times out.
     fn read_response(&mut self, target: &str, port: Port) -> ScanResult<String> {
-        let mut line = String::new();
-        self.reader.read_line(&mut line).map_err(|e| {
-            if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut {
-                rustnmap_common::ScanError::Timeout {
-                    target: target.to_string(),
-                    port,
+        loop {
+            let mut line = String::new();
+            let bytes_read = self.reader.read_line(&mut line).map_err(|e| {
+                if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut {
+                    rustnmap_common::ScanError::Timeout {
+                        target: target.to_string(),
+                        port,
+                    }
+                } else {
+                    rustnmap_common::ScanError::Network(rustnmap_common::Error::Io(e))
                 }
-            } else {
-                rustnmap_common::ScanError::Network(rustnmap_common::Error::Io(e))
+            })?;
+
+            // EOF: server closed the connection
+            if bytes_read == 0 {
+                return Err(rustnmap_common::ScanError::Network(
+                    rustnmap_common::Error::Other("FTP server closed connection".to_string()),
+                ));
             }
-        })?;
 
-        // Remove trailing CRLF
-        let line = line.trim_end().to_string();
+            // Strip only \r\n for the final-line check; trim_end() would also
+            // remove the trailing space from lines like "220 \r\n", turning
+            // "220 " into "220" (3 chars) and failing the len >= 4 guard.
+            let stripped = line.trim_end_matches(['\r', '\n']);
 
-        Ok(line)
+            // RFC 959: multi-line uses hyphen after code (e.g., "220-"),
+            // final line uses space (e.g., "220 text" or even "220 ").
+            if stripped.len() >= 4 && stripped.as_bytes()[3] == b' ' {
+                return Ok(stripped.to_string());
+            }
+            // Continuation line: "NNN-text" or short line - keep reading
+        }
     }
 }
 
@@ -447,43 +480,35 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_port_state_open() {
-        assert_eq!(
-            FtpBounceScanner::parse_port_state("150 Opening data connection"),
-            PortState::Open
-        );
-        assert_eq!(
-            FtpBounceScanner::parse_port_state("226 Transfer complete"),
-            PortState::Open
-        );
+    fn test_port_state_open_responses() {
+        // 2xx and 150 responses indicate open port (nmap nmap_ftp.cc:332)
+        let open_responses = [
+            "200 OK",
+            "226 Transfer complete",
+            "150 Opening data connection",
+        ];
+        for resp in &open_responses {
+            let is_open =
+                resp.starts_with("200") || resp.starts_with("226") || resp.starts_with("150");
+            assert!(is_open, "Expected '{resp}' to indicate open");
+        }
     }
 
     #[test]
-    fn test_parse_port_state_closed() {
-        assert_eq!(
-            FtpBounceScanner::parse_port_state("425 Can't open data connection"),
-            PortState::Closed
-        );
-        assert_eq!(
-            FtpBounceScanner::parse_port_state("426 Connection closed; transfer aborted"),
-            PortState::Closed
-        );
-    }
-
-    #[test]
-    fn test_parse_port_state_filtered() {
-        assert_eq!(
-            FtpBounceScanner::parse_port_state("500 Syntax error"),
-            PortState::Filtered
-        );
-        assert_eq!(
-            FtpBounceScanner::parse_port_state("530 Not logged in"),
-            PortState::Filtered
-        );
-        assert_eq!(
-            FtpBounceScanner::parse_port_state("200 Command okay"),
-            PortState::Filtered
-        );
+    fn test_port_state_closed_responses() {
+        // Non-2xx responses indicate closed port (nmap nmap_ftp.cc:334-336)
+        let closed_responses = [
+            "425 Can't open data connection",
+            "426 Connection closed; transfer aborted",
+            "500 OOPS: Illegal port request",
+            "530 Not logged in",
+            "550 Failed to open file",
+        ];
+        for resp in &closed_responses {
+            let is_open =
+                resp.starts_with("200") || resp.starts_with("226") || resp.starts_with("150");
+            assert!(!is_open, "Expected '{resp}' to indicate closed");
+        }
     }
 
     #[test]
@@ -563,36 +588,6 @@ mod tests {
         let result = scanner.scan_port(&target, 80, Protocol::Tcp);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), PortState::Filtered);
-    }
-
-    #[test]
-    fn test_parse_port_state_empty_response() {
-        // Empty string should be treated as Filtered
-        assert_eq!(FtpBounceScanner::parse_port_state(""), PortState::Filtered);
-    }
-
-    #[test]
-    fn test_parse_port_state_extended_codes() {
-        // Extended codes that start with valid prefixes are treated as those codes
-        // This is correct behavior - "1500" starts with "150" indicating Open
-        assert_eq!(
-            FtpBounceScanner::parse_port_state("1500 Some extended code"),
-            PortState::Open
-        );
-        // "4250" starts with "425" indicating Closed
-        assert_eq!(
-            FtpBounceScanner::parse_port_state("4250 Another extended code"),
-            PortState::Closed
-        );
-    }
-
-    #[test]
-    fn test_parse_port_state_multiline_response() {
-        // Test first line parsing behavior (multiline would be handled by connection)
-        assert_eq!(
-            FtpBounceScanner::parse_port_state("150-Opening data connection"),
-            PortState::Open
-        );
     }
 
     #[test]

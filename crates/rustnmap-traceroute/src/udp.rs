@@ -15,7 +15,10 @@ use std::net::{SocketAddr, SocketAddrV4};
 pub struct UdpTraceroute {
     config: TracerouteConfig,
     local_addr: Ipv4Addr,
-    socket: RawSocket,
+    /// Socket for sending UDP probes.
+    send_socket: RawSocket,
+    /// Socket for receiving ICMP responses (Time Exceeded, Port Unreachable).
+    recv_socket: RawSocket,
     /// Base destination port (incremented per probe).
     base_dest_port: u16,
     /// Sequence number for probes.
@@ -34,15 +37,20 @@ impl UdpTraceroute {
     ///
     /// Returns an error if socket creation fails.
     pub fn new(config: TracerouteConfig, local_addr: Ipv4Addr) -> Result<Self> {
-        // Use IPPROTO_UDP (17) for receiving UDP responses
-        let socket = RawSocket::with_protocol(17).map_err(|e| TracerouteError::SocketCreation {
+        // Use IPPROTO_UDP (17) for sending probes
+        let send_socket = RawSocket::with_protocol(17).map_err(|e| TracerouteError::SocketCreation {
+            source: io::Error::other(e),
+        })?;
+        // Use IPPROTO_ICMP (1) for receiving ICMP responses (Time Exceeded, Port Unreachable)
+        let recv_socket = RawSocket::with_protocol(1).map_err(|e| TracerouteError::SocketCreation {
             source: io::Error::other(e),
         })?;
 
         Ok(Self {
             config,
             local_addr,
-            socket,
+            send_socket,
+            recv_socket,
             base_dest_port: 33434,
             sequence: 0,
         })
@@ -87,20 +95,20 @@ impl UdpTraceroute {
             .payload(&payload)
             .build();
 
-        // Set TTL on socket
-        self.socket
+        // Set TTL on send socket
+        self.send_socket
             .set_ttl(u32::from(ttl))
             .map_err(|e| TracerouteError::Network(format!("Failed to set TTL: {e}")))?;
 
         // Create destination socket address
         let dst_sockaddr = SocketAddr::V4(SocketAddrV4::new(target, dest_port));
 
-        // Send the packet
-        self.socket
+        // Send the packet via UDP socket
+        self.send_socket
             .send_packet(&packet, &dst_sockaddr)
             .map_err(|e| TracerouteError::SendFailed { source: e })?;
 
-        // Wait for response
+        // Wait for response on ICMP socket
         self.receive_response(target, dest_port)
     }
 
@@ -120,7 +128,7 @@ impl UdpTraceroute {
         let timeout = self.config.probe_timeout;
 
         match self
-            .socket
+            .recv_socket
             .recv_packet(recv_buf.as_mut_slice(), Some(timeout))
         {
             Ok(len) if len > 0 => {

@@ -5,6 +5,7 @@
 
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::sync::Arc;
 use std::time::Duration;
 
 use tracing::{debug, info, trace};
@@ -12,8 +13,8 @@ use tracing::{debug, info, trace};
 use super::{
     database::{FingerprintDatabase, OsMatch},
     fingerprint::{
-        EcnFingerprint, IcmpTestResult, IpIdPattern, IpIdSeqClass, IsnClass, OpsFingerprint,
-        OsFingerprint, SeqFingerprint, TestResult, TimestampRate, UdpTestResult,
+        EcnFingerprint, IcmpTestResult, IpIdPattern, IpIdSeqClass, IsnClass,
+        OsFingerprint, SeqFingerprint, TestResult, UdpTestResult,
     },
 };
 use crate::Result;
@@ -21,6 +22,7 @@ use rustnmap_net::raw_socket::{
     parse_icmpv6_echo_reply, parse_ipv6_tcp_response, Icmpv6PacketBuilder, Ipv6TcpPacketBuilder,
     Ipv6UdpPacketBuilder, RawSocket,
 };
+use rustnmap_packet::{BpfFilter, MmapPacketEngine, PacketEngine, RingConfig};
 
 /// OS detection engine.
 ///
@@ -29,8 +31,8 @@ use rustnmap_net::raw_socket::{
 /// Supports both IPv4 and IPv6 targets.
 #[derive(Debug)]
 pub struct OsDetector {
-    /// OS fingerprint database.
-    db: FingerprintDatabase,
+    /// OS fingerprint database shared across detection tasks via Arc.
+    db: Arc<FingerprintDatabase>,
 
     /// Number of sequence probes to send.
     seq_count: usize,
@@ -66,18 +68,12 @@ struct SeqProbeResponse {
     ip_id: u16,
     /// TCP timestamp value.
     timestamp: Option<u32>,
-    /// TCP window size.
-    #[expect(
-        dead_code,
-        reason = "Reserved for advanced ISN predictability analysis"
-    )]
+    /// TCP window size (used for WIN fingerprint section).
     window: u16,
-    /// TCP options.
-    #[expect(
-        dead_code,
-        reason = "Reserved for advanced OS fingerprinting algorithms"
-    )]
-    options: OpsFingerprint,
+    /// Raw TCP option bytes (used for OPS fingerprint section).
+    raw_options: Vec<u8>,
+    /// Time when this probe was sent (for ISR/SP rate calculation).
+    send_time: std::time::Instant,
 }
 
 /// TCP flags constants.
@@ -92,12 +88,354 @@ mod tcp_flags {
     pub const CWR: u8 = 0x80;
 }
 
+/// Ethernet header length in bytes (6 dst MAC + 6 src MAC + 2 EtherType).
+const ETH_HEADER_LEN: usize = 14;
+
+/// Source port offset between probe groups to avoid kernel TCP state interference.
+/// Each probe group (SEQ, OPS, ECN, T1-T7) uses a different source port to prevent
+/// the kernel's TCP stack from interfering with subsequent probes to the same
+/// port pair (SYN-ACK responses from SEQ would cause kernel RST, which could
+/// cause the target to reject later SYNs to the same port pair).
+const SRC_PORT_OFFSET_PER_GROUP: u16 = 100;
+
+/// Probe option sets matching nmap's prbOpts[] in osscan2.cc.
+///
+/// Indices 0-5: SEQ/OPS/WIN probes (6 probes with different options)
+/// Index 6: ECN probe
+/// Indices 7-12: T1-T7 probes
+///
+/// Each entry is (option_bytes, window_size).
+static PROBE_OPTIONS: &[(&[u8], u16)] = &[
+    // 0: WScale(10), NOP, MSS(1460), Timestamp, SACK | win=1
+    (
+        &[
+            0x03, 0x03, 0x0A, // WScale=10
+            0x01, // NOP
+            0x02, 0x04, 0x05, 0xB4, // MSS=1460
+            0x08, 0x0A, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, // Timestamp
+            0x04, 0x02, // SACK
+        ],
+        1,
+    ),
+    // 1: MSS(1400), WScale(0), SACK, Timestamp, EOL | win=63
+    (
+        &[
+            0x02, 0x04, 0x05, 0x78, // MSS=1400
+            0x03, 0x03, 0x00, // WScale=0
+            0x04, 0x02, // SACK
+            0x08, 0x0A, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, // Timestamp
+            0x00, // EOL
+        ],
+        63,
+    ),
+    // 2: Timestamp, NOP, NOP, WScale(5), NOP, MSS(640), EOL | win=4
+    (
+        &[
+            0x08, 0x0A, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, // Timestamp
+            0x01, 0x01, // NOP NOP
+            0x03, 0x03, 0x05, // WScale=5
+            0x01, // NOP
+            0x02, 0x04, 0x02, 0x80, // MSS=640
+        ],
+        4,
+    ),
+    // 3: SACK, Timestamp, WScale(10), EOL | win=4
+    (
+        &[
+            0x04, 0x02, // SACK
+            0x08, 0x0A, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, // Timestamp
+            0x03, 0x03, 0x0A, // WScale=10
+            0x00, // EOL
+        ],
+        4,
+    ),
+    // 4: MSS(536), SACK, Timestamp, WScale(10), EOL | win=16
+    (
+        &[
+            0x02, 0x04, 0x02, 0x18, // MSS=536
+            0x04, 0x02, // SACK
+            0x08, 0x0A, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, // Timestamp
+            0x03, 0x03, 0x0A, // WScale=10
+            0x00, // EOL
+        ],
+        16,
+    ),
+    // 5: MSS(265), SACK, Timestamp | win=512
+    (
+        &[
+            0x02, 0x04, 0x01, 0x09, // MSS=265
+            0x04, 0x02, // SACK
+            0x08, 0x0A, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, // Timestamp
+        ],
+        512,
+    ),
+    // 6: ECN probe: WScale(10), NOP, MSS(1460), SACK, NOP, NOP | win=3
+    (
+        &[
+            0x03, 0x03, 0x0A, // WScale=10
+            0x01, // NOP
+            0x02, 0x04, 0x05, 0xB4, // MSS=1460
+            0x04, 0x02, // SACK
+            0x01, 0x01, // NOP NOP
+        ],
+        3,
+    ),
+    // 7: T1: WScale(10), NOP, MSS(265), Timestamp, SACK | win=128
+    (
+        &[
+            0x03, 0x03, 0x0A, // WScale=10
+            0x01, // NOP
+            0x02, 0x04, 0x01, 0x09, // MSS=265
+            0x08, 0x0A, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, // Timestamp
+            0x04, 0x02, // SACK
+        ],
+        128,
+    ),
+    // 8: T2: same options as T1 | win=256
+    (
+        &[
+            0x03, 0x03, 0x0A, // WScale=10
+            0x01, // NOP
+            0x02, 0x04, 0x01, 0x09, // MSS=265
+            0x08, 0x0A, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, // Timestamp
+            0x04, 0x02, // SACK
+        ],
+        256,
+    ),
+    // 9: T3: same options as T1 | win=1024
+    (
+        &[
+            0x03, 0x03, 0x0A, // WScale=10
+            0x01, // NOP
+            0x02, 0x04, 0x01, 0x09, // MSS=265
+            0x08, 0x0A, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, // Timestamp
+            0x04, 0x02, // SACK
+        ],
+        1024,
+    ),
+    // 10: T4: same options as T1 | win=31337
+    (
+        &[
+            0x03, 0x03, 0x0A, // WScale=10
+            0x01, // NOP
+            0x02, 0x04, 0x01, 0x09, // MSS=265
+            0x08, 0x0A, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, // Timestamp
+            0x04, 0x02, // SACK
+        ],
+        31337,
+    ),
+    // 11: T5: same options as T1 | win=32768
+    (
+        &[
+            0x03, 0x03, 0x0A, // WScale=10
+            0x01, // NOP
+            0x02, 0x04, 0x01, 0x09, // MSS=265
+            0x08, 0x0A, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, // Timestamp
+            0x04, 0x02, // SACK
+        ],
+        32768,
+    ),
+    // 12: T6: WScale(15), NOP, MSS(265), Timestamp, SACK | win=65535
+    (
+        &[
+            0x03, 0x03, 0x0F, // WScale=15
+            0x01, // NOP
+            0x02, 0x04, 0x01, 0x09, // MSS=265
+            0x08, 0x0A, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, // Timestamp
+            0x04, 0x02, // SACK
+        ],
+        65535,
+    ),
+];
+
+/// Drains all pending packets from the `MmapPacketEngine` ring buffer.
+///
+/// After changing the BPF filter, stale frames that passed the previous filter
+/// may still be queued. This function consumes and discards them so that the
+/// next receive loop only sees packets matching the new filter.
+fn drain_engine(engine: &mut MmapPacketEngine) {
+    let mut drained = 0u32;
+    while let Ok(Some(_)) = engine.try_recv_zero_copy() {
+        drained += 1;
+    }
+    if drained > 0 {
+        trace!("drain_engine: discarded {drained} stale packets");
+    }
+}
+
+/// Swaps byte order of a u32 (little-endian to big-endian or vice versa).
+fn swap_bytes_u32(val: u32) -> u32 {
+    ((val & 0xFF) << 24) | ((val & 0xFF00) << 8) | ((val & 0xFF0000) >> 8) | ((val & 0xFF000000) >> 24)
+}
+
+/// Resolves the network interface name and creates a `MmapPacketEngine` for the
+/// interface that routes to the given local IPv4 address.
+///
+/// Reads `/proc/net/route` to find the interface whose network contains
+/// `local_addr`. Prefers more specific routes (higher mask value).
+///
+/// The route table hex values are in little-endian byte order, so they must
+/// be byte-swapped before comparing with `u32::from(Ipv4Addr)` (host order).
+fn resolve_interface_for_ip(local_addr: Ipv4Addr) -> Result<(String, MmapPacketEngine)> {
+    let local_u32 = u32::from(local_addr);
+    let route_data =
+        std::fs::read_to_string("/proc/net/route").map_err(|e| crate::FingerprintError::Network {
+            operation: "read /proc/net/route".to_string(),
+            reason: e.to_string(),
+        })?;
+
+    let mut best_iface: Option<String> = None;
+    let mut best_mask: u32 = 0;
+
+    for line in route_data.lines().skip(1) {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        if fields.len() < 8 {
+            continue;
+        }
+
+        let iface = fields[0];
+        let dest_hex = fields[1];
+        let mask_hex = fields[7];
+
+        // /proc/net/route hex values are little-endian; swap to host order
+        let dest_raw = u32::from_str_radix(dest_hex, 16).unwrap_or(0);
+        let mask_raw = u32::from_str_radix(mask_hex, 16).unwrap_or(0);
+        let dest = swap_bytes_u32(dest_raw);
+        let mask = swap_bytes_u32(mask_raw);
+
+        if (local_u32 & mask) == dest && mask >= best_mask {
+            best_mask = mask;
+            best_iface = Some(iface.to_string());
+        }
+    }
+
+    let if_name = best_iface.ok_or_else(|| crate::FingerprintError::Network {
+        operation: "resolve interface".to_string(),
+        reason: format!("no route found for local address {local_addr}"),
+    })?;
+
+    // Small ring buffer for OS detection: a few packets per probe
+    let config = RingConfig::default();
+    let engine = MmapPacketEngine::new(&if_name, config).map_err(|e| {
+        crate::FingerprintError::Network {
+            operation: format!("create MmapPacketEngine on {if_name}"),
+            reason: e.to_string(),
+        }
+    })?;
+
+    Ok((if_name, engine))
+}
+
+/// TCP response data from a BPF-filtered MmapPacketEngine capture.
+///
+/// Contains both the parsed TCP response fields and the raw TCP option bytes
+/// needed for OS fingerprint matching.
+#[derive(Debug, Clone)]
+struct TcpResponseData {
+    /// Parsed TCP response from `parse_tcp_response_full`.
+    response: rustnmap_net::raw_socket::TcpResponse,
+    /// Raw TCP option bytes (between fixed 20-byte TCP header and data offset).
+    raw_options: Vec<u8>,
+}
+
+/// Receives a TCP response packet via `MmapPacketEngine` with BPF filtering.
+///
+/// Polls `try_recv_zero_copy()` in a loop with short sleeps until a matching
+/// TCP response is found or the timeout expires.
+///
+/// The packet data from `MmapPacketEngine` includes a 14-byte Ethernet header,
+/// which is stripped before passing to `parse_tcp_response_full`.
+fn recv_tcp_response_bpf(
+    engine: &mut MmapPacketEngine,
+    expected_src_port: u16,
+    expected_dst_port: u16,
+    timeout: Duration,
+) -> Result<Option<TcpResponseData>> {
+    let deadline = std::time::Instant::now() + timeout;
+    let poll_interval = Duration::from_millis(1);
+    let mut poll_count = 0u32;
+    let mut ok_some_count = 0u32;
+    let mut ok_none_count = 0u32;
+    let mut err_count = 0u32;
+
+    loop {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
+            debug!(
+                "recv_tcp_response_bpf: timed out after {poll_count} polls \
+                 (some={ok_some_count} none={ok_none_count} err={err_count}) \
+                 expecting sp={expected_src_port} dp={expected_dst_port}"
+            );
+            return Ok(None);
+        }
+        poll_count += 1;
+
+        match engine.try_recv_zero_copy() {
+            Ok(Some(pkt)) => {
+                ok_some_count += 1;
+                let d = pkt.data();
+                trace!(
+                    "recv_tcp_response_bpf: got {} bytes, expecting sp={} dp={}",
+                    d.len(),
+                    expected_src_port,
+                    expected_dst_port
+                );
+                // Skip Ethernet header (14 bytes), then parse IP+TCP
+                if d.len() > ETH_HEADER_LEN {
+                    let ip_data = &d[ETH_HEADER_LEN..];
+                    if let Some(response) = rustnmap_net::raw_socket::parse_tcp_response_full(ip_data)
+                    {
+                        trace!(
+                            "recv_tcp_response_bpf: parsed sp={} dp={} flags=0x{:02x}",
+                            response.src_port,
+                            response.dst_port,
+                            response.flags
+                        );
+                        if response.src_port == expected_src_port
+                            && response.dst_port == expected_dst_port
+                        {
+                            // Extract raw TCP options from the mmap packet data
+                            let ip_hlen = (ip_data[0] & 0x0F) as usize * 4;
+                            let raw_options = if ip_data.len() >= ip_hlen + 20 {
+                                let tcp_doff =
+                                    (ip_data[ip_hlen + 12] >> 4) as usize * 4;
+                                if tcp_doff > 20 && ip_data.len() >= ip_hlen + tcp_doff {
+                                    ip_data[ip_hlen + 20..ip_hlen + tcp_doff].to_vec()
+                                } else {
+                                    Vec::new()
+                                }
+                            } else {
+                                Vec::new()
+                            };
+
+                            return Ok(Some(TcpResponseData { response, raw_options }));
+                        }
+                    }
+                }
+                // Packet dropped here (ZeroCopyPacket released, frame returned to kernel)
+            }
+            Ok(None) => {
+                ok_none_count += 1;
+                // No packet available yet, sleep briefly
+                std::thread::sleep(poll_interval);
+            }
+            Err(e) => {
+                err_count += 1;
+                if err_count <= 3 {
+                    debug!("recv_tcp_response_bpf: error: {e}");
+                }
+                std::thread::sleep(poll_interval);
+            }
+        }
+    }
+}
+
 impl OsDetector {
     /// Create new OS detector with IPv4 support.
     #[must_use]
     pub fn new(db: FingerprintDatabase, local_addr: Ipv4Addr) -> Self {
         Self {
-            db,
+            db: Arc::new(db),
             seq_count: 6,
             local_addr_v4: local_addr,
             local_addr_v6: None,
@@ -117,7 +455,7 @@ impl OsDetector {
         local_addr_v6: Ipv6Addr,
     ) -> Self {
         Self {
-            db,
+            db: Arc::new(db),
             seq_count: 6,
             local_addr_v4,
             local_addr_v6: Some(local_addr_v6),
@@ -134,7 +472,7 @@ impl OsDetector {
     #[must_use]
     pub fn new_with_ref(db: &FingerprintDatabase, local_addr: Ipv4Addr) -> Self {
         Self {
-            db: db.clone(),
+            db: Arc::new(db.clone()),
             seq_count: 6,
             local_addr_v4: local_addr,
             local_addr_v6: None,
@@ -242,37 +580,48 @@ impl OsDetector {
     async fn build_fingerprint(&self, target: Ipv4Addr) -> Result<OsFingerprint> {
         let mut fingerprint = OsFingerprint::new();
 
+        // Create one MmapPacketEngine for all TCP probes (SEQ, ECN, T1-T7)
+        let (_if_name, mut engine) = resolve_interface_for_ip(self.local_addr_v4)?;
+        engine.start().await.map_err(|e| crate::FingerprintError::Network {
+            operation: "start MmapPacketEngine for OS detection".to_string(),
+            reason: e.to_string(),
+        })?;
+
         // Send SEQ probes (6 SYN probes to open port with 100ms intervals)
+        // Each probe uses different options/window; responses provide OPS and WIN data
         debug!("Sending SEQ probes to {}:{}", target, self.open_port);
-        let seq_responses = self.send_seq_probes(target).await?;
+        let seq_responses = self.send_seq_probes(target, &mut engine).await?;
         let seq_fp = self.analyze_seq_responses(&seq_responses);
         fingerprint.seq = Some(seq_fp);
 
+        // Populate OPS(O1-O6) and WIN(W1-W6) from SEQ probe responses.
+        // Nmap collects these from the 6 SYN-ACK responses, NOT from T1-T6 tests.
+        for (i, resp) in seq_responses.iter().enumerate() {
+            let test_name = format!("T{}", i + 1);
+            fingerprint.win.insert(test_name.clone(), resp.window);
+        }
+        // Store raw options from SEQ responses for the OPS fingerprint section
+        fingerprint.seq_raw_options = seq_responses.iter().map(|r| r.raw_options.clone()).collect();
+
+        // Drain stale packets before ECN phase (filter will change)
+        drain_engine(&mut engine);
+
         // Send ECN probe
         debug!("Sending ECN probe to {}:{}", target, self.open_port);
-        let ecn_fp = self.send_ecn_probe(target).await?;
+        let ecn_fp = self.send_ecn_probe(target, &mut engine).await?;
         fingerprint.ecn = Some(ecn_fp);
+
+        // Drain stale packets before T1-T7 phase (filter will change per test)
+        drain_engine(&mut engine);
 
         // Send T1-T7 TCP tests
         debug!("Sending T1-T7 TCP tests to {}", target);
-        let tcp_tests = self.send_tcp_tests(target).await?;
+        let tcp_tests = self.send_tcp_tests(target, &mut engine).await?;
         for test in &tcp_tests {
             fingerprint.tests.insert(test.name.clone(), test.clone());
-            fingerprint
-                .win
-                .insert(test.name.clone(), test.window.unwrap_or(0));
-            fingerprint.ops.insert(
-                test.name.clone(),
-                OpsFingerprint {
-                    mss: test.mss,
-                    wscale: test.wscale,
-                    sack: test.sack,
-                    timestamp: test.timestamp,
-                    nop_count: 0, // Extracted from options parsing
-                    eol: false,
-                },
-            );
         }
+
+        let _ = engine.stop().await;
 
         // Send IE (ICMP Echo) probes
         debug!("Sending IE probes to {}", target);
@@ -284,9 +633,79 @@ impl OsDetector {
         let u1_fp = self.send_udp_probe(target).await?;
         fingerprint.u1 = Some(u1_fp);
 
-        // Analyze IP ID patterns from SEQ responses
+        // Analyze IP ID patterns from SEQ responses (TI)
         let ip_id_pattern = Self::analyze_ip_id_patterns(&seq_responses);
         fingerprint.ip_id = Some(ip_id_pattern);
+
+        // Classify CI (closed port TCP IP ID sequence) from T4-T7 responses
+        // These probes go to the closed port, and their IP IDs determine CI
+        let tcp_closed_ip_ids: Vec<u16> = ["T4", "T5", "T6", "T7"]
+            .iter()
+            .filter_map(|name| {
+                fingerprint
+                    .tests
+                    .get(*name)
+                    .and_then(|t| t.ip_id)
+            })
+            .collect();
+        if let Some(seq) = fingerprint.seq.as_mut() {
+            seq.ci = Self::classify_ip_id_sequence_nmap(&tcp_closed_ip_ids);
+        }
+
+        // Classify II (ICMP IP ID sequence) from IE probe responses
+        let icmp_ip_ids: Vec<u16> = fingerprint
+            .ie
+            .as_ref()
+            .map(|ie| {
+                let mut ids = Vec::new();
+                if let Some(id) = ie.ip_id1 {
+                    ids.push(id);
+                }
+                if let Some(id) = ie.ip_id2 {
+                    ids.push(id);
+                }
+                ids
+            })
+            .unwrap_or_default();
+        if let Some(seq) = fingerprint.seq.as_mut() {
+            seq.ii = Self::classify_ip_id_sequence_nmap(&icmp_ip_ids);
+        }
+
+        // SS (Shared IP ID sequence) - both TCP and ICMP must be incremental
+        if let Some(ref seq) = fingerprint.seq {
+            let tcp_incr = matches!(
+                seq.ti,
+                IpIdSeqClass::Incremental | IpIdSeqClass::Incremental257
+            );
+            let icmp_incr = matches!(
+                seq.ii,
+                IpIdSeqClass::Incremental | IpIdSeqClass::Incremental257
+            );
+            let tcp_last = seq_responses.last().map(|r| r.ip_id).unwrap_or(0);
+            let icmp_first = icmp_ip_ids.first().copied().unwrap_or(0);
+            let tcp_first = seq_responses.first().map(|r| r.ip_id).unwrap_or(0);
+            trace!(
+                "SS check: tcp_incr={}, icmp_incr={}, tcp_first={}, tcp_last={}, icmp_ids={:?}",
+                tcp_incr, icmp_incr, tcp_first, tcp_last, icmp_ip_ids
+            );
+            if tcp_incr && icmp_incr {
+                let count = seq_responses.len();
+                let shared = if count > 1 {
+                    let avg = (u32::from(tcp_last).wrapping_sub(u32::from(tcp_first)))
+                        / (count - 1) as u32;
+                    let threshold = tcp_last.wrapping_add(avg.saturating_mul(3) as u16);
+                    trace!("SS: avg={}, threshold={}, icmp_first={}, shared={}", avg, threshold, icmp_first, icmp_first < threshold);
+                    icmp_first < threshold
+                } else {
+                    false
+                };
+                if shared {
+                    if let Some(seq) = fingerprint.seq.as_mut() {
+                        seq.ss = 1; // "S" = shared
+                    }
+                }
+            }
+        }
 
         Ok(fingerprint)
     }
@@ -332,20 +751,6 @@ impl OsDetector {
             .await?;
         for test in &tcp_tests {
             fingerprint.tests.insert(test.name.clone(), test.clone());
-            fingerprint
-                .win
-                .insert(test.name.clone(), test.window.unwrap_or(0));
-            fingerprint.ops.insert(
-                test.name.clone(),
-                OpsFingerprint {
-                    mss: test.mss,
-                    wscale: test.wscale,
-                    sack: test.sack,
-                    timestamp: test.timestamp,
-                    nop_count: 0,
-                    eol: false,
-                },
-            );
         }
 
         // Send ICMPv6 Echo probes
@@ -388,21 +793,23 @@ impl OsDetector {
         socket: &RawSocket,
     ) -> Result<Vec<SeqProbeResponse>> {
         let mut responses = Vec::with_capacity(self.seq_count);
-        let src_port = Self::generate_source_port();
+        let src_port = Self::generate_source_port(0);
 
         for i in 0..self.seq_count {
             let seq = Self::generate_sequence_number() + (i as u32 * 1000);
 
             // Build IPv6 TCP SYN packet with options for OS detection
-            let options = Self::build_tcp_options_for_seq();
+            let (options, window) = Self::get_probe_options(i);
             let packet = Ipv6TcpPacketBuilder::new(local_v6, target, src_port, self.open_port)
                 .seq(seq)
                 .syn()
-                .window(65535)
-                .options(&options)
+                .window(window)
+                .options(options)
                 .build();
 
             let dst_sockaddr = SocketAddr::new(IpAddr::V6(target), self.open_port);
+
+            let send_time = std::time::Instant::now();
 
             // Send the packet
             socket.send_packet(&packet, &dst_sockaddr).map_err(|e| {
@@ -429,7 +836,8 @@ impl OsDetector {
                                 ip_id: 0, // IPv6 doesn't have IP ID
                                 timestamp: None,
                                 window: 65535,
-                                options: OpsFingerprint::default(),
+                                raw_options: Vec::new(),
+                                send_time,
                             });
                         }
                     }
@@ -461,14 +869,14 @@ impl OsDetector {
         socket: &RawSocket,
     ) -> Result<Vec<TestResult>> {
         let mut tests = Vec::new();
-        let src_port = Self::generate_source_port();
+        let src_port = Self::generate_source_port(0);
 
-        // T1: SYN to open port with options
-        let options = Self::build_tcp_options_for_seq();
+        // T1: SYN to open port with options (probe set 7)
+        let (options, window) = Self::get_probe_options(7);
         let packet = Ipv6TcpPacketBuilder::new(local_v6, target, src_port, self.open_port)
             .syn()
-            .window(65535)
-            .options(&options)
+            .window(window)
+            .options(options)
             .build();
 
         let dst_sockaddr = SocketAddr::new(IpAddr::V6(target), self.open_port);
@@ -497,6 +905,11 @@ impl OsDetector {
                         df: false,
                         ttl: None,
                         ip_id: None,
+                        sent_seq: 0,
+                        sent_ack: 0,
+                        resp_seq: 0,
+                        resp_ack: 0,
+                        raw_options: Vec::new(),
                     });
                 }
             }
@@ -571,7 +984,7 @@ impl OsDetector {
     ) -> Result<UdpTestResult> {
         use rustnmap_net::raw_socket::parse_ipv6_udp_response;
 
-        let src_port = Self::generate_source_port();
+        let src_port = Self::generate_source_port(0);
 
         // Build IPv6 UDP packet
         let packet =
@@ -606,83 +1019,86 @@ impl OsDetector {
     /// Send SEQ probes to analyze TCP ISN generation.
     ///
     /// Sends 6 TCP SYN probes to an open port with 100ms intervals.
+    /// Each probe uses a different TCP option set and window size
+    /// (matching nmap's prbOpts[0-5] and prbWindowSz[0-5]).
+    /// The responses provide OPS(O1-O6) and WIN(W1-W6) fingerprint data.
+    ///
+    /// Uses `MmapPacketEngine` with BPF filtering to receive responses,
+    /// avoiding the unrelated-traffic flooding problem of IPPROTO_TCP raw sockets.
     #[allow(
         clippy::cast_possible_truncation,
         reason = "i is bounded by seq_count which is small"
     )]
-    async fn send_seq_probes(&self, target: Ipv4Addr) -> Result<Vec<SeqProbeResponse>> {
-        use rustnmap_net::raw_socket::{parse_tcp_response_full, RawSocket, TcpPacketBuilder};
+    async fn send_seq_probes(&self, target: Ipv4Addr, engine: &mut MmapPacketEngine) -> Result<Vec<SeqProbeResponse>> {
+        use rustnmap_net::raw_socket::{RawSocket, TcpPacketBuilder};
 
-        // Use IPPROTO_TCP (6) for receiving TCP responses
-        let socket = RawSocket::with_protocol(6).map_err(|e| crate::FingerprintError::Network {
-            operation: "create raw socket".to_string(),
-            reason: e.to_string(),
-        })?;
+        // IPPROTO_TCP raw socket for SENDING only
+        let socket =
+            RawSocket::with_protocol(6).map_err(|e| crate::FingerprintError::Network {
+                operation: "create raw socket for send".to_string(),
+                reason: e.to_string(),
+            })?;
+
+        let base_src_port = Self::generate_source_port(0);
 
         let mut responses = Vec::with_capacity(self.seq_count);
-        let src_port = Self::generate_source_port();
 
         for i in 0..self.seq_count {
+            // Each SEQ probe uses a different source port, option set, and window size
+            let src_port = base_src_port.wrapping_add(i as u16);
             let seq = Self::generate_sequence_number() + (i as u32 * 1000);
 
-            // Build TCP SYN packet with specific options for OS detection
-            // Nmap uses: WScale=10,NOP,MSS=1460,Timestamp,SACK
-            let options = Self::build_tcp_options_for_seq();
-            let packet =
-                TcpPacketBuilder::new(self.local_addr_v4, target, src_port, self.open_port)
-                    .seq(seq)
-                    .syn()
-                    .window(65535)
-                    .options(&options)
-                    .build();
+            // Use nmap's probe option set for this probe index (0-5)
+            let (options, window) = Self::get_probe_options(i);
 
-            let dst_sockaddr = SocketAddr::new(IpAddr::V4(target), self.open_port);
-
-            // Send the packet
-            socket.send_packet(&packet, &dst_sockaddr).map_err(|e| {
+            // BPF filter for this specific probe
+            let target_nbo = u32::from_be_bytes(target.octets());
+            let filter = BpfFilter::tcp_response(target_nbo, self.open_port, src_port);
+            engine.set_filter(&filter.to_sock_fprog()).map_err(|e| {
                 crate::FingerprintError::Network {
-                    operation: "send SEQ probe".to_string(),
+                    operation: format!("set BPF filter for SEQ probe {i}"),
                     reason: e.to_string(),
                 }
             })?;
 
-            // Wait for response
-            let mut recv_buf = vec![0u8; 65535];
-            match socket.recv_packet(&mut recv_buf, Some(self.timeout)) {
-                Ok(len) if len > 0 => {
-                    if let Some(response) = parse_tcp_response_full(&recv_buf[..len]) {
-                        // Verify this is a response to our probe
-                        if response.src_port == self.open_port
-                            && (response.flags & tcp_flags::SYN) != 0
-                            && (response.flags & tcp_flags::ACK) != 0
-                        {
-                            let ops = OpsFingerprint {
-                                mss: response.options.mss,
-                                wscale: response.options.wscale,
-                                sack: response.options.sack,
-                                timestamp: response.options.timestamp,
-                                nop_count: response.options.nop_count,
-                                eol: response.options.eol,
-                            };
+            drain_engine(engine);
 
-                            responses.push(SeqProbeResponse {
-                                isn: response.seq,
-                                ip_id: response.ip_id,
-                                timestamp: response.options.timestamp_value,
-                                window: response.window,
-                                options: ops,
-                            });
-                        }
-                    }
-                }
-                Ok(_) => {}
-                Err(e)
-                    if e.kind() == io::ErrorKind::WouldBlock
-                        || e.kind() == io::ErrorKind::TimedOut => {}
-                Err(e) => {
-                    return Err(crate::FingerprintError::Network {
-                        operation: "receive SEQ response".to_string(),
-                        reason: e.to_string(),
+            let packet =
+                TcpPacketBuilder::new(self.local_addr_v4, target, src_port, self.open_port)
+                    .seq(seq)
+                    .syn()
+                    .window(window)
+                    .options(options)
+                    .build();
+
+            let dst_sockaddr = SocketAddr::new(IpAddr::V4(target), self.open_port);
+
+            let send_time = std::time::Instant::now();
+
+            // Send via RawSocket
+            socket
+                .send_packet(&packet, &dst_sockaddr)
+                .map_err(|e| crate::FingerprintError::Network {
+                    operation: "send SEQ probe".to_string(),
+                    reason: e.to_string(),
+                })?;
+
+            // Receive via MmapPacketEngine with BPF filter
+            debug!("SEQ probe {i}: waiting for response (timeout={:?})", self.timeout);
+            if let Some(data) =
+                recv_tcp_response_bpf(engine, self.open_port, src_port, self.timeout)?
+            {
+                let response = data.response;
+                if (response.flags & tcp_flags::SYN) != 0
+                    && (response.flags & tcp_flags::ACK) != 0
+                {
+                    responses.push(SeqProbeResponse {
+                        isn: response.seq,
+                        ip_id: response.ip_id,
+                        timestamp: response.options.timestamp_value,
+                        window: response.window,
+                        raw_options: data.raw_options,
+                        send_time,
                     });
                 }
             }
@@ -711,8 +1127,16 @@ impl OsDetector {
         // Extract ISN values
         let isns: Vec<u32> = responses.iter().map(|r| r.isn).collect();
 
-        // Calculate differences between consecutive ISNs
-        let diffs: Vec<u32> = isns.windows(2).map(|w| w[1].wrapping_sub(w[0])).collect();
+        // Calculate differences between consecutive ISNs using nmap's MOD_DIFF
+        // MOD_DIFF(a,b) = MIN(a - b, b - a) - takes the shorter wrap-around distance
+        let diffs: Vec<u32> = isns
+            .windows(2)
+            .map(|w| {
+                let fwd = w[1].wrapping_sub(w[0]);
+                let bwd = w[0].wrapping_sub(w[1]);
+                fwd.min(bwd)
+            })
+            .collect();
 
         // Calculate GCD of differences
         let gcd = Self::calculate_gcd_list(&diffs);
@@ -721,28 +1145,191 @@ impl OsDetector {
         // Determine ISN class based on GCD and differences
         fp.class = Self::classify_isn_pattern(&isns, &diffs, gcd);
 
-        // Calculate ISR (ISN Rate) - approximate rate of ISN generation
-        fp.isr = Self::calculate_isr(&diffs);
-
-        // Calculate SP (Sequence Predictability)
-        fp.sp = Self::calculate_sp(&isns, &diffs);
+        // Calculate ISR and SP using nmap's time-based formulas
+        // Requires >= 4 responses (matching nmap's check in osscan2.cc)
+        if responses.len() >= 4 {
+            let (isr, sp) = Self::calculate_isr_sp(responses, &diffs, gcd);
+            fp.isr = isr;
+            fp.sp = sp;
+        }
 
         // Analyze timestamps
         let timestamps: Vec<u32> = responses.iter().filter_map(|r| r.timestamp).collect();
         fp.timestamps.clone_from(&timestamps);
 
-        if !timestamps.is_empty() {
-            fp.timestamp = true;
-            fp.timestamp_rate = Self::classify_timestamp_rate(&timestamps);
+        // Debug: log ISN values and diffs for ISR/SP analysis
+        for (i, r) in responses.iter().enumerate() {
+            trace!(
+                "SEQ response {}: ISN=0x{:08X}, ip_id={}, window={}, timestamp={:?}, send_time={:?}",
+                i, r.isn, r.ip_id, r.window, r.timestamp, r.send_time.elapsed()
+            );
+        }
+        for (i, &d) in diffs.iter().enumerate() {
+            let td = responses[i + 1].send_time.duration_since(responses[i].send_time);
+            trace!("SEQ diff {}: 0x{:08X} ({}) time_delta={:?}", i, d, d, td);
         }
 
-        // Analyze IP ID patterns
+        if !timestamps.is_empty() {
+            fp.timestamp = true;
+            fp.ts_val = Self::classify_timestamp_rate_with_time(responses);
+        }
+
+        // Analyze IP ID patterns using nmap's get_diffs/identify_sequence algorithm
         let ip_ids: Vec<u16> = responses.iter().map(|r| r.ip_id).collect();
-        fp.ti = Self::classify_ip_id_sequence(&ip_ids);
+        fp.ti = Self::classify_ip_id_sequence_nmap(&ip_ids);
 
         trace!("SEQ analysis: GCD={}, ISR={}, SP={}", fp.gcd, fp.isr, fp.sp);
 
         fp
+    }
+
+    /// Calculate ISR and SP using nmap's exact formulas from osscan2.cc.
+    ///
+    /// ISR = round(log2(avg_isn_rate_per_sec) * 8)
+    /// SP = round(log2(stddev_of_isn_rates) * 8)
+    ///
+    /// When GCD > 9, rates are divided by GCD before computing stddev
+    /// (matching nmap's compromise to avoid artificial low values).
+    #[allow(
+        clippy::cast_lossless,
+        clippy::cast_possible_truncation,
+        reason = "ISR/SP are clamped to u8 range after float calculation"
+    )]
+    fn calculate_isr_sp(
+        responses: &[SeqProbeResponse],
+        diffs: &[u32],
+        gcd: u32,
+    ) -> (u8, u8) {
+        // Calculate individual ISN rates (per second) using actual time deltas
+        let mut rates: Vec<f64> = Vec::with_capacity(diffs.len());
+        for i in 0..diffs.len() {
+            let time_delta =
+                responses[i + 1].send_time.duration_since(responses[i].send_time);
+            let usec = time_delta.as_micros() as f64;
+            // nmap: if time delta is 0, set to 1 to avoid division by zero
+            let usec = if usec < 1.0 { 1.0 } else { usec };
+            // Rate = diff * 1_000_000 / usec (ISN per second)
+            rates.push(f64::from(diffs[i]) * 1_000_000.0 / usec);
+        }
+
+        if rates.is_empty() {
+            return (0, 0);
+        }
+
+        // ISR: average rate, then round(log2(avg) * 8)
+        let avg_rate: f64 = rates.iter().sum::<f64>() / rates.len() as f64;
+
+        if gcd == 0 {
+            // Constant ISN (all same)
+            return (0, 0);
+        }
+
+        let isr = (avg_rate.log2() * 8.0 + 0.5).clamp(0.0, 255.0) as u8;
+
+        // SP: stddev of rates (optionally divided by GCD), then round(log2(stddev) * 8)
+        // nmap: divide by GCD if > 9 to avoid artificial low values
+        let div_gcd = if gcd > 9 { f64::from(gcd) } else { 1.0 };
+        let avg_rate_div = avg_rate / div_gcd;
+
+        // Use population variance with (N-1) denominator (nmap uses responses - 2)
+        // since we have (responses - 1) diffs and divide by (responses - 2)
+        let sum_sq: f64 = rates
+            .iter()
+            .map(|&r| {
+                let diff = r / div_gcd - avg_rate_div;
+                diff * diff
+            })
+            .sum();
+
+        // nmap divides by (responses - 2) which equals rates.len() - 1
+        let n = rates.len();
+        let variance = if n > 1 { sum_sq / (n - 1) as f64 } else { 0.0 };
+        let stddev = variance.sqrt();
+
+        let sp = if stddev <= 1.0 {
+            0
+        } else {
+            (stddev.log2() * 8.0 + 0.5).clamp(0.0, 255.0) as u8
+        };
+
+        (isr, sp)
+    }
+
+    /// Classify IP ID sequence using nmap's get_diffs + identify_sequence algorithm.
+    ///
+    /// Steps (from nmap osscan2.cc):
+    /// 1. Calculate u32 diffs between consecutive IP IDs
+    /// 2. If any diff > 20000, classify as Random
+    /// 3. If all IP IDs are zero, classify as Fixed (Z)
+    /// 4. Otherwise run identify_sequence:
+    ///    - All diffs == 0 → Constant (rare, but maps to hex value)
+    ///    - Any diff > 1000 (not mult of 256 or >= 25600) → Random Positive Increments (RI)
+    ///    - All diffs mult of 256 and <= 5120 → Broken Incremental (BI)
+    ///    - All diffs mult of 2 → Incremental by 2 (I)
+    ///    - All diffs < 10 → Incremental (I)
+    ///    - Otherwise → Unknown
+    #[allow(clippy::cast_possible_wrap, reason = "u16 diff wrapping is intentional")]
+    fn classify_ip_id_sequence_nmap(ip_ids: &[u16]) -> IpIdSeqClass {
+        if ip_ids.len() < 2 {
+            return IpIdSeqClass::Unknown;
+        }
+
+        // Calculate u32 diffs (wrapping subtraction, masked to 16-bit)
+        let diffs: Vec<u32> = ip_ids
+            .windows(2)
+            .map(|w| {
+                let diff = u32::from(w[1]).wrapping_sub(u32::from(w[0]));
+                diff & 0xFFFF // Mask to 16-bit range as nmap does
+            })
+            .collect();
+
+        // Step 1: Check for Random (any diff > 20000)
+        for &diff in &diffs {
+            if diff > 20000 {
+                return IpIdSeqClass::Random;
+            }
+        }
+
+        // Step 2: Check if all zeros
+        if ip_ids.iter().all(|&id| id == 0) {
+            return IpIdSeqClass::Fixed;
+        }
+
+        // Step 3: identify_sequence algorithm
+
+        // Check for Constant (all diffs zero) - before other checks
+        // In nmap this returns IPID_SEQ_CONSTANT which maps to hex value of ipids[0]
+        // We use Fixed since we don't have a separate Constant variant
+        if diffs.iter().all(|&d| d == 0) {
+            return IpIdSeqClass::Fixed;
+        }
+
+        // Check for Random Positive Increments (any diff > 1000 and
+        // (not mult of 256 OR >= 25600))
+        for &diff in &diffs {
+            if diff > 1000 && (diff % 256 != 0 || diff >= 25600) {
+                return IpIdSeqClass::Random; // Maps to RI in nmap, but we use Random
+            }
+        }
+
+        // Check flags for remaining classifications
+        let all_mult_256_and_le_5120 = diffs.iter().all(|&d| d <= 5120 && d % 256 == 0);
+        if all_mult_256_and_le_5120 {
+            return IpIdSeqClass::Incremental257; // Broken Incremental (BI)
+        }
+
+        let all_even = diffs.iter().all(|&d| d % 2 == 0);
+        if all_even {
+            // Incremental by 2 - maps to I in nmap
+            return IpIdSeqClass::Incremental;
+        }
+
+        let all_small = diffs.iter().all(|&d| d < 10);
+        if all_small {
+            return IpIdSeqClass::Incremental;
+        }
+
+        IpIdSeqClass::Unknown
     }
 
     /// Calculate GCD of a list of numbers.
@@ -829,128 +1416,61 @@ impl OsDetector {
         sum_sq_diff / nums.len() as u64
     }
 
-    /// Calculate ISR (ISN Rate).
+    /// Classify timestamp rate using actual time deltas between probes.
+    ///
+    /// Matches nmap's algorithm from osscan2.cc:
+    /// - avg_hz <= 5.66 → 1
+    /// - 70 < avg_hz <= 150 → 7
+    /// - 150 < avg_hz <= 350 → 8
+    /// - else → round(log2(avg_hz))
+    ///
+    /// Returns the raw integer value that nmap outputs as hex in TS field.
     #[allow(
-        clippy::cast_lossless,
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
-        clippy::cast_precision_loss,
-        reason = "ISR calculation with clamp ensures valid range"
+        reason = "log2 result fits in u8 for realistic Hz values"
     )]
-    fn calculate_isr(diffs: &[u32]) -> u8 {
-        if diffs.is_empty() {
-            return 0;
-        }
-        let avg_diff = diffs.iter().map(|&d| u64::from(d)).sum::<u64>() / diffs.len() as u64;
-        // ISR is approximately log2(avg_diff) scaled
-        (avg_diff as f64).log2().clamp(0.0, 255.0) as u8
-    }
-
-    /// Calculate SP (Sequence Predictability).
-    fn calculate_sp(_isns: &[u32], diffs: &[u32]) -> u8 {
-        if diffs.len() < 2 {
-            return 0;
-        }
-
-        // SP is based on how predictable the sequence is
-        // Lower variance = higher predictability = lower SP
-        let variance = Self::calculate_variance(diffs);
-        let max_variance = u64::from(u32::MAX).pow(2);
-
-        // SP = 100 - (variance / max_variance * 100)
-        100u8.saturating_sub(u8::try_from(variance * 100 / max_variance).unwrap_or(100))
-    }
-
-    /// Classify timestamp rate.
-    #[allow(
-        clippy::unnecessary_wraps,
-        reason = "API consistency with fingerprint structure"
-    )]
-    fn classify_timestamp_rate(timestamps: &[u32]) -> Option<TimestampRate> {
-        if timestamps.len() < 2 {
-            return Some(TimestampRate::None);
-        }
-
-        // Calculate average increment per probe (assuming 100ms intervals)
-        let diffs: Vec<u32> = timestamps
-            .windows(2)
-            .map(|w| w[1].wrapping_sub(w[0]))
-            .collect();
-        let avg_diff = diffs.iter().map(|&d| u64::from(d)).sum::<u64>() / diffs.len() as u64;
-
-        // Typical rates:
-        // 2 Hz = ~20 increments per 100ms (if in 10ms units)
-        // 100 Hz = ~1000 increments per 100ms
-        if avg_diff < 50 {
-            Some(TimestampRate::Rate2)
-        } else if avg_diff < 5000 {
-            Some(TimestampRate::Rate100)
-        } else {
-            Some(TimestampRate::Unknown)
-        }
-    }
-
-    /// Classify IP ID sequence pattern.
-    fn classify_ip_id_sequence(ip_ids: &[u16]) -> IpIdSeqClass {
-        if ip_ids.len() < 2 {
-            return IpIdSeqClass::Unknown;
-        }
-
-        // Check if all zeros
-        if ip_ids.iter().all(|&id| id == 0) {
-            return IpIdSeqClass::Fixed;
-        }
-
-        // Calculate differences
-        let diffs: Vec<i32> = ip_ids
-            .windows(2)
-            .map(|w| i32::from(w[1]) - i32::from(w[0]))
-            .collect();
-
-        // Check for incremental by 1
-        if diffs.iter().all(|&d| d == 1 || d == -65535) {
-            return IpIdSeqClass::Incremental;
-        }
-
-        // Check for incremental by 257 (byte-swapped)
-        if diffs.iter().all(|&d| d == 257 || d == -65279) {
-            return IpIdSeqClass::Incremental257;
-        }
-
-        // Check for fixed
-        let first = ip_ids[0];
-        if ip_ids.iter().all(|&id| id == first) {
-            return IpIdSeqClass::Fixed;
-        }
-
-        // High variance indicates random
-        let variance = Self::calculate_variance_u16(ip_ids);
-        if variance > 1000 {
-            return IpIdSeqClass::Random;
-        }
-
-        IpIdSeqClass::Unknown
-    }
-
-    /// Calculate variance for u16 values.
-    #[allow(
-        clippy::cast_possible_wrap,
-        clippy::cast_sign_loss,
-        reason = "Mathematical calculation with verified ranges"
-    )]
-    fn calculate_variance_u16(nums: &[u16]) -> u64 {
-        if nums.len() < 2 {
-            return 0;
-        }
-        let mean = nums.iter().map(|&n| u64::from(n)).sum::<u64>() / nums.len() as u64;
-        let sum_sq_diff: u64 = nums
+    fn classify_timestamp_rate_with_time(responses: &[SeqProbeResponse]) -> u8 {
+        let timestamps: Vec<(u32, std::time::Instant)> = responses
             .iter()
-            .map(|&n| {
-                let diff = i64::from(n) - mean as i64;
-                (diff * diff) as u64
-            })
-            .sum();
-        sum_sq_diff / nums.len() as u64
+            .filter_map(|r| r.timestamp.map(|ts| (ts, r.send_time)))
+            .collect();
+
+        if timestamps.len() < 2 {
+            return 0;
+        }
+
+        // Calculate average Hz using actual time deltas
+        let mut avg_hz = 0.0;
+        let mut count = 0;
+        for w in timestamps.windows(2) {
+            let ts_diff = f64::from(w[1].0.wrapping_sub(w[0].0));
+            let time_usec = w[1]
+                .1
+                .duration_since(w[0].1)
+                .as_micros() as f64;
+            if time_usec > 0.0 {
+                avg_hz += ts_diff / (time_usec / 1_000_000.0);
+                count += 1;
+            }
+        }
+
+        if count == 0 {
+            return 0;
+        }
+
+        avg_hz /= count as f64;
+
+        // nmap's classification thresholds from osscan2.cc lines 2528-2547
+        if avg_hz <= 5.66 {
+            1
+        } else if avg_hz > 70.0 && avg_hz <= 150.0 {
+            7
+        } else if avg_hz > 150.0 && avg_hz <= 350.0 {
+            8
+        } else {
+            (0.5 + (avg_hz.ln() / 2.0_f64.ln())) as u8
+        }
     }
 
     /// Analyze IP ID patterns from SEQ responses.
@@ -960,34 +1480,35 @@ impl OsDetector {
         IpIdPattern {
             zero: ip_ids.iter().all(|&id| id == 0),
             incremental: ip_ids.windows(2).all(|w| w[1] == w[0].wrapping_add(1)),
-            seq_class: Self::classify_ip_id_sequence(&ip_ids),
+            seq_class: Self::classify_ip_id_sequence_nmap(&ip_ids),
         }
     }
 
     /// Send ECN probe.
     ///
     /// Sends a TCP SYN packet with ECN flags (ECE and CWR) set.
-    #[allow(clippy::unused_async, clippy::match_same_arms)]
-    async fn send_ecn_probe(&self, target: Ipv4Addr) -> Result<EcnFingerprint> {
-        use rustnmap_net::raw_socket::{parse_tcp_response_full, RawSocket, TcpPacketBuilder};
+    /// Uses `MmapPacketEngine` with BPF filtering to receive the response.
+    #[allow(clippy::unused_async)]
+    async fn send_ecn_probe(&self, target: Ipv4Addr, engine: &mut MmapPacketEngine) -> Result<EcnFingerprint> {
+        use rustnmap_net::raw_socket::{RawSocket, TcpPacketBuilder};
 
-        // Use IPPROTO_TCP (6) for receiving TCP responses
-        let socket = RawSocket::with_protocol(6).map_err(|e| crate::FingerprintError::Network {
-            operation: "create raw socket".to_string(),
-            reason: e.to_string(),
-        })?;
+        // IPPROTO_TCP raw socket for SENDING only
+        let socket =
+            RawSocket::with_protocol(6).map_err(|e| crate::FingerprintError::Network {
+                operation: "create raw socket for send".to_string(),
+                reason: e.to_string(),
+            })?;
 
-        let src_port = Self::generate_source_port();
+        let src_port = Self::generate_source_port(1);
         let seq = Self::generate_sequence_number();
 
-        // Build TCP SYN packet with ECN flags
-        // Nmap sends: SYN, ECN-Echo (ECE), and CWR flags
-        let options = Self::build_tcp_options_for_seq();
+        // ECN probe uses option set 6 (no timestamp) and window=3 (per nmap)
+        let (options, window) = Self::get_probe_options(6);
         let packet = TcpPacketBuilder::new(self.local_addr_v4, target, src_port, self.open_port)
             .seq(seq)
             .syn()
-            .window(65535)
-            .options(&options)
+            .window(window)
+            .options(options)
             .build();
 
         // Modify packet to set ECN flags (ECE=0x40, CWR=0x80)
@@ -996,34 +1517,47 @@ impl OsDetector {
         let tcp_flags_offset = ip_header_len + 13;
         packet[tcp_flags_offset] |= tcp_flags::ECE | tcp_flags::CWR;
 
-        // Recalculate TCP checksum
+        // Zero checksum field before recalculating (RFC 1071: checksum is
+        // computed over the segment with the checksum field set to zero).
+        // Without this, the old checksum value is included in the sum,
+        // producing an incorrect result (~0xFFFF = 0x0000).
+        packet[ip_header_len + 16] = 0;
+        packet[ip_header_len + 17] = 0;
         let tcp_checksum = Self::recalculate_tcp_checksum(&packet, ip_header_len);
         packet[ip_header_len + 16] = (tcp_checksum >> 8) as u8;
         packet[ip_header_len + 17] = (tcp_checksum & 0xFF) as u8;
 
-        let dst_sockaddr = SocketAddr::new(IpAddr::V4(target), self.open_port);
-
-        socket.send_packet(&packet, &dst_sockaddr).map_err(|e| {
+        // BPF filter: capture TCP from target:open_port -> local:src_port
+        let target_nbo = u32::from_be_bytes(target.octets());
+        let filter = BpfFilter::tcp_response(target_nbo, self.open_port, src_port);
+        engine.set_filter(&filter.to_sock_fprog()).map_err(|e| {
             crate::FingerprintError::Network {
-                operation: "send ECN probe".to_string(),
+                operation: "set BPF filter for ECN probe".to_string(),
                 reason: e.to_string(),
             }
         })?;
 
-        // Wait for response
-        let mut recv_buf = vec![0u8; 65535];
+        let dst_sockaddr = SocketAddr::new(IpAddr::V4(target), self.open_port);
+
+        socket
+            .send_packet(&packet, &dst_sockaddr)
+            .map_err(|e| crate::FingerprintError::Network {
+                operation: "send ECN probe".to_string(),
+                reason: e.to_string(),
+            })?;
+
         let mut fp = EcnFingerprint::new();
 
-        match socket.recv_packet(&mut recv_buf, Some(self.timeout)) {
-            Ok(len) if len > 0 => {
-                if let Some(response) = parse_tcp_response_full(&recv_buf[..len]) {
-                    fp.ece = (response.flags & tcp_flags::ECE) != 0;
-                    fp.cwr = (response.flags & tcp_flags::CWR) != 0;
-                    fp.df = response.df;
-                    // TOS would need to be extracted from IP header
-                }
-            }
-            Ok(_) | Err(_) => {}
+        if let Some(data) =
+            recv_tcp_response_bpf(engine, self.open_port, src_port, self.timeout)?
+        {
+            let response = data.response;
+            fp.ece = (response.flags & tcp_flags::ECE) != 0;
+            fp.cwr = (response.flags & tcp_flags::CWR) != 0;
+            fp.df = response.df;
+            fp.ttl = Some(response.ttl);
+            fp.window = Some(response.window);
+            fp.raw_options = data.raw_options;
         }
 
         Ok(fp)
@@ -1071,7 +1605,11 @@ impl OsDetector {
         !(sum as u16)
     }
 
-    /// Send T1-T7 TCP test probes.
+    /// Send T1-T7 TCP test probes using pipelined send-then-collect.
+    ///
+    /// All 7 probes are sent first, then responses are collected in a single
+    /// receive loop. This reduces total probe time from 7*RTT to 1-2*RTT,
+    /// matching nmap's cwnd-based parallel probe approach.
     ///
     /// T1: SYN to open port (standard)
     /// T2: NULL to open port (no flags)
@@ -1081,16 +1619,10 @@ impl OsDetector {
     /// T6: ACK to closed port
     /// T7: FIN+PSH+URG to closed port
     #[allow(clippy::unused_async)]
-    async fn send_tcp_tests(&self, target: Ipv4Addr) -> Result<Vec<TestResult>> {
-        use rustnmap_net::raw_socket::{parse_tcp_response_full, RawSocket, TcpPacketBuilder};
+    async fn send_tcp_tests(&self, target: Ipv4Addr, engine: &mut MmapPacketEngine) -> Result<Vec<TestResult>> {
+        use rustnmap_net::raw_socket::{RawSocket, TcpPacketBuilder};
 
-        // Use IPPROTO_TCP (6) for receiving TCP responses
-        let socket = RawSocket::with_protocol(6).map_err(|e| crate::FingerprintError::Network {
-            operation: "create raw socket".to_string(),
-            reason: e.to_string(),
-        })?;
-
-        let tests = vec![
+        let tests = [
             ("T1", self.open_port, tcp_flags::SYN),
             ("T2", self.open_port, 0), // NULL
             (
@@ -1108,70 +1640,165 @@ impl OsDetector {
             ),
         ];
 
-        let mut results = Vec::with_capacity(tests.len());
+        // Set broad BPF filter: accept any TCP from target IP, match ports in software
+        let target_nbo = u32::from_be_bytes(target.octets());
+        let filter = BpfFilter::tcp_response_from_ip(target_nbo);
+        engine.set_filter(&filter.to_sock_fprog()).map_err(|e| {
+            crate::FingerprintError::Network {
+                operation: "set broad BPF filter for T1-T7".to_string(),
+                reason: e.to_string(),
+            }
+        })?;
+        drain_engine(engine);
 
-        for (name, port, flags) in tests {
-            let src_port = Self::generate_source_port();
+        // Single RawSocket reused for all probes
+        let socket = RawSocket::with_protocol(6).map_err(|e| crate::FingerprintError::Network {
+            operation: "create socket for T1-T7".to_string(),
+            reason: e.to_string(),
+        })?;
+
+        // Phase 1: Build and send all probes
+        struct ProbeInfo {
+            name: &'static str,
+            src_port: u16,
+            dst_port: u16,
+            sent_seq: u32,
+        }
+
+        let mut probe_infos: Vec<ProbeInfo> = Vec::with_capacity(tests.len());
+
+        for (test_idx, (name, port, flags)) in tests.iter().enumerate() {
+            let src_port = Self::generate_source_port(2 + test_idx as u16);
             let seq = Self::generate_sequence_number();
+            let (options, window) = Self::get_probe_options(7 + test_idx);
 
-            // Build TCP packet
-            let options = if name == "T1" {
-                Self::build_tcp_options_for_seq()
-            } else {
-                Vec::new()
-            };
-
-            let packet = TcpPacketBuilder::new(self.local_addr_v4, target, src_port, port)
+            let packet = TcpPacketBuilder::new(self.local_addr_v4, target, src_port, *port)
                 .seq(seq)
-                .window(65535)
-                .options(&options)
+                .window(window)
+                .options(options)
                 .build();
 
-            // Set the appropriate flags
             let mut packet = packet;
             let ip_header_len = 20;
-            let tcp_flags_offset = ip_header_len + 13;
-            packet[tcp_flags_offset] = flags;
+            packet[ip_header_len + 13] = *flags;
 
             // Recalculate checksum
+            packet[ip_header_len + 16] = 0;
+            packet[ip_header_len + 17] = 0;
             let tcp_checksum = Self::recalculate_tcp_checksum(&packet, ip_header_len);
             packet[ip_header_len + 16] = (tcp_checksum >> 8) as u8;
             packet[ip_header_len + 17] = (tcp_checksum & 0xFF) as u8;
 
-            let dst_sockaddr = SocketAddr::new(IpAddr::V4(target), port);
-
-            socket.send_packet(&packet, &dst_sockaddr).map_err(|e| {
-                crate::FingerprintError::Network {
+            let dst_sockaddr = SocketAddr::new(IpAddr::V4(target), *port);
+            socket
+                .send_packet(&packet, &dst_sockaddr)
+                .map_err(|e| crate::FingerprintError::Network {
                     operation: format!("send {name} probe"),
                     reason: e.to_string(),
-                }
-            })?;
+                })?;
+            debug!("TCP test {name}: sent flags=0x{flags:02x} to {target}:{port} from :{src_port}");
 
-            // Wait for response
-            let mut recv_buf = vec![0u8; 65535];
-            let mut result = TestResult::new(name);
-
-            match socket.recv_packet(&mut recv_buf, Some(self.timeout)) {
-                Ok(len) if len > 0 => {
-                    if let Some(response) = parse_tcp_response_full(&recv_buf[..len]) {
-                        result = result
-                            .with_flags(response.flags)
-                            .with_window(response.window)
-                            .with_ip_fields(response.df, response.ttl, response.ip_id);
-
-                        result.mss = response.options.mss;
-                        result.wscale = response.options.wscale;
-                        result.sack = response.options.sack;
-                        result.timestamp = response.options.timestamp;
-                    }
-                }
-                Ok(_) | Err(_) => {}
-            }
-
-            results.push(result);
+            probe_infos.push(ProbeInfo {
+                name,
+                src_port,
+                dst_port: *port,
+                sent_seq: seq,
+            });
         }
 
-        Ok(results)
+        // Phase 2: Collect all responses in a single receive loop
+        let mut results: Vec<(String, TestResult)> = Vec::with_capacity(tests.len());
+        let deadline = std::time::Instant::now() + self.timeout;
+        let poll_interval = Duration::from_millis(1);
+
+        loop {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+
+            match engine.try_recv_zero_copy() {
+                Ok(Some(pkt)) => {
+                    let d = pkt.data();
+                    if d.len() > ETH_HEADER_LEN {
+                        let ip_data = &d[ETH_HEADER_LEN..];
+                        if let Some(response) = rustnmap_net::raw_socket::parse_tcp_response_full(ip_data) {
+                            // Match response to probe by src_port (target's src = our dst_port)
+                            if let Some(info) = probe_infos
+                                .iter()
+                                .find(|p| response.src_port == p.dst_port && response.dst_port == p.src_port)
+                            {
+                                // Check if we already have a result for this probe
+                                let already_matched = results.iter().any(|(n, _)| n == info.name);
+                                if !already_matched {
+                                    debug!(
+                                        "TCP test {}: GOT RESPONSE flags=0x{:02x} sp={} dp={} win={}",
+                                        info.name, response.flags, response.src_port,
+                                        response.dst_port, response.window
+                                    );
+
+                                    let mut result = TestResult::new(info.name);
+                                    result.sent_seq = info.sent_seq;
+                                    result = result
+                                        .with_flags(response.flags)
+                                        .with_window(response.window)
+                                        .with_ip_fields(response.df, response.ttl, response.ip_id);
+                                    result.mss = response.options.mss;
+                                    result.wscale = response.options.wscale;
+                                    result.sack = response.options.sack;
+                                    result.timestamp = response.options.timestamp;
+                                    result.resp_seq = response.seq;
+                                    result.resp_ack = response.ack;
+
+                                    // Extract raw TCP options
+                                    let ip_hlen = (ip_data[0] & 0x0F) as usize * 4;
+                                    let raw_options = if ip_data.len() >= ip_hlen + 20 {
+                                        let tcp_doff =
+                                            (ip_data[ip_hlen + 12] >> 4) as usize * 4;
+                                        if tcp_doff > 20 && ip_data.len() >= ip_hlen + tcp_doff {
+                                            ip_data[ip_hlen + 20..ip_hlen + tcp_doff].to_vec()
+                                        } else {
+                                            Vec::new()
+                                        }
+                                    } else {
+                                        Vec::new()
+                                    };
+                                    result.raw_options = raw_options;
+
+                                    results.push((info.name.to_string(), result));
+
+                                    // Early exit if all probes have responses
+                                    if results.len() == tests.len() {
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                Ok(None) => {
+                    std::thread::sleep(poll_interval);
+                }
+                Err(_) => {
+                    std::thread::sleep(poll_interval);
+                }
+            }
+        }
+
+        // Build final results in original order, filling in missing probes
+        let mut final_results = Vec::with_capacity(tests.len());
+        for (name, _port, _flags) in &tests {
+            if let Some(pos) = results.iter().position(|(n, _)| n == *name) {
+                final_results.push(results.remove(pos).1);
+            } else {
+                debug!("TCP test {name}: NO RESPONSE");
+                let mut result = TestResult::new(*name);
+                result.sent_seq = probe_infos.iter().find(|p| p.name == *name).map(|p| p.sent_seq).unwrap_or(0);
+                final_results.push(result);
+            }
+        }
+
+        Ok(final_results)
     }
 
     /// Send IE (ICMP Echo) probes.
@@ -1280,7 +1907,7 @@ impl OsDetector {
             reason: e.to_string(),
         })?;
 
-        let src_port = Self::generate_source_port();
+        let src_port = Self::generate_source_port(3);
 
         // Build UDP packet with specific payload (Nmap uses 300 bytes)
         let payload = vec![0x41u8; 300]; // 'A' repeated 300 times
@@ -1326,61 +1953,31 @@ impl OsDetector {
         Ok(result)
     }
 
-    /// Build TCP options for SEQ probes.
+    /// Get probe options and window size by index from the nmap probe table.
     ///
-    /// Nmap uses: WScale=10, NOP, MSS=1460, Timestamp, SACK permitted
-    #[allow(
-        clippy::cast_possible_truncation,
-        reason = "Byte extraction: shifting right and casting to u8 is intentional"
-    )]
-    fn build_tcp_options_for_seq() -> Vec<u8> {
-        // TSval (4 bytes) - use current time
-        let tsval = u32::try_from(
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs(),
-        )
-        .unwrap_or(0);
-
-        vec![
-            // Window Scale (kind=3, len=3, value=10)
-            3,
-            3,
-            10,
-            // NOP (kind=1)
-            1,
-            // MSS (kind=2, len=4, value=1460)
-            2,
-            4,
-            0x05,
-            0xB4,
-            // Timestamp (kind=8, len=10, TSval, TSecr)
-            8,
-            10,
-            // TSval (4 bytes)
-            (tsval >> 24) as u8,
-            (tsval >> 16) as u8,
-            (tsval >> 8) as u8,
-            (tsval & 0xFF) as u8,
-            // TSecr (4 bytes) - 0 for initial SYN
-            0,
-            0,
-            0,
-            0,
-            // SACK permitted (kind=4, len=2)
-            4,
-            2,
-        ]
+    /// Indices 0-5: SEQ/OPS/WIN probes
+    /// Index 6: ECN probe
+    /// Indices 7-12: T1-T7 probes
+    fn get_probe_options(index: usize) -> (&'static [u8], u16) {
+        if index < PROBE_OPTIONS.len() {
+            PROBE_OPTIONS[index]
+        } else {
+            // Fallback: use T1 options
+            PROBE_OPTIONS[7]
+        }
     }
 
-    /// Generates a random source port.
+    /// Generates a source port with a group offset.
+    ///
+    /// Each probe group (SEQ, ECN, T1-T7) uses a different offset to avoid
+    /// kernel TCP state interference from earlier probes.
     #[allow(
         clippy::cast_possible_truncation,
         reason = "Process ID modulo 20000 fits in u16 range"
     )]
-    fn generate_source_port() -> u16 {
-        40000 + (std::process::id() % 20000) as u16
+    fn generate_source_port(group_offset: u16) -> u16 {
+        let base = 40000 + (std::process::id() % 20000) as u16;
+        base.wrapping_add(group_offset * SRC_PORT_OFFSET_PER_GROUP)
     }
 
     /// Generates a random initial sequence number.
@@ -1463,46 +2060,68 @@ mod tests {
     }
 
     #[test]
-    fn test_classify_ip_id_sequence() {
-        // Test incremental
+    fn test_classify_ip_id_sequence_nmap() {
+        // Test incremental (diffs all < 10)
         let ip_ids = vec![100, 101, 102, 103];
         assert_eq!(
-            OsDetector::classify_ip_id_sequence(&ip_ids),
+            OsDetector::classify_ip_id_sequence_nmap(&ip_ids),
             IpIdSeqClass::Incremental
         );
 
-        // Test fixed
+        // Test constant (all same non-zero) - all diffs are 0
+        // Matches nmap's IPID_SEQ_CONSTANT check before other classifications
         let ip_ids = vec![100, 100, 100, 100];
         assert_eq!(
-            OsDetector::classify_ip_id_sequence(&ip_ids),
+            OsDetector::classify_ip_id_sequence_nmap(&ip_ids),
             IpIdSeqClass::Fixed
         );
 
         // Test zeros (fixed)
         let ip_ids = vec![0, 0, 0, 0];
         assert_eq!(
-            OsDetector::classify_ip_id_sequence(&ip_ids),
+            OsDetector::classify_ip_id_sequence_nmap(&ip_ids),
             IpIdSeqClass::Fixed
+        );
+
+        // Test random (diff > 20000)
+        let ip_ids = vec![100, 50000, 200, 30000];
+        assert_eq!(
+            OsDetector::classify_ip_id_sequence_nmap(&ip_ids),
+            IpIdSeqClass::Random
+        );
+
+        // Test broken incremental (diffs are mult of 256, <= 5120)
+        // e.g., 0x0001, 0x0101, 0x0201 → diffs = 0x0100 (256)
+        let ip_ids: Vec<u16> = vec![0x0001, 0x0101, 0x0201, 0x0301];
+        assert_eq!(
+            OsDetector::classify_ip_id_sequence_nmap(&ip_ids),
+            IpIdSeqClass::Incremental257
+        );
+
+        // Test incremental by 2 (all diffs even but not all mult of 256)
+        let ip_ids = vec![100, 102, 104, 106];
+        assert_eq!(
+            OsDetector::classify_ip_id_sequence_nmap(&ip_ids),
+            IpIdSeqClass::Incremental
         );
     }
 
     #[test]
-    fn test_build_tcp_options() {
-        let options = OsDetector::build_tcp_options_for_seq();
+    fn test_probe_options_table() {
+        // Verify probe option sets are defined correctly
+        assert_eq!(PROBE_OPTIONS.len(), 13); // 6 SEQ + 1 ECN + 6 T1-T7
 
-        // Should contain: WScale(3), NOP(1), MSS(2), Timestamp(8), SACK(4)
-        assert!(!options.is_empty());
+        // SEQ probe 0: WScale(10), NOP, MSS(1460), Timestamp, SACK, win=1
+        let (opts, win) = OsDetector::get_probe_options(0);
+        assert_eq!(win, 1);
+        assert!(!opts.is_empty());
 
-        // Check for Window Scale option (kind=3)
-        assert!(options.contains(&3));
+        // ECN probe: win=3
+        let (_, win) = OsDetector::get_probe_options(6);
+        assert_eq!(win, 3);
 
-        // Check for MSS option (kind=2)
-        assert!(options.contains(&2));
-
-        // Check for Timestamp option (kind=8)
-        assert!(options.contains(&8));
-
-        // Check for SACK permitted (kind=4)
-        assert!(options.contains(&4));
+        // T1: win=128
+        let (_, win) = OsDetector::get_probe_options(7);
+        assert_eq!(win, 128);
     }
 }

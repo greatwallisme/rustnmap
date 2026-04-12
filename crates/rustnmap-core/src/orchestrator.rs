@@ -17,7 +17,9 @@ use rustnmap_common::ScanConfig as ScannerConfig;
 use rustnmap_evasion::DecoyScheduler;
 use rustnmap_net::raw_socket::{parse_arp_reply, ArpPacketBuilder};
 use rustnmap_output::models::PortState;
-use rustnmap_output::models::{HostResult, HostStatus, PortResult, ScanResult, ScanStatistics};
+use rustnmap_output::models::{
+    HostResult, HostStatus, HostTimes, PortResult, ScanResult, ScanStatistics,
+};
 use rustnmap_scan::adaptive_delay::AdaptiveDelay;
 use rustnmap_scan::congestion::CongestionControl;
 use rustnmap_scan::connect_scan::TcpConnectScanner;
@@ -33,6 +35,8 @@ use rustnmap_scan::ultrascan::ParallelScanEngine;
 use rustnmap_target::discovery::{HostDiscovery, HostState as DiscoveryHostState};
 use rustnmap_target::Target;
 
+use rustnmap_net::raw_socket::{RawSocket, TcpPacketBuilder};
+
 use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, error, info, instrument, warn};
 
@@ -40,6 +44,55 @@ use crate::error::{CoreError, Result};
 use crate::scheduler::{ScheduledTask, TaskPriority, TaskScheduler};
 use crate::session::{ScanConfig, ScanSession, ScanType};
 use crate::state::{HostState, PortScanState, ScanProgress};
+
+/// Measures RTT to a target using a TCP SYN probe.
+///
+/// Sends a single TCP SYN to port 80 (commonly open) and measures the
+/// response time. Returns the measured RTT, or `None` if no response.
+/// This matches nmap's behavior of measuring RTT from ARP/TCP probes
+/// before port scanning begins.
+fn measure_target_rtt(
+    src_addr: std::net::Ipv4Addr,
+    dst_addr: std::net::Ipv4Addr,
+) -> Option<Duration> {
+   
+
+    let socket = RawSocket::with_protocol(6).ok()?; // IPPROTO_TCP
+    let src_port = 50000 + (std::process::id() % 1000) as u16;
+    let dst_port: u16 = 80;
+
+    let packet = TcpPacketBuilder::new(
+        rustnmap_common::Ipv4Addr::new(src_addr.octets()[0], src_addr.octets()[1], src_addr.octets()[2], src_addr.octets()[3]),
+        rustnmap_common::Ipv4Addr::new(dst_addr.octets()[0], dst_addr.octets()[1], dst_addr.octets()[2], dst_addr.octets()[3]),
+        src_port,
+        dst_port,
+    )
+    .seq(1000)
+    .syn()
+    .window(65535)
+    .build();
+
+    let dst_sockaddr = SocketAddr::new(IpAddr::V4(dst_addr), dst_port);
+
+    // Start timer before send, matching nmap's probe timing approach where
+    // sent timestamp is recorded before the send syscall (scan_engine.cc:1593).
+    let start = Instant::now();
+    socket.send_packet(&packet, &dst_sockaddr).ok()?;
+
+    let mut buf = vec![0u8; 65535];
+    let timeout = Duration::from_secs(1);
+    match socket.recv_packet(&mut buf, Some(timeout)) {
+        Ok(len) if len > 0 => {
+            let elapsed = start.elapsed();
+            if elapsed > Duration::from_micros(100) {
+                Some(elapsed)
+            } else {
+                Some(Duration::from_micros(100))
+            }
+        }
+        _ => None,
+    }
+}
 
 /// Gets the local IPv4 address by creating a UDP socket to an external address.
 ///
@@ -290,6 +343,275 @@ fn get_interface_name_for_addr(local_addr: std::net::Ipv4Addr) -> Option<String>
     // SAFETY: addrs was allocated by getifaddrs and must be freed by freeifaddrs
     unsafe { libc::freeifaddrs(addrs) };
     found_name
+}
+
+/// In-memory MAC address cache, matching nmap's `do_mac_cache()` in
+/// `libnetutil/netutil.cc:489-530`.
+///
+/// Caches IP-to-MAC mappings to avoid repeated ARP lookups for the same
+/// target across scan phases. Thread-safe via `std::sync::Mutex`.
+mod mac_cache {
+    use std::collections::HashMap;
+    use std::net::Ipv4Addr;
+    use std::sync::Mutex;
+
+    use rustnmap_common::MacAddr;
+
+    static CACHE: Mutex<Option<HashMap<Ipv4Addr, MacAddr>>> = Mutex::new(None);
+
+    /// Retrieves a cached MAC address for the given IP.
+    pub fn get(ip: Ipv4Addr) -> Option<MacAddr> {
+        let guard = CACHE.lock().ok()?;
+        guard.as_ref()?.get(&ip).copied()
+    }
+
+    /// Stores a MAC address in the cache for the given IP.
+    pub fn set(ip: Ipv4Addr, mac: MacAddr) {
+        if let Ok(mut guard) = CACHE.lock() {
+            let cache = guard.get_or_insert_with(HashMap::new);
+            cache.insert(ip, mac);
+        }
+    }
+}
+
+/// Looks up a MAC address from the kernel ARP cache using `ioctl(SIOCGARP)`.
+///
+/// This matches nmap's approach via libdnet's `arp_get()` in
+/// `libdnet-stripped/src/arp-ioctl.c:182-205`. The kernel ARP table is
+/// populated by normal network traffic, so after scanning a target its
+/// MAC is typically already cached by the kernel.
+///
+/// This is effectively free (no packet sending, no socket timeout) compared
+/// to sending a manual ARP request.
+fn get_mac_from_system_arp_cache(target_ip: std::net::Ipv4Addr) -> Option<MacAddr> {
+    // Determine the interface for this target, matching libdnet's _arp_set_dev()
+    // in arp-ioctl.c:78-97. SIOCGARP requires arp_dev to identify which
+    // interface's ARP table to query; without it the kernel returns ENODEV.
+    let src_ip = get_source_address_for_target(target_ip);
+    let iface_name = get_interface_name_for_addr(src_ip)?;
+
+    // Create a UDP socket for the ioctl call (same as libdnet: AF_INET, SOCK_DGRAM)
+    // SAFETY: socket() returns a valid fd or -1; we check fd < 0 below
+    let fd = unsafe { libc::socket(libc::AF_INET, libc::SOCK_DGRAM, 0) };
+    if fd < 0 {
+        return None;
+    }
+
+    // Build arpreq with the target IP in arp_pa
+    // SAFETY: mem::zeroed() is safe for arpreq which is POD
+    let mut arpreq: libc::arpreq = unsafe { std::mem::zeroed() };
+    let sin: &mut libc::sockaddr_in =
+        // SAFETY: sockaddr_in and sockaddr have compatible layout; arp_pa is
+        // large enough for sockaddr_in
+        unsafe { &mut *std::ptr::addr_of_mut!(arpreq.arp_pa).cast() };
+    sin.sin_family = u16::try_from(libc::AF_INET).unwrap_or(0);
+    sin.sin_addr = libc::in_addr {
+        s_addr: u32::from(target_ip).to_be(),
+    };
+
+    // Set the interface name (arp_dev) as required by SIOCGARP on Linux.
+    // Matches libdnet's _arp_set_dev() which iterates interfaces to find
+    // the one whose subnet contains the target IP.
+    let iface_bytes = iface_name.as_bytes();
+    let copy_len = iface_bytes.len().min(arpreq.arp_dev.len() - 1);
+    for (i, &b) in iface_bytes[..copy_len].iter().enumerate() {
+        // Interface name bytes are ASCII (0-127), safe to convert to c_char
+        #[expect(clippy::cast_possible_wrap, reason = "interface names are ASCII, values 0-127")]
+        {
+            arpreq.arp_dev[i] = b as std::ffi::c_char;
+        }
+    }
+
+    // SAFETY: fd is a valid socket; arpreq is properly initialized with the
+    // target IP and interface name. SIOCGARP reads from the kernel ARP table
+    // without side effects.
+    let rc = unsafe {
+        libc::ioctl(fd, libc::SIOCGARP, std::ptr::addr_of_mut!(arpreq))
+    };
+    // SAFETY: fd is valid and being closed after use
+    unsafe { libc::close(fd) };
+
+    if rc < 0 {
+        return None;
+    }
+
+    // Check ATF_COM flag (entry is complete/resolved)
+    if (arpreq.arp_flags & libc::ATF_COM) == 0 {
+        return None;
+    }
+
+    // Extract the 6-byte MAC from arp_ha.sa_data
+    let d = arpreq.arp_ha.sa_data;
+    #[expect(clippy::cast_sign_loss, reason = "MAC bytes are always positive")]
+    Some(MacAddr::new([
+        d[0] as u8, d[1] as u8, d[2] as u8,
+        d[3] as u8, d[4] as u8, d[5] as u8,
+    ]))
+}
+
+/// Checks if a target IP is directly connected (on the same L2 segment).
+///
+/// Uses `ip route get <target>` logic via a connected UDP socket to compare
+/// the kernel's nexthop with the destination. Matches nmap's `route_dst()`
+/// in `libnetutil/netutil.cc:3322-3334` where `direct_connect` is set to 0
+/// when `nexthop != dst`.
+///
+/// Only directly-connected targets have their MAC resolvable via ARP.
+/// Non-directly-connected targets are behind routers and their MAC is
+/// not observable from the local network segment.
+fn is_directly_connected(target_ip: std::net::Ipv4Addr) -> bool {
+    // Loopback is always directly connected
+    if target_ip.is_loopback() {
+        return true;
+    }
+
+    // Determine the source address the kernel would use for this target,
+    // then check if both source and target are on the same interface subnet.
+    // SAFETY: socket() returns a valid fd or -1; checked below
+    let fd = unsafe { libc::socket(libc::AF_INET, libc::SOCK_DGRAM, 0) };
+    if fd < 0 {
+        return false;
+    }
+
+    // SAFETY: mem::zeroed() is safe for sockaddr_in which is POD
+    let mut dst: libc::sockaddr_in = unsafe { std::mem::zeroed() };
+    dst.sin_family = u16::try_from(libc::AF_INET).unwrap_or(0);
+    dst.sin_port = 9u16.to_be(); // discard port
+    dst.sin_addr = libc::in_addr {
+        s_addr: u32::from(target_ip).to_be(),
+    };
+
+    let addr_size = u32::try_from(std::mem::size_of::<libc::sockaddr_in>()).unwrap_or(0);
+    // SAFETY: fd is valid; dst is a properly initialized sockaddr_in
+    let rc = unsafe {
+        libc::connect(fd, std::ptr::addr_of!(dst).cast(), addr_size)
+    };
+    if rc < 0 {
+        // SAFETY: fd is valid and being closed on error path
+        unsafe { libc::close(fd) };
+        return false;
+    }
+
+    // Get the local source address the kernel selected for this route
+    // SAFETY: mem::zeroed() is safe for sockaddr_in which is POD
+    let mut local: libc::sockaddr_in = unsafe { std::mem::zeroed() };
+    let mut local_len = addr_size;
+    // SAFETY: fd is connected; local is a valid buffer for getsockname
+    let rc = unsafe {
+        libc::getsockname(
+            fd,
+            std::ptr::addr_of_mut!(local).cast(),
+            std::ptr::addr_of_mut!(local_len),
+        )
+    };
+    // SAFETY: fd is valid and being closed after use
+    unsafe { libc::close(fd) };
+
+    if rc < 0 {
+        return false;
+    }
+
+    let src_ip = std::net::Ipv4Addr::from(u32::from_be(local.sin_addr.s_addr));
+
+    // Check all interfaces for one where both src and target are on the same subnet
+    is_on_same_subnet(src_ip, target_ip)
+}
+
+/// Checks if two IPs are on the same subnet by enumerating interfaces.
+fn is_on_same_subnet(src_ip: std::net::Ipv4Addr, target_ip: std::net::Ipv4Addr) -> bool {
+    let mut addrs: *mut libc::ifaddrs = std::ptr::null_mut();
+    // SAFETY: getifaddrs writes to addrs pointer; we free it later with freeifaddrs
+    if unsafe { libc::getifaddrs(std::ptr::addr_of_mut!(addrs)) } != 0 {
+        return false;
+    }
+
+    let src_u32 = u32::from(src_ip);
+    let target_u32 = u32::from(target_ip);
+    let mut found = false;
+
+    let mut current = addrs;
+    while !current.is_null() {
+        // SAFETY: current points to a valid linked list node from getifaddrs
+        let ifa = unsafe { &*current };
+
+        if !ifa.ifa_addr.is_null() && !ifa.ifa_netmask.is_null() {
+            // SAFETY: ifa_addr is non-null and points to a valid sockaddr
+            let family = unsafe { (*ifa.ifa_addr).sa_family };
+            if i32::from(family) == libc::AF_INET {
+                // SAFETY: AF_INET confirms sockaddr_in layout
+                #[expect(
+                    clippy::cast_ptr_alignment,
+                    reason = "AF_INET confirms sockaddr_in layout"
+                )]
+                // SAFETY: AF_INET family check confirms sockaddr_in layout
+                let addr = unsafe { &*(ifa.ifa_addr.cast::<libc::sockaddr_in>()) };
+                #[expect(
+                    clippy::cast_ptr_alignment,
+                    reason = "AF_INET confirms sockaddr_in layout"
+                )]
+                // SAFETY: AF_INET family check confirms sockaddr_in layout for netmask
+                let mask = unsafe { &*(ifa.ifa_netmask.cast::<libc::sockaddr_in>()) };
+
+                let if_ip = u32::from_be(addr.sin_addr.s_addr);
+                let netmask = u32::from_be(mask.sin_addr.s_addr);
+
+                // Check if source is on this interface and target is on the same subnet
+                if if_ip == src_u32 && (src_u32 & netmask) == (target_u32 & netmask) {
+                    found = true;
+                    break;
+                }
+            }
+        }
+        current = ifa.ifa_next;
+    }
+
+    // SAFETY: addrs was allocated by getifaddrs and must be freed by freeifaddrs
+    unsafe { libc::freeifaddrs(addrs) };
+    found
+}
+
+/// Resolves a target's MAC address using nmap's three-tier strategy from
+/// `getNextHopMAC()` in `tcpip.cc:1655-1690`:
+///
+/// 1. Check the in-memory MAC cache (nmap's `mac_cache_get`)
+/// 2. Check the kernel ARP table via `ioctl(SIOCGARP)` (nmap's `arp_get`)
+/// 3. Send a manual ARP request as last resort (nmap's `doArp`)
+///
+/// Only attempts resolution for directly-connected targets (same L2 segment),
+/// matching nmap's behavior in `targets.cc:363-367` where `setDirectlyConnected`
+/// gates ARP resolution.
+///
+/// Results are cached for future lookups.
+fn resolve_mac_address(
+    target_ip: std::net::Ipv4Addr,
+    local_addr: std::net::Ipv4Addr,
+    timeout: std::time::Duration,
+) -> Option<MacAddr> {
+    // Skip MAC resolution for non-directly-connected targets.
+    // Matches nmap's targets.cc:363 where directlyConnected() gates ARP.
+    // Non-local targets are behind routers; their MAC is not on our L2 segment.
+    if !is_directly_connected(target_ip) {
+        return None;
+    }
+
+    // Tier 1: in-memory cache (nmap's mac_cache_get)
+    if let Some(mac) = mac_cache::get(target_ip) {
+        return Some(mac);
+    }
+
+    // Tier 2: kernel ARP table via ioctl(SIOCGARP) (nmap's arp_get via libdnet)
+    if let Some(mac) = get_mac_from_system_arp_cache(target_ip) {
+        mac_cache::set(target_ip, mac);
+        return Some(mac);
+    }
+
+    // Tier 3: send ARP request as last resort (nmap's doArp)
+    if let Some(mac) = get_mac_address_via_arp(target_ip, local_addr, timeout) {
+        mac_cache::set(target_ip, mac);
+        return Some(mac);
+    }
+
+    None
 }
 
 /// Resolves a target's MAC address using ARP over an `AF_PACKET` socket.
@@ -1041,9 +1363,9 @@ impl ScanOrchestrator {
     /// Runs the host discovery phase.
     async fn run_host_discovery(&self) -> Result<()> {
         // Auto-skip host discovery for single target (matches nmap behavior)
-        // Nmap doesn't perform host discovery when there's only one known target
+        // But NOT for -sn which is host-discovery-only
         let targets_vec: Vec<Target> = self.session.target_set.targets().to_vec();
-        if targets_vec.len() == 1 {
+        if targets_vec.len() == 1 && !self.session.config.no_port_scan {
             info!("Skipping host discovery for single target (matching nmap behavior)");
             return Ok(());
         }
@@ -1086,6 +1408,7 @@ impl ScanOrchestrator {
                         min_rate: None,
                         max_rate: None,
                         timing_level: 3, // Use T3 Normal for host discovery
+                        badsum: session.config.badsum,
                     };
                     let discovery = HostDiscovery::new(discovery_config);
 
@@ -1144,6 +1467,33 @@ impl ScanOrchestrator {
         reason = "Port scanning requires handling all scan types and parallel vs sequential logic in one function for performance"
     )]
     async fn run_port_scanning(&self) -> Result<Vec<HostResult>> {
+        // -sn (ping sweep): skip port scanning, build results from discovered hosts
+        if self.session.config.no_port_scan {
+            info!("Port scanning skipped (-sn: ping sweep only)");
+            let targets = self.session.target_set.targets();
+            let host_results: Vec<HostResult> = targets
+                .iter()
+                .map(|target| HostResult {
+                    ip: target.ip,
+                    mac: None,
+                    hostname: target.hostname.clone(),
+                    status: HostStatus::Up,
+                    status_reason: "syn-ack".to_string(),
+                    latency: Duration::default(),
+                    ports: Vec::new(),
+                    os_matches: Vec::new(),
+                    scripts: Vec::new(),
+                    traceroute: None,
+                    times: HostTimes {
+                        srtt: None,
+                        rttvar: None,
+                        timeout: None,
+                    },
+                })
+                .collect();
+            return Ok(host_results);
+        }
+
         info!("Starting port scanning phase");
 
         let targets: Vec<Target> = self.session.target_set.targets().to_vec();
@@ -1192,10 +1542,33 @@ impl ScanOrchestrator {
             // Get timing parameters from the timing template
             let timing_config = self.session.config.timing_template.scan_config();
 
+            // Measure RTT to first target for adaptive timing seeding.
+            // Nmap propagates host discovery RTT into port scanning via
+            // target->to.srtt (scan_engine.cc:508-516). Without this,
+            // the first-round probe timeout uses the template default
+            // (1000ms for T3) instead of measured RTT (~0.5ms local).
+            let measured_rtt = targets.first().and_then(|t| {
+                if let IpAddr::V4(dst) = t.ip {
+                    let src = get_source_address_for_target(dst);
+                    measure_target_rtt(src, dst)
+                } else {
+                    None
+                }
+            });
+            // Clamp measured RTT to [min_rtt, max_rtt] matching nmap's
+            // box(minRttTimeout, maxRttTimeout, timeout) in timing.cc:153.
+            let initial_rtt = measured_rtt
+                .map_or(timing_config.initial_rtt, |rtt| rtt.clamp(timing_config.min_rtt, timing_config.max_rtt));
+            debug!(
+                measured_rtt = ?measured_rtt,
+                initial_rtt = ?initial_rtt,
+                "Parallel scan adaptive timing initial RTT"
+            );
+
             let scanner_config = ScannerConfig {
                 min_rtt: timing_config.min_rtt,
                 max_rtt: timing_config.max_rtt,
-                initial_rtt: timing_config.initial_rtt,
+                initial_rtt,
                 max_retries: timing_config.max_retries,
                 host_timeout: self
                     .session
@@ -1212,6 +1585,7 @@ impl ScanOrchestrator {
                 min_rate: self.session.config.min_rate,
                 max_rate: self.session.config.max_rate,
                 timing_level: timing_config.timing_level,
+                badsum: self.session.config.badsum,
             };
 
             let engine = if let Ok(engine) = ParallelScanEngine::new(local_addr, scanner_config) {
@@ -1331,7 +1705,7 @@ impl ScanOrchestrator {
                         let before_mac = std::time::Instant::now();
 
                         let mac = if let Some(target_ipv4) = target_ip_for_mac {
-                            get_mac_address_via_arp(target_ipv4, local_addr, mac_timeout).map(
+                            resolve_mac_address(target_ipv4, local_addr, mac_timeout).map(
                                 |mac_addr| {
                                     let mac_str = mac_addr.to_string();
                                     // Look up vendor from MAC prefix database
@@ -1487,7 +1861,7 @@ impl ScanOrchestrator {
                 ip: target.ip,
                 mac: match target.ip {
                     IpAddr::V4(target_ipv4) => {
-                        get_mac_address_via_arp(
+                        resolve_mac_address(
                             target_ipv4,
                             local_addr,
                             std::time::Duration::from_millis(500),
@@ -1556,10 +1930,32 @@ impl ScanOrchestrator {
         let local_addr = get_local_address(&self.session.config.dns_server);
         let timing_config = self.session.config.timing_template.scan_config();
 
+        // Measure RTT to first target for adaptive timing seeding.
+        // Nmap does this via ARP ping before port scanning; we use TCP SYN probe.
+        // This allows scanners to use measured RTT instead of template defaults,
+        // dramatically improving speed for local network targets.
+        let measured_rtt = targets.first().and_then(|t| {
+            if let IpAddr::V4(dst) = t.ip {
+                let src = get_source_address_for_target(dst);
+                measure_target_rtt(src, dst)
+            } else {
+                None
+            }
+        });
+        // Clamp measured RTT to [min_rtt, max_rtt] matching nmap's
+        // box(minRttTimeout, maxRttTimeout, timeout) in timing.cc:153.
+        let initial_rtt = measured_rtt
+            .map_or(timing_config.initial_rtt, |rtt| rtt.clamp(timing_config.min_rtt, timing_config.max_rtt));
+        debug!(
+            measured_rtt = ?measured_rtt,
+            initial_rtt = ?initial_rtt,
+            "Adaptive timing initial RTT"
+        );
+
         let scanner_config = ScannerConfig {
             min_rtt: timing_config.min_rtt,
             max_rtt: timing_config.max_rtt,
-            initial_rtt: timing_config.initial_rtt,
+            initial_rtt,
             max_retries: timing_config.max_retries,
             host_timeout: self
                 .session
@@ -1574,6 +1970,7 @@ impl ScanOrchestrator {
             min_rate: self.session.config.min_rate,
             max_rate: self.session.config.max_rate,
             timing_level: timing_config.timing_level,
+            badsum: self.session.config.badsum,
         };
 
         // Create decoy scheduler if evasion config has decoys
@@ -1755,7 +2152,7 @@ impl ScanOrchestrator {
             // Get MAC address via ARP (only for IPv4 targets)
             let mac = match target.ip {
                 IpAddr::V4(target_ipv4) => {
-                    get_mac_address_via_arp(
+                    resolve_mac_address(
                         target_ipv4,
                         local_addr,
                         std::time::Duration::from_millis(500),
@@ -1822,10 +2219,25 @@ impl ScanOrchestrator {
         let local_addr = get_local_address(&self.session.config.dns_server);
         let timing_config = self.session.config.timing_template.scan_config();
 
+        // Measure RTT to first target for adaptive timing, matching nmap's
+        // propagation of host discovery RTT into port scanning timeout.
+        let measured_rtt = targets.first().and_then(|t| {
+            if let IpAddr::V4(dst) = t.ip {
+                let src = get_source_address_for_target(dst);
+                measure_target_rtt(src, dst)
+            } else {
+                None
+            }
+        });
+        // Clamp measured RTT to [min_rtt, max_rtt] matching nmap's
+        // box(minRttTimeout, maxRttTimeout, timeout) in timing.cc:153.
+        let initial_rtt = measured_rtt
+            .map_or(timing_config.initial_rtt, |rtt| rtt.clamp(timing_config.min_rtt, timing_config.max_rtt));
+
         let scanner_config = ScannerConfig {
             min_rtt: timing_config.min_rtt,
             max_rtt: timing_config.max_rtt,
-            initial_rtt: timing_config.initial_rtt,
+            initial_rtt,
             max_retries: timing_config.max_retries,
             host_timeout: self
                 .session
@@ -1840,6 +2252,7 @@ impl ScanOrchestrator {
             min_rate: self.session.config.min_rate,
             max_rate: self.session.config.max_rate,
             timing_level: timing_config.timing_level,
+            badsum: self.session.config.badsum,
         };
 
         let mut host_results = Vec::new();
@@ -1891,7 +2304,7 @@ impl ScanOrchestrator {
             // Get MAC address for IPv4 targets
             let mac = match target.ip {
                 IpAddr::V4(target_ipv4) => {
-                    get_mac_address_via_arp(
+                    resolve_mac_address(
                         target_ipv4,
                         local_addr,
                         std::time::Duration::from_millis(500),
@@ -2024,7 +2437,7 @@ impl ScanOrchestrator {
                 ip: target.ip,
                 mac: match target.ip {
                     IpAddr::V4(target_ipv4) => {
-                        get_mac_address_via_arp(
+                        resolve_mac_address(
                             target_ipv4,
                             local_addr,
                             std::time::Duration::from_millis(500),
@@ -2070,7 +2483,7 @@ impl ScanOrchestrator {
             if !host_results.iter().any(|h| h.ip == target.ip) {
                 let mac = match target.ip {
                     IpAddr::V4(target_ipv4) => {
-                        get_mac_address_via_arp(
+                        resolve_mac_address(
                             target_ipv4,
                             local_addr,
                             std::time::Duration::from_millis(500),
@@ -2159,6 +2572,7 @@ impl ScanOrchestrator {
             min_rate: self.session.config.min_rate,
             max_rate: self.session.config.max_rate,
             timing_level: timing_config.timing_level,
+            badsum: self.session.config.badsum,
         };
 
         // Get local address for the scanner by detecting the source IP for the target
@@ -2591,15 +3005,15 @@ impl ScanOrchestrator {
             return Ok(());
         };
 
-        // Get local address for OS detection probes
-        let local_addr = std::net::Ipv4Addr::UNSPECIFIED;
-
         for host_result in host_results.iter_mut() {
             // OS detection only works with IPv4
             let IpAddr::V4(target_ip) = host_result.ip else {
                 debug!(ip = %host_result.ip, "OS detection skipped for IPv6 target");
                 continue;
             };
+
+            // Resolve correct source address for this target
+            let local_addr = get_source_address_for_target(target_ip);
 
             // Find open and closed ports for OS detection probes
             // Nmap requires both: open port for SEQ/ECN probes, closed port for T2-T7 tests
@@ -2615,11 +3029,22 @@ impl ScanOrchestrator {
                 .find(|p| p.state == PortState::Closed)
                 .map_or(443, |p| p.number);
 
-            // Create detector with the correct ports for this host
+            // Create detector with the correct ports for this host.
+            // Use measured RTT for timeout: nmap uses 5s default but adapts based on RTT.
+            let measured_rtt = host_result.latency;
+            let timeout = if measured_rtt > std::time::Duration::ZERO {
+                // Use 10x measured RTT, clamped to [500ms, 5s]
+                (measured_rtt * 10)
+                    .max(std::time::Duration::from_millis(500))
+                    .min(std::time::Duration::from_secs(5))
+            } else {
+                std::time::Duration::from_secs(5)
+            };
+
             let detector = rustnmap_fingerprint::OsDetector::new(os_db.clone(), local_addr)
                 .with_open_port(open_port)
                 .with_closed_port(closed_port)
-                .with_timeout(std::time::Duration::from_secs(5));
+                .with_timeout(timeout);
 
             let target_addr = SocketAddr::new(IpAddr::V4(target_ip), open_port);
 
@@ -2876,25 +3301,44 @@ impl ScanOrchestrator {
     async fn run_traceroute(&self, host_results: &mut [HostResult]) -> Result<()> {
         info!("Starting traceroute phase");
 
-        // Create traceroute configuration
-        let config = rustnmap_traceroute::TracerouteConfig::new()
-            .with_max_hops(30)
-            .with_probes_per_hop(3)
-            .with_probe_timeout(std::time::Duration::from_secs(1));
-
-        // Get local address for traceroute
-        let local_addr = rustnmap_common::Ipv4Addr::UNSPECIFIED;
-
-        // Create traceroute instance
-        let Ok(tracer) = rustnmap_traceroute::Traceroute::new(config, local_addr) else {
-            warn!("Failed to create traceroute instance");
-            return Ok(());
-        };
-
         for host_result in host_results.iter_mut() {
             // Traceroute only works with IPv4
             let IpAddr::V4(addr) = host_result.ip else {
                 debug!(ip = %host_result.ip, "Traceroute skipped for IPv6 target");
+                continue;
+            };
+
+            // Resolve correct source address for this target's routing path
+            let src_addr = get_source_address_for_target(addr);
+            let local_addr = rustnmap_common::Ipv4Addr::new(
+                src_addr.octets()[0],
+                src_addr.octets()[1],
+                src_addr.octets()[2],
+                src_addr.octets()[3],
+            );
+
+            // Use measured RTT from port scanning if available to set probe timeout.
+            // Nmap uses timing data from the scan phase for traceroute probes.
+            // Use 4x the measured latency, clamped to [100ms, 500ms].
+            let measured_rtt = host_result.latency;
+            let probe_timeout = if measured_rtt > std::time::Duration::ZERO {
+                (measured_rtt * 4)
+                    .max(std::time::Duration::from_millis(100))
+                    .min(std::time::Duration::from_millis(500))
+            } else {
+                std::time::Duration::from_millis(500)
+            };
+
+            // Create traceroute configuration with correct source address.
+            // Nmap uses 1 probe per hop for --traceroute (not 3 like traditional traceroute).
+            let config = rustnmap_traceroute::TracerouteConfig::new()
+                .with_max_hops(20)
+                .with_probes_per_hop(1)
+                .with_probe_timeout(probe_timeout);
+
+            // Create traceroute instance per target (correct source address)
+            let Ok(tracer) = rustnmap_traceroute::Traceroute::new(config, local_addr) else {
+                warn!("Failed to create traceroute instance");
                 continue;
             };
 

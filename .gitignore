@@ -10,6 +10,8 @@ benchmarks/uv.lock
 benchmarks/__pycache__
 benchmarks/reports/*.txt
 benchmarks/reports/*.json
+benchmarks/reports/*.md
+
 
 # Benchmarks results
 benchmarks/reports/*.txt

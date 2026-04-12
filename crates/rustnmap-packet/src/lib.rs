@@ -98,6 +98,8 @@ pub use crate::error::{PacketError, Result};
 #[doc(inline)]
 pub use crate::mmap::MmapPacketEngine;
 #[doc(inline)]
+pub use crate::mmap::RingRef;
+#[doc(inline)]
 pub use crate::recvfrom::RecvfromPacketEngine;
 #[doc(inline)]
 pub use crate::stream::PacketStream;

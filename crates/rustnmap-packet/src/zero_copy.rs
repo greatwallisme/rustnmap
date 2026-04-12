@@ -1,38 +1,40 @@
 //! Zero-copy packet buffer implementation for PACKET_MMAP V2.
 //!
 //! This module provides `ZeroCopyPacket`, a packet buffer that holds a reference
-//! to the `MmapPacketEngine` to ensure the memory-mapped region remains valid
-//! during the packet's lifetime. The frame is automatically released back to
-//! the kernel when the packet is dropped.
+//! to the shared ring buffer (`Arc<RingRef>`) to ensure the memory-mapped region
+//! remains valid during the packet's lifetime. The frame is automatically released
+//! back to the kernel when the packet is dropped.
 //!
 //! # Architecture
 //!
 //! The zero-copy architecture has three layers:
 //!
-//! 1. **MmapPacketEngine** - Owns the kernel-shared memory ring buffer (4MB)
-//!    - Contains frame structures managed by the kernel
-//!    - Provides access to individual frames
+//! 1. **MmapPacketEngine** - Owns the socket fd and the `Arc<RingRef>`
+//!    - Created once at engine construction
+//!    - Shares `RingRef` with packets via `Arc::clone`
 //!
-//! 2. **Arc<MmapPacketEngine>** - Reference counting to keep the engine alive
-//!    - Prevents munmap while packets are in use
-//!    - Ensures socket fd remains valid
+//! 2. **Arc<RingRef>** - Lightweight reference-counted ring buffer state
+//!    - Contains only the mmap pointer, size, frame pointers, and frame count
+//!    - Cloning is ~10 CPU cycles (atomic increment)
+//!    - `Drop` calls `munmap` when the last reference is dropped
 //!
 //! 3. **ZeroCopyPacket** - Zero-copy view into a single frame
-//!    - `_engine: Arc<MmapPacketEngine>` - keeps engine alive
+//!    - `_ring_ref: Arc<RingRef>` - keeps mmap region alive
 //!    - `frame_idx: u32` - tracks which frame is in use
 //!    - `data: ZeroCopyBytes` - zero-copy view into packet data
 //!    - `impl Drop` - releases frame back to kernel when dropped
 //!
 //! # Memory Safety
 //!
-//! The `Arc<MmapPacketEngine>` ensures that:
+//! The `Arc<RingRef>` ensures that:
 //! 1. The memory-mapped region is not `munmap`-ed while the packet is alive
-//! 2. The socket file descriptor remains valid
-//! 3. The frame pointers remain valid
+//! 2. The frame pointers remain valid
+//! 3. `munmap` happens automatically when the last reference drops
 //!
 //! # Performance
 //!
 //! - **No `memcpy`**: Data is accessed directly from kernel memory
+//! - **No dup(fd)**: Arc::clone replaces the old dup(fd) + full engine clone
 //! - **Atomic operations**: Only reference counting overhead (~10 CPU cycles)
 //! - **Automatic cleanup**: Frame released on `drop`
 //!
@@ -50,9 +52,9 @@
 //! } // Frame automatically released back to kernel here
 //! ```
 
-// Rust guideline compliant 2026-03-07
+// Rust guideline compliant 2026-04-11
 
-use crate::mmap::MmapPacketEngine;
+use crate::mmap::RingRef;
 use std::fmt;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -66,14 +68,14 @@ use std::time::Instant;
 ///
 /// # Memory Safety
 ///
-/// For borrowed data, the `Arc<MmapPacketEngine>` ensures the mmap
+/// For borrowed data, the `Arc<RingRef>` ensures the mmap
 /// region is not freed while this view is alive.
 ///
 /// # Example
 ///
 /// ```rust,ignore
 /// // Borrowed from mmap region (zero-copy)
-/// let view = ZeroCopyBytes::borrowed(engine, ptr, len);
+/// let view = ZeroCopyBytes::borrowed(ring_ref, ptr, len);
 ///
 /// // Owned data (copied, e.g., for VLAN reconstruction)
 /// let view = ZeroCopyBytes::owned(vec);
@@ -81,7 +83,7 @@ use std::time::Instant;
 #[derive(Clone)]
 pub struct ZeroCopyBytes {
     /// Arc reference to keep the mmap region alive (for borrowed data).
-    _engine: Option<Arc<MmapPacketEngine>>,
+    _ring_ref: Option<Arc<RingRef>>,
 
     /// Pointer into the mmap region (for borrowed data).
     ptr: *const u8,
@@ -107,24 +109,20 @@ impl ZeroCopyBytes {
     ///
     /// # Arguments
     ///
-    /// * `engine` - Arc reference to keep the mmap region alive
+    /// * `ring_ref` - Arc reference to keep the mmap region alive
     /// * `ptr` - Pointer into the mmap region
     /// * `len` - Length of the data
     ///
     /// # Safety
     ///
     /// The caller must ensure:
-    /// - `ptr` points into the memory-mapped region owned by `engine`
+    /// - `ptr` points into the memory-mapped region owned by `ring_ref`
     /// - `ptr..ptr+len` is within the mmap region bounds
     /// - The data remains valid for the lifetime of this view
     #[must_use]
-    pub const unsafe fn borrowed(
-        engine: Arc<MmapPacketEngine>,
-        ptr: *const u8,
-        len: usize,
-    ) -> Self {
+    pub const unsafe fn borrowed(ring_ref: Arc<RingRef>, ptr: *const u8, len: usize) -> Self {
         Self {
-            _engine: Some(engine),
+            _ring_ref: Some(ring_ref),
             ptr,
             len,
             owned: None,
@@ -141,7 +139,7 @@ impl ZeroCopyBytes {
         let len = data.len();
         let ptr = data.as_ptr();
         Self {
-            _engine: None,
+            _ring_ref: None,
             ptr,
             len,
             owned: Some(data),
@@ -212,21 +210,21 @@ impl fmt::Debug for ZeroCopyBytes {
 /// Zero-copy packet buffer with automatic frame lifetime management.
 ///
 /// This struct can hold either:
-/// 1. A reference to the `MmapPacketEngine` via `Arc` for true zero-copy packets from mmap
+/// 1. A reference to the ring buffer via `Arc<RingRef>` for true zero-copy packets from mmap
 /// 2. Owned data for packets received via recvfrom or other non-zero-copy sources
 ///
-/// When holding a reference to the engine, the frame is automatically released
+/// When holding a ring reference, the frame is automatically released
 /// back to the kernel when the packet is dropped. For owned data, no frame
 /// release is needed.
 ///
 /// # Memory Safety
 ///
-/// For zero-copy packets (when `_engine` is `Some`):
-/// - The `Arc<MmapPacketEngine>` ensures the `mmap` region is not freed while the packet is alive
-/// - The socket file descriptor remains valid
+/// For zero-copy packets (when `_ring_ref` is `Some`):
+/// - The `Arc<RingRef>` ensures the `mmap` region is not freed while the packet is alive
 /// - The frame pointer remains valid
+/// - `munmap` happens when the last `Arc<RingRef>` is dropped
 ///
-/// For owned packets (when `_engine` is `None`):
+/// For owned packets (when `_ring_ref` is `None`):
 /// - The data is owned and lives for the lifetime of the packet
 /// - No frame release is performed on drop
 ///
@@ -252,19 +250,19 @@ impl fmt::Debug for ZeroCopyBytes {
 /// ```
 #[derive(Debug)]
 pub struct ZeroCopyPacket {
-    /// Optional Arc reference to the engine that owns the mmap region.
+    /// Optional Arc reference to the shared ring buffer state.
     ///
-    /// - `Some(engine)`: Zero-copy packet, frame will be released on drop
+    /// - `Some(ring_ref)`: Zero-copy packet, frame will be released on drop
     /// - `None`: Owned packet (e.g., from recvfrom), no frame to release
     #[expect(
         clippy::used_underscore_binding,
         reason = "Field is only used in Drop impl"
     )]
-    _engine: Option<Arc<MmapPacketEngine>>,
+    _ring_ref: Option<Arc<RingRef>>,
 
     /// Index of the frame in the ring buffer.
     ///
-    /// Only used when `_engine` is `Some` to release the frame back to the kernel.
+    /// Only used when `_ring_ref` is `Some` to release the frame back to the kernel.
     frame_idx: u32,
 
     /// Zero-copy view into the packet data.
@@ -290,11 +288,11 @@ pub struct ZeroCopyPacket {
 }
 
 impl ZeroCopyPacket {
-    /// Creates a new zero-copy packet from an mmap engine.
+    /// Creates a new zero-copy packet from a shared ring buffer reference.
     ///
     /// # Arguments
     ///
-    /// * `engine` - Arc reference to the mmap engine
+    /// * `ring_ref` - Arc reference to the shared ring buffer state
     /// * `frame_idx` - Index of the frame in the ring buffer
     /// * `data` - Zero-copy bytes view into the packet data
     /// * `timestamp` - When the packet was received
@@ -306,20 +304,21 @@ impl ZeroCopyPacket {
     /// # Safety
     ///
     /// The caller must ensure:
-    /// - `data` points into the memory-mapped region owned by `engine`
+    /// - `data` points into the memory-mapped region owned by `ring_ref`
     /// - The frame at `frame_idx` is marked as in-use
     /// - The frame remains valid for the lifetime of this packet
     ///
     /// # Panics
     ///
-    /// Panics if the data pointer is not within the engine's mmap region (in debug builds, borrowed data only).
+    /// Panics if the data pointer is not within the ring buffer's mmap region
+    /// (in debug builds, borrowed data only).
     #[expect(
         clippy::too_many_arguments,
         reason = "All parameters are distinct and required for zero-copy packet construction"
     )]
     #[must_use]
     pub fn new(
-        engine: Arc<MmapPacketEngine>,
+        ring_ref: Arc<RingRef>,
         frame_idx: u32,
         data: ZeroCopyBytes,
         timestamp: Instant,
@@ -333,8 +332,8 @@ impl ZeroCopyPacket {
             // For borrowed data, verify data pointer is within mmap region
             // For owned data, we skip this check since the pointer is into a Vec
             if data.is_borrowed() {
-                let mmap_start = engine.ring_ptr() as usize;
-                let mmap_end = mmap_start + engine.ring_size();
+                let mmap_start = ring_ref.ring_ptr.as_ptr() as usize;
+                let mmap_end = mmap_start + ring_ref.ring_size;
                 // For borrowed data, the pointer is valid and points into mmap region
                 let data_ptr = data.as_ptr() as usize;
 
@@ -349,7 +348,7 @@ impl ZeroCopyPacket {
         }
 
         Self {
-            _engine: Some(engine),
+            _ring_ref: Some(ring_ref),
             frame_idx,
             data,
             timestamp,
@@ -395,7 +394,7 @@ impl ZeroCopyPacket {
     ) -> Self {
         let zero_copy_bytes = ZeroCopyBytes::owned(data);
         Self {
-            _engine: None,
+            _ring_ref: None,
             frame_idx: 0,
             data: zero_copy_bytes,
             timestamp,
@@ -459,30 +458,30 @@ impl ZeroCopyPacket {
 
     /// Returns the frame index.
     ///
-    /// Returns `0` for owned packets (where `_engine` is `None`).
+    /// Returns `0` for owned packets (where `_ring_ref` is `None`).
     #[must_use]
     pub const fn frame_idx(&self) -> u32 {
         self.frame_idx
     }
 
-    /// Returns a reference to the engine, if this is a zero-copy packet.
+    /// Returns a reference to the ring buffer state, if this is a zero-copy packet.
     ///
     /// Returns `None` for owned packets.
     #[must_use]
-    pub const fn engine(&self) -> Option<&Arc<MmapPacketEngine>> {
-        self._engine.as_ref()
+    pub const fn ring_ref(&self) -> Option<&Arc<RingRef>> {
+        self._ring_ref.as_ref()
     }
 
     /// Returns `true` if this is a zero-copy packet (backed by mmap).
     #[must_use]
     pub const fn is_zero_copy(&self) -> bool {
-        self._engine.is_some()
+        self._ring_ref.is_some()
     }
 
     /// Converts the zero-copy packet into a `PacketBuffer`.
     ///
     /// This copies the data, so the resulting `PacketBuffer` no longer
-    /// holds a reference to the engine.
+    /// holds a reference to the ring buffer.
     ///
     /// # Example
     ///
@@ -512,10 +511,10 @@ impl ZeroCopyPacket {
 impl Drop for ZeroCopyPacket {
     fn drop(&mut self) {
         // Release the frame back to the kernel when the packet is dropped.
-        // This only applies to zero-copy packets (where _engine is Some).
+        // This only applies to zero-copy packets (where _ring_ref is Some).
         // For owned packets, there's no frame to release.
-        if let Some(engine) = &self._engine {
-            engine.release_frame_by_idx(self.frame_idx);
+        if let Some(ring_ref) = &self._ring_ref {
+            ring_ref.release_frame(self.frame_idx);
         }
     }
 }
@@ -528,10 +527,10 @@ impl Clone for ZeroCopyPacket {
         // 3. The same frame_idx
         //
         // When both clones are dropped, the frame will be released twice.
-        // This is safe because release_frame_by_idx uses atomic operations.
+        // This is safe because release_frame uses atomic operations.
         // For owned packets, there's no frame to release.
         Self {
-            _engine: self._engine.as_ref().map(Arc::clone),
+            _ring_ref: self._ring_ref.as_ref().map(Arc::clone),
             frame_idx: self.frame_idx,
             data: self.data.clone(),
             timestamp: self.timestamp,
@@ -548,15 +547,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_zero_copy_bytes_borrowed() {
-        // Test that the borrowed constructor compiles
-        // Note: This doesn't create a real engine, just tests the API
-        let _ = "test";
-    }
-
-    #[test]
     fn test_zero_copy_bytes_owned() {
-        // Test that the owned constructor works
         let data = vec![1u8, 2, 3, 4, 5];
         let bytes = ZeroCopyBytes::owned(data);
         assert_eq!(bytes.len(), 5);

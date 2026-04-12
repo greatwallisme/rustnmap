@@ -174,7 +174,7 @@ async fn test_service_detection_http() {
         .with_intensity(7);
 
     // Attempt detection - may fail if no service is running
-    let result = detector.detect_service(&target, target.port()).await;
+    let result = detector.detect_service_with_protocol(&target, target.port(), "tcp").await;
 
     // Should either succeed with results or return unknown
     if let Ok(services) = result {
@@ -304,7 +304,7 @@ async fn test_detection_timeout() {
     let detector = ServiceDetector::new(db).with_timeout(Duration::from_millis(100)); // Very short timeout
 
     // Should timeout quickly or return empty results
-    let result = detector.detect_service(&target, 80).await;
+    let result = detector.detect_service_with_protocol(&target, 80, "tcp").await;
 
     // Result should be either:
     // - Error (timeout or network unreachable)

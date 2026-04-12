@@ -84,13 +84,34 @@ impl AdaptiveTiming {
     ///
     /// Initial values:
     /// - SRTT: 1000ms (`INITIAL_RTT_TIMEOUT`)
-    /// - RTTVAR: 1000ms (clamped between 5ms-2000ms)
+    /// - RTTVAR: 500ms (srtt / 2, matching nmap `timing.cc:124`)
     const fn new() -> Self {
         Self {
             // Nmap INITIAL_RTT_TIMEOUT = 1000ms
             srtt_micros: 1_000_000,
-            // Nmap: rttvar = box(5000, 2000000, srtt) = clamp(srtt, 5ms, 2000ms)
-            rttvar_micros: 1_000_000,
+            // Nmap timing.cc:124: rttvar = box(5000, 2000000, srtt) = clamp(srtt, 5ms, 2s)
+            // Before first measurement, nmap sets rttvar = srtt/2 (RFC 6298 Section 2.3)
+            rttvar_micros: 500_000,
+            first_measurement: true,
+        }
+    }
+
+    /// Creates adaptive timing with initial RTT from config.
+    ///
+    /// Uses the config's `initial_rtt` to seed the timing estimator,
+    /// matching nmap's behavior of using `initialRttTimeout` before
+    /// any measurements are available.
+    fn with_initial_rtt(initial_rtt: Duration) -> Self {
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "initial_rtt is always within reasonable bounds (< 30s)"
+        )]
+        let srtt_micros = initial_rtt.as_micros() as u64;
+        // Nmap timing.cc:124: rttvar = clamp(srtt, 5ms, 2s)
+        let rttvar_micros = (srtt_micros / 2).clamp(5_000, 2_000_000);
+        Self {
+            srtt_micros,
+            rttvar_micros,
             first_measurement: true,
         }
     }
@@ -260,6 +281,38 @@ impl TcpFinScanner {
         })
     }
 
+    /// Receives a packet using the `PACKET_MMAP` engine (preferred) or raw socket fallback.
+    fn recv_packet(&self, buf: &mut [u8], timeout: Duration) -> io::Result<Option<usize>> {
+        if let Some(ref engine_arc) = self.packet_engine {
+            tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(async {
+                    let mut engine = engine_arc.lock().await;
+                    if !self
+                        .packet_engine_started
+                        .load(std::sync::atomic::Ordering::Relaxed)
+                    {
+                        let _ = engine.start().await.map_err(|e| {
+                            io::Error::other(format!("Failed to start packet engine: {e}"))
+                        });
+                        self.packet_engine_started
+                            .store(true, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    match engine.recv_with_timeout(timeout).await {
+                        Ok(Some(data)) => {
+                            let len = data.len().min(buf.len());
+                            buf[..len].copy_from_slice(&data[..len]);
+                            Ok(Some(len))
+                        }
+                        Ok(None) => Ok(None),
+                        Err(e) => Err(io::Error::other(format!("Packet engine error: {e}"))),
+                    }
+                })
+            })
+        } else {
+            self.socket.recv_packet(buf, Some(timeout)).map(Some)
+        }
+    }
+
     /// Scans a single port on a target.
     fn scan_port_impl(
         &self,
@@ -288,6 +341,7 @@ impl TcpFinScanner {
             .seq(seq)
             .fin()
             .window(65535)
+            .badsum_if(self.config.badsum)
             .build();
 
         let dst_sockaddr = SocketAddr::new(std::net::IpAddr::V4(dst_addr), dst_port);
@@ -505,11 +559,26 @@ impl TcpFinScanner {
         let max_retries = u32::from(self.config.max_retries.min(3));
 
         // Adaptive timing for nmap-style RTT estimation
-        let mut timing = AdaptiveTiming::new();
+        let mut timing = AdaptiveTiming::with_initial_rtt(self.config.initial_rtt);
 
-        // Flush any stale packets from the packet socket BEFORE starting.
-        // The packet engine uses a different buffering strategy, so no flush is needed.
-        let _flushed = self.packet_engine.is_some();
+        // Start packet engine BEFORE sending any probes to ensure the ring buffer
+        // is ready to capture responses. Without this, RST responses that arrive
+        // between probe sending and first recv_packet() call are lost.
+        if let Some(ref engine_arc) = self.packet_engine {
+            if !self
+                .packet_engine_started
+                .load(std::sync::atomic::Ordering::Relaxed)
+            {
+                tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current().block_on(async {
+                        let mut engine = engine_arc.lock().await;
+                        let _ = engine.start().await;
+                    });
+                });
+                self.packet_engine_started
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
 
         // Nmap-style retry loop with adaptive timeout
         for _retry_round in 0..=max_retries {
@@ -544,6 +613,7 @@ impl TcpFinScanner {
                             .seq(seq)
                             .fin()
                             .window(65535)
+                            .badsum_if(self.config.badsum)
                             .build();
 
                         let port_sockaddr =
@@ -574,6 +644,7 @@ impl TcpFinScanner {
                             .seq(seq)
                             .fin()
                             .window(65535)
+                            .badsum_if(self.config.badsum)
                             .build();
 
                     let port_sockaddr = SocketAddr::new(std::net::IpAddr::V4(dst_addr), *dst_port);
@@ -603,15 +674,19 @@ impl TcpFinScanner {
                     break;
                 }
 
-                // The packet engine provides PACKET_MMAP V2 zero-copy capture but requires async context.
-                // This synchronous method uses raw socket reception for packet capture.
-                // Future migration will make this method async to leverage the packet engine.
-                let data = match self
-                    .socket
-                    .recv_packet(recv_buf.as_mut_slice(), Some(remaining))
-                {
-                    Ok(len) if len > 0 => (&recv_buf[..len], len),
-                    Ok(_) => continue,
+                // Use packet engine (PACKET_MMAP) for reception when available.
+                // IPPROTO_RAW socket is send-only on Linux; packet engine uses AF_PACKET which can receive.
+                let data = match self.recv_packet(recv_buf.as_mut_slice(), remaining) {
+                    Ok(Some(len)) if len > 0 => {
+                        // PACKET_MMAP captures at Ethernet layer, skip 14-byte header
+                        let packet_data = if self.packet_engine.is_some() && len > 14 {
+                            &recv_buf[14..len]
+                        } else {
+                            &recv_buf[..len]
+                        };
+                        (packet_data, len)
+                    }
+                    Ok(Some(_) | None) => continue,
                     Err(e)
                         if e.kind() == io::ErrorKind::WouldBlock
                             || e.kind() == io::ErrorKind::TimedOut =>
@@ -806,6 +881,38 @@ impl TcpNullScanner {
         })
     }
 
+    /// Receives a packet using the `PACKET_MMAP` engine (preferred) or raw socket fallback.
+    fn recv_packet(&self, buf: &mut [u8], timeout: Duration) -> io::Result<Option<usize>> {
+        if let Some(ref engine_arc) = self.packet_engine {
+            tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(async {
+                    let mut engine = engine_arc.lock().await;
+                    if !self
+                        .packet_engine_started
+                        .load(std::sync::atomic::Ordering::Relaxed)
+                    {
+                        let _ = engine.start().await.map_err(|e| {
+                            io::Error::other(format!("Failed to start packet engine: {e}"))
+                        });
+                        self.packet_engine_started
+                            .store(true, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    match engine.recv_with_timeout(timeout).await {
+                        Ok(Some(data)) => {
+                            let len = data.len().min(buf.len());
+                            buf[..len].copy_from_slice(&data[..len]);
+                            Ok(Some(len))
+                        }
+                        Ok(None) => Ok(None),
+                        Err(e) => Err(io::Error::other(format!("Packet engine error: {e}"))),
+                    }
+                })
+            })
+        } else {
+            self.socket.recv_packet(buf, Some(timeout)).map(Some)
+        }
+    }
+
     /// Scans a single port on a target.
     fn scan_port_impl(
         &self,
@@ -834,6 +941,7 @@ impl TcpNullScanner {
         let packet = TcpPacketBuilder::new(self.local_addr, dst_addr, src_port, dst_port)
             .seq(seq)
             .window(65_535)
+            .badsum_if(self.config.badsum)
             .build();
 
         let dst_sockaddr = SocketAddr::new(std::net::IpAddr::V4(dst_addr), dst_port);
@@ -1019,11 +1127,26 @@ impl TcpNullScanner {
         let max_retries = u32::from(self.config.max_retries.min(3));
 
         // Adaptive timing for nmap-style RTT estimation
-        let mut timing = AdaptiveTiming::new();
+        let mut timing = AdaptiveTiming::with_initial_rtt(self.config.initial_rtt);
 
-        // Flush any stale packets from the packet socket BEFORE starting.
-        // The packet engine uses a different buffering strategy, so no flush is needed.
-        let _flushed = self.packet_engine.is_some();
+        // Start packet engine BEFORE sending any probes to ensure the ring buffer
+        // is ready to capture responses. Without this, RST responses that arrive
+        // between probe sending and first recv_packet() call are lost.
+        if let Some(ref engine_arc) = self.packet_engine {
+            if !self
+                .packet_engine_started
+                .load(std::sync::atomic::Ordering::Relaxed)
+            {
+                tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current().block_on(async {
+                        let mut engine = engine_arc.lock().await;
+                        let _ = engine.start().await;
+                    });
+                });
+                self.packet_engine_started
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
 
         // Nmap-style retry loop with adaptive timeout
         for _retry_round in 0..=max_retries {
@@ -1055,6 +1178,7 @@ impl TcpNullScanner {
                         let packet = TcpPacketBuilder::new(src_ipv4, dst_addr, src_port, *dst_port)
                             .seq(seq)
                             .window(65535)
+                            .badsum_if(self.config.badsum)
                             .build();
 
                         let port_sockaddr =
@@ -1082,6 +1206,7 @@ impl TcpNullScanner {
                         TcpPacketBuilder::new(self.local_addr, dst_addr, src_port, *dst_port)
                             .seq(seq)
                             .window(65535)
+                            .badsum_if(self.config.badsum)
                             .build();
 
                     let port_sockaddr = SocketAddr::new(std::net::IpAddr::V4(dst_addr), *dst_port);
@@ -1111,15 +1236,19 @@ impl TcpNullScanner {
                     break;
                 }
 
-                // The packet engine provides PACKET_MMAP V2 zero-copy capture but requires async context.
-                // This synchronous method uses raw socket reception for packet capture.
-                // Future migration will make this method async to leverage the packet engine.
-                let data = match self
-                    .socket
-                    .recv_packet(recv_buf.as_mut_slice(), Some(remaining))
-                {
-                    Ok(len) if len > 0 => (&recv_buf[..len], len),
-                    Ok(_) => continue,
+                // Use packet engine (PACKET_MMAP) for reception when available.
+                // IPPROTO_RAW socket is send-only on Linux; packet engine uses AF_PACKET which can receive.
+                let data = match self.recv_packet(recv_buf.as_mut_slice(), remaining) {
+                    Ok(Some(len)) if len > 0 => {
+                        // PACKET_MMAP captures at Ethernet layer, skip 14-byte header
+                        let packet_data = if self.packet_engine.is_some() && len > 14 {
+                            &recv_buf[14..len]
+                        } else {
+                            &recv_buf[..len]
+                        };
+                        (packet_data, len)
+                    }
+                    Ok(Some(_) | None) => continue,
                     Err(e)
                         if e.kind() == io::ErrorKind::WouldBlock
                             || e.kind() == io::ErrorKind::TimedOut =>
@@ -1135,13 +1264,17 @@ impl TcpNullScanner {
                     }
                 };
 
-                if let Some((flags, _seq, _ack, src_port, _dst_port, src_ip)) =
+                if let Some((flags, _seq, _ack, _resp_src_port, resp_dst_port, src_ip)) =
                     parse_tcp_response(data.0)
                 {
                     if src_ip == dst_addr {
-                        if let Some(dst_port) = src_to_dst.remove(&src_port) {
+                        // RST responses come FROM target port TO our source port.
+                        // src_to_dst maps our_source_port -> target_port, so use resp_dst_port (our source port) as key.
+                        if let Some(scanned_port) = src_to_dst.remove(&resp_dst_port) {
                             // Update RTT estimate for adaptive timing
-                            if let Some((_, sent_time)) = outstanding.get(&(dst_port, src_port)) {
+                            if let Some((_, sent_time)) =
+                                outstanding.get(&(scanned_port, resp_dst_port))
+                            {
                                 timing.update_rtt(sent_time.elapsed());
                             }
                             let state = if (flags & tcp_flags::RST) != 0 {
@@ -1149,13 +1282,13 @@ impl TcpNullScanner {
                             } else {
                                 PortState::Filtered
                             };
-                            results.insert(dst_port, state);
-                            pending_ports.remove(&dst_port);
-                            outstanding.remove(&(dst_port, src_port));
-                            if let Some(srcs) = port_srcs.get_mut(&dst_port) {
-                                srcs.remove(&src_port);
+                            results.insert(scanned_port, state);
+                            pending_ports.remove(&scanned_port);
+                            outstanding.remove(&(scanned_port, resp_dst_port));
+                            if let Some(srcs) = port_srcs.get_mut(&scanned_port) {
+                                srcs.remove(&resp_dst_port);
                                 if srcs.is_empty() {
-                                    port_srcs.remove(&dst_port);
+                                    port_srcs.remove(&scanned_port);
                                 }
                             }
                         }
@@ -1311,6 +1444,38 @@ impl TcpXmasScanner {
         })
     }
 
+    /// Receives a packet using the `PACKET_MMAP` engine (preferred) or raw socket fallback.
+    fn recv_packet(&self, buf: &mut [u8], timeout: Duration) -> io::Result<Option<usize>> {
+        if let Some(ref engine_arc) = self.packet_engine {
+            tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(async {
+                    let mut engine = engine_arc.lock().await;
+                    if !self
+                        .packet_engine_started
+                        .load(std::sync::atomic::Ordering::Relaxed)
+                    {
+                        let _ = engine.start().await.map_err(|e| {
+                            io::Error::other(format!("Failed to start packet engine: {e}"))
+                        });
+                        self.packet_engine_started
+                            .store(true, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    match engine.recv_with_timeout(timeout).await {
+                        Ok(Some(data)) => {
+                            let len = data.len().min(buf.len());
+                            buf[..len].copy_from_slice(&data[..len]);
+                            Ok(Some(len))
+                        }
+                        Ok(None) => Ok(None),
+                        Err(e) => Err(io::Error::other(format!("Packet engine error: {e}"))),
+                    }
+                })
+            })
+        } else {
+            self.socket.recv_packet(buf, Some(timeout)).map(Some)
+        }
+    }
+
     /// Scans a single port on a target.
     fn scan_port_impl(
         &self,
@@ -1342,6 +1507,7 @@ impl TcpXmasScanner {
             .psh()
             .urg()
             .window(65535)
+            .badsum_if(self.config.badsum)
             .build();
 
         let dst_sockaddr = SocketAddr::new(std::net::IpAddr::V4(dst_addr), dst_port);
@@ -1527,11 +1693,26 @@ impl TcpXmasScanner {
         let max_retries = u32::from(self.config.max_retries.min(3));
 
         // Adaptive timing for nmap-style RTT estimation
-        let mut timing = AdaptiveTiming::new();
+        let mut timing = AdaptiveTiming::with_initial_rtt(self.config.initial_rtt);
 
-        // Flush any stale packets from the packet socket BEFORE starting.
-        // The packet engine uses a different buffering strategy, so no flush is needed.
-        let _flushed = self.packet_engine.is_some();
+        // Start packet engine BEFORE sending any probes to ensure the ring buffer
+        // is ready to capture responses. Without this, RST responses that arrive
+        // between probe sending and first recv_packet() call are lost.
+        if let Some(ref engine_arc) = self.packet_engine {
+            if !self
+                .packet_engine_started
+                .load(std::sync::atomic::Ordering::Relaxed)
+            {
+                tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current().block_on(async {
+                        let mut engine = engine_arc.lock().await;
+                        let _ = engine.start().await;
+                    });
+                });
+                self.packet_engine_started
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
 
         // Nmap-style retry loop with adaptive timeout
         for _retry_round in 0..=max_retries {
@@ -1566,6 +1747,7 @@ impl TcpXmasScanner {
                             .psh()
                             .urg()
                             .window(65535)
+                            .badsum_if(self.config.badsum)
                             .build();
 
                         let port_sockaddr =
@@ -1596,6 +1778,7 @@ impl TcpXmasScanner {
                             .psh()
                             .urg()
                             .window(65535)
+                            .badsum_if(self.config.badsum)
                             .build();
 
                     let port_sockaddr = SocketAddr::new(std::net::IpAddr::V4(dst_addr), *dst_port);
@@ -1625,15 +1808,19 @@ impl TcpXmasScanner {
                     break;
                 }
 
-                // The packet engine provides PACKET_MMAP V2 zero-copy capture but requires async context.
-                // This synchronous method uses raw socket reception for packet capture.
-                // Future migration will make this method async to leverage the packet engine.
-                let data = match self
-                    .socket
-                    .recv_packet(recv_buf.as_mut_slice(), Some(remaining))
-                {
-                    Ok(len) if len > 0 => (&recv_buf[..len], len),
-                    Ok(_) => continue,
+                // Use packet engine (PACKET_MMAP) for reception when available.
+                // IPPROTO_RAW socket is send-only on Linux; packet engine uses AF_PACKET which can receive.
+                let data = match self.recv_packet(recv_buf.as_mut_slice(), remaining) {
+                    Ok(Some(len)) if len > 0 => {
+                        // PACKET_MMAP captures at Ethernet layer, skip 14-byte header
+                        let packet_data = if self.packet_engine.is_some() && len > 14 {
+                            &recv_buf[14..len]
+                        } else {
+                            &recv_buf[..len]
+                        };
+                        (packet_data, len)
+                    }
+                    Ok(Some(_) | None) => continue,
                     Err(e)
                         if e.kind() == io::ErrorKind::WouldBlock
                             || e.kind() == io::ErrorKind::TimedOut =>
@@ -1649,13 +1836,17 @@ impl TcpXmasScanner {
                     }
                 };
 
-                if let Some((flags, _seq, _ack, src_port, _dst_port, src_ip)) =
+                if let Some((flags, _seq, _ack, _resp_src_port, resp_dst_port, src_ip)) =
                     parse_tcp_response(data.0)
                 {
                     if src_ip == dst_addr {
-                        if let Some(dst_port) = src_to_dst.remove(&src_port) {
+                        // RST responses come FROM target port TO our source port.
+                        // src_to_dst maps our_source_port -> target_port, so use resp_dst_port (our source port) as key.
+                        if let Some(scanned_port) = src_to_dst.remove(&resp_dst_port) {
                             // Update RTT estimate for adaptive timing
-                            if let Some((_, sent_time)) = outstanding.get(&(dst_port, src_port)) {
+                            if let Some((_, sent_time)) =
+                                outstanding.get(&(scanned_port, resp_dst_port))
+                            {
                                 timing.update_rtt(sent_time.elapsed());
                             }
                             let state = if (flags & tcp_flags::RST) != 0 {
@@ -1663,13 +1854,13 @@ impl TcpXmasScanner {
                             } else {
                                 PortState::Filtered
                             };
-                            results.insert(dst_port, state);
-                            pending_ports.remove(&dst_port);
-                            outstanding.remove(&(dst_port, src_port));
-                            if let Some(srcs) = port_srcs.get_mut(&dst_port) {
-                                srcs.remove(&src_port);
+                            results.insert(scanned_port, state);
+                            pending_ports.remove(&scanned_port);
+                            outstanding.remove(&(scanned_port, resp_dst_port));
+                            if let Some(srcs) = port_srcs.get_mut(&scanned_port) {
+                                srcs.remove(&resp_dst_port);
                                 if srcs.is_empty() {
-                                    port_srcs.remove(&dst_port);
+                                    port_srcs.remove(&scanned_port);
                                 }
                             }
                         }
@@ -1880,6 +2071,7 @@ impl TcpAckScanner {
             .seq(seq)
             .ack_flag()
             .window(65535)
+            .badsum_if(self.config.badsum)
             .build();
 
         let dst_sockaddr = SocketAddr::new(std::net::IpAddr::V4(dst_addr), dst_port);
@@ -2051,6 +2243,10 @@ impl TcpAckScanner {
     /// - RST received -> Unfiltered
     /// - ICMP unreachable -> Filtered
     /// - No response after retries -> Filtered
+    #[expect(
+        clippy::too_many_lines,
+        reason = "Batch scanning with retransmissions requires handling send, receive, retry, and result collection in one method for clarity"
+    )]
     pub fn scan_ports_batch(
         &self,
         dst_addr: Ipv4Addr,
@@ -2072,11 +2268,26 @@ impl TcpAckScanner {
         let max_retries = u32::from(self.config.max_retries.min(3));
 
         // Adaptive timing for nmap-style RTT estimation
-        let mut timing = AdaptiveTiming::new();
+        let mut timing = AdaptiveTiming::with_initial_rtt(self.config.initial_rtt);
 
-        // Flush any stale packets from the packet socket BEFORE starting.
-        // The packet engine uses a different buffering strategy, so no flush is needed.
-        let _flushed = self.packet_engine.is_some();
+        // Start packet engine BEFORE sending any probes to ensure the ring buffer
+        // is ready to capture responses. Without this, RST responses that arrive
+        // between probe sending and first recv_packet() call are lost.
+        if let Some(ref engine_arc) = self.packet_engine {
+            if !self
+                .packet_engine_started
+                .load(std::sync::atomic::Ordering::Relaxed)
+            {
+                tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current().block_on(async {
+                        let mut engine = engine_arc.lock().await;
+                        let _ = engine.start().await;
+                    });
+                });
+                self.packet_engine_started
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
 
         // Nmap-style retry loop with adaptive timeout
         for _retry_round in 0..=max_retries {
@@ -2097,6 +2308,7 @@ impl TcpAckScanner {
                     .seq(seq)
                     .ack_flag()
                     .window(65535)
+                    .badsum_if(self.config.badsum)
                     .build();
 
                 let port_sockaddr = SocketAddr::new(std::net::IpAddr::V4(dst_addr), *dst_port);
@@ -2307,6 +2519,38 @@ impl TcpMaimonScanner {
         })
     }
 
+    /// Receives a packet using the `PACKET_MMAP` engine (preferred) or raw socket fallback.
+    fn recv_packet(&self, buf: &mut [u8], timeout: Duration) -> io::Result<Option<usize>> {
+        if let Some(ref engine_arc) = self.packet_engine {
+            tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(async {
+                    let mut engine = engine_arc.lock().await;
+                    if !self
+                        .packet_engine_started
+                        .load(std::sync::atomic::Ordering::Relaxed)
+                    {
+                        let _ = engine.start().await.map_err(|e| {
+                            io::Error::other(format!("Failed to start packet engine: {e}"))
+                        });
+                        self.packet_engine_started
+                            .store(true, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    match engine.recv_with_timeout(timeout).await {
+                        Ok(Some(data)) => {
+                            let len = data.len().min(buf.len());
+                            buf[..len].copy_from_slice(&data[..len]);
+                            Ok(Some(len))
+                        }
+                        Ok(None) => Ok(None),
+                        Err(e) => Err(io::Error::other(format!("Packet engine error: {e}"))),
+                    }
+                })
+            })
+        } else {
+            self.socket.recv_packet(buf, Some(timeout)).map(Some)
+        }
+    }
+
     /// Scans a single port on a target.
     fn scan_port_impl(
         &self,
@@ -2337,6 +2581,7 @@ impl TcpMaimonScanner {
             .fin()
             .ack_flag()
             .window(65535)
+            .badsum_if(self.config.badsum)
             .build();
 
         let dst_sockaddr = SocketAddr::new(std::net::IpAddr::V4(dst_addr), dst_port);
@@ -2517,11 +2762,26 @@ impl TcpMaimonScanner {
         let max_retries = u32::from(self.config.max_retries.min(3));
 
         // Adaptive timing for nmap-style RTT estimation
-        let mut timing = AdaptiveTiming::new();
+        let mut timing = AdaptiveTiming::with_initial_rtt(self.config.initial_rtt);
 
-        // Flush any stale packets from the packet socket BEFORE starting.
-        // The packet engine uses a different buffering strategy, so no flush is needed.
-        let _flushed = self.packet_engine.is_some();
+        // Start packet engine BEFORE sending any probes to ensure the ring buffer
+        // is ready to capture responses. Without this, RST responses that arrive
+        // between probe sending and first recv_packet() call are lost.
+        if let Some(ref engine_arc) = self.packet_engine {
+            if !self
+                .packet_engine_started
+                .load(std::sync::atomic::Ordering::Relaxed)
+            {
+                tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current().block_on(async {
+                        let mut engine = engine_arc.lock().await;
+                        let _ = engine.start().await;
+                    });
+                });
+                self.packet_engine_started
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
 
         // Nmap-style retry loop with adaptive timeout
         for _retry_round in 0..=max_retries {
@@ -2555,6 +2815,7 @@ impl TcpMaimonScanner {
                             .fin()
                             .ack_flag()
                             .window(65535)
+                            .badsum_if(self.config.badsum)
                             .build();
 
                         let port_sockaddr =
@@ -2584,6 +2845,7 @@ impl TcpMaimonScanner {
                             .fin()
                             .ack_flag()
                             .window(65535)
+                            .badsum_if(self.config.badsum)
                             .build();
 
                     let port_sockaddr = SocketAddr::new(std::net::IpAddr::V4(dst_addr), *dst_port);
@@ -2613,15 +2875,19 @@ impl TcpMaimonScanner {
                     break;
                 }
 
-                // The packet engine provides PACKET_MMAP V2 zero-copy capture but requires async context.
-                // This synchronous method uses raw socket reception for packet capture.
-                // Future migration will make this method async to leverage the packet engine.
-                let data = match self
-                    .socket
-                    .recv_packet(recv_buf.as_mut_slice(), Some(remaining))
-                {
-                    Ok(len) if len > 0 => (&recv_buf[..len], len),
-                    Ok(_) => continue,
+                // Use packet engine (PACKET_MMAP) for reception when available.
+                // IPPROTO_RAW socket is send-only on Linux; packet engine uses AF_PACKET which can receive.
+                let data = match self.recv_packet(recv_buf.as_mut_slice(), remaining) {
+                    Ok(Some(len)) if len > 0 => {
+                        // PACKET_MMAP captures at Ethernet layer, skip 14-byte header
+                        let packet_data = if self.packet_engine.is_some() && len > 14 {
+                            &recv_buf[14..len]
+                        } else {
+                            &recv_buf[..len]
+                        };
+                        (packet_data, len)
+                    }
+                    Ok(Some(_) | None) => continue,
                     Err(e)
                         if e.kind() == io::ErrorKind::WouldBlock
                             || e.kind() == io::ErrorKind::TimedOut =>
@@ -2637,13 +2903,17 @@ impl TcpMaimonScanner {
                     }
                 };
 
-                if let Some((flags, _seq, _ack, src_port, _dst_port, src_ip)) =
+                if let Some((flags, _seq, _ack, _resp_src_port, resp_dst_port, src_ip)) =
                     parse_tcp_response(data.0)
                 {
                     if src_ip == dst_addr {
-                        if let Some(dst_port) = src_to_dst.remove(&src_port) {
+                        // RST responses come FROM target port TO our source port.
+                        // src_to_dst maps our_source_port -> target_port, so use resp_dst_port (our source port) as key.
+                        if let Some(scanned_port) = src_to_dst.remove(&resp_dst_port) {
                             // Update RTT estimate for adaptive timing
-                            if let Some((_, sent_time)) = outstanding.get(&(dst_port, src_port)) {
+                            if let Some((_, sent_time)) =
+                                outstanding.get(&(scanned_port, resp_dst_port))
+                            {
                                 timing.update_rtt(sent_time.elapsed());
                             }
                             let state = if (flags & tcp_flags::RST) != 0 {
@@ -2651,13 +2921,13 @@ impl TcpMaimonScanner {
                             } else {
                                 PortState::Filtered
                             };
-                            results.insert(dst_port, state);
-                            pending_ports.remove(&dst_port);
-                            outstanding.remove(&(dst_port, src_port));
-                            if let Some(srcs) = port_srcs.get_mut(&dst_port) {
-                                srcs.remove(&src_port);
+                            results.insert(scanned_port, state);
+                            pending_ports.remove(&scanned_port);
+                            outstanding.remove(&(scanned_port, resp_dst_port));
+                            if let Some(srcs) = port_srcs.get_mut(&scanned_port) {
+                                srcs.remove(&resp_dst_port);
                                 if srcs.is_empty() {
-                                    port_srcs.remove(&dst_port);
+                                    port_srcs.remove(&scanned_port);
                                 }
                             }
                         }
@@ -2867,6 +3137,7 @@ impl TcpWindowScanner {
             .seq(seq)
             .ack_flag()
             .window(65535)
+            .badsum_if(self.config.badsum)
             .build();
 
         let dst_sockaddr = SocketAddr::new(std::net::IpAddr::V4(dst_addr), dst_port);
@@ -3061,7 +3332,7 @@ impl TcpWindowScanner {
     /// - No response after retries -> Filtered
     #[expect(
         clippy::too_many_lines,
-        reason = "Batch scan logic is inherently complex"
+        reason = "Batch scanning with retransmissions requires handling send, receive, retry, and result collection in one method for clarity"
     )]
     pub fn scan_ports_batch(
         &self,
@@ -3085,11 +3356,26 @@ impl TcpWindowScanner {
         let max_retries = u32::from(self.config.max_retries.min(3));
 
         // Adaptive timing for nmap-style RTT estimation
-        let mut timing = AdaptiveTiming::new();
+        let mut timing = AdaptiveTiming::with_initial_rtt(self.config.initial_rtt);
 
-        // Flush any stale packets from the packet socket BEFORE starting.
-        // The packet engine uses a different buffering strategy, so no flush is needed.
-        let _flushed = self.packet_engine.is_some();
+        // Start packet engine BEFORE sending any probes to ensure the ring buffer
+        // is ready to capture responses. Without this, RST responses that arrive
+        // between probe sending and first recv_packet() call are lost.
+        if let Some(ref engine_arc) = self.packet_engine {
+            if !self
+                .packet_engine_started
+                .load(std::sync::atomic::Ordering::Relaxed)
+            {
+                tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current().block_on(async {
+                        let mut engine = engine_arc.lock().await;
+                        let _ = engine.start().await;
+                    });
+                });
+                self.packet_engine_started
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
 
         // Nmap-style retry loop with adaptive timeout
         for _retry_round in 0..=max_retries {
@@ -3109,6 +3395,7 @@ impl TcpWindowScanner {
                     .seq(seq)
                     .ack_flag()
                     .window(65535)
+                    .badsum_if(self.config.badsum)
                     .build();
 
                 let port_sockaddr = SocketAddr::new(std::net::IpAddr::V4(dst_addr), *dst_port);

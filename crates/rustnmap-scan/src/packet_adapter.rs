@@ -46,7 +46,9 @@
 
 use rustnmap_common::{MacAddr, ScanConfig};
 use rustnmap_packet::{AsyncPacketEngine, BpfFilter, EngineStats, PacketEngine, RingConfig};
+use std::ffi::CStr;
 use std::net::Ipv4Addr;
+use std::net::Ipv4Addr as StdIpv4Addr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
@@ -163,6 +165,19 @@ impl ScannerPacketEngine {
         Ok(Arc::new(Mutex::new(Self::new(if_name, config)?)))
     }
 
+    /// Starts the packet engine without spawning the background receiver task.
+    ///
+    /// Use this when the caller will read packets directly via `try_recv_direct()`
+    /// instead of through the bounded channel. Avoids competition for ring buffer
+    /// frames between the background task and direct reads.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the engine is already started or startup fails.
+    pub async fn start_no_background(&mut self) -> rustnmap_packet::Result<()> {
+        self.inner.start_no_background().await
+    }
+
     /// Starts the packet engine.
     ///
     /// # Errors
@@ -270,6 +285,23 @@ impl ScannerPacketEngine {
         self.inner.set_filter(&fprog)
     }
 
+    /// Receives a packet directly from the `PACKET_MMAP` ring buffer.
+    ///
+    /// This bypasses the bounded channel and background task entirely,
+    /// providing the lowest possible latency for time-critical operations
+    /// like port scanning where probe timeout accuracy is essential.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the engine is not running or a receive error occurs.
+    pub async fn try_recv_direct(&self) -> rustnmap_packet::Result<Option<Vec<u8>>> {
+        let result = self.inner.try_recv_direct().await?;
+        match result {
+            Some(packet) => Ok(Some(packet.data().as_ref().to_vec())),
+            None => Ok(None),
+        }
+    }
+
     /// Returns the engine statistics.
     #[must_use]
     pub fn stats(&self) -> EngineStats {
@@ -313,12 +345,58 @@ impl ScannerPacketEngine {
 /// of the first interface with a loopback address (127.x.x.x).
 ///
 /// # Returns
+/// Checks if the given IP address is assigned to any local network interface.
+///
+/// This is used to detect self-scanning: when the target IP matches one of our
+/// own interface IPs, the kernel routes traffic through loopback internally,
+/// and the packet engine must be bound to the loopback interface.
+///
+/// # Arguments
+///
+/// * `addr` - IP address to check
+///
+/// # Returns
+///
+/// `true` if the address is assigned to a local interface.
+#[expect(
+    clippy::cast_ptr_alignment,
+    reason = "sockaddr is sockaddr_in when AF_INET"
+)]
+fn is_local_address(addr: Ipv4Addr) -> bool {
+    // SAFETY: getifaddrs() and freeifaddrs() are libc functions for interface enumeration.
+    // Pointer validity is checked before dereferencing. Cast from sockaddr to sockaddr_in
+    // is safe because we verify sa_family is AF_INET before casting.
+    unsafe {
+        let mut ifaddrs: *mut libc::ifaddrs = std::ptr::null_mut();
+        if libc::getifaddrs(&raw mut ifaddrs) != 0 || ifaddrs.is_null() {
+            return false;
+        }
+        let mut current = ifaddrs;
+        while !current.is_null() {
+            let ifa = &*current;
+            if !ifa.ifa_addr.is_null() && i32::from((*ifa.ifa_addr).sa_family) == libc::AF_INET {
+                let sin = &*(ifa.ifa_addr as *const libc::sockaddr_in);
+                let ip_bytes = sin.sin_addr.s_addr.to_ne_bytes();
+                let ip = StdIpv4Addr::new(ip_bytes[0], ip_bytes[1], ip_bytes[2], ip_bytes[3]);
+                if ip == addr {
+                    libc::freeifaddrs(ifaddrs);
+                    return true;
+                }
+            }
+            current = ifa.ifa_next;
+        }
+        libc::freeifaddrs(ifaddrs);
+        false
+    }
+}
+
+/// Finds the loopback interface name on the system.
+///
+/// This function enumerates all network interfaces and returns the name
+/// of the first interface with a loopback address (127.x.x.x).
 ///
 /// `Some(interface_name)` if a loopback interface is found, `None` otherwise.
 fn find_loopback_interface() -> Option<String> {
-    use std::ffi::CStr;
-    use std::net::Ipv4Addr as StdIpv4Addr;
-
     // SAFETY: getifaddrs() and freeifaddrs() are libc functions for interface enumeration.
     // The function properly handles the returned pointers and uses CStr for safe string conversion.
     // Pointer validity is checked before dereferencing.
@@ -486,9 +564,6 @@ fn detect_interface_from_addr_impl(
     local_addr: Option<Ipv4Addr>,
     target_addr: Option<Ipv4Addr>,
 ) -> String {
-    use std::ffi::CStr;
-    use std::net::Ipv4Addr as StdIpv4Addr;
-
     // Check if target is localhost (127.x.x.x)
     // For localhost scanning, we must use the loopback interface
     // because kernel routes 127.0.0.1 via 'lo', and `PACKET_MMAP`
@@ -498,6 +573,19 @@ fn detect_interface_from_addr_impl(
         // Check if address is in 127.0.0.0/8 (loopback range)
         if target_bytes[0] == 127 {
             // Target is localhost - explicitly use loopback interface
+            if let Some(lo_name) = find_loopback_interface() {
+                return lo_name;
+            }
+        }
+    }
+
+    // Check if target is one of our own interface IPs.
+    // When scanning our own IP, the kernel routes traffic through loopback
+    // internally, so we must use the loopback interface to capture responses.
+    // Without this, the AF_PACKET engine on the external interface (e.g. ens33)
+    // never sees the loopback responses, causing all ports to appear filtered.
+    if let Some(target) = target_addr {
+        if is_local_address(target) {
             if let Some(lo_name) = find_loopback_interface() {
                 return lo_name;
             }

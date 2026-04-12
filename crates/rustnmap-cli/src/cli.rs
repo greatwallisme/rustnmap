@@ -87,6 +87,11 @@ pub async fn run_scan(args: Args) -> Result<()> {
     }
 
     // Normal scan flow
+    // Handle FTP Bounce scan separately (uses FtpBounceScanner, not ultrascan)
+    if args.ftp_bounce.is_some() {
+        return handle_ftp_bounce_scan(&args);
+    }
+
     run_normal_scan(&args).await
 }
 
@@ -805,8 +810,9 @@ async fn run_normal_scan(args: &Args) -> Result<()> {
 
     // Auto-disable host discovery for single host targets (matching nmap behavior)
     // When scanning a single IP address (not a network range), host discovery is unnecessary
+    // But NOT for -sn (ping sweep) which is host discovery only
     let mut config = config;
-    if !args.disable_ping && targets.targets.len() == 1 {
+    if !args.disable_ping && !args.no_port_scan && targets.targets.len() == 1 {
         config.host_discovery = false;
         debug!("Auto-disabled host discovery for single host target");
     }
@@ -1127,6 +1133,12 @@ fn build_scan_config(args: &Args) -> Result<ScanConfig> {
     // Host discovery
     config.host_discovery = !args.disable_ping;
 
+    // No port scan (-sn): ping sweep only, skip port scanning
+    config.no_port_scan = args.no_port_scan;
+    if args.no_port_scan && !args.disable_ping {
+        config.host_discovery = true;
+    }
+
     // Aggressive scan (-A) enables: OS detection, service detection, vuln scripts, T4 timing
     if args.aggressive_scan {
         config.service_detection = true;
@@ -1186,6 +1198,9 @@ fn build_scan_config(args: &Args) -> Result<ScanConfig> {
 
     // DNS server for local IP detection
     config.dns_server.clone_from(&args.dns_server);
+
+    // Bad checksum (--badsum)
+    config.badsum = args.badsum;
 
     Ok(config)
 }
@@ -1508,7 +1523,11 @@ fn parse_port_string(s: &str) -> Result<PortSpec> {
 const fn map_scan_type(scan_type: crate::args::ScanType) -> CoreScanType {
     match scan_type {
         crate::args::ScanType::Syn => CoreScanType::TcpSyn,
-        crate::args::ScanType::Connect => CoreScanType::TcpConnect,
+        // FTP Bounce is handled separately in handle_ftp_bounce_scan,
+        // this arm should never be reached but is required for exhaustiveness.
+        crate::args::ScanType::Connect | crate::args::ScanType::FtpBounce => {
+            CoreScanType::TcpConnect
+        }
         crate::args::ScanType::Udp => CoreScanType::Udp,
         crate::args::ScanType::Fin => CoreScanType::TcpFin,
         crate::args::ScanType::Null => CoreScanType::TcpNull,
@@ -1525,20 +1544,29 @@ fn build_command_line_string(args: &Args) -> String {
 
     let mut cmd = String::from("rustnmap");
 
-    // Add scan type
-    match args.scan_type() {
-        crate::args::ScanType::Syn => cmd.push_str(" -sS"),
-        crate::args::ScanType::Connect => cmd.push_str(" -sT"),
-        crate::args::ScanType::Udp => cmd.push_str(" -sU"),
-        crate::args::ScanType::Fin => cmd.push_str(" -sF"),
-        crate::args::ScanType::Null => cmd.push_str(" -sN"),
-        crate::args::ScanType::Xmas => cmd.push_str(" -sX"),
-        crate::args::ScanType::Maimon => cmd.push_str(" -sM"),
-        crate::args::ScanType::Ack => cmd.push_str(" -sA"),
-        crate::args::ScanType::Window => cmd.push_str(" -sW"),
+    // Add scan type (show -sn for ping sweep)
+    if args.no_port_scan {
+        cmd.push_str(" -sn");
+    } else {
+        match args.scan_type() {
+            crate::args::ScanType::Syn => cmd.push_str(" -sS"),
+            crate::args::ScanType::Connect => cmd.push_str(" -sT"),
+            crate::args::ScanType::Udp => cmd.push_str(" -sU"),
+            crate::args::ScanType::Fin => cmd.push_str(" -sF"),
+            crate::args::ScanType::Null => cmd.push_str(" -sN"),
+            crate::args::ScanType::Xmas => cmd.push_str(" -sX"),
+            crate::args::ScanType::Maimon => cmd.push_str(" -sM"),
+            crate::args::ScanType::Ack => cmd.push_str(" -sA"),
+            crate::args::ScanType::Window => cmd.push_str(" -sW"),
+            crate::args::ScanType::FtpBounce => {
+                if let Some(ref b) = args.ftp_bounce {
+                    let _ = write!(cmd, " -b {b}");
+                }
+            }
+        }
     }
 
-    // Add ports
+    // Add ports (skip for -sn)
     if let Some(ports) = &args.ports {
         let _ = write!(cmd, " -p{ports}");
     } else if args.port_range_all {
@@ -1655,7 +1683,7 @@ fn print_normal_output(
 }
 
 /// Prints a single host in normal format.
-fn print_host_normal<W: Write>(handle: &mut W, args: &Args, host: &HostResult) {
+fn print_host_normal<W: Write>(handle: &mut W, _args: &Args, host: &HostResult) {
     let _ = writeln!(handle, "RustNmap scan report for {}", host.ip);
 
     if let Some(ref hostname) = host.hostname {
@@ -1676,16 +1704,53 @@ fn print_host_normal<W: Write>(handle: &mut W, args: &Args, host: &HostResult) {
         latency_ms / 1000.0
     );
 
-    // Port information
+    // Port information (sorted by port number, matching nmap output order)
+    // Uses dynamic column alignment like nmap's NmapOutputTable
     if !host.ports.is_empty() {
-        let _ = writeln!(handle, "PORT     STATE SERVICE");
-        for port in &host.ports {
-            print_port_normal(handle, args, port);
+        let mut sorted_ports: Vec<&PortResult> = host.ports.iter().collect();
+        sorted_ports.sort_by_key(|p| (p.number, p.protocol));
+
+        // Build all port rows first, then compute dynamic column widths
+        let mut port_rows: Vec<(String, String, String)> = Vec::new();
+        for port in &sorted_ports {
+            let port_col = format_port_col(port);
+            let state_col = format_state_col(port).to_string();
+            let service_col = format_service_col(port);
+            port_rows.push((port_col, state_col, service_col));
+        }
+
+        // Compute max width per column
+        let port_width = port_rows
+            .iter()
+            .map(|r| r.0.len())
+            .max()
+            .unwrap_or(4)
+            .max(4);
+        let state_width = port_rows
+            .iter()
+            .map(|r| r.1.len())
+            .max()
+            .unwrap_or(5)
+            .max(5);
+
+        // Print header
+        let _ = writeln!(
+            handle,
+            "{:<port_width$} {:<state_width$} SERVICE",
+            "PORT", "STATE",
+        );
+
+        // Print each port row with dynamic padding
+        for (port_col, state_col, service_col) in &port_rows {
+            let _ = writeln!(
+                handle,
+                "{port_col:<port_width$} {state_col:<state_width$} {service_col}",
+            );
         }
 
         // Print scripts for all ports (any port state can have scripts)
         let formatter = rustnmap_output::NormalFormatter::new();
-        for port in &host.ports {
+        for port in &sorted_ports {
             for script in &port.scripts {
                 if let Ok(output) = formatter.format_script(script) {
                     let _ = write!(handle, "{output}");
@@ -1716,52 +1781,97 @@ fn print_host_normal<W: Write>(handle: &mut W, args: &Args, host: &HostResult) {
     // MAC address (after ports, scripts, and OS — matching nmap output order)
     if let Some(ref mac) = host.mac {
         let vendor = mac.vendor.as_deref().unwrap_or("Unknown");
-        let _ = writeln!(handle, "MAC Address: {} ({vendor})", mac.address.to_uppercase());
+        let _ = writeln!(
+            handle,
+            "MAC Address: {} ({vendor})",
+            mac.address.to_uppercase()
+        );
+    }
+
+    // Traceroute results (matching nmap output order: after MAC, before blank line)
+    if let Some(ref trace) = host.traceroute {
+        let proto = match trace.protocol {
+            rustnmap_output::models::Protocol::Tcp => "tcp",
+            rustnmap_output::models::Protocol::Udp => "udp",
+            rustnmap_output::models::Protocol::Sctp => "sctp",
+        };
+        let _ = writeln!(handle, "\nTRACEROUTE (using port {}/{})", trace.port, proto);
+        let _ = writeln!(handle, "HOP RTT     ADDRESS");
+        for hop in &trace.hops {
+            let rtt = hop.rtt.map_or_else(
+                || "--".to_string(),
+                |d| format!("{:.2} ms", d.as_secs_f64() * 1000.0),
+            );
+            let _ = writeln!(handle, "{:<3} {:<7} {}", hop.ttl, rtt, hop.ip);
+        }
     }
 
     let _ = writeln!(handle);
 }
 
-/// Prints a single port in normal format.
-fn print_port_normal<W: Write>(handle: &mut W, _args: &Args, port: &PortResult) {
-    use rustnmap_output::NormalFormatter;
+/// Formats the port/protocol column (e.g., "22/tcp", "6379/tcp").
+fn format_port_col(port: &PortResult) -> String {
+    let proto = match port.protocol {
+        Protocol::Tcp => "tcp",
+        Protocol::Udp => "udp",
+        Protocol::Sctp => "sctp",
+    };
+    format!("{}/{}", port.number, proto)
+}
 
-    let formatter = NormalFormatter::new();
-    if let Ok(output) = formatter.format_port(port) {
-        let _ = write!(handle, "{output}");
-    } else {
-        // Fallback to simple format if formatter fails
-        let protocol = match port.protocol {
-            Protocol::Tcp => "tcp",
-            Protocol::Udp => "udp",
-            Protocol::Sctp => "sctp",
-        };
+/// Formats the port state column (e.g., "open", "filtered", "open|filtered").
+fn format_state_col(port: &PortResult) -> &'static str {
+    match port.state {
+        PortState::Open => "open",
+        PortState::Closed => "closed",
+        PortState::Filtered => "filtered",
+        PortState::Unfiltered => "unfiltered",
+        PortState::OpenOrFiltered => "open|filtered",
+        PortState::ClosedOrFiltered => "closed|filtered",
+        PortState::OpenOrClosed => "open|closed",
+        PortState::FilteredOrClosed => "filtered|closed",
+        PortState::Unknown => "unknown",
+    }
+}
 
-        let state_str = match port.state {
-            PortState::Open => "open",
-            PortState::Closed => "closed",
-            PortState::Filtered => "filtered",
-            PortState::Unfiltered => "unfiltered",
-            PortState::OpenOrFiltered => "open|filtered",
-            PortState::ClosedOrFiltered => "closed|filtered",
-            PortState::OpenOrClosed => "open|closed",
-            PortState::FilteredOrClosed => "filtered|closed",
-            PortState::Unknown => "unknown",
-        };
+/// Formats the service column with version info when available.
+fn format_service_col(port: &PortResult) -> String {
+    #[expect(
+        clippy::option_if_let_else,
+        reason = "if let/else is more readable for complex conditional logic"
+    )]
+    if let Some(service) = &port.service {
+        if service.method == "probed" {
+            let mut parts = Vec::new();
+            let has_version_info = service.product.is_some() || service.version.is_some();
 
-        if let Some(ref service) = port.service {
-            let _ = writeln!(
-                handle,
-                "{}/{:<5} {:<8} {}",
-                port.number, protocol, state_str, service.name
-            );
+            if service.name.starts_with("ssl/") || service.name.starts_with("tls/") {
+                parts.push(service.name.clone());
+            } else if has_version_info && matches!(port.number, 443 | 8443 | 631) {
+                parts.push(format!("ssl/{}", service.name));
+            } else {
+                parts.push(service.name.clone());
+            }
+
+            if let Some(product) = &service.product {
+                parts.push(product.clone());
+            }
+            if let Some(version) = &service.version {
+                parts.push(version.clone());
+            }
+            if let Some(extrainfo) = &service.extrainfo {
+                if extrainfo.starts_with('(') {
+                    parts.push(extrainfo.clone());
+                } else {
+                    parts.push(format!("({extrainfo})"));
+                }
+            }
+            parts.join(" ")
         } else {
-            let _ = writeln!(
-                handle,
-                "{}/{:<5} {:<8} unknown",
-                port.number, protocol, state_str
-            );
+            service.name.clone()
         }
+    } else {
+        String::from("unknown")
     }
 }
 
@@ -2092,6 +2202,179 @@ fn write_json_output(result: &ScanResult, path: &std::path::Path, append: bool) 
         .map_err(|e| rustnmap_common::Error::Other(format!("Write error: {e}")))?;
 
     Ok(())
+}
+
+/// Handle FTP Bounce scan (`-b` option).
+///
+/// Parses the FTP relay specification, connects to the FTP server,
+/// and uses it as a proxy to scan target ports.
+fn handle_ftp_bounce_scan(args: &Args) -> Result<()> {
+    setup_logging(args);
+    info!(
+        "RustNmap v{} starting FTP bounce scan...",
+        env!("CARGO_PKG_VERSION")
+    );
+
+    let bounce_spec = args.ftp_bounce.as_ref().unwrap();
+
+    // Parse FTP bounce spec: [username:password@]host[:port]
+    let (username, password, host_port) = if let Some(at_pos) = bounce_spec.rfind('@') {
+        let creds = &bounce_spec[..at_pos];
+        let host = &bounce_spec[at_pos + 1..];
+        let (user, pass) = if let Some(colon_pos) = creds.find(':') {
+            (
+                Some(creds[..colon_pos].to_string()),
+                Some(creds[colon_pos + 1..].to_string()),
+            )
+        } else {
+            (Some(creds.to_string()), None)
+        };
+        (user, pass, host)
+    } else {
+        (None, None, bounce_spec.as_str())
+    };
+
+    // Parse host:port (default FTP port is 21)
+    let ftp_addr: std::net::SocketAddr = if host_port.contains(':') {
+        host_port.parse().map_err(|e| {
+            rustnmap_common::Error::Other(format!("Invalid FTP server address: {e}"))
+        })?
+    } else {
+        format!("{host_port}:21").parse().map_err(|e| {
+            rustnmap_common::Error::Other(format!("Invalid FTP server address: {e}"))
+        })?
+    };
+
+    // Parse targets
+    let targets = parse_targets(args)?;
+    if targets.is_empty() {
+        return Err(rustnmap_common::Error::Other(
+            "No valid targets".to_string(),
+        ));
+    }
+
+    // Parse ports
+    let port_spec = parse_port_spec(args)?;
+    let ports: Vec<u16> = match port_spec {
+        PortSpec::All => (1..=65535).collect(),
+        PortSpec::Top(n) => rustnmap_common::ServiceDatabase::global()
+            .top_tcp_ports(n)
+            .to_vec(),
+        PortSpec::Range { start, end } => (start..=end).collect(),
+        PortSpec::List(p) => p,
+    };
+
+    // Create scanner and run scan
+    let scanner = rustnmap_scan::FtpBounceScanner::new(ftp_addr, username, password);
+    let start_time = chrono::Utc::now();
+    let hosts = ftp_bounce_scan_hosts(&scanner, &targets, &ports);
+    let end_time = chrono::Utc::now();
+    let elapsed = end_time - start_time;
+
+    let scan_result = rustnmap_output::models::ScanResult {
+        metadata: rustnmap_output::models::ScanMetadata {
+            scanner_version: env!("CARGO_PKG_VERSION").to_string(),
+            command_line: build_command_line_string(args),
+            start_time,
+            end_time,
+            elapsed: elapsed.to_std().unwrap_or_default(),
+            scan_type: rustnmap_output::models::ScanType::TcpConnect,
+            protocol: rustnmap_output::models::Protocol::Tcp,
+        },
+        hosts,
+        statistics: rustnmap_output::models::ScanStatistics::default(),
+        errors: vec![],
+    };
+
+    let db_context = rustnmap_output::DatabaseContext::new();
+    let command_line = build_command_line_string(args);
+    output_results(args, &scan_result, &command_line, &db_context)?;
+
+    info!("FTP bounce scan completed successfully");
+    Ok(())
+}
+
+/// Scans all targets/ports via FTP bounce and returns host results.
+fn ftp_bounce_scan_hosts(
+    scanner: &rustnmap_scan::FtpBounceScanner,
+    targets: &rustnmap_target::TargetGroup,
+    ports: &[u16],
+) -> Vec<rustnmap_output::models::HostResult> {
+    use rustnmap_scan::scanner::PortScanner;
+
+    let mut hosts = Vec::new();
+    for target in &targets.targets {
+        let mut port_results = Vec::new();
+        for port in ports {
+            let (state, state_reason, service) =
+                match scanner.scan_port(target, *port, rustnmap_common::Protocol::Tcp) {
+                    Ok(s) => {
+                        let out_state = match s {
+                            rustnmap_common::PortState::Open => {
+                                rustnmap_output::models::PortState::Open
+                            }
+                            rustnmap_common::PortState::Closed => {
+                                rustnmap_output::models::PortState::Closed
+                            }
+                            rustnmap_common::PortState::Filtered => {
+                                rustnmap_output::models::PortState::Filtered
+                            }
+                            _ => rustnmap_output::models::PortState::Unknown,
+                        };
+                        let svc = rustnmap_common::ServiceDatabase::global()
+                            .lookup(*port, rustnmap_common::ServiceProtocol::Tcp)
+                            .map(|name| rustnmap_output::models::ServiceInfo {
+                                name: name.to_string(),
+                                product: None,
+                                version: None,
+                                extrainfo: None,
+                                hostname: None,
+                                ostype: None,
+                                devicetype: None,
+                                method: "table".to_string(),
+                                confidence: 3,
+                                cpe: vec![],
+                            });
+                        (out_state, "ftp-bounce".to_string(), svc)
+                    }
+                    Err(e) => {
+                        warn!("FTP bounce scan failed for port {port}: {e}");
+                        (
+                            rustnmap_output::models::PortState::Unknown,
+                            format!("ftp-bounce-error: {e}"),
+                            None,
+                        )
+                    }
+                };
+            port_results.push(rustnmap_output::models::PortResult {
+                number: *port,
+                protocol: rustnmap_output::models::Protocol::Tcp,
+                state,
+                state_reason,
+                state_ttl: None,
+                service,
+                scripts: vec![],
+            });
+        }
+        hosts.push(rustnmap_output::models::HostResult {
+            ip: target.ip,
+            mac: None,
+            hostname: target.hostname.clone(),
+            status: rustnmap_output::models::HostStatus::Up,
+            status_reason: "ftp-bounce".to_string(),
+            latency: std::time::Duration::ZERO,
+            ports: port_results,
+            os_matches: vec![],
+            scripts: vec![],
+            traceroute: None,
+            times: rustnmap_output::models::HostTimes {
+                srtt: None,
+                rttvar: None,
+                timeout: None,
+            },
+        });
+    }
+    hosts
 }
 
 /// Sets up logging based on verbosity and debug levels.

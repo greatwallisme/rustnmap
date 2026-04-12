@@ -265,7 +265,10 @@ const BPF_JA: u16 = 0x00;
 /// Ethernet header length (14 bytes: 6 dst + 6 src + 2 type).
 const ETH_HLEN: u32 = 14;
 
-/// IP header length field offset (low 4 bits of byte at offset 0).
+/// `EtherType` field offset within Ethernet header (bytes 12-13).
+const ETHERTYPE_OFFSET: u32 = 12;
+
+/// IP header length field offset (low 4 bits of byte at offset 0, relative to IP header start).
 const IP_HLEN_OFFSET: u32 = 0;
 
 /// IP protocol field offset in IP header.
@@ -468,6 +471,29 @@ impl BpfFilter {
         Self::new(Self::build_icmp_or_udp_dst_filter(addr))
     }
 
+    /// Creates a filter for TCP packets destined to a specific IPv4 address.
+    ///
+    /// Used for TCP SYN scan response capture: filters for IPv4 TCP packets
+    /// where the destination IP matches our local address. This significantly
+    /// reduces the amount of traffic the `PACKET_MMAP` ring buffer needs to
+    /// process, preventing packet loss during high-throughput scans.
+    ///
+    /// Filter logic:
+    /// ```text
+    /// if ethertype != IPv4: reject
+    /// if protocol != TCP: reject
+    /// if dst_ip != addr: reject
+    /// accept
+    /// ```
+    ///
+    /// # Arguments
+    ///
+    /// * `addr` - Destination IPv4 address in network byte order
+    #[must_use]
+    pub fn tcp_dst_ip(addr: u32) -> Self {
+        Self::new(Self::build_tcp_dst_ip_filter(addr))
+    }
+
     /// Creates a filter for TCP SYN packets.
     #[must_use]
     pub fn tcp_syn() -> Self {
@@ -478,6 +504,42 @@ impl BpfFilter {
     #[must_use]
     pub fn tcp_ack() -> Self {
         Self::new(Self::build_tcp_ack_filter())
+    }
+
+    /// Creates a filter for TCP response packets matching source IP, source port,
+    /// and destination port.
+    ///
+    /// Used for OS detection where we need to capture TCP responses to our probes
+    /// before the kernel TCP stack intercepts them. `AF_PACKET` captures at the link
+    /// layer, so these packets arrive even when the kernel sends RST.
+    ///
+    /// Filter logic:
+    /// ```text
+    /// if ethertype != IPv4: reject
+    /// if protocol != TCP: reject
+    /// if src_ip != expected: reject
+    /// if src_port != expected: reject
+    /// if dst_port != expected: reject
+    /// accept
+    /// ```
+    ///
+    /// # Arguments
+    ///
+    /// * `src_ip` - Source IPv4 address in network byte order
+    /// * `src_port` - Source port in host byte order
+    /// * `dst_port` - Destination port in host byte order
+    #[must_use]
+    pub fn tcp_response(src_ip: u32, src_port: u16, dst_port: u16) -> Self {
+        Self::new(Self::build_tcp_response_filter(src_ip, src_port, dst_port))
+    }
+
+    /// Creates a filter for any TCP response from a specific source IP.
+    ///
+    /// Matches IPv4 + TCP + source IP. Port filtering is done in software
+    /// to allow pipelined probe collection.
+    #[must_use]
+    pub fn tcp_response_from_ip(src_ip: u32) -> Self {
+        Self::new(Self::build_tcp_response_from_ip_filter(src_ip))
     }
 
     /// Creates a filter for IPv4 packets.
@@ -587,15 +649,15 @@ impl BpfFilter {
 
         vec![
             // Load EtherType (bytes 12-13)
-            BpfInstruction::load_half(ETH_HLEN),
+            BpfInstruction::load_half(ETHERTYPE_OFFSET),
             // Jump if IPv4
-            BpfInstruction::jump_eq(u32::from(ETHERTYPE_IP), 0, 6),
+            BpfInstruction::jump_eq(u32::from(ETHERTYPE_IP), 1, 0),
             // Not IPv4, reject
             BpfInstruction::ret_reject(),
             // Load IP protocol (byte at offset 23 = 14 + 9)
             BpfInstruction::load_byte(ETH_HLEN + IP_PROTO_OFFSET),
             // Jump if matches protocol
-            BpfInstruction::jump_eq(protocol, 0, 3),
+            BpfInstruction::jump_eq(protocol, 1, 0),
             // Not matching protocol, reject
             BpfInstruction::ret_reject(),
             // Load IP header length * 4 (low 4 bits of byte 14, multiplied by 4)
@@ -612,8 +674,9 @@ impl BpfFilter {
             BpfInstruction::new(BPF_MISC | BPF_TAX, 0, 0, 0),
             // Load half-word at packet[X + 0]
             BpfInstruction::new(BPF_LD | BPF_H | BPF_IND, 0, 0, 0),
-            // Compare with port (in network byte order)
-            BpfInstruction::jump_eq(u32::from(port.to_be()), 0, 1),
+            // Compare with port — BPF ldh reads big-endian from packet directly,
+            // so we use the port value as-is (e.g. port 80 = 0x0050 in packet).
+            BpfInstruction::jump_eq(u32::from(port), 1, 0),
             // Not matching, reject
             BpfInstruction::ret_reject(),
             // Accept
@@ -625,15 +688,15 @@ impl BpfFilter {
     fn build_icmp_filter() -> Vec<BpfInstruction> {
         vec![
             // Load EtherType
-            BpfInstruction::load_half(ETH_HLEN),
+            BpfInstruction::load_half(ETHERTYPE_OFFSET),
             // Check if IPv4
-            BpfInstruction::jump_eq(u32::from(ETHERTYPE_IP), 0, 5),
+            BpfInstruction::jump_eq(u32::from(ETHERTYPE_IP), 1, 0),
             // Not IPv4, reject
             BpfInstruction::ret_reject(),
             // Load IP protocol
             BpfInstruction::load_byte(ETH_HLEN + IP_PROTO_OFFSET),
             // Check if ICMP (1)
-            BpfInstruction::jump_eq(IPPROTO_ICMP, 0, 1),
+            BpfInstruction::jump_eq(IPPROTO_ICMP, 1, 0),
             // Not ICMP, reject
             BpfInstruction::ret_reject(),
             // Accept
@@ -645,15 +708,15 @@ impl BpfFilter {
     fn build_icmp_type_filter(icmp_type: u8) -> Vec<BpfInstruction> {
         vec![
             // Load EtherType
-            BpfInstruction::load_half(ETH_HLEN),
+            BpfInstruction::load_half(ETHERTYPE_OFFSET),
             // Check if IPv4
-            BpfInstruction::jump_eq(u32::from(ETHERTYPE_IP), 0, 7),
+            BpfInstruction::jump_eq(u32::from(ETHERTYPE_IP), 1, 0),
             // Not IPv4, reject
             BpfInstruction::ret_reject(),
             // Load IP protocol
             BpfInstruction::load_byte(ETH_HLEN + IP_PROTO_OFFSET),
             // Check if ICMP (1)
-            BpfInstruction::jump_eq(IPPROTO_ICMP, 0, 4),
+            BpfInstruction::jump_eq(IPPROTO_ICMP, 1, 0),
             // Not ICMP, reject
             BpfInstruction::ret_reject(),
             // Load IP header length
@@ -668,7 +731,7 @@ impl BpfFilter {
             // Load ICMP type byte
             BpfInstruction::new(BPF_LD | BPF_B | BPF_IND, 0, 0, 0),
             // Compare with desired type
-            BpfInstruction::jump_eq(u32::from(icmp_type), 0, 1),
+            BpfInstruction::jump_eq(u32::from(icmp_type), 1, 0),
             // Not matching, reject
             BpfInstruction::ret_reject(),
             // Accept
@@ -682,21 +745,21 @@ impl BpfFilter {
     fn build_icmp_dst_filter(addr: u32) -> Vec<BpfInstruction> {
         vec![
             // Load EtherType (bytes 12-13)
-            BpfInstruction::load_half(ETH_HLEN),
+            BpfInstruction::load_half(ETHERTYPE_OFFSET),
             // Check if IPv4 (0x0800) - jump to next if true, else skip 5 to reject
-            BpfInstruction::jump_eq(u32::from(ETHERTYPE_IP), 0, 5),
+            BpfInstruction::jump_eq(u32::from(ETHERTYPE_IP), 1, 0),
             // Not IPv4, reject
             BpfInstruction::ret_reject(),
             // Load IP protocol (byte at offset 23 = 14 + 9)
             BpfInstruction::load_byte(ETH_HLEN + IP_PROTO_OFFSET),
-            // Check if ICMP (1) - jump to next if true, else skip 3 to reject
-            BpfInstruction::jump_eq(IPPROTO_ICMP, 0, 3),
+            // Check if ICMP (1)
+            BpfInstruction::jump_eq(IPPROTO_ICMP, 1, 0),
             // Not ICMP, reject
             BpfInstruction::ret_reject(),
             // Load destination IP (offset 30, 4 bytes) - 14 + 16 (IP dst offset)
             BpfInstruction::load_word(ETH_HLEN + IP_DST_OFFSET),
-            // Check if matches local IP - jump to accept if true, else reject
-            BpfInstruction::jump_eq(addr, 0, 1),
+            // Check if matches local IP
+            BpfInstruction::jump_eq(addr, 1, 0),
             // Not matching, reject
             BpfInstruction::ret_reject(),
             // Accept packet (return full packet length)
@@ -712,37 +775,63 @@ impl BpfFilter {
     fn build_icmp_or_udp_dst_filter(addr: u32) -> Vec<BpfInstruction> {
         vec![
             // Load EtherType (bytes 12-13)
-            BpfInstruction::load_half(ETH_HLEN),
+            BpfInstruction::load_half(ETHERTYPE_OFFSET),
             // Check if IPv4 (0x0800) - jump to IP processing if true
-            BpfInstruction::jump_eq(u32::from(ETHERTYPE_IP), 0, 8),
+            BpfInstruction::jump_eq(u32::from(ETHERTYPE_IP), 1, 0),
             // Not IPv4, reject
             BpfInstruction::ret_reject(),
             // Load IP protocol (byte at offset 23 = 14 + 9)
             BpfInstruction::load_byte(ETH_HLEN + IP_PROTO_OFFSET),
             // Check if ICMP (1) - jump to ICMP path if true
-            BpfInstruction::jump_eq(IPPROTO_ICMP, 0, 3),
+            BpfInstruction::jump_eq(IPPROTO_ICMP, 2, 0),
             // Check if UDP (17) - jump to UDP path if true
-            BpfInstruction::jump_eq(IPPROTO_UDP, 0, 1),
+            BpfInstruction::jump_eq(IPPROTO_UDP, 5, 0),
             // Neither ICMP nor UDP, reject
             BpfInstruction::ret_reject(),
             // --- ICMP path ---
             // Load destination IP (offset 30, 4 bytes)
             BpfInstruction::load_word(ETH_HLEN + IP_DST_OFFSET),
-            // Check if matches our address - accept or reject
-            BpfInstruction::jump_eq(addr, 0, 1),
+            // Check if matches our address
+            BpfInstruction::jump_eq(addr, 1, 0),
             BpfInstruction::ret_reject(),
             BpfInstruction::ret_accept(),
             // --- UDP path ---
             // Load destination IP (offset 30, 4 bytes)
             BpfInstruction::load_word(ETH_HLEN + IP_DST_OFFSET),
-            // Check if matches our address - accept or reject
-            BpfInstruction::jump_eq(addr, 0, 1),
+            // Check if matches our address
+            BpfInstruction::jump_eq(addr, 1, 0),
             BpfInstruction::ret_reject(),
             BpfInstruction::ret_accept(),
         ]
     }
 
     /// Builds a TCP SYN filter.
+    /// Builds a TCP SYN filter.
+    fn build_tcp_dst_ip_filter(addr: u32) -> Vec<BpfInstruction> {
+        vec![
+            // Load EtherType
+            BpfInstruction::load_half(ETHERTYPE_OFFSET),
+            // Check if IPv4
+            BpfInstruction::jump_eq(u32::from(ETHERTYPE_IP), 1, 0),
+            // Not IPv4, reject
+            BpfInstruction::ret_reject(),
+            // Load IP protocol
+            BpfInstruction::load_byte(ETH_HLEN + IP_PROTO_OFFSET),
+            // Check if TCP (6)
+            BpfInstruction::jump_eq(IPPROTO_TCP, 1, 0),
+            // Not TCP, reject
+            BpfInstruction::ret_reject(),
+            // Load destination IP (offset 30 = ETH_HLEN + 16)
+            BpfInstruction::load_word(ETH_HLEN + IP_DST_OFFSET),
+            // Check if matches our address
+            BpfInstruction::jump_eq(addr, 1, 0),
+            // Not our address, reject
+            BpfInstruction::ret_reject(),
+            // Accept
+            BpfInstruction::ret_accept(),
+        ]
+    }
+
     fn build_tcp_syn_filter() -> Vec<BpfInstruction> {
         // TCP flags are at offset 13 from TCP header start
         const TCP_FLAGS_OFFSET: u32 = 13;
@@ -750,15 +839,15 @@ impl BpfFilter {
 
         vec![
             // Load EtherType
-            BpfInstruction::load_half(ETH_HLEN),
+            BpfInstruction::load_half(ETHERTYPE_OFFSET),
             // Check if IPv4
-            BpfInstruction::jump_eq(u32::from(ETHERTYPE_IP), 0, 7),
+            BpfInstruction::jump_eq(u32::from(ETHERTYPE_IP), 1, 0),
             // Not IPv4, reject
             BpfInstruction::ret_reject(),
             // Load IP protocol
             BpfInstruction::load_byte(ETH_HLEN + IP_PROTO_OFFSET),
             // Check if TCP (6)
-            BpfInstruction::jump_eq(IPPROTO_TCP, 0, 4),
+            BpfInstruction::jump_eq(IPPROTO_TCP, 1, 0),
             // Not TCP, reject
             BpfInstruction::ret_reject(),
             // Load IP header length
@@ -773,7 +862,7 @@ impl BpfFilter {
             // Load TCP flags byte
             BpfInstruction::new(BPF_LD | BPF_B | BPF_IND, 0, 0, 0),
             // Check if SYN flag is set
-            BpfInstruction::new(BPF_JMP | BPF_JSET | BPF_K, 0, 1, TCP_FLAG_SYN),
+            BpfInstruction::new(BPF_JMP | BPF_JSET | BPF_K, 1, 0, TCP_FLAG_SYN),
             // SYN not set, reject
             BpfInstruction::ret_reject(),
             // Accept
@@ -788,15 +877,15 @@ impl BpfFilter {
 
         vec![
             // Load EtherType
-            BpfInstruction::load_half(ETH_HLEN),
+            BpfInstruction::load_half(ETHERTYPE_OFFSET),
             // Check if IPv4
-            BpfInstruction::jump_eq(u32::from(ETHERTYPE_IP), 0, 7),
+            BpfInstruction::jump_eq(u32::from(ETHERTYPE_IP), 1, 0),
             // Not IPv4, reject
             BpfInstruction::ret_reject(),
             // Load IP protocol
             BpfInstruction::load_byte(ETH_HLEN + IP_PROTO_OFFSET),
             // Check if TCP (6)
-            BpfInstruction::jump_eq(IPPROTO_TCP, 0, 4),
+            BpfInstruction::jump_eq(IPPROTO_TCP, 1, 0),
             // Not TCP, reject
             BpfInstruction::ret_reject(),
             // Load IP header length
@@ -811,10 +900,109 @@ impl BpfFilter {
             // Load TCP flags byte
             BpfInstruction::new(BPF_LD | BPF_B | BPF_IND, 0, 0, 0),
             // Check if ACK flag is set
-            BpfInstruction::new(BPF_JMP | BPF_JSET | BPF_K, 0, 1, TCP_FLAG_ACK),
+            BpfInstruction::new(BPF_JMP | BPF_JSET | BPF_K, 1, 0, TCP_FLAG_ACK),
             // ACK not set, reject
             BpfInstruction::ret_reject(),
             // Accept
+            BpfInstruction::ret_accept(),
+        ]
+    }
+
+    /// Builds a TCP response filter matching source IP, source port, and destination port.
+    ///
+    /// The IP addresses are in network byte order (as loaded directly from packet).
+    /// Ports are compared in network byte order.
+    fn build_tcp_response_filter(src_ip: u32, src_port: u16, dst_port: u16) -> Vec<BpfInstruction> {
+        vec![
+            // Load EtherType (bytes 12-13)
+            BpfInstruction::load_half(ETHERTYPE_OFFSET),
+            // Check if IPv4
+            BpfInstruction::jump_eq(u32::from(ETHERTYPE_IP), 1, 0),
+            // Not IPv4, reject
+            BpfInstruction::ret_reject(),
+            // Load IP source address (offset 26 = 14 + 12)
+            BpfInstruction::load_word(ETH_HLEN + IP_SRC_OFFSET),
+            // Check if matches expected source IP
+            BpfInstruction::jump_eq(src_ip, 1, 0),
+            // Not matching, reject
+            BpfInstruction::ret_reject(),
+            // Load IP protocol (offset 23 = 14 + 9)
+            BpfInstruction::load_byte(ETH_HLEN + IP_PROTO_OFFSET),
+            // Check if TCP (6)
+            BpfInstruction::jump_eq(IPPROTO_TCP, 1, 0),
+            // Not TCP, reject
+            BpfInstruction::ret_reject(),
+            // Load IP header length to calculate TCP header offset
+            BpfInstruction::load_byte(ETH_HLEN + IP_HLEN_OFFSET),
+            // AND with 0x0F to get IHL, multiply by 4
+            BpfInstruction::new(BPF_ALU | BPF_AND | BPF_K, 0, 0, 0x0F),
+            BpfInstruction::new(BPF_ALU | BPF_LSH | BPF_K, 0, 0, 2),
+            // Add ETH_HLEN + TCP_SRC_PORT_OFFSET
+            BpfInstruction::new(
+                BPF_ALU | BPF_ADD | BPF_K,
+                0,
+                0,
+                ETH_HLEN + TCP_SRC_PORT_OFFSET,
+            ),
+            // Move to X
+            BpfInstruction::new(BPF_MISC | BPF_TAX, 0, 0, 0),
+            // Load TCP source port
+            BpfInstruction::new(BPF_LD | BPF_H | BPF_IND, 0, 0, 0),
+            // Compare with expected src_port — BPF ldh reads big-endian from
+            // packet directly, so we use the port value as-is.
+            BpfInstruction::jump_eq(u32::from(src_port), 1, 0),
+            // Not matching, reject
+            BpfInstruction::ret_reject(),
+            // Load IP header length again for dst port check
+            BpfInstruction::load_byte(ETH_HLEN + IP_HLEN_OFFSET),
+            BpfInstruction::new(BPF_ALU | BPF_AND | BPF_K, 0, 0, 0x0F),
+            BpfInstruction::new(BPF_ALU | BPF_LSH | BPF_K, 0, 0, 2),
+            // Add ETH_HLEN + TCP_DST_PORT_OFFSET
+            BpfInstruction::new(
+                BPF_ALU | BPF_ADD | BPF_K,
+                0,
+                0,
+                ETH_HLEN + TCP_DST_PORT_OFFSET,
+            ),
+            // Move to X
+            BpfInstruction::new(BPF_MISC | BPF_TAX, 0, 0, 0),
+            // Load TCP destination port
+            BpfInstruction::new(BPF_LD | BPF_H | BPF_IND, 0, 0, 0),
+            // Compare with expected dst_port — BPF ldh reads big-endian from
+            // packet directly, so we use the port value as-is.
+            BpfInstruction::jump_eq(u32::from(dst_port), 1, 0),
+            // Not matching, reject
+            BpfInstruction::ret_reject(),
+            // Accept
+            BpfInstruction::ret_accept(),
+        ]
+    }
+
+    /// Builds a TCP response filter matching only source IP and protocol=TCP.
+    ///
+    /// Port matching is done in software so multiple probes can be collected
+    /// with a single BPF filter.
+    fn build_tcp_response_from_ip_filter(src_ip: u32) -> Vec<BpfInstruction> {
+        vec![
+            // Load EtherType (bytes 12-13)
+            BpfInstruction::load_half(ETHERTYPE_OFFSET),
+            // Check if IPv4
+            BpfInstruction::jump_eq(u32::from(ETHERTYPE_IP), 1, 0),
+            // Not IPv4, reject
+            BpfInstruction::ret_reject(),
+            // Load IP source address (offset 26 = 14 + 12)
+            BpfInstruction::load_word(ETH_HLEN + IP_SRC_OFFSET),
+            // Check if matches expected source IP
+            BpfInstruction::jump_eq(src_ip, 1, 0),
+            // Not matching, reject
+            BpfInstruction::ret_reject(),
+            // Load IP protocol (offset 23 = 14 + 9)
+            BpfInstruction::load_byte(ETH_HLEN + IP_PROTO_OFFSET),
+            // Check if TCP (6)
+            BpfInstruction::jump_eq(IPPROTO_TCP, 1, 0),
+            // Not TCP, reject
+            BpfInstruction::ret_reject(),
+            // Accept any TCP packet from this IP
             BpfInstruction::ret_accept(),
         ]
     }
@@ -823,9 +1011,9 @@ impl BpfFilter {
     fn build_ethertype_filter(ethertype: u32) -> Vec<BpfInstruction> {
         vec![
             // Load EtherType (bytes 12-13)
-            BpfInstruction::load_half(ETH_HLEN),
+            BpfInstruction::load_half(ETHERTYPE_OFFSET),
             // Check if matches
-            BpfInstruction::jump_eq(ethertype, 0, 1),
+            BpfInstruction::jump_eq(ethertype, 1, 0),
             // Not matching, reject
             BpfInstruction::ret_reject(),
             // Accept
@@ -837,15 +1025,15 @@ impl BpfFilter {
     fn build_ipv4_addr_filter(offset: u32, addr: u32) -> Vec<BpfInstruction> {
         vec![
             // Load EtherType
-            BpfInstruction::load_half(ETH_HLEN),
+            BpfInstruction::load_half(ETHERTYPE_OFFSET),
             // Check if IPv4
-            BpfInstruction::jump_eq(u32::from(ETHERTYPE_IP), 0, 3),
+            BpfInstruction::jump_eq(u32::from(ETHERTYPE_IP), 1, 0),
             // Not IPv4, reject
             BpfInstruction::ret_reject(),
             // Load IP address at offset
             BpfInstruction::load_word(ETH_HLEN + offset),
             // Check if matches
-            BpfInstruction::jump_eq(addr, 0, 1),
+            BpfInstruction::jump_eq(addr, 1, 0),
             // Not matching, reject
             BpfInstruction::ret_reject(),
             // Accept
@@ -1038,7 +1226,7 @@ mod tests {
         let filter = BpfFilter::ipv4();
         assert_eq!(filter.len(), 4); // load, compare, reject, accept
         assert_eq!(filter.instructions()[0].code, BPF_LD | BPF_H | BPF_ABS);
-        assert_eq!(filter.instructions()[0].k, ETH_HLEN);
+        assert_eq!(filter.instructions()[0].k, ETHERTYPE_OFFSET);
     }
 
     #[test]
@@ -1066,6 +1254,14 @@ mod tests {
         let filter = BpfFilter::tcp_ack();
         assert!(!filter.is_empty());
         assert!(filter.len() > 5);
+    }
+
+    #[test]
+    fn test_bpf_filter_tcp_response() {
+        let filter = BpfFilter::tcp_response(0xAC1C_0003, 80, 49999);
+        assert!(!filter.is_empty());
+        // Should check: ethertype, src_ip, protocol, src_port, dst_port
+        assert!(filter.len() > 10);
     }
 
     #[test]

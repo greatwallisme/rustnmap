@@ -3533,12 +3533,14 @@ name = "rustnmap-fingerprint"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "libc",
  "pcre2",
  "reqwest",
  "ring",
  "rustls",
  "rustnmap-common",
  "rustnmap-net",
+ "rustnmap-packet",
  "serde",
  "tempfile",
  "thiserror 2.0.18",

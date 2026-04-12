@@ -23,12 +23,13 @@
 pub mod database;
 pub mod detector;
 pub mod fingerprint;
+pub mod matching;
 
 pub use database::{FingerprintDatabase, OsMatch};
 pub use detector::OsDetector;
 pub use fingerprint::{
     EcnFingerprint, IcmpTestResult, IpIdPattern, IpIdSeqClass, IsnClass, OpsFingerprint,
-    OsFingerprint, SeqFingerprint, TestResult, TimestampRate, UdpTestResult,
+    OsFingerprint, SeqFingerprint, TestResult, UdpTestResult,
 };
 
-// Rust guideline compliant (2026-02-12)
+// Rust guideline compliant 2026-04-09

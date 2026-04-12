@@ -395,6 +395,8 @@ pub mod raw_socket {
         options: Vec<u8>,
         /// IP identification field.
         identification: u16,
+        /// Send with bogus checksum (--badsum).
+        badsum: bool,
     }
 
     impl TcpPacketBuilder {
@@ -413,6 +415,7 @@ pub mod raw_socket {
                 window: 65535,
                 options: Vec::new(),
                 identification: rand::rng().random(),
+                badsum: false,
             }
         }
 
@@ -483,6 +486,22 @@ pub mod raw_socket {
         #[must_use]
         pub fn options(mut self, options: &[u8]) -> Self {
             self.options = options.to_vec();
+            self
+        }
+
+        /// Sets the badsum flag to send packets with bogus TCP checksum.
+        #[must_use]
+        pub const fn badsum(mut self) -> Self {
+            self.badsum = true;
+            self
+        }
+
+        /// Conditionally sets the badsum flag.
+        #[must_use]
+        pub const fn badsum_if(mut self, cond: bool) -> Self {
+            if cond {
+                self.badsum = true;
+            }
             self
         }
 
@@ -566,8 +585,12 @@ pub mod raw_socket {
             packet.extend_from_slice(&self.options);
 
             // Calculate TCP checksum
-            let tcp_checksum =
+            let mut tcp_checksum =
                 Self::calculate_tcp_checksum(self.src_ip, self.dst_ip, &packet[tcp_header_start..]);
+            if self.badsum {
+                // Match nmap's behavior: decrement checksum by 1 to make it bogus
+                tcp_checksum = tcp_checksum.wrapping_sub(1);
+            }
             packet[tcp_header_start + 16] = (tcp_checksum >> 8) as u8;
             packet[tcp_header_start + 17] = (tcp_checksum & 0xFF) as u8;
 
@@ -1045,6 +1068,8 @@ pub mod raw_socket {
         payload: Vec<u8>,
         /// IP identification field.
         identification: u16,
+        /// Send with bogus checksum (--badsum).
+        badsum: bool,
     }
 
     impl UdpPacketBuilder {
@@ -1059,6 +1084,7 @@ pub mod raw_socket {
                 dst_port,
                 payload: Vec::new(),
                 identification: rand::rng().random(),
+                badsum: false,
             }
         }
 
@@ -1066,6 +1092,22 @@ pub mod raw_socket {
         #[must_use]
         pub fn payload(mut self, payload: &[u8]) -> Self {
             self.payload = payload.to_vec();
+            self
+        }
+
+        /// Sets the badsum flag to send packets with bogus UDP checksum.
+        #[must_use]
+        pub const fn badsum(mut self) -> Self {
+            self.badsum = true;
+            self
+        }
+
+        /// Conditionally sets the badsum flag.
+        #[must_use]
+        pub const fn badsum_if(mut self, cond: bool) -> Self {
+            if cond {
+                self.badsum = true;
+            }
             self
         }
 
@@ -1133,8 +1175,16 @@ pub mod raw_socket {
             packet.extend_from_slice(&self.payload);
 
             // Calculate UDP checksum
-            let udp_checksum =
+            let mut udp_checksum =
                 Self::calculate_udp_checksum(self.src_ip, self.dst_ip, &packet[udp_header_start..]);
+            if self.badsum {
+                // Match nmap's behavior: decrement checksum by 1 to make it bogus.
+                // UDP checksum=0 means "no checksum", so wrap to 0xffff.
+                udp_checksum = udp_checksum.wrapping_sub(1);
+                if udp_checksum == 0 {
+                    udp_checksum = 0xFFFF;
+                }
+            }
             packet[udp_header_start + 6] = (udp_checksum >> 8) as u8;
             packet[udp_header_start + 7] = (udp_checksum & 0xFF) as u8;
 

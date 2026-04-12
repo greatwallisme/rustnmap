@@ -43,7 +43,7 @@ mkdir -p "$REPORT_DIR"
 
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 LOG_FILE="${LOG_DIR}/nse_comparison_${TIMESTAMP}.log"
-REPORT_FILE="${REPORT_DIR}/nse_comparison_report_${TIMESTAMP}.txt"
+REPORT_FILE="${REPORT_DIR}/nse_comparison_report_${TIMESTAMP}.md"
 
 # Test tracking
 TOTAL_TESTS=0

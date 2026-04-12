@@ -279,6 +279,7 @@ impl IdleScanner {
         .ack_flag() // Set ACK flag
         .syn() // Set SYN flag
         .window(65535)
+        .badsum_if(self.config.badsum)
         .build();
 
         let zombie_sockaddr =
@@ -347,6 +348,7 @@ impl IdleScanner {
             .seq(seq)
             .syn()
             .window(65535)
+            .badsum_if(self.config.badsum)
             .build();
 
         let target_sockaddr = SocketAddr::new(std::net::IpAddr::V4(dst_addr), dst_port);

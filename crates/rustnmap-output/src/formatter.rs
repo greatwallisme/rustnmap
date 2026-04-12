@@ -560,7 +560,7 @@ impl OutputFormatter for NormalFormatter {
         };
 
         Ok(format!(
-            "{}/{}  {:7} {}\n",
+            "{}/{:<5} {:<6}{}\n",
             port.number, proto, state, service_string
         ))
     }

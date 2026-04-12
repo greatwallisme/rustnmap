@@ -21,6 +21,13 @@ pub struct OsFingerprint {
     /// TCP options per test (T1-T7).
     pub ops: HashMap<String, OpsFingerprint>,
 
+    /// Raw TCP option bytes from SEQ probe responses (O1-O6).
+    ///
+    /// These are collected from the 6 SYN-ACK responses to SEQ probes,
+    /// matching nmap's approach where OPS(O1-O6) comes from SEQ probes,
+    /// not from T1-T6 TCP tests.
+    pub seq_raw_options: Vec<Vec<u8>>,
+
     /// TCP window sizes per test.
     pub win: HashMap<String, u16>,
 
@@ -46,8 +53,15 @@ pub struct SeqFingerprint {
     /// TCP Timestamp option presence.
     pub timestamp: bool,
 
-    /// Timestamp increment rate (if timestamps enabled).
-    pub timestamp_rate: Option<TimestampRate>,
+    /// TS (TCP Timestamp rate) - raw hex value matching nmap encoding.
+    ///
+    /// Computed as `round(log2(avg_ts_hz))` with special cases:
+    /// - 0: no timestamp option
+    /// - 1: avg <= 5.66 Hz
+    /// - 7: 70 < avg <= 150 Hz
+    /// - 8: 150 < avg <= 350 Hz
+    /// - other: round(log2(avg_hz))
+    pub ts_val: u8,
 
     /// GCD (Greatest Common Divisor) of ISN differences.
     pub gcd: u32,
@@ -99,21 +113,6 @@ pub enum IsnClass {
     Unknown,
 }
 
-/// TCP timestamp rate class.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
-pub enum TimestampRate {
-    /// No timestamp option present.
-    None,
-
-    /// Timestamp increments by 2 per second.
-    Rate2,
-
-    /// Timestamp increments by 100 per second.
-    Rate100,
-
-    /// Unknown timestamp rate.
-    Unknown,
-}
 
 /// IP ID generation pattern.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -183,6 +182,15 @@ pub struct EcnFingerprint {
 
     /// CWR flag received.
     pub cwr: bool,
+
+    /// TTL of ECN response.
+    pub ttl: Option<u8>,
+
+    /// Window size of ECN response.
+    pub window: Option<u16>,
+
+    /// Raw TCP options from ECN response.
+    pub raw_options: Vec<u8>,
 }
 
 /// Result of a single OS detection test.
@@ -224,6 +232,21 @@ pub struct TestResult {
 
     /// IP ID value.
     pub ip_id: Option<u16>,
+
+    /// Sequence number we sent in the probe.
+    pub sent_seq: u32,
+
+    /// ACK number we sent in the probe (0 for most tests).
+    pub sent_ack: u32,
+
+    /// Response sequence number.
+    pub resp_seq: u32,
+
+    /// Response ACK number.
+    pub resp_ack: u32,
+
+    /// Raw TCP options bytes from response.
+    pub raw_options: Vec<u8>,
 }
 
 /// U1 (UDP) test result.
@@ -306,6 +329,7 @@ impl OsFingerprint {
             seq: None,
             ip_id: None,
             ops: HashMap::new(),
+            seq_raw_options: Vec::new(),
             win: HashMap::new(),
             ecn: None,
             tests: HashMap::new(),
@@ -413,6 +437,9 @@ impl EcnFingerprint {
             df: false,
             tos: 0,
             cwr: false,
+            ttl: None,
+            window: None,
+            raw_options: Vec::new(),
         }
     }
 }
@@ -424,7 +451,7 @@ impl SeqFingerprint {
         Self {
             class: IsnClass::Unknown,
             timestamp: false,
-            timestamp_rate: None,
+            ts_val: 0,
             gcd: 0,
             isr: 0,
             sp: 0,
@@ -459,6 +486,11 @@ impl TestResult {
             df: false,
             ttl: None,
             ip_id: None,
+            sent_seq: 0,
+            sent_ack: 0,
+            resp_seq: 0,
+            resp_ack: 0,
+            raw_options: Vec::new(),
         }
     }
 
@@ -612,7 +644,7 @@ mod tests {
         let fp = OsFingerprint::new().with_seq(SeqFingerprint {
             class: IsnClass::Random,
             timestamp: false,
-            timestamp_rate: None,
+            ts_val: 0,
             gcd: 1,
             isr: 0,
             sp: 0,
