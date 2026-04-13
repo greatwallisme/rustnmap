@@ -29,7 +29,7 @@ use rustnmap_core::session::{
 use rustnmap_core::{ScanConfig, ScanOrchestrator, ScanSession};
 use rustnmap_output::formatter::OutputFormatter;
 use rustnmap_output::models::{HostResult, PortResult, PortState, Protocol, ScanResult, ScanType};
-use rustnmap_output::{DatabaseContext, JsonFormatter, MarkdownFormatter, NdjsonFormatter};
+use rustnmap_output::{JsonFormatter, MarkdownFormatter, NdjsonFormatter};
 use rustnmap_scan::scanner::TimingTemplate;
 use rustnmap_scan_management::{ScanFilter, ScanHistory, ScanProfile};
 use rustnmap_target::{Target, TargetGroup, TargetParser};
@@ -75,6 +75,22 @@ pub async fn run_scan(args: Args) -> Result<()> {
 
     if args.generate_profile {
         handle_generate_profile_command();
+        return Ok(());
+    }
+
+    // Handle NSE script management commands (no targets required)
+    if args.script_updatedb {
+        handle_script_updatedb_command();
+        return Ok(());
+    }
+
+    if let Some(ref script_name) = args.script_help {
+        handle_script_help_command(script_name);
+        return Ok(());
+    }
+
+    if args.if_list {
+        handle_iflist_command();
         return Ok(());
     }
 
@@ -273,6 +289,104 @@ output:
 
     let mut stdout = std::io::stdout().lock();
     let _ = writeln!(stdout, "{profile_template}");
+}
+
+/// Handle `--script-updatedb` command.
+///
+/// Updates the NSE script database. This is a placeholder that prints
+/// a message since the script database update mechanism needs the
+/// script directory to be configured.
+fn handle_script_updatedb_command() {
+    let mut stdout = std::io::stdout().lock();
+    let _ = writeln!(stdout, "NSE script database update is not yet implemented.");
+    let _ = writeln!(
+        stdout,
+        "Scripts are loaded from ~/.rustnmap/scripts/ at runtime."
+    );
+}
+
+/// Handle `--script-help` command.
+///
+/// Displays help information for the specified NSE script.
+fn handle_script_help_command(script_name: &str) {
+    let mut stdout = std::io::stdout().lock();
+    let _ = writeln!(stdout, "Script help for: {script_name}");
+    let _ = writeln!(
+        stdout,
+        "NSE script help display is not yet fully implemented."
+    );
+    let _ = writeln!(
+        stdout,
+        "Use --script {script_name} to run the script during a scan."
+    );
+}
+
+/// Handle `--iflist` / `--if-list` command.
+///
+/// Lists available network interfaces and routing information,
+/// matching nmap's `--iflist` behavior.
+fn handle_iflist_command() {
+    let mut stdout = std::io::stdout().lock();
+    let _ = writeln!(stdout, "INTERFACES:");
+
+    // Read interfaces from /proc/net/dev (Linux)
+    if let Ok(content) = std::fs::read_to_string("/proc/net/dev") {
+        for line in content.lines().skip(2) {
+            let line = line.trim();
+            if let Some((iface_name, _stats)) = line.split_once(':') {
+                let iface_name = iface_name.trim();
+                // Get interface addresses from /sbin/ip
+                let addrs = std::process::Command::new("ip")
+                    .args(["-brief", "addr", "show", "dev", iface_name])
+                    .output()
+                    .ok()
+                    .and_then(|o| String::from_utf8(o.stdout).ok())
+                    .map(|s| {
+                        let parts: Vec<&str> = s.split_whitespace().collect();
+                        parts.iter().skip(2).copied().collect::<Vec<_>>().join(" ")
+                    })
+                    .unwrap_or_default();
+
+                if addrs.is_empty() {
+                    let _ = writeln!(stdout, "{iface_name} (no address)");
+                } else {
+                    let _ = writeln!(stdout, "{iface_name}: {addrs}");
+                }
+            }
+        }
+    } else {
+        let _ = writeln!(stdout, "  (unable to read interface information)");
+    }
+
+    let _ = writeln!(stdout);
+    let _ = writeln!(stdout, "ROUTES:");
+
+    // Read routing table from /proc/net/route
+    if let Ok(content) = std::fs::read_to_string("/proc/net/route") {
+        for line in content.lines().skip(1) {
+            let fields: Vec<&str> = line.split_whitespace().collect();
+            if fields.len() >= 3 {
+                let iface = fields[0];
+                let dest_hex = fields[1];
+                let gw_hex = fields[2];
+                // Parse hex destination and gateway
+                if let (Ok(dest_u32), Ok(gw_u32)) = (
+                    u32::from_str_radix(dest_hex, 16),
+                    u32::from_str_radix(gw_hex, 16),
+                ) {
+                    let dest = std::net::Ipv4Addr::from(u32::from_be(dest_u32));
+                    let gw = std::net::Ipv4Addr::from(u32::from_be(gw_u32));
+                    if gw.is_unspecified() {
+                        let _ = writeln!(stdout, "{dest}/0 dev {iface}");
+                    } else {
+                        let _ = writeln!(stdout, "{dest}/0 via {gw} dev {iface}");
+                    }
+                }
+            }
+        }
+    } else {
+        let _ = writeln!(stdout, "  (unable to read routing table)");
+    }
 }
 
 /// Handle --diff command
@@ -512,13 +626,6 @@ async fn handle_profile_scan(args: &Args, profile_path: &std::path::Path) -> Res
         }
     }
 
-    // Create database context for output
-    // Note: Service names are looked up using rustnmap_common::ServiceDatabase::global()
-    // Note: protocols and RPC databases are not loaded at startup - they are unused
-    // in output functions (all output paths use _db_context with underscore prefix).
-    // These can be loaded lazily if needed in the future.
-    let db_context = DatabaseContext::new();
-
     let fingerprint_db = Arc::new(fp_db);
 
     // Create scan session and run
@@ -579,7 +686,7 @@ async fn handle_profile_scan(args: &Args, profile_path: &std::path::Path) -> Res
     let command_line = build_command_line_string(args);
 
     // Output results
-    output_results(args, &scan_result, &command_line, &db_context)?;
+    output_results(args, &scan_result, &command_line)?;
 
     info!("Scan completed successfully");
     Ok(())
@@ -915,11 +1022,6 @@ async fn run_normal_scan(args: &Args) -> Result<()> {
 
     // Create database context for output
     // Note: Service names are looked up using rustnmap_common::ServiceDatabase::global()
-    // Note: protocols and RPC databases are not loaded at startup - they are unused
-    // in output functions (all output paths use _db_context with underscore prefix).
-    // These can be loaded lazily if needed in the future.
-    let db_context = DatabaseContext::new();
-
     let fingerprint_db = Arc::new(fp_db);
 
     // Create scan session with dependencies
@@ -988,7 +1090,7 @@ async fn run_normal_scan(args: &Args) -> Result<()> {
     let command_line = build_command_line_string(args);
 
     // Output results
-    output_results(args, &scan_result, &command_line, &db_context)?;
+    output_results(args, &scan_result, &command_line)?;
 
     #[cfg(feature = "diagnostic")]
     {
@@ -1494,6 +1596,13 @@ fn parse_port_string(s: &str) -> Result<PortSpec> {
 
     for segment in s.split(',') {
         let segment = segment.trim();
+        // Special case: "-" alone means all ports (1-65535), matching nmap's `-p-`
+        if segment == "-" {
+            return Ok(PortSpec::Range {
+                start: 1,
+                end: 65535,
+            });
+        }
         if segment.contains('-') {
             // Range
             let range_parts: Vec<&str> = segment.split('-').collect();
@@ -1587,12 +1696,7 @@ fn build_command_line_string(args: &Args) -> String {
 }
 
 /// Outputs scan results based on command-line arguments.
-fn output_results(
-    args: &Args,
-    result: &ScanResult,
-    command_line: &str,
-    db_context: &DatabaseContext,
-) -> Result<()> {
+fn output_results(args: &Args, result: &ScanResult, command_line: &str) -> Result<()> {
     // Handle quiet mode
     if args.quiet || args.no_output {
         return Ok(());
@@ -1602,23 +1706,26 @@ fn output_results(
     if args.output_script_kiddie {
         print_script_kiddie_output(result);
     } else {
-        print_normal_output(args, result, command_line, db_context);
+        print_normal_output(args, result, command_line);
     }
 
     // Write to output files if specified
     if let Some(output_format) = &args.output {
         match output_format {
             OutputFormat::Normal(path) => {
-                write_normal_output(result, path, args.append_output, db_context)?;
+                write_normal_output(result, path, args.append_output)?;
             }
             OutputFormat::Xml(path) => {
-                write_xml_output(result, path, args.append_output, db_context)?;
+                write_xml_output(result, path, args.append_output)?;
             }
             OutputFormat::Grepable(path) => {
                 write_grepable_output(result, path, args.append_output)?;
             }
             OutputFormat::All(basename) => {
-                write_all_formats(result, basename, args.append_output, db_context)?;
+                write_all_formats(result, basename, args.append_output)?;
+            }
+            OutputFormat::Json(path) => {
+                write_json_output(result, path, args.append_output)?;
             }
         }
     }
@@ -1638,12 +1745,7 @@ fn output_results(
 }
 
 /// Prints normal formatted output to console.
-fn print_normal_output(
-    args: &Args,
-    result: &ScanResult,
-    command_line: &str,
-    _db_context: &DatabaseContext,
-) {
+fn print_normal_output(args: &Args, result: &ScanResult, command_line: &str) {
     let stdout = std::io::stdout();
     let mut handle = stdout.lock();
 
@@ -1907,12 +2009,7 @@ fn print_script_kiddie_output(result: &ScanResult) {
 }
 
 /// Writes output in all formats.
-fn write_all_formats(
-    result: &ScanResult,
-    basename: &std::path::Path,
-    append: bool,
-    db_context: &DatabaseContext,
-) -> Result<()> {
+fn write_all_formats(result: &ScanResult, basename: &std::path::Path, append: bool) -> Result<()> {
     let normal_path = basename.with_extension("nmap");
     let xml_path = basename.with_extension("xml");
     let grepable_path = basename.with_extension("gnmap");
@@ -1920,8 +2017,8 @@ fn write_all_formats(
     let ndjson_path = basename.with_extension("ndjson");
     let md_path = basename.with_extension("md");
 
-    write_normal_output(result, &normal_path, append, db_context)?;
-    write_xml_output(result, &xml_path, append, db_context)?;
+    write_normal_output(result, &normal_path, append)?;
+    write_xml_output(result, &xml_path, append)?;
     write_grepable_output(result, &grepable_path, append)?;
     write_json_output(result, &json_path, append)?;
     write_ndjson_output(result, &ndjson_path, append)?;
@@ -1956,12 +2053,7 @@ fn open_output_file(path: &std::path::Path, append: bool) -> Result<std::fs::Fil
 }
 
 /// Writes normal format output to file.
-fn write_normal_output(
-    result: &ScanResult,
-    path: &std::path::Path,
-    append: bool,
-    _db_context: &DatabaseContext,
-) -> Result<()> {
+fn write_normal_output(result: &ScanResult, path: &std::path::Path, append: bool) -> Result<()> {
     let mut file = open_output_file(path, append)?;
     // Write header
     writeln!(
@@ -2040,12 +2132,7 @@ fn write_normal_output(
 }
 
 /// Writes XML format output to file.
-fn write_xml_output(
-    result: &ScanResult,
-    path: &std::path::Path,
-    append: bool,
-    _db_context: &DatabaseContext,
-) -> Result<()> {
+fn write_xml_output(result: &ScanResult, path: &std::path::Path, append: bool) -> Result<()> {
     let mut file = open_output_file(path, append)?;
     writeln!(file, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>")
         .map_err(|e| rustnmap_common::Error::Other(format!("Write error: {e}")))?;
@@ -2287,9 +2374,8 @@ fn handle_ftp_bounce_scan(args: &Args) -> Result<()> {
         errors: vec![],
     };
 
-    let db_context = rustnmap_output::DatabaseContext::new();
     let command_line = build_command_line_string(args);
-    output_results(args, &scan_result, &command_line, &db_context)?;
+    output_results(args, &scan_result, &command_line)?;
 
     info!("FTP bounce scan completed successfully");
     Ok(())

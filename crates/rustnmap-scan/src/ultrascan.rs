@@ -342,7 +342,13 @@ impl InternalCongestionController {
     /// From nmap `timing.cc:276-279`:
     /// - `timing_level` < 4: `ca_incr` = 1
     /// - `timing_level` >= 4: `ca_incr` = 2
-    fn new(max_cwnd: usize, timing_level: u8, initial_rtt: Duration, min_rtt: Duration, max_rtt: Duration) -> Self {
+    fn new(
+        max_cwnd: usize,
+        timing_level: u8,
+        initial_rtt: Duration,
+        min_rtt: Duration,
+        max_rtt: Duration,
+    ) -> Self {
         // Nmap timing.cc:272 - group_initial_cwnd = box(low_cwnd, max_cwnd, 10)
         // low_cwnd=1, max_cwnd=300, box() returns 10 since 1 < 10 < 300
         const GROUP_INITIAL_CWND: usize = 10;
@@ -1096,7 +1102,8 @@ impl ParallelScanEngine {
                         .unwrap_or(Duration::from_millis(5))
                         .max(Duration::from_millis(2))
                 };
-                let drain_deadline = drain_start + earliest_remaining.min(Duration::from_millis(200));
+                let drain_deadline =
+                    drain_start + earliest_remaining.min(Duration::from_millis(200));
 
                 // First packet: wait up to 5ms for kernel → ring buffer → channel propagation.
                 // Subsequent packets: near-zero wait (already queued).
@@ -1232,7 +1239,13 @@ impl ParallelScanEngine {
             eprintln!("==============================\n");
         };
 
-        let _ = (diag_raw_recv, diag_parsed, diag_matched, diag_ack_fail, diag_unmatched);
+        let _ = (
+            diag_raw_recv,
+            diag_parsed,
+            diag_matched,
+            diag_ack_fail,
+            diag_unmatched,
+        );
 
         Ok(results)
     }

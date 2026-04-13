@@ -1976,7 +1976,10 @@ impl HostDiscovery {
                 if i32::from(family) == libc::AF_INET {
                     // SAFETY: family check confirms this is a sockaddr_in;
                     // cast_ptr_alignment: sockaddr_in is the correct interpretation for AF_INET
-                    #[expect(clippy::cast_ptr_alignment, reason = "AF_INET confirms sockaddr_in layout")]
+                    #[expect(
+                        clippy::cast_ptr_alignment,
+                        reason = "AF_INET confirms sockaddr_in layout"
+                    )]
                     let sockaddr_in = unsafe { &*(ifa_addr as *const libc::sockaddr_in) };
                     let addr_bytes = sockaddr_in.sin_addr.s_addr.to_ne_bytes();
                     if addr_bytes == target_bytes {

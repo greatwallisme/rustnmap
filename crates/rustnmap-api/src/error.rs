@@ -52,6 +52,9 @@ pub enum ApiError {
 
     #[error("Scan limit reached: maximum {0} concurrent scans")]
     ScanLimitReached(usize),
+
+    #[error("Scan pending: {0}")]
+    ScanPending(String),
 }
 
 impl IntoResponse for ApiError {
@@ -85,6 +88,7 @@ impl IntoResponse for ApiError {
                 StatusCode::TOO_MANY_REQUESTS,
                 format!("Scan limit reached: maximum {max} concurrent scans"),
             ),
+            ApiError::ScanPending(msg) => (StatusCode::ACCEPTED, format!("Scan pending: {msg}")),
         };
 
         let body = Json(json!({

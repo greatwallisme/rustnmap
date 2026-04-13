@@ -30,7 +30,10 @@ use crate::error::ApiResult;
 pub async fn cancel_scan(
     State(state): State<crate::server::ApiState>,
     Path(scan_id): Path<String>,
-) -> ApiResult<(axum::http::StatusCode, Json<CancelScanResponse>)> {
+) -> ApiResult<(
+    axum::http::StatusCode,
+    Json<crate::ApiResponse<CancelScanResponse>>,
+)> {
     // Cancel the scan
     state.scan_manager.cancel_scan(&scan_id)?;
 
@@ -40,7 +43,10 @@ pub async fn cancel_scan(
         message: "Scan cancelled by user".to_string(),
     };
 
-    Ok((axum::http::StatusCode::OK, Json(response)))
+    Ok((
+        axum::http::StatusCode::OK,
+        Json(crate::ApiResponse::success(response)),
+    ))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

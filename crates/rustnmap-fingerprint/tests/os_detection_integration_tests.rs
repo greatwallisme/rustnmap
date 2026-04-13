@@ -25,8 +25,7 @@ use std::time::Duration;
 
 use rustnmap_fingerprint::os::{
     EcnFingerprint, FingerprintDatabase, IcmpTestResult, IpIdPattern, IpIdSeqClass, IsnClass,
-    OpsFingerprint, OsDetector, OsFingerprint, SeqFingerprint, TestResult,
-    UdpTestResult,
+    OpsFingerprint, OsDetector, OsFingerprint, SeqFingerprint, TestResult, UdpTestResult,
 };
 
 // =============================================================================

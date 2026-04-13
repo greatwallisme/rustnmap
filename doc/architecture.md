@@ -1,7 +1,7 @@
 # 2. 系统架构设计
 
-> **版本**: 1.0.0 (2.0 开发中)
-> **最后更新**: 2026-02-17
+> **版本**: 1.1.0
+> **最后更新**: 2026-04-12
 
 ---
 
@@ -11,11 +11,13 @@ RustNmap 2.0 从"端口扫描器"升级为"攻击面管理平台"，新增以下
 
 ### 2.1.1 2.0 新增 Crate
 
-| Crate | 用途 | 对应 Phase | 状态 |
-|-------|------|-----------|------|
-| `rustnmap-vuln` | 漏洞情报 (CVE/CPE 关联、EPSS/KEV) | Phase 2 (Week 5-7) | 待创建 |
-| `rustnmap-api` | REST API / Daemon 模式 | Phase 5 (Week 12) | 待创建 |
-| `rustnmap-sdk` | Rust SDK (Builder API) | Phase 5 (Week 12) | 待创建 |
+| Crate | 用途 | 状态 |
+|-------|------|------|
+| `rustnmap-stateless-scan` | Masscan 式无状态高速扫描 (SYN Cookie) | 已创建 |
+| `rustnmap-scan-management` | 扫描持久化 (SQLite)、扫描对比、YAML 配置 | 已创建 |
+| `rustnmap-vuln` | 漏洞情报 (CVE/CPE 关联、EPSS/KEV) | 已创建 |
+| `rustnmap-api` | REST API / Daemon 模式 (Axum) | 已创建 |
+| `rustnmap-sdk` | Rust SDK (Builder API，支持本地和远程扫描) | 已创建 |
 
 ### 2.1.2 2.0 新增功能模块
 
@@ -161,55 +163,30 @@ RustNmap 2.0 从"端口扫描器"升级为"攻击面管理平台"，新增以下
 ### 2.3.2 2.0 新增依赖关系
 
 ```
-                            ┌───────────────────────────────┐
-                            │     rustnmap-sdk (2.0)        │
-                            │   (稳定高层 Builder API)       │
-                            └───────────────┬───────────────┘
-                                            │ uses
-                                            ▼
-┌───────────────────────────────────────────────────────────────┐
-│                     rustnmap-api (2.0)                        │
-│   (REST API / Daemon 模式，基于 axum)                          │
-│   POST /api/v1/scans, GET /api/v1/scans/{id}                 │
-└───────────────────────────┬───────────────────────────────────┘
-                            │ uses
-                            ▼
-┌───────────────────────────────────────────────────────────────┐
-│                  rustnmap-vuln (2.0)                          │
-│   (漏洞情报：CVE/CPE 关联、EPSS 评分、KEV 标记)                  │
-│   - NVD API 集成                                               │
-│   - 本地 SQLite 数据库                                          │
-│   - EPSS/KEV聚合                                               │
-└───────────────────────────┬───────────────────────────────────┘
-                            │ uses
-                            ▼
-                    ┌────────────────┐
-                    │ rustnmap-output │
-                    │ (扩展 HostResult) │
-                    └────────────────┘
+rustnmap-sdk (2.0) ──> rustnmap-core (本地扫描)
+                   ──> rustnmap-output, rustnmap-target, rustnmap-evasion
+
+rustnmap-api (2.0) ──> rustnmap-core
+                   ──> rustnmap-output
+                   ──> rustnmap-scan-management ──> rustnmap-vuln ──> rustnmap-output
+
+rustnmap-stateless-scan (2.0) ──> rustnmap-core, rustnmap-packet, rustnmap-output
 ```
 
 ### 2.3.3 完整依赖链 (1.0 + 2.0)
 
 ```
-rustnmap-sdk (2.0)
-    │
-    └──> rustnmap-api (2.0)
-             │
-             ├──> rustnmap-core
-             │        │
-             │        ├──> rustnmap-scan
-             │        ├──> rustnmap-nse
-             │        ├──> rustnmap-fingerprint
-             │        ├──> rustnmap-traceroute
-             │        └──> rustnmap-evasion
-             │
-             ├──> rustnmap-vuln (2.0)
-             │        │
-             │        └──> rustnmap-output
-             │
-             └──> rustnmap-output
-```
+rustnmap-cli ──> rustnmap-core ──> rustnmap-scan, rustnmap-nse, rustnmap-fingerprint,
+                              │    rustnmap-traceroute, rustnmap-evasion, rustnmap-output
+                              └──> rustnmap-vuln, rustnmap-scan-management (用于输出/管理)
+
+rustnmap-sdk ──> rustnmap-core (本地扫描，非通过 API)
+             ──> rustnmap-output, rustnmap-target, rustnmap-evasion, rustnmap-common
+
+rustnmap-api ──> rustnmap-core, rustnmap-output, rustnmap-scan-management
+             (通过 scan-management 访问 vuln，不直接依赖)
+
+rustnmap-stateless-scan ──> rustnmap-core, rustnmap-packet, rustnmap-output
 ```
 
 ---
@@ -319,64 +296,40 @@ if (!immediate_mode) {
 
 ### 2.3.3 核心组件定义
 
-#### PacketEngine Trait
+> **注意**: 以下为实际实现代码的定义。早期设计版本（基于 start/recv/send/stop 的 API）
+> 已被替换为基于 send_packet/send_batch/recv_stream 的 API。
+
+#### PacketEngine Trait (实际实现)
+
+定义在 `crates/rustnmap-core/src/session.rs`:
 
 ```rust
-use std::sync::Arc;
-use async_trait::async_trait;
-use bytes::Bytes;
-use tokio::sync::mpsc;
-
-/// 数据包引擎核心抽象
+/// 数据包引擎抽象 (支持依赖注入)
 #[async_trait]
 pub trait PacketEngine: Send + Sync {
-    /// 启动引擎 (初始化环形缓冲区)
-    async fn start(&mut self) -> Result<(), PacketError>;
-
-    /// 接收单个数据包 (零拷贝)
-    async fn recv(&mut self) -> Result<Option<PacketBuffer>, PacketError>;
-
     /// 发送单个数据包
-    async fn send(&self, packet: &[u8]) -> Result<usize, PacketError>;
+    async fn send_packet(&self, pkt: PacketBuffer) -> Result<usize>;
 
-    /// 停止引擎
-    async fn stop(&mut self) -> Result<(), PacketError>;
+    /// 批量发送数据包 (默认逐个发送)
+    async fn send_batch(&self, pkts: &[PacketBuffer]) -> Result<usize>;
+
+    /// 接收数据包流
+    fn recv_stream(&self) -> Pin<Box<dyn Stream<Item = PacketBuffer> + Send>>;
 
     /// 设置 BPF 过滤器
-    fn set_filter(&self, filter: &BpfFilter) -> Result<(), PacketError>;
+    fn set_bpf(&self, filter: &BpfProg) -> Result<()>;
 
-    /// 刷新缓冲区
-    fn flush(&self) -> Result<(), PacketError>;
+    /// 获取本机 MAC 地址
+    fn local_mac(&self) -> Option<MacAddr>;
 
-    /// 获取统计信息
-    fn stats(&self) -> EngineStats;
-}
-
-/// 零拷贝数据包缓冲区
-#[derive(Debug)]
-pub struct PacketBuffer {
-    /// 数据引用 (Bytes 实现零拷贝克隆)
-    pub data: Bytes,
-    /// 实际长度
-    pub len: usize,
-    /// 捕获时间戳
-    pub timestamp: std::time::Instant,
-    /// 协议类型
-    pub protocol: u16,
-    /// VLAN 标签 (可选)
-    pub vlan_tci: Option<u16>,
-}
-
-/// 引擎统计信息
-#[derive(Debug, Default)]
-pub struct EngineStats {
-    pub packets_received: u64,
-    pub packets_dropped: u64,
-    pub bytes_received: u64,
-    pub filter_accepts: u64,
-    pub filter_rejects: u64,
+    /// 获取接口索引
+    fn if_index(&self) -> libc::c_uint;
 }
 ```
+
+同时，`crates/rustnmap-packet/src/engine.rs` 中的低层 PacketEngine trait 提供了
+更接近硬件的 API (start/recv/send/stop/set_filter/flush/stats)，由 MmapPacketEngine
+和 RecvfromPacketEngine 实现。`session.rs` 中的 `DefaultPacketEngine` 桥接两层。
 
 #### MmapPacketEngine 实现
 
@@ -1228,6 +1181,8 @@ if targets.iter().any(|t| t.is_loopback()) && scantype == ScanType::Syn {
 
 | 日期 | 变更内容 | 影响 |
 |------|---------|------|
+| 2026-04-12 | 设计文档校对：更新依赖图、修正 PacketEngine trait、更新 2.0 crate 列表 | 文档与实现对齐 |
+| 2026-03-08 | NSE 引擎改为进程隔离 (ProcessExecutor + rustnmap-nse-runner) | 替代原 NseSandbox 设计 |
 | 2026-03-08 | 添加 localhost 扫描限制章节 | 新增已知限制文档 |
 | 2026-03-07 | 完成 PACKET_MMAP V2 实现 | Phase 5 完成 |
 | 2026-03-07 | 修复 T5 多端口扫描拥塞控制 | 准确率 94.9% |

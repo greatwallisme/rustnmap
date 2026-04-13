@@ -71,15 +71,23 @@ fn measure_target_rtt(
     src_addr: std::net::Ipv4Addr,
     dst_addr: std::net::Ipv4Addr,
 ) -> Option<Duration> {
-   
-
     let socket = RawSocket::with_protocol(6).ok()?; // IPPROTO_TCP
     let src_port = 50000 + (std::process::id() % 1000) as u16;
     let dst_port: u16 = 80;
 
     let packet = TcpPacketBuilder::new(
-        rustnmap_common::Ipv4Addr::new(src_addr.octets()[0], src_addr.octets()[1], src_addr.octets()[2], src_addr.octets()[3]),
-        rustnmap_common::Ipv4Addr::new(dst_addr.octets()[0], dst_addr.octets()[1], dst_addr.octets()[2], dst_addr.octets()[3]),
+        rustnmap_common::Ipv4Addr::new(
+            src_addr.octets()[0],
+            src_addr.octets()[1],
+            src_addr.octets()[2],
+            src_addr.octets()[3],
+        ),
+        rustnmap_common::Ipv4Addr::new(
+            dst_addr.octets()[0],
+            dst_addr.octets()[1],
+            dst_addr.octets()[2],
+            dst_addr.octets()[3],
+        ),
         src_port,
         dst_port,
     )
@@ -432,7 +440,10 @@ fn get_mac_from_system_arp_cache(target_ip: std::net::Ipv4Addr) -> Option<MacAdd
     let copy_len = iface_bytes.len().min(arpreq.arp_dev.len() - 1);
     for (i, &b) in iface_bytes[..copy_len].iter().enumerate() {
         // Interface name bytes are ASCII (0-127), safe to convert to c_char
-        #[expect(clippy::cast_possible_wrap, reason = "interface names are ASCII, values 0-127")]
+        #[expect(
+            clippy::cast_possible_wrap,
+            reason = "interface names are ASCII, values 0-127"
+        )]
         {
             arpreq.arp_dev[i] = b as std::ffi::c_char;
         }
@@ -441,9 +452,7 @@ fn get_mac_from_system_arp_cache(target_ip: std::net::Ipv4Addr) -> Option<MacAdd
     // SAFETY: fd is a valid socket; arpreq is properly initialized with the
     // target IP and interface name. SIOCGARP reads from the kernel ARP table
     // without side effects.
-    let rc = unsafe {
-        libc::ioctl(fd, libc::SIOCGARP, std::ptr::addr_of_mut!(arpreq))
-    };
+    let rc = unsafe { libc::ioctl(fd, libc::SIOCGARP, std::ptr::addr_of_mut!(arpreq)) };
     // SAFETY: fd is valid and being closed after use
     unsafe { libc::close(fd) };
 
@@ -460,8 +469,7 @@ fn get_mac_from_system_arp_cache(target_ip: std::net::Ipv4Addr) -> Option<MacAdd
     let d = arpreq.arp_ha.sa_data;
     #[expect(clippy::cast_sign_loss, reason = "MAC bytes are always positive")]
     Some(MacAddr::new([
-        d[0] as u8, d[1] as u8, d[2] as u8,
-        d[3] as u8, d[4] as u8, d[5] as u8,
+        d[0] as u8, d[1] as u8, d[2] as u8, d[3] as u8, d[4] as u8, d[5] as u8,
     ]))
 }
 
@@ -499,9 +507,7 @@ fn is_directly_connected(target_ip: std::net::Ipv4Addr) -> bool {
 
     let addr_size = u32::try_from(std::mem::size_of::<libc::sockaddr_in>()).unwrap_or(0);
     // SAFETY: fd is valid; dst is a properly initialized sockaddr_in
-    let rc = unsafe {
-        libc::connect(fd, std::ptr::addr_of!(dst).cast(), addr_size)
-    };
+    let rc = unsafe { libc::connect(fd, std::ptr::addr_of!(dst).cast(), addr_size) };
     if rc < 0 {
         // SAFETY: fd is valid and being closed on error path
         unsafe { libc::close(fd) };
@@ -1573,8 +1579,9 @@ impl ScanOrchestrator {
             });
             // Clamp measured RTT to [min_rtt, max_rtt] matching nmap's
             // box(minRttTimeout, maxRttTimeout, timeout) in timing.cc:153.
-            let initial_rtt = measured_rtt
-                .map_or(timing_config.initial_rtt, |rtt| rtt.clamp(timing_config.min_rtt, timing_config.max_rtt));
+            let initial_rtt = measured_rtt.map_or(timing_config.initial_rtt, |rtt| {
+                rtt.clamp(timing_config.min_rtt, timing_config.max_rtt)
+            });
             debug!(
                 measured_rtt = ?measured_rtt,
                 initial_rtt = ?initial_rtt,
@@ -1960,8 +1967,9 @@ impl ScanOrchestrator {
         });
         // Clamp measured RTT to [min_rtt, max_rtt] matching nmap's
         // box(minRttTimeout, maxRttTimeout, timeout) in timing.cc:153.
-        let initial_rtt = measured_rtt
-            .map_or(timing_config.initial_rtt, |rtt| rtt.clamp(timing_config.min_rtt, timing_config.max_rtt));
+        let initial_rtt = measured_rtt.map_or(timing_config.initial_rtt, |rtt| {
+            rtt.clamp(timing_config.min_rtt, timing_config.max_rtt)
+        });
         debug!(
             measured_rtt = ?measured_rtt,
             initial_rtt = ?initial_rtt,
@@ -2247,8 +2255,9 @@ impl ScanOrchestrator {
         });
         // Clamp measured RTT to [min_rtt, max_rtt] matching nmap's
         // box(minRttTimeout, maxRttTimeout, timeout) in timing.cc:153.
-        let initial_rtt = measured_rtt
-            .map_or(timing_config.initial_rtt, |rtt| rtt.clamp(timing_config.min_rtt, timing_config.max_rtt));
+        let initial_rtt = measured_rtt.map_or(timing_config.initial_rtt, |rtt| {
+            rtt.clamp(timing_config.min_rtt, timing_config.max_rtt)
+        });
 
         let scanner_config = ScannerConfig {
             min_rtt: timing_config.min_rtt,

@@ -71,9 +71,10 @@ impl TcpSynTraceroute {
             source: io::Error::other(e),
         })?;
         // Use IPPROTO_ICMP (1) for receiving ICMP Time Exceeded responses
-        let icmp_socket = RawSocket::with_protocol(1).map_err(|e| TracerouteError::SocketCreation {
-            source: io::Error::other(e),
-        })?;
+        let icmp_socket =
+            RawSocket::with_protocol(1).map_err(|e| TracerouteError::SocketCreation {
+                source: io::Error::other(e),
+            })?;
 
         Ok(Self {
             config,
@@ -176,8 +177,8 @@ impl TcpSynTraceroute {
             }
             Ok(_) => {}
             Err(e)
-                if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut =>
-            {}
+                if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut => {
+            }
             Err(e) => return Err(TracerouteError::ReceiveFailed { source: e }),
         }
 
@@ -333,9 +334,10 @@ impl TcpAckTraceroute {
             source: io::Error::other(e),
         })?;
         // Use IPPROTO_ICMP (1) for receiving ICMP Time Exceeded responses
-        let icmp_socket = RawSocket::with_protocol(1).map_err(|e| TracerouteError::SocketCreation {
-            source: io::Error::other(e),
-        })?;
+        let icmp_socket =
+            RawSocket::with_protocol(1).map_err(|e| TracerouteError::SocketCreation {
+                source: io::Error::other(e),
+            })?;
 
         Ok(Self {
             config,
@@ -428,8 +430,8 @@ impl TcpAckTraceroute {
             }
             Ok(_) => {}
             Err(e)
-                if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut =>
-            {}
+                if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut => {
+            }
             Err(e) => return Err(TracerouteError::ReceiveFailed { source: e }),
         }
 

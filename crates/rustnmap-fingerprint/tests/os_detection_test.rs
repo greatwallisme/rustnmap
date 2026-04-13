@@ -22,8 +22,7 @@ use std::net::{Ipv4Addr, SocketAddr};
 
 use rustnmap_fingerprint::os::{
     EcnFingerprint, FingerprintDatabase, IcmpTestResult, IpIdPattern, IpIdSeqClass, IsnClass,
-    OpsFingerprint, OsDetector, OsFingerprint, SeqFingerprint, TestResult,
-    UdpTestResult,
+    OpsFingerprint, OsDetector, OsFingerprint, SeqFingerprint, TestResult, UdpTestResult,
 };
 
 /// Test that OS detector can be created with an empty database.

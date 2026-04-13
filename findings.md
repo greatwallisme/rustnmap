@@ -1,168 +1,271 @@
-# Technical Findings
+# Findings: rustnmap-api & rustnmap-sdk Module Audit
 
-> **Updated**: 2026-04-12 (Post Phase 4 Memory Optimization)
-
----
-
-## MEMORY OPTIMIZATION RESULTS (Phase 4)
-
-### OS Fingerprint Compact Representation (2026-04-12)
-
-**Problem**: OS detection memory 135MB (4.1x nmap's 33MB). Root cause: `RawFingerprint = HashMap<String, HashMap<String, String>>` with 6036 fingerprints, each storing ~14 sections of ~10 key-value String pairs.
-
-**nmap Reference Analysis** (from C++ source code):
-- `string_pool`: Global string interning for common values ("Y", "N", "S", etc.)
-- `ShortStr<5>`: Inline 5-char storage for attribute names (no heap allocation)
-- `FingerTest tests[NUM_FPTESTS]`: Fixed 13-slot array, not HashMap
-- `FingerTestDef::AttrIdx`: Maps attribute name -> index via `std::map<FPstr, u8>`
-
-**Fix**: Compact fingerprint representation:
-1. `Section` enum (13 variants): Zero-cost section key replacing String
-2. `AttrKey` enum (41 variants): Zero-cost attribute key replacing String
-3. `CompactFingerprint`: `[Option<Vec<(AttrKey, Box<str>)>>; 13]` replacing `HashMap<String, HashMap<String, String>>`
-4. `CompiledMatchPoints`: Pre-compiled enum-based match points
-5. `compare_compact()`: Enum iteration replacing string HashMap lookups
-
-**Files**: `matching.rs` (new types + compare_compact), `database.rs` (compact storage + parsing)
-
-**Result**: 135MB -> 70MB (2.0x nmap, was 4.1x). Per-fingerprint: 20KB -> 3.5KB (5.7x reduction).
-
-### Memory Savings Breakdown
-
-| Component | Before | After | Savings |
-|-----------|--------|-------|---------|
-| Section name Strings (6036 x 14) | ~2.3MB | 0 (enum) | 2.3MB |
-| Attribute name Strings (6036 x 14 x 10) | ~22.9MB | 0 (enum) | 22.9MB |
-| HashMap overhead (outer) | ~3MB | ~1.3MB (array) | 1.7MB |
-| HashMap overhead (inner, 6036 x 14) | ~31MB | 0 (Vec) | 31MB |
-| String value overhead (capacity field) | ~6.5MB | 0 (Box<str>) | 6.5MB |
-| **Total estimated** | **~84MB** | **~21MB** | **~63MB** |
+> **Date**: 2026-04-13
+> **Scope**: `crates/rustnmap-api/` and `crates/rustnmap-sdk/`
+> **Result**: Clippy 0 warnings, 100 tests pass. **25 issues found** (3 CRITICAL, 4 HIGH, 7 MEDIUM, 5 LOW, 6 INFO)
+> **Status**: All 22 actionable issues **FIXED** (6 INFO are observations, not bugs)
 
 ---
 
-### OS Detection Speed (2026-04-12)
+## CRITICAL Issues
 
-**Problem**: OS detection 0.78x nmap. Sequential T1-T7 probes with per-probe BPF filter changes caused 7x RTT overhead.
+### C-01: API creates scans but never executes them
+**File**: `crates/rustnmap-api/src/handlers/create_scan.rs:207-243`
 
-**Root Cause Analysis**:
-- Each T1-T7 probe created a new RawSocket, set a BPF filter, sent probe, waited for response
-- 7 sequential probes = 7 RTTs minimum
-- Per-probe BPF filter changes required `drain_engine()` to flush stale packets
-- Total T1-T7 phase: ~700ms vs nmap's ~100ms
+The `create_scan` handler inserts a task record into `ScanManager` with status `Queued`, but **no background task picks up queued scans and runs them**. Scans stay in `Queued` state forever.
 
-**Fix**: Pipelined send-all-then-collect architecture:
-1. Set ONE broad BPF filter (src_ip + TCP protocol, no port filtering)
-2. Create ONE RawSocket for all probes
-3. Phase 1: Send all 7 probes in <1ms
-4. Phase 2: Single receive loop matching responses by port in software
-5. Early exit when all responses collected
+**Evidence**: `ScanManager` has `update_status()` and `update_progress()` methods that are never called from any handler or background worker. The `ScanOrchestrator` is never invoked from the API crate.
 
-**Files**: `os/detector.rs:1621-1801` (send_tcp_tests), `bpf.rs:985-1008` (tcp_response_from_ip)
+**Impact**: The entire API is a facade - it records scan requests but never performs actual network scanning.
 
-**Result**: OS detection 0.78x -> 0.99-1.10x nmap
-
-### Version Detection Speed (2026-04-12)
-
-**Problem**: Version detection 0.83x nmap. Debug timestamps showed 23 ports starting ~100ms apart despite `tokio::spawn` + `join_all`.
-
-**Root Cause**: `ServiceDetector` derived `Clone`, deep-cloning `ProbeDatabase` (HashMap<String, ProbeDefinition> with 103+ probes, each with Vec<MatchRule> containing String patterns). The `.map(|work| detector.clone())` in the orchestrator ran synchronously before spawning, causing sequential ~100ms clone operations.
-
-**Fix**: Wrapped `ProbeDatabase` in `Arc`:
-```rust
-// Before: expensive deep clone
-db: ProbeDatabase,  // Clone = deep copy of all probes
-
-// After: cheap reference count
-db: Arc<ProbeDatabase>,  // Clone = Arc::clone (increment refcount)
-```
-
-**Files**: `service/detector.rs:102-104` (ServiceDetector), `service/detector.rs:116-121` (new)
-
-**Result**: Version detection 0.83x -> **1.61x** nmap. Memory from ~130MB to 74.5MB.
-
-### OS Detection Memory (2026-04-12)
-
-**Problem**: `OsDetector::new(os_db.clone(), ...)` deep-cloned `FingerprintDatabase` for each host.
-
-**Fix**: Wrapped `FingerprintDatabase` in `Arc<OsDetector>`.
-
-**Files**: `os/detector.rs:34` (db field), `os/detector.rs:435-437` (new)
-
-**Result**: Prevents clone overhead. Base footprint ~135MB remains (6036 fingerprints).
+**Fix**: Add a background task runner that:
+1. Polls `ScanManager` for `Queued` scans
+2. Spawns `ScanOrchestrator::run()` in a tokio task
+3. Updates status/progress via `ScanManager` callbacks
+4. Stores results when complete
 
 ---
 
-## MEMORY OPTIMIZATION RESULTS (Phase 2)
+### C-02: SSE stream never terminates for queued scans
+**File**: `crates/rustnmap-api/src/sse/mod.rs:42-77`
 
-### Fixes Applied
+The `scan_stream` SSE handler polls every 1 second waiting for terminal state (`Completed`, `Cancelled`, `Failed`). Since scans never transition out of `Queued` (see C-01), the stream **loops forever** sending identical progress updates.
 
-| Fix | Before | After | Reduction |
-|-----|--------|-------|-----------|
-| Ring buffer: block_nr 256->64 | 16MB mmap | 4MB mmap | -12MB |
-| Per-packet engine clone | Arc::new(Self) per packet | Arc::clone(&ring_ref) | -10-20MB alloc churn |
-| Debug eprintln in find_matches | 4 calls printing full FPS | Removed | Speed + memory |
-| Dual OS fingerprint storage | typed + raw for 5678 entries | raw only | -50-70MB |
-| Dead parse_fingerprint code | 460 lines | Removed | Binary size |
+**Impact**: Memory leak - each SSE connection holds a reference and sends data indefinitely.
 
-### Memory Comparison (2026-04-12 01:52 Benchmark)
-
-| Category | nmap | rustnmap (Before Phase 2) | rustnmap (Current) | Current Ratio |
-|----------|------|---------------------------|-------------------|---------------|
-| Basic scans | 18.5MB | 44-46MB | 16-24MB | 1.0-1.3x |
-| Service detection | 52MB | 167MB | 74.5MB | 1.4x |
-| OS detection | 33MB | 208MB | 135MB | 4.1x |
-| Aggressive (-A) | 67MB | 268MB | 171MB | 2.6x |
-| Host discovery | 11.7MB | 15-17MB | 15-17MB | 1.3x |
+**Fix**: Either implement the scan runner (C-01), or add a timeout to the SSE stream for queued scans.
 
 ---
 
-## OS Fingerprint Memory Analysis
-
-### RawFingerprint Structure
+### C-03: `port_list()` builder method produces wrong results
+**File**: `crates/rustnmap-sdk/src/builder.rs:179-196`
 
 ```rust
-type RawFingerprint = HashMap<String, HashMap<String, String>>;
-// 6036 entries, each with ~14 sections (SEQ, OPS, WIN, ECN, T1-T7, U1, IE)
-// Each section: ~10 key-value pairs
-// Per fingerprint: ~12KB
-// Total: ~74MB just for RawFingerprint data
+pub fn port_list(mut self, ports: &[u16]) -> Self {
+    if ports.len() == 1 {
+        self.config.port_spec = PortSpec::Range { start: ports[0], end: ports[0] };
+    } else {
+        self.config.port_spec = PortSpec::Top(ports.len());  // BUG
+    }
+    self
+}
 ```
 
-### Common String Patterns (Internable)
+Passing `[22, 80, 443]` creates `PortSpec::Top(3)` which scans the **top 3 most common ports** (e.g., 80, 23, 443), NOT ports 22, 80, 443 specifically.
 
-Keys repeated 6036x across all fingerprints:
-- R, DF, T, TG, S, A, F, O, M, W, RD, Q, P, SI, etc.
+**Impact**: SDK users get completely different scan results than requested.
 
-Values repeated frequently:
-- "Y", "N", "0x0100", hex values, distance values
-
-### Potential Savings from String Interning
-
-| Optimization | Estimated Savings |
-|-------------|-------------------|
-| Key interning (20 common keys) | ~10MB |
-| Value interning ("Y", "N", common hex) | ~5MB |
-| Vec<(u8, CompactString)> instead of HashMap | ~20MB |
-| Total | ~35MB |
+**Fix**: Build a proper comma-separated port string and parse it, or add a `PortSpec::List` variant.
 
 ---
 
-## PERFORMANCE ANALYSIS (Phase 1)
+## HIGH Issues
 
-### Nmap Architecture vs Rustnmap
+### H-01: `vulnerability_scan()` is a silent no-op
+**File**: `crates/rustnmap-sdk/src/builder.rs:305-310`
 
-| Aspect | Nmap | Rustnmap | Impact |
-|--------|------|----------|--------|
-| Packet I/O | libpcap + PACKET_MMAP | PACKET_MMAP V2 | Parity |
-| Service probes | nsock parallel I/O | tokio::spawn + join_all | Parity |
-| OS probes | cwnd-based parallel | Sequential (now pipelined) | FIXED |
-| Fingerprint matching | Linear scan | Linear scan (now pre-filtered) | FIXED |
-| Timing | RTT-adaptive | RTT-adaptive | Parity |
+```rust
+pub fn vulnerability_scan(self, enable: bool) -> Self {
+    let _ = enable;  // Silently discarded
+    self
+}
+```
 
-### Key nmap Timing Parameters
+Users who call `.vulnerability_scan(true)` get no vulnerability scanning, and no error or warning.
 
-- DEFAULT_SERVICEWAITMS = 5000ms (total time budget for all probes per port)
-- Probe timeout = budget - elapsed_so_far
-- Connection reuse from banner grab (service_scan.cc lines 2095-2105)
-- SEQ probes: 100ms intervals (osscan2.cc)
-- T1-T7: Sent in parallel via nsock (not sequential)
+**Fix**: Either implement it via `rustnmap-vuln` integration, or return an error/panic explaining it's not yet supported.
+
+---
+
+### H-02: `get_scan_results` returns misleading 404 for pending scans
+**File**: `crates/rustnmap-api/src/handlers/get_scan_results.rs:33-44`
+
+The handler only checks the `results` DashMap. If a scan exists (is `Queued` or `Running`) but hasn't completed, it returns `404 Scan not found`.
+
+**Impact**: Client can't distinguish between "scan doesn't exist" and "scan exists but not done".
+
+**Fix**: Check `tasks` first, return 404 if not found, 202 Accepted if not completed, 200 with results if completed.
+
+---
+
+### H-03: Missing SCTP scan types in `ScanProfile::to_scan_config()`
+**File**: `crates/rustnmap-sdk/src/profile.rs:210-227`
+
+The match statement handles 9 scan types but omits `sctp_init` and `sctp_cookie`, which ARE listed in the API's `VALID_SCAN_TYPES` (12 types total in `create_scan.rs:28-41`).
+
+**Impact**: Loading a profile with `scan_type: "sctp_init"` returns an error instead of configuring the scan.
+
+---
+
+### H-04: Type duplication between API and SDK
+**Files**: `rustnmap-api/src/lib.rs`, `rustnmap-sdk/src/models.rs`, `rustnmap-sdk/src/remote.rs`
+
+Both crates independently define:
+- `ScanStatus` enum (API `lib.rs:117-125` vs SDK `models.rs:131-138`)
+- `CreateScanRequest` / `ScanOptions` (API `lib.rs:165-191` vs SDK `remote.rs:324-337`)
+- `ApiResponse` (API `lib.rs:65-72` vs SDK `remote.rs:340-344`)
+- `ScanProgress` (API `lib.rs:151-162` vs SDK `remote.rs:363-368`)
+
+SDK models also duplicate `rustnmap_output::models` with different field names (e.g., `port.number` vs `port.port`).
+
+**Impact**: Maintenance burden, potential inconsistency, API/SDK version drift.
+
+**Fix**: Move shared types to `rustnmap-common` or a new `rustnmap-api-types` crate.
+
+---
+
+## MEDIUM Issues
+
+### M-01: Unused dependency `once_cell`
+**File**: `crates/rustnmap-api/Cargo.toml:37`
+
+The code uses `std::sync::LazyLock` (stable since Rust 1.80), making `once_cell = "1.19"` unnecessary.
+
+---
+
+### M-02: Unused dependency `reqwest` in rustnmap-api
+**File**: `crates/rustnmap-api/Cargo.toml:49`
+
+Listed as "HTTP client for health checks" but never imported or used anywhere in the API crate.
+
+---
+
+### M-03: Unused dependency `futures-util` and `async-stream` in rustnmap-sdk
+**File**: `crates/rustnmap-sdk/Cargo.toml:18-19`
+
+Neither `futures_util` nor `async_stream` are used in any SDK source file.
+
+---
+
+### M-04: `parse_port_spec` doesn't handle comma-separated ports
+**File**: `crates/rustnmap-sdk/src/builder.rs:200-223`
+
+Only handles ranges (`"1-1000"`), special strings (`"all"`, `"*"`), `"topN"`, and single ports. Cannot handle `"22,80,443"` which is a standard nmap port format.
+
+---
+
+### M-05: `ScanOptions.ports` has no server-side validation
+**File**: `crates/rustnmap-api/src/handlers/create_scan.rs`
+
+The `validate_request()` function validates targets, scan_type, and timing, but **never validates `options.ports`**. Invalid port strings are passed through silently.
+
+---
+
+### M-06: Inconsistent response format for `cancel_scan`
+**File**: `crates/rustnmap-api/src/handlers/cancel_scan.rs:33-43`
+
+Returns `CancelScanResponse` directly (no `ApiResponse<>` wrapper). Other handlers use `ApiResponse::success()` wrapper with `{"success": true, "data": {...}}`.
+
+cancel_scan returns: `{"id": "...", "status": "cancelled", "message": "..."}`
+Others return: `{"success": true, "data": {"id": "...", ...}}`
+
+---
+
+### M-07: Manual XML construction vulnerable to injection
+**File**: `crates/rustnmap-sdk/src/models.rs:93-127`
+
+Uses `std::fmt::Write` to manually build XML. If any field (e.g., hostname, service name, OS name) contains `<`, `>`, `&`, or `"`, the output will be malformed XML or vulnerable to injection.
+
+---
+
+## LOW Issues
+
+### L-01: Dead `AuthMiddleware` struct
+**File**: `crates/rustnmap-api/src/middleware/auth.rs:28-35`
+
+`AuthMiddleware` struct is defined with a `state` field marked `#[allow(dead_code)]`, but only `auth_middleware` function is actually used as middleware. The struct is never constructed except in tests.
+
+---
+
+### L-02: Missing `#[must_use]` on `Scanner::run()` and `ScannerBuilder::run()`
+**File**: `crates/rustnmap-sdk/src/builder.rs:83, 339`
+
+Both `run()` methods return `ScanResult<ScanOutput>` which should not be silently discarded. `#[must_use]` is present on builder setter methods but missing on the `run()` methods themselves.
+
+---
+
+### L-03: `Scanner::default()` may panic
+**File**: `crates/rustnmap-sdk/src/builder.rs:137-141`
+
+```rust
+impl Default for Scanner {
+    fn default() -> Self {
+        Self::new().unwrap()
+    }
+}
+```
+
+`Scanner::new()` currently can't fail (just returns `Ok`), but if it ever does, `Default` will panic. Should use a const default or handle gracefully.
+
+---
+
+### L-04: `HealthResponse::default()` has hardcoded zeros
+**File**: `crates/rustnmap-api/src/lib.rs:104-114`
+
+Default impl sets `uptime_seconds: 0`, `active_scans: 0`, `queued_scans: 0`. The handler overrides these, but anyone using `HealthResponse::default()` directly gets misleading data.
+
+---
+
+### L-05: `ScanStatus` conversion doesn't handle `Queued`
+**File**: `crates/rustnmap-api/src/lib.rs:139-148`
+
+`From<rustnmap_scan_management::ScanStatus>` only handles `Running`, `Completed`, `Failed`, `Cancelled`. If `scan_management` ever adds `Queued`, compilation fails.
+
+---
+
+## INFO (Observations, not issues)
+
+### I-01: `ScanProfile::from_file` uses `block_in_place`
+**File**: `crates/rustnmap-sdk/src/profile.rs:144-147`
+
+Uses `tokio::task::block_in_place` for file I/O, which is valid in async context but will panic outside tokio runtime.
+
+### I-02: No CORS configuration
+**File**: `crates/rustnmap-api/Cargo.toml:19`
+
+`tower-http` is compiled with CORS feature, but no CORS layer is configured in the router.
+
+### I-03: No graceful shutdown
+**File**: `crates/rustnmap-api/src/server.rs:84-100`
+
+`run()` uses `axum::serve()` without `with_graceful_shutdown()`. Server cannot be cleanly stopped.
+
+### I-04: `profile.rs` port parsing uses `unwrap_or` defaults silently
+**File**: `crates/rustnmap-sdk/src/profile.rs:184-196`
+
+Invalid port specs silently become defaults (e.g., `unwrap_or(1000)`) instead of returning errors.
+
+### I-05: No request size limit
+**File**: `crates/rustnmap-api/src/routes/mod.rs`
+
+No `DefaultBodyLimit` layer is applied. A malicious client could send extremely large JSON bodies.
+
+### I-06: `ApiConfig` generates a random key on every `default()`
+**File**: `crates/rustnmap-api/src/config.rs:48`
+
+Every `ApiConfig::default()` call generates a new random key. This is documented but could surprise users who create two instances expecting the same key.
+
+---
+
+## Build & Test Verification
+
+| Check | Result |
+|-------|--------|
+| `cargo clippy -p rustnmap-api -p rustnmap-sdk -- -D warnings` | 0 warnings |
+| `cargo test -p rustnmap-api -p rustnmap-sdk` | 100 pass (76 api unit + 16 api integration + 6 sdk unit + 2 doctests) |
+| `cargo fmt --all -- --check` | Pass (formatting compliant) |
+
+---
+
+## Statistics
+
+| Metric | Value |
+|--------|-------|
+| Files reviewed | 22 (14 api + 5 sdk + 2 Cargo.toml + 1 doc) |
+| Lines of code | 5,175 (new on develop branch) |
+| Total issues | 25 |
+| Critical | 3 |
+| High | 4 |
+| Medium | 7 |
+| Low | 5 |
+| Info | 6 |

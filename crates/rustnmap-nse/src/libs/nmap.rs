@@ -1389,7 +1389,9 @@ impl mlua::UserData for NseSocket {
                     mlua::Value::String(s) => {
                         let s = s.to_string_lossy();
                         s.parse::<u16>().map_err(|e| {
-                            mlua::Error::RuntimeError(format!("sendto: port string parse error: {e}"))
+                            mlua::Error::RuntimeError(format!(
+                                "sendto: port string parse error: {e}"
+                            ))
                         })?
                     }
                     mlua::Value::Table(t) => {

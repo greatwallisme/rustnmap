@@ -9,288 +9,159 @@
 
 ### 5.0.1 Crate 列表 (1.0 + 2.0)
 
-| Crate | 用途 | 状态 | 对应 Phase |
-|-------|------|------|-----------|
-| `rustnmap-common` | 公共类型、工具函数、错误处理 | 1.0 | - |
-| `rustnmap-net` | 原始套接字、数据包构造 | 1.0 | - |
-| `rustnmap-packet` | PACKET_MMAP V2 零拷贝引擎 (重构中) | 1.0 | Phase 40 |
-| `rustnmap-target` | 目标解析、主机发现 | 1.0 | - |
-| `rustnmap-scan` | 端口扫描实现 | 1.0 | - |
-| `rustnmap-fingerprint` | OS/服务指纹匹配 | 1.0 | - |
-| `rustnmap-nse` | Lua 脚本引擎 | 1.0 | - |
-| `rustnmap-traceroute` | 网络路由追踪 | 1.0 | - |
-| `rustnmap-evasion` | 防火墙/IDS 规避技术 | 1.0 | - |
-| `rustnmap-cli` | 命令行界面 | 1.0 | - |
-| `rustnmap-core` | 核心编排和状态管理 | 1.0 | - |
-| `rustnmap-output` | 输出格式化 | 1.0 | - |
-| `rustnmap-benchmarks` | 性能基准测试 | 1.0 | - |
-| `rustnmap-macros` | 过程宏 | 1.0 | - |
-| `rustnmap-vuln` | **漏洞情报 (CVE/CPE/EPSS/KEV)** | **2.0 NEW** | Phase 2 |
-| `rustnmap-api` | **REST API / Daemon 模式** | **2.0 NEW** | Phase 5 |
-| `rustnmap-sdk` | **Rust SDK (Builder API)** | **2.0 NEW** | Phase 5 |
+| Crate | 用途 | 状态 |
+|-------|------|------|
+| `rustnmap-common` | 公共类型、工具函数、错误处理、ServiceDatabase | 1.0 |
+| `rustnmap-net` | 原始套接字、数据包构造 | 1.0 |
+| `rustnmap-packet` | PACKET_MMAP V2 零拷贝引擎 | 1.0 |
+| `rustnmap-target` | 目标解析、主机发现 | 1.0 |
+| `rustnmap-scan` | 端口扫描实现 (12 种扫描类型) | 1.0 |
+| `rustnmap-fingerprint` | 服务/OS 指纹匹配、数据库加载 (MAC/RPC/协议) | 1.0 |
+| `rustnmap-nse` | Lua 脚本引擎 (进程隔离) | 1.0 |
+| `rustnmap-traceroute` | 网络路由追踪 | 1.0 |
+| `rustnmap-evasion` | 防火墙/IDS 规避技术 | 1.0 |
+| `rustnmap-cli` | 命令行界面 (lexopt 解析器) | 1.0 |
+| `rustnmap-core` | 核心编排器、ScanSession DI 容器 | 1.0 |
+| `rustnmap-output` | 输出格式化 (7 种格式) | 1.0 |
+| `rustnmap-benchmarks` | 性能基准测试 | 1.0 |
+| `rustnmap-stateless-scan` | Masscan 式无状态高速扫描 (SYN Cookie) | **2.0 NEW** |
+| `rustnmap-scan-management` | 扫描持久化 (SQLite)、扫描对比、YAML 配置 | **2.0 NEW** |
+| `rustnmap-vuln` | 漏洞情报 (CVE/CPE/EPSS/KEV) | **2.0 NEW** |
+| `rustnmap-api` | REST API / Daemon 模式 (Axum) | **2.0 NEW** |
+| `rustnmap-sdk` | Rust SDK (Builder API，支持本地和远程扫描) | **2.0 NEW** |
 
-**总计**: 14 个 (1.0) + 3 个 (2.0 新增) = **17 个 Crate**
+**总计**: 13 个 (1.0) + 5 个 (2.0 新增) = **18 个 Crate**
 
 ---
 
-## 5.1 Cargo Workspace 结构 (1.0 基线)
+## 5.1 Cargo Workspace 结构
 
 ```
-rustnmap/
-├── Cargo.toml                 # Workspace 配置
-├── README.md
-├── LICENSE
-├── .gitignore
-│
-├── crates/
-│   ├── rustnmap-cli/          # 命令行入口
-│   │   ├── Cargo.toml
-│   │   └── src/
-│   │       ├── main.rs
-│   │       ├── args.rs        # CLI 参数解析
-│   │       └── output.rs      # 终端输出处理
-│   │
-│   ├── rustnmap-core/         # 核心扫描引擎
-│   │   ├── Cargo.toml
-│   │   └── src/
-│   │       ├── lib.rs
-│   │       ├── scan/
-│   │       │   ├── mod.rs
-│   │       │   ├── orchestrator.rs
-│   │       │   ├── scheduler.rs
-│   │       │   └── executor.rs
-│   │       ├── discovery/
-│   │       │   ├── mod.rs
-│   │       │   ├── arp.rs
-│   │       │   ├── icmp.rs
-│   │       │   └── tcp.rs
-│   │       ├── portscan/
-│   │       │   ├── mod.rs
-│   │       │   ├── tcp_syn.rs
-│   │       │   ├── tcp_connect.rs
-│   │       │   ├── tcp_stealth.rs
-│   │       │   └── udp.rs
-│   │       ├── service/
-│   │       │   ├── mod.rs
-│   │       │   ├── probe.rs
-│   │       │   └── matcher.rs
-│   │       ├── os/
-│   │       │   ├── mod.rs
-│   │       │   ├── fingerprint.rs
-│   │       │   └── matcher.rs
-│   │       └── result.rs
-│   │
-│   ├── rustnmap-nse/          # NSE 脚本引擎
-│   │   ├── Cargo.toml
-│   │   └── src/
-│   │       ├── lib.rs
-│   │       ├── engine/
-│   │       │   ├── mod.rs
-│   │       │   ├── lua_bridge.rs
-│   │       │   ├── scheduler.rs
-│   │       │   └── sandbox.rs
-│   │       ├── libs/
-│   │       │   ├── mod.rs
-│   │       │   ├── nmap.rs
-│   │       │   ├── stdnse.rs
-│   │       │   ├── http.rs
-│   │       │   ├── ssl.rs
-│   │       │   ├── ssh.rs
-│   │       │   ├── smb.rs
-│   │       │   └── ... (其他协议库)
-│   │       └── parser/
-│   │           ├── mod.rs
-│   │           └── script_parser.rs
-│   │
-│   ├── rustnmap-net/          # 网络层
-│   │   ├── Cargo.toml
-│   │   └── src/
-│   │       ├── lib.rs
-│   │       ├── socket/
-│   │       │   ├── mod.rs
-│   │       │   ├── raw_socket.rs
-│   │       │   ├── tcp.rs
-│   │       │   └── udp.rs
-│   │       ├── packet/
-│   │       │   ├── mod.rs
-│   │       │   ├── builder.rs
-│   │       │   ├── parser.rs
-│   │       │   ├── ethernet.rs
-│   │       │   ├── ip.rs
-│   │       │   ├── tcp.rs
-│   │       │   ├── udp.rs
-│   │       │   └── icmp.rs
-│   │       └── interface.rs
-│   │
-│   ├── rustnmap-db/           # 数据库
-│   │   ├── Cargo.toml
-│   │   └── src/
-│   │       ├── lib.rs
-│   │       ├── service_probes.rs
-│   │       ├── os_fingerprints.rs
-│   │       ├── mac_prefixes.rs
-│   │       └── loader.rs
-│   │
-│   ├── rustnmap-output/       # 输出格式化
-│   │   ├── Cargo.toml
-│   │   └── src/
-│   │       ├── lib.rs
-│   │       ├── normal.rs
-│   │       ├── xml.rs
-│   │       ├── json.rs
-│   │       ├── grepable.rs
-│   │       └── html.rs
-│   │
-│   └── rustnmap-common/       # 公共类型
-│       ├── Cargo.toml
-│       └── src/
-│           ├── lib.rs
-│           ├── types.rs
-│           ├── error.rs
-│           └── utils.rs
-│
-├── scripts/                   # NSE 脚本库
-│   ├── auth/
-│   ├── broadcast/
-│   ├── brute/
-│   ├── default/
-│   ├── discovery/
-│   ├── exploit/
-│   ├── safe/
-│   ├── vuln/
-│   └── script.db
-│
-├── data/                      # 数据库文件
-│   ├── service-probes
-│   ├── os-fingerprints
-│   ├── mac-prefixes
-│   ├── rpc-procedures
-│   └── payloads
-│
-└── tests/                     # 集成测试
-    ├── integration/
-    ├── e2e/
-    └── fixtures/
+crates/
+├── rustnmap-common/           # 公共类型、错误处理、ServiceDatabase
+├── rustnmap-net/              # 原始套接字、数据包构造
+├── rustnmap-packet/           # PACKET_MMAP V2 零拷贝引擎
+│   └── src/ (engine, mmap, zero_copy, async_engine, bpf, stream)
+├── rustnmap-target/           # 目标解析、主机发现
+├── rustnmap-scan/             # 端口扫描实现 (12 种扫描类型)
+├── rustnmap-fingerprint/      # 服务/OS 指纹匹配
+│   └── src/database/ (mac, rpc, protocols, service/, os/)
+├── rustnmap-nse/              # Lua 脚本引擎 (进程隔离)
+│   ├── src/ (engine, libs, parser, process_executor)
+│   └── src/bin/runner.rs      # rustnmap-nse-runner 独立进程
+├── rustnmap-traceroute/       # 网络路由追踪
+├── rustnmap-evasion/          # 防火墙/IDS 规避技术
+├── rustnmap-output/           # 输出格式化 (7 种格式)
+│   └── src/ (formatter, models, database_context)
+├── rustnmap-core/             # 核心编排器、ScanSession DI 容器
+│   └── src/ (orchestrator, session, timing)
+├── rustnmap-cli/              # 命令行界面 (lexopt)
+├── rustnmap-benchmarks/       # 性能基准测试
+├── rustnmap-stateless-scan/   # 无状态高速扫描 (SYN Cookie)
+├── rustnmap-scan-management/  # 扫描持久化、对比、YAML 配置
+├── rustnmap-vuln/             # 漏洞情报 (CVE/CPE/EPSS/KEV)
+├── rustnmap-api/              # REST API (Axum)
+└── rustnmap-sdk/              # Rust SDK (Builder API)
+
+data/                          # Nmap 兼容数据库文件
+├── nmap-service-probes
+├── nmap-os-db
+├── nmap-mac-prefixes
+├── nmap-rpc
+└── nmap-payloads
+
+scripts/                       # NSE 脚本库 (Nmap 兼容)
 ```
 
 ## 5.2 依赖关系图
 
-### 5.2.1 1.0 基线依赖图
+### 5.2.1 实际内部依赖关系
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                         Dependency Graph                            │
+│                    Internal Crate Dependencies                       │
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                     │
-│     ┌──────────────┐                                               │
-│     │ rustnmap-cli │                                               │
-│     └──────┬───────┘                                               │
-│            │ uses                                                   │
-│            ▼                                                        │
-│  ┌─────────────────────────────────────────────────────────────┐   │
-│  │              rustnmap-core (扫描编排)                        │   │
-│  └───────┬─────────────────┬──────────────────┬────────────────┘   │
-│          │ uses             │ uses             │ uses                │
-│          ▼                  ▼                  ▼                    │
-│  ┌───────────────┐  ┌───────────────┐  ┌───────────────┐          │
-│  │ rustnmap-nse  │  │ rustnmap-net  │  │ rustnmap-db   │          │
-│  │ (脚本引擎)    │  │ (网络层)      │  │ (数据库)      │          │
-│  └───────┬───────┘  └───────┬───────┘  └───────┬───────┘          │
-│          │                  │                  │                    │
-│          └──────────────────┼──────────────────┘                    │
-│                             │ uses                                  │
-│                             ▼                                       │
-│                    ┌─────────────────┐                             │
-│                    │ rustnmap-common │                             │
-│                    │ (公共类型)      │                             │
-│                    └────────┬────────┘                             │
-│                             │ uses                                  │
-│                             ▼                                       │
-│                    ┌─────────────────┐                             │
-│                    │ rustnmap-output │                             │
-│                    │ (输出格式化)    │                             │
-│                    └─────────────────┘                             │
+│  rustnmap-common          (无内部依赖 - 基础类型层)                 │
+│     ^                                                               │
+│     ├── rustnmap-net                                               │
+│     │      ^                                                       │
+│     │      ├── rustnmap-target                                     │
+│     │      ├── rustnmap-evasion                                    │
+│     │      └── rustnmap-scan ──> rustnmap-packet                   │
+│     │                                                               │
+│     ├── rustnmap-packet                                            │
+│     │      ^                                                       │
+│     │      └── rustnmap-scan                                       │
+│     │                                                               │
+│     ├── rustnmap-fingerprint ──> rustnmap-net, rustnmap-packet     │
+│     │      ^                                                       │
+│     │      └── rustnmap-output                                     │
+│     │                                                               │
+│     ├── rustnmap-nse ──> rustnmap-target                           │
+│     │                                                               │
+│     ├── rustnmap-traceroute ──> rustnmap-net                       │
+│     │                                                               │
+│     ├── rustnmap-vuln ──> rustnmap-output                          │
+│     │      ^                                                       │
+│     │      └── rustnmap-scan-management                            │
+│     │                                                               │
+│     └── rustnmap-core ──> common, net, packet, scan, target,       │
+│            evasion, fingerprint, nse, traceroute, output           │
+│            ^                                                        │
+│            ├── rustnmap-cli ──> common, core, scan, target,        │
+│            │       fingerprint, nse, output, evasion, vuln,        │
+│            │       scan-management                                  │
+│            │                                                        │
+│            ├── rustnmap-api ──> core, output, scan-management      │
+│            │                                                        │
+│            ├── rustnmap-sdk ──> core, output, target, evasion,     │
+│            │       common                                           │
+│            │                                                        │
+│            └── rustnmap-stateless-scan ──> core, packet, output    │
 │                                                                     │
-├─────────────────────────────────────────────────────────────────────┤
-│  External Crates (关键依赖):                                        │
-│  ─────────────────────────                                           │
-│  ├── tokio (异步运行时)                                             │
-│  ├── mlua (Lua 绑定)                                                │
-│  ├── pnet (数据包处理)                                              │
-│  ├── lexopt (CLI 解析, 2026-03-10 从 clap 迁移)                      │
-│  ├── serde/serde_json (序列化)                                      │
-│  ├── regex (正则匹配)                                               │
-│  ├── trust-dns (DNS 解析)                                           │
-│  ├── rustls (TLS/SSL)                                               │
-│  └── chrono (时间处理)                                              │
+│  rustnmap-benchmarks ──> common, fingerprint, net, nse, packet,    │
+│     scan, target                                                    │
 │                                                                     │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-### 5.2.2 2.0 新增依赖关系
+### 5.2.2 关键外部依赖
+
+| 依赖 | 用途 |
+|------|------|
+| tokio | 异步运行时 |
+| mlua | Lua 5.4 绑定 (NSE 脚本) |
+| pnet | 数据包处理 |
+| lexopt | CLI 参数解析 |
+| serde/serde_json | 序列化 |
+| regex | 正则匹配 |
+| trust-dns | DNS 解析 |
+| rustls/tokio-rustls | TLS/SSL |
+| axum | REST API 框架 (2.0) |
+| rusqlite | SQLite 数据库 (2.0) |
+| reqwest | HTTP 客户端 (NVD API) |
+| x509-parser | 证书解析 |
+
+### 5.2.3 完整依赖链
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                    RustNmap 2.0 New Dependencies                    │
-├─────────────────────────────────────────────────────────────────────┤
-│                                                                     │
-│     ┌─────────────────────────────────────────────────────────┐    │
-│     │              rustnmap-sdk (2.0 NEW)                      │    │
-│     │         (稳定高层 Builder API for Rust)                  │    │
-│     └────────────────────┬────────────────────────────────────┘    │
-│                          │ uses                                     │
-│                          ▼                                          │
-│     ┌─────────────────────────────────────────────────────────┐    │
-│     │              rustnmap-api (2.0 NEW)                      │    │
-│     │         (REST API / Daemon Mode with axum)               │    │
-│     │   POST /api/v1/scans, GET /api/v1/scans/{id}/stream     │    │
-│     └────────────────────┬────────────────────────────────────┘    │
-│                          │ uses                                     │
-│          ┌───────────────┼───────────────┐                         │
-│          │               │               │                         │
-│          ▼               ▼               ▼                         │
-│  ┌──────────────┐ ┌──────────────┐ ┌──────────────┐              │
-│  │rustnmap-core │ │rustnmap-vuln │ │rustnmap-output│              │
-│  │ (编排器)     │ │ (2.0 NEW)    │ │ (扩展)        │              │
-│  └──────────────┘ └──────┬───────┘ └──────────────┘              │
-│                          │                                         │
-│                          │ uses                                    │
-│                          ▼                                         │
-│                 ┌─────────────────┐                               │
-│                 │  rusqlite       │                               │
-│                 │  (SQLite ORM)   │                               │
-│                 └─────────────────┘                               │
-│                                                                     │
-├─────────────────────────────────────────────────────────────────────┤
-│  2.0 External Crates (新增依赖):                                    │
-│  ────────────────────────────                                        │
-│  ├── axum (REST API Web 框架)                                       │
-│  ├── tower (中间件支持)                                             │
-│  ├── rusqlite (SQLite 数据库)                                       │
-│  ├── reqwest (NVD API HTTP 客户端)                                  │
-│  └── bincode (状态序列化，用于暂停/恢复)                            │
-│                                                                     │
-└─────────────────────────────────────────────────────────────────────┘
-```
+rustnmap-cli ──> rustnmap-core ──> rustnmap-scan ──> rustnmap-net
+                              │                       rustnmap-packet
+                              │                       rustnmap-target
+                              │                       rustnmap-evasion
+                              ├──> rustnmap-nse ──> rustnmap-target
+                              ├──> rustnmap-fingerprint ──> rustnmap-net
+                              │                          rustnmap-packet
+                              ├──> rustnmap-traceroute ──> rustnmap-net
+                              └──> rustnmap-output ──> rustnmap-fingerprint
 
-### 5.2.3 完整依赖链 (1.0 + 2.0)
+rustnmap-sdk ──> rustnmap-core (本地扫描)
+             ──> rustnmap-output, rustnmap-target, rustnmap-evasion
 
-```
-rustnmap-cli ──> rustnmap-core ──> rustnmap-scan
-                              │
-                              ├──> rustnmap-nse
-                              │
-                              ├──> rustnmap-fingerprint
-                              │
-                              ├──> rustnmap-traceroute
-                              │
-                              └──> rustnmap-evasion
-
-rustnmap-sdk (2.0) ──> rustnmap-api (2.0) ──> rustnmap-core
-                                          │
-                                          └──> rustnmap-vuln (2.0)
-                                                   │
-                                                   └──> rustnmap-output (extended)
+rustnmap-api ──> rustnmap-core
+             ──> rustnmap-output
+             ──> rustnmap-scan-management ──> rustnmap-vuln ──> rustnmap-output
 ```
 
 ---

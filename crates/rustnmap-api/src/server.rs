@@ -24,6 +24,7 @@ use tower_http::trace::TraceLayer;
 use crate::config::ApiConfig;
 use crate::error::ApiResult;
 use crate::manager::ScanManager;
+use crate::runner::ScanRunner;
 
 /// Shared API state
 #[derive(Clone, Debug)]
@@ -84,6 +85,10 @@ impl ApiServer {
     pub async fn run(self, addr: SocketAddr) -> ApiResult<()> {
         let state = self.state();
 
+        // Start background scan runner
+        let runner = Arc::new(ScanRunner::new(Arc::clone(&state.scan_manager)));
+        runner.start();
+
         // Create router
         let app = crate::routes::create_router(state);
 
@@ -106,6 +111,10 @@ impl ApiServer {
     /// Returns `ApiError` if the server fails to start or encounters an error during operation.
     pub async fn run_with_addr(self, addr: SocketAddr) -> ApiResult<SocketAddr> {
         let state = self.state();
+
+        // Start background scan runner
+        let runner = Arc::new(ScanRunner::new(Arc::clone(&state.scan_manager)));
+        runner.start();
 
         // Create router
         let app = crate::routes::create_router(state);

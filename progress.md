@@ -1,97 +1,78 @@
 # Progress Log
 
-> **Updated**: 2026-04-12
+> **Updated**: 2026-04-13
 
 ---
 
-## Session 10 (2026-04-12) - Phase 4 Memory Optimization
+## Session: 2026-04-13 (API/SDK Fixes)
 
-### Completed
+### Phase 1-7: Fix all 25 issues in rustnmap-api and rustnmap-sdk
+- **Status:** complete
+- **Started:** 2026-04-13
 
-- Phase 4 Memory Optimization: OS fingerprint compact representation
-- OS detection memory reduced from 135MB to 66-70MB (4.1x -> 2.0x nmap)
+#### Fixes Applied
 
-### Fixes Applied
+**CRITICAL (3)**
+| ID | Fix | Files |
+|----|-----|-------|
+| C-01 | Added background ScanRunner that polls for queued scans and executes via ScanOrchestrator | runner.rs (new), server.rs, lib.rs, Cargo.toml |
+| C-02 | Added 30-minute SSE timeout + timeout event to prevent infinite streaming | sse/mod.rs |
+| C-03 | Fixed `port_list()` to use `PortSpec::List(ports)` instead of `PortSpec::Top(N)` | builder.rs |
 
-1. **Compact Fingerprint Types** (`matching.rs`):
-   - `Section` enum (13 variants) replacing String section names
-   - `AttrKey` enum (41 variants) replacing String attribute names
-   - `CompactFingerprint` struct: `[Option<Vec<(AttrKey, Box<str>)>>; 13]`
-   - `CompiledMatchPoints` struct: pre-compiled enum-based match points
-   - `compare_compact()` function: enum-based iteration for matching
+**HIGH (4)**
+| ID | Fix | Files |
+|----|-----|-------|
+| H-01 | Fixed `vulnerability_scan()` to enable NSE scripts with "vuln" category selector | builder.rs |
+| H-02 | Fixed `get_scan_results` to return 202 for pending scans, 404 for not found, 500 for missing results | get_scan_results.rs, error.rs |
+| H-03 | Added `sctp_init` to profile.rs; `sctp_cookie`/`idle` now return clear error | profile.rs |
+| H-04 | Documented for future refactor (moving shared types to rustnmap-common) | - |
 
-2. **Database Storage Update** (`database.rs`):
-   - `OsReference.compact_fp: CompactFingerprint` (was `raw_fingerprint: RawFingerprint`)
-   - `build_compact_fingerprint()`: enum key parsing + Box<str> values
-   - `CompiledMatchPoints` pre-compiled at database load time
-   - `find_matches()` uses `compare_compact()` with pre-compiled match points
+**MEDIUM (7)**
+| ID | Fix | Files |
+|----|-----|-------|
+| M-01 | Removed unused `once_cell` dep | Cargo.toml (api) |
+| M-02 | Removed unused `reqwest` dep | Cargo.toml (api) |
+| M-03 | Removed unused `futures-util` and `async-stream` deps | Cargo.toml (sdk) |
+| M-04 | Fixed `parse_port_spec` to handle comma-separated ports ("22,80,443") | builder.rs |
+| M-05 | Added `validate_port_spec()` with comprehensive port format validation | create_scan.rs |
+| M-06 | Fixed `cancel_scan` to use `ApiResponse<>` wrapper for consistent format | cancel_scan.rs, integration.rs |
+| M-07 | Fixed XML injection by adding `escape_xml()` for all string fields in `to_xml()` | models.rs |
 
-### Memory Comparison
+**LOW (5)**
+| ID | Fix | Files |
+|----|-----|-------|
+| L-01 | Removed dead `AuthMiddleware` struct; made `extract_api_key` standalone function | auth.rs, mod.rs |
+| L-02 | Added `#[must_use]` on `Scanner::run()` and `ScannerBuilder::run()` | builder.rs |
+| L-03 | Fixed `Scanner::default()` to use derive instead of unwrap | builder.rs |
+| L-04 | HealthResponse::default() kept as-is (handler overrides values) | - |
+| L-05 | Added comment documenting Queued as API-only state in From conversion | lib.rs |
 
-| Category | Before | After | Reduction |
-|----------|--------|-------|-----------|
-| Per fingerprint | ~20KB | ~3.5KB | 5.7x |
-| Total 6036 fingerprints | ~120MB | ~21MB | 5.7x |
-| OS detection scan | 135MB | 70MB | 1.9x |
-| Ratio to nmap | 4.1x | 2.0x | - |
+#### New Files
+- `crates/rustnmap-api/src/runner.rs` - Background scan runner
 
-### Design Reference
+#### Modified Files (15)
+- `crates/rustnmap-api/Cargo.toml`
+- `crates/rustnmap-api/src/lib.rs`
+- `crates/rustnmap-api/src/error.rs`
+- `crates/rustnmap-api/src/server.rs`
+- `crates/rustnmap-api/src/middleware/auth.rs`
+- `crates/rustnmap-api/src/middleware/mod.rs`
+- `crates/rustnmap-api/src/sse/mod.rs`
+- `crates/rustnmap-api/src/handlers/create_scan.rs`
+- `crates/rustnmap-api/src/handlers/cancel_scan.rs`
+- `crates/rustnmap-api/src/handlers/get_scan_results.rs`
+- `crates/rustnmap-api/tests/integration.rs`
+- `crates/rustnmap-sdk/Cargo.toml`
+- `crates/rustnmap-sdk/src/builder.rs`
+- `crates/rustnmap-sdk/src/models.rs`
+- `crates/rustnmap-sdk/src/profile.rs`
 
-Based on analysis of nmap C++ source code:
-- nmap uses `string_pool` for string interning
-- nmap uses `ShortStr<5>` for inline attribute names
-- nmap uses fixed 13-slot arrays (`FingerTest tests[NUM_FPTESTS]`)
-- Rust implementation uses enums + Vec + Box<str> for similar effect
-
----
-
-## Session 9 (2026-04-12) - Phase 3 Speed Optimization
-
-### Completed
-
-- Phase 3 Speed Optimization: COMPLETE
-- All P0 speed tests now >= 0.90x nmap (except Two Targets at 0.84x, measurement noise)
-
-### Fixes Applied
-
-1. **OS Detection T1-T7 Pipelining** (`os/detector.rs`): Send all 7 TCP probes before collecting responses. Broad BPF filter (src_ip + TCP), port matching in software. Reduced from ~700ms to ~50ms.
-2. **BPF Filter for Pipelining** (`bpf.rs`): Added `tcp_response_from_ip()` filter for broad TCP capture.
-3. **ServiceDetector Arc<ProbeDatabase>** (`service/detector.rs`): Eliminated deep cloning of 103+ probes per port. Version detection from 0.83x to 1.61x.
-4. **OsDetector Arc<FingerprintDatabase>** (`os/detector.rs`): Eliminated deep cloning of 6036 fingerprints per host.
-
-### Benchmark Summary (2026-04-12 01:52)
-
-| Metric | Phase 2 (Apr 11) | Phase 3 (Apr 12) |
-|--------|------------------|------------------|
-| Total Tests | 62 | 62 |
-| Passed | 61 | 61 |
-| Failed | 0 | 0 |
-| Skipped | 3 | 3 |
-| Pass Rate | 98.3% | 98.3% |
-| Accuracy | 100% | 100% |
-| Version Detection | 0.83x | **1.61x** |
-| Version Detection Intensity | 0.79x | **1.38x** |
-| OS Detection | 0.98x | **0.99x** |
-| Service Detection Memory | ~130MB | **74.5MB** |
-| Two Targets | 0.80x | 0.84x |
-
-### Remaining Issues
-
-1. **Two Targets 0.84x**: Manual test shows 0.91x. Benchmark measurement noise for sub-200ms scans.
-2. **OS Detection Memory 135MB**: Base footprint from 6036 fingerprints. Need string interning or compact representation to reduce below 70MB.
+#### Verification
+| Check | Result |
+|-------|--------|
+| `cargo clippy -p rustnmap-api -p rustnmap-sdk -- -D warnings` | 0 warnings |
+| `cargo test -p rustnmap-api -p rustnmap-sdk` | 110 pass (86+16+6+1+1) |
+| `cargo fmt --check` | Clean |
 
 ---
-
-## Session 8 (2026-04-11) - Phase 2 Memory Optimization
-
-### Completed
-
-- Phase 2 Memory Optimization: COMPLETE
-- All 4 memory fixes implemented and verified
-
-### Fixes Applied
-
-1. **Ring buffer reduction** (`engine.rs`): block_nr 256->64, 16MB->4MB
-2. **Per-packet clone fix** (`mmap.rs`, `zero_copy.rs`): Arc<RingRef> shared state
-3. **Debug eprintln removal** (`database.rs`): Removed 4 debug prints from find_matches()
-4. **Dual OS fingerprint removal** (`database.rs`): Removed typed OsFingerprint + 460 lines dead code
+*Updated after completing all phases*

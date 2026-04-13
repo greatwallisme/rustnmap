@@ -305,98 +305,64 @@ impl DatabaseManager {
 
 ### 4.5.3 查找逻辑（最长前缀优先）
 
-参考 `reference/nmap/MACLookup.cc:190-206`
+实际实现在 `crates/rustnmap-fingerprint/src/database/mac.rs`:
 
 ```rust
 pub fn lookup(&self, mac: &str) -> Option<&str> {
-    let normalized = Self::normalize_mac(mac); // "0050C2AB123456"
+    let normalized = Self::normalize_mac(mac)?;
 
-    // 1. 先尝试 MA-S (9字符, 36位) - 最高优先级
-    if normalized.len() >= 9 {
-        if let Some(vendor) = self.prefixes.get(&normalized[..9]) {
+    // Try longest match first (12 chars down to 6 chars)
+    // This ensures more specific prefixes match before general ones
+    for len in (6..=normalized.len().min(12)).rev() {
+        let oui = &normalized[..len];
+        if let Some(vendor) = self.prefixes.get(oui) {
             return Some(vendor);
         }
     }
 
-    // 2. 再尝试 MA-M (7字符, 28位) - 中等优先级
-    if normalized.len() >= 7 {
-        if let Some(vendor) = self.prefixes.get(&normalized[..7]) {
-            return Some(vendor);
-        }
-    }
-
-    // 3. 最后尝试 MA-L (6字符, 24位) - 最低优先级
-    if normalized.len() >= 6 {
-        self.prefixes.get(&normalized[..6]).map(String::as_str)
-    } else {
-        None
-    }
+    None
 }
 ```
 
-### 4.5.4 解析器要求
+支持 6-12 字符的 OUI 长度，自动匹配最长前缀。
+
+### 4.5.4 解析器实现
+
+实际实现在 `crates/rustnmap-fingerprint/src/database/mac.rs`:
 
 ```rust
 pub struct MacPrefixDatabase {
-    // Maps OUI (6, 7, or 9 hex chars) to vendor name
     prefixes: HashMap<String, String>,
 }
 
 impl MacPrefixDatabase {
     pub fn parse(content: &str) -> Result<Self> {
+        let mut db = Self::empty();
         for (line_num, line) in content.lines().enumerate() {
             let line = line.trim();
-
-            // Skip comments and empty lines
-            if line.is_empty() || line.starts_with('#') {
-                continue;
-            }
+            let line_num = line_num + 1;
+            if line.is_empty() || line.starts_with('#') { continue; }
 
             let parts: Vec<&str> = line.split_whitespace().collect();
-            let oui = parts[0].to_uppercase();
+            if parts.len() < 2 { continue; }
 
-            // Support MA-L (6), MA-M (7), and MA-S (9) formats
-            let valid_len = oui.len() == 6 || oui.len() == 7 || oui.len() == 9;
-            if !valid_len || !oui.chars().all(|c| c.is_ascii_hexdigit()) {
-                return Err(ParseError {
-                    line: line_num + 1,
-                    content: format!("Invalid OUI format: {} (expected 6, 7, or 9 hex digits)", oui),
+            let oui = parts[0].to_uppercase();
+            let vendor = parts[1..].join(" ");
+
+            // Validate OUI format (6-12 hex digits for extended prefixes)
+            if !(6..=12).contains(&oui.len()) || !oui.chars().all(|c| c.is_ascii_hexdigit()) {
+                return Err(FingerprintError::ParseError {
+                    line: line_num,
+                    content: format!("Invalid OUI format: {oui}"),
                 });
             }
 
-            let vendor = parts[1..].join(" ");
             db.prefixes.insert(oui, vendor);
         }
         Ok(db)
     }
 }
 ```
-
-### 4.5.4 查找逻辑
-
-MAC 地址查找时，优先匹配最长前缀：
-1. 首先尝试 7 字符 OUI 匹配
-2. 如果未匹配，尝试 6 字符 OUI 匹配
-3. 返回匹配的厂商名称或 `None`
-
-```rust
-pub fn lookup(&self, mac: &str) -> Option<&str> {
-    let normalized = Self::normalize_mac(mac);
-
-    // Try 7-char OUI first (more specific)
-    if normalized.len() >= 7 {
-        if let Some(vendor) = self.prefixes.get(&normalized[..7]) {
-            return Some(vendor);
-        }
-    }
-
-    // Fall back to 6-char OUI
-    if normalized.len() >= 6 {
-        self.prefixes.get(&normalized[..6]).map(String::as_str)
-    } else {
-        None
-    }
-}
 ```
 
 ---

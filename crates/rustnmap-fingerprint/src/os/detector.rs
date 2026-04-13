@@ -29,8 +29,8 @@ use tracing::{debug, info, trace};
 use super::{
     database::{FingerprintDatabase, OsMatch},
     fingerprint::{
-        EcnFingerprint, IcmpTestResult, IpIdPattern, IpIdSeqClass, IsnClass,
-        OsFingerprint, SeqFingerprint, TestResult, UdpTestResult,
+        EcnFingerprint, IcmpTestResult, IpIdPattern, IpIdSeqClass, IsnClass, OsFingerprint,
+        SeqFingerprint, TestResult, UdpTestResult,
     },
 };
 use crate::Result;
@@ -281,7 +281,10 @@ fn drain_engine(engine: &mut MmapPacketEngine) {
 
 /// Swaps byte order of a u32 (little-endian to big-endian or vice versa).
 fn swap_bytes_u32(val: u32) -> u32 {
-    ((val & 0xFF) << 24) | ((val & 0xFF00) << 8) | ((val & 0xFF0000) >> 8) | ((val & 0xFF000000) >> 24)
+    ((val & 0xFF) << 24)
+        | ((val & 0xFF00) << 8)
+        | ((val & 0xFF0000) >> 8)
+        | ((val & 0xFF000000) >> 24)
 }
 
 /// Resolves the network interface name and creates a `MmapPacketEngine` for the
@@ -294,11 +297,12 @@ fn swap_bytes_u32(val: u32) -> u32 {
 /// be byte-swapped before comparing with `u32::from(Ipv4Addr)` (host order).
 fn resolve_interface_for_ip(local_addr: Ipv4Addr) -> Result<(String, MmapPacketEngine)> {
     let local_u32 = u32::from(local_addr);
-    let route_data =
-        std::fs::read_to_string("/proc/net/route").map_err(|e| crate::FingerprintError::Network {
+    let route_data = std::fs::read_to_string("/proc/net/route").map_err(|e| {
+        crate::FingerprintError::Network {
             operation: "read /proc/net/route".to_string(),
             reason: e.to_string(),
-        })?;
+        }
+    })?;
 
     let mut best_iface: Option<String> = None;
     let mut best_mask: u32 = 0;
@@ -332,12 +336,11 @@ fn resolve_interface_for_ip(local_addr: Ipv4Addr) -> Result<(String, MmapPacketE
 
     // Small ring buffer for OS detection: a few packets per probe
     let config = RingConfig::default();
-    let engine = MmapPacketEngine::new(&if_name, config).map_err(|e| {
-        crate::FingerprintError::Network {
+    let engine =
+        MmapPacketEngine::new(&if_name, config).map_err(|e| crate::FingerprintError::Network {
             operation: format!("create MmapPacketEngine on {if_name}"),
             reason: e.to_string(),
-        }
-    })?;
+        })?;
 
     Ok((if_name, engine))
 }
@@ -399,7 +402,8 @@ fn recv_tcp_response_bpf(
                 // Skip Ethernet header (14 bytes), then parse IP+TCP
                 if d.len() > ETH_HEADER_LEN {
                     let ip_data = &d[ETH_HEADER_LEN..];
-                    if let Some(response) = rustnmap_net::raw_socket::parse_tcp_response_full(ip_data)
+                    if let Some(response) =
+                        rustnmap_net::raw_socket::parse_tcp_response_full(ip_data)
                     {
                         trace!(
                             "recv_tcp_response_bpf: parsed sp={} dp={} flags=0x{:02x}",
@@ -413,8 +417,7 @@ fn recv_tcp_response_bpf(
                             // Extract raw TCP options from the mmap packet data
                             let ip_hlen = (ip_data[0] & 0x0F) as usize * 4;
                             let raw_options = if ip_data.len() >= ip_hlen + 20 {
-                                let tcp_doff =
-                                    (ip_data[ip_hlen + 12] >> 4) as usize * 4;
+                                let tcp_doff = (ip_data[ip_hlen + 12] >> 4) as usize * 4;
                                 if tcp_doff > 20 && ip_data.len() >= ip_hlen + tcp_doff {
                                     ip_data[ip_hlen + 20..ip_hlen + tcp_doff].to_vec()
                                 } else {
@@ -424,7 +427,10 @@ fn recv_tcp_response_bpf(
                                 Vec::new()
                             };
 
-                            return Ok(Some(TcpResponseData { response, raw_options }));
+                            return Ok(Some(TcpResponseData {
+                                response,
+                                raw_options,
+                            }));
                         }
                     }
                 }
@@ -598,10 +604,13 @@ impl OsDetector {
 
         // Create one MmapPacketEngine for all TCP probes (SEQ, ECN, T1-T7)
         let (_if_name, mut engine) = resolve_interface_for_ip(self.local_addr_v4)?;
-        engine.start().await.map_err(|e| crate::FingerprintError::Network {
-            operation: "start MmapPacketEngine for OS detection".to_string(),
-            reason: e.to_string(),
-        })?;
+        engine
+            .start()
+            .await
+            .map_err(|e| crate::FingerprintError::Network {
+                operation: "start MmapPacketEngine for OS detection".to_string(),
+                reason: e.to_string(),
+            })?;
 
         // Send SEQ probes (6 SYN probes to open port with 100ms intervals)
         // Each probe uses different options/window; responses provide OPS and WIN data
@@ -617,7 +626,10 @@ impl OsDetector {
             fingerprint.win.insert(test_name.clone(), resp.window);
         }
         // Store raw options from SEQ responses for the OPS fingerprint section
-        fingerprint.seq_raw_options = seq_responses.iter().map(|r| r.raw_options.clone()).collect();
+        fingerprint.seq_raw_options = seq_responses
+            .iter()
+            .map(|r| r.raw_options.clone())
+            .collect();
 
         // Drain stale packets before ECN phase (filter will change)
         drain_engine(&mut engine);
@@ -657,12 +669,7 @@ impl OsDetector {
         // These probes go to the closed port, and their IP IDs determine CI
         let tcp_closed_ip_ids: Vec<u16> = ["T4", "T5", "T6", "T7"]
             .iter()
-            .filter_map(|name| {
-                fingerprint
-                    .tests
-                    .get(*name)
-                    .and_then(|t| t.ip_id)
-            })
+            .filter_map(|name| fingerprint.tests.get(*name).and_then(|t| t.ip_id))
             .collect();
         if let Some(seq) = fingerprint.seq.as_mut() {
             seq.ci = Self::classify_ip_id_sequence_nmap(&tcp_closed_ip_ids);
@@ -702,7 +709,11 @@ impl OsDetector {
             let tcp_first = seq_responses.first().map(|r| r.ip_id).unwrap_or(0);
             trace!(
                 "SS check: tcp_incr={}, icmp_incr={}, tcp_first={}, tcp_last={}, icmp_ids={:?}",
-                tcp_incr, icmp_incr, tcp_first, tcp_last, icmp_ip_ids
+                tcp_incr,
+                icmp_incr,
+                tcp_first,
+                tcp_last,
+                icmp_ip_ids
             );
             if tcp_incr && icmp_incr {
                 let count = seq_responses.len();
@@ -710,7 +721,13 @@ impl OsDetector {
                     let avg = (u32::from(tcp_last).wrapping_sub(u32::from(tcp_first)))
                         / (count - 1) as u32;
                     let threshold = tcp_last.wrapping_add(avg.saturating_mul(3) as u16);
-                    trace!("SS: avg={}, threshold={}, icmp_first={}, shared={}", avg, threshold, icmp_first, icmp_first < threshold);
+                    trace!(
+                        "SS: avg={}, threshold={}, icmp_first={}, shared={}",
+                        avg,
+                        threshold,
+                        icmp_first,
+                        icmp_first < threshold
+                    );
                     icmp_first < threshold
                 } else {
                     false
@@ -1045,15 +1062,18 @@ impl OsDetector {
         clippy::cast_possible_truncation,
         reason = "i is bounded by seq_count which is small"
     )]
-    async fn send_seq_probes(&self, target: Ipv4Addr, engine: &mut MmapPacketEngine) -> Result<Vec<SeqProbeResponse>> {
+    async fn send_seq_probes(
+        &self,
+        target: Ipv4Addr,
+        engine: &mut MmapPacketEngine,
+    ) -> Result<Vec<SeqProbeResponse>> {
         use rustnmap_net::raw_socket::{RawSocket, TcpPacketBuilder};
 
         // IPPROTO_TCP raw socket for SENDING only
-        let socket =
-            RawSocket::with_protocol(6).map_err(|e| crate::FingerprintError::Network {
-                operation: "create raw socket for send".to_string(),
-                reason: e.to_string(),
-            })?;
+        let socket = RawSocket::with_protocol(6).map_err(|e| crate::FingerprintError::Network {
+            operation: "create raw socket for send".to_string(),
+            reason: e.to_string(),
+        })?;
 
         let base_src_port = Self::generate_source_port(0);
 
@@ -1092,21 +1112,23 @@ impl OsDetector {
             let send_time = std::time::Instant::now();
 
             // Send via RawSocket
-            socket
-                .send_packet(&packet, &dst_sockaddr)
-                .map_err(|e| crate::FingerprintError::Network {
+            socket.send_packet(&packet, &dst_sockaddr).map_err(|e| {
+                crate::FingerprintError::Network {
                     operation: "send SEQ probe".to_string(),
                     reason: e.to_string(),
-                })?;
+                }
+            })?;
 
             // Receive via MmapPacketEngine with BPF filter
-            debug!("SEQ probe {i}: waiting for response (timeout={:?})", self.timeout);
+            debug!(
+                "SEQ probe {i}: waiting for response (timeout={:?})",
+                self.timeout
+            );
             if let Some(data) =
                 recv_tcp_response_bpf(engine, self.open_port, src_port, self.timeout)?
             {
                 let response = data.response;
-                if (response.flags & tcp_flags::SYN) != 0
-                    && (response.flags & tcp_flags::ACK) != 0
+                if (response.flags & tcp_flags::SYN) != 0 && (response.flags & tcp_flags::ACK) != 0
                 {
                     responses.push(SeqProbeResponse {
                         isn: response.seq,
@@ -1181,7 +1203,9 @@ impl OsDetector {
             );
         }
         for (i, &d) in diffs.iter().enumerate() {
-            let td = responses[i + 1].send_time.duration_since(responses[i].send_time);
+            let td = responses[i + 1]
+                .send_time
+                .duration_since(responses[i].send_time);
             trace!("SEQ diff {}: 0x{:08X} ({}) time_delta={:?}", i, d, d, td);
         }
 
@@ -1211,16 +1235,13 @@ impl OsDetector {
         clippy::cast_possible_truncation,
         reason = "ISR/SP are clamped to u8 range after float calculation"
     )]
-    fn calculate_isr_sp(
-        responses: &[SeqProbeResponse],
-        diffs: &[u32],
-        gcd: u32,
-    ) -> (u8, u8) {
+    fn calculate_isr_sp(responses: &[SeqProbeResponse], diffs: &[u32], gcd: u32) -> (u8, u8) {
         // Calculate individual ISN rates (per second) using actual time deltas
         let mut rates: Vec<f64> = Vec::with_capacity(diffs.len());
         for i in 0..diffs.len() {
-            let time_delta =
-                responses[i + 1].send_time.duration_since(responses[i].send_time);
+            let time_delta = responses[i + 1]
+                .send_time
+                .duration_since(responses[i].send_time);
             let usec = time_delta.as_micros() as f64;
             // nmap: if time delta is 0, set to 1 to avoid division by zero
             let usec = if usec < 1.0 { 1.0 } else { usec };
@@ -1284,7 +1305,10 @@ impl OsDetector {
     ///    - All diffs mult of 2 → Incremental by 2 (I)
     ///    - All diffs < 10 → Incremental (I)
     ///    - Otherwise → Unknown
-    #[allow(clippy::cast_possible_wrap, reason = "u16 diff wrapping is intentional")]
+    #[allow(
+        clippy::cast_possible_wrap,
+        reason = "u16 diff wrapping is intentional"
+    )]
     fn classify_ip_id_sequence_nmap(ip_ids: &[u16]) -> IpIdSeqClass {
         if ip_ids.len() < 2 {
             return IpIdSeqClass::Unknown;
@@ -1461,10 +1485,7 @@ impl OsDetector {
         let mut count = 0;
         for w in timestamps.windows(2) {
             let ts_diff = f64::from(w[1].0.wrapping_sub(w[0].0));
-            let time_usec = w[1]
-                .1
-                .duration_since(w[0].1)
-                .as_micros() as f64;
+            let time_usec = w[1].1.duration_since(w[0].1).as_micros() as f64;
             if time_usec > 0.0 {
                 avg_hz += ts_diff / (time_usec / 1_000_000.0);
                 count += 1;
@@ -1505,15 +1526,18 @@ impl OsDetector {
     /// Sends a TCP SYN packet with ECN flags (ECE and CWR) set.
     /// Uses `MmapPacketEngine` with BPF filtering to receive the response.
     #[allow(clippy::unused_async)]
-    async fn send_ecn_probe(&self, target: Ipv4Addr, engine: &mut MmapPacketEngine) -> Result<EcnFingerprint> {
+    async fn send_ecn_probe(
+        &self,
+        target: Ipv4Addr,
+        engine: &mut MmapPacketEngine,
+    ) -> Result<EcnFingerprint> {
         use rustnmap_net::raw_socket::{RawSocket, TcpPacketBuilder};
 
         // IPPROTO_TCP raw socket for SENDING only
-        let socket =
-            RawSocket::with_protocol(6).map_err(|e| crate::FingerprintError::Network {
-                operation: "create raw socket for send".to_string(),
-                reason: e.to_string(),
-            })?;
+        let socket = RawSocket::with_protocol(6).map_err(|e| crate::FingerprintError::Network {
+            operation: "create raw socket for send".to_string(),
+            reason: e.to_string(),
+        })?;
 
         let src_port = Self::generate_source_port(1);
         let seq = Self::generate_sequence_number();
@@ -1555,18 +1579,16 @@ impl OsDetector {
 
         let dst_sockaddr = SocketAddr::new(IpAddr::V4(target), self.open_port);
 
-        socket
-            .send_packet(&packet, &dst_sockaddr)
-            .map_err(|e| crate::FingerprintError::Network {
+        socket.send_packet(&packet, &dst_sockaddr).map_err(|e| {
+            crate::FingerprintError::Network {
                 operation: "send ECN probe".to_string(),
                 reason: e.to_string(),
-            })?;
+            }
+        })?;
 
         let mut fp = EcnFingerprint::new();
 
-        if let Some(data) =
-            recv_tcp_response_bpf(engine, self.open_port, src_port, self.timeout)?
-        {
+        if let Some(data) = recv_tcp_response_bpf(engine, self.open_port, src_port, self.timeout)? {
             let response = data.response;
             fp.ece = (response.flags & tcp_flags::ECE) != 0;
             fp.cwr = (response.flags & tcp_flags::CWR) != 0;
@@ -1635,7 +1657,11 @@ impl OsDetector {
     /// T6: ACK to closed port
     /// T7: FIN+PSH+URG to closed port
     #[allow(clippy::unused_async)]
-    async fn send_tcp_tests(&self, target: Ipv4Addr, engine: &mut MmapPacketEngine) -> Result<Vec<TestResult>> {
+    async fn send_tcp_tests(
+        &self,
+        target: Ipv4Addr,
+        engine: &mut MmapPacketEngine,
+    ) -> Result<Vec<TestResult>> {
         use rustnmap_net::raw_socket::{RawSocket, TcpPacketBuilder};
 
         let tests = [
@@ -1706,12 +1732,12 @@ impl OsDetector {
             packet[ip_header_len + 17] = (tcp_checksum & 0xFF) as u8;
 
             let dst_sockaddr = SocketAddr::new(IpAddr::V4(target), *port);
-            socket
-                .send_packet(&packet, &dst_sockaddr)
-                .map_err(|e| crate::FingerprintError::Network {
+            socket.send_packet(&packet, &dst_sockaddr).map_err(|e| {
+                crate::FingerprintError::Network {
                     operation: format!("send {name} probe"),
                     reason: e.to_string(),
-                })?;
+                }
+            })?;
             debug!("TCP test {name}: sent flags=0x{flags:02x} to {target}:{port} from :{src_port}");
 
             probe_infos.push(ProbeInfo {
@@ -1738,12 +1764,13 @@ impl OsDetector {
                     let d = pkt.data();
                     if d.len() > ETH_HEADER_LEN {
                         let ip_data = &d[ETH_HEADER_LEN..];
-                        if let Some(response) = rustnmap_net::raw_socket::parse_tcp_response_full(ip_data) {
+                        if let Some(response) =
+                            rustnmap_net::raw_socket::parse_tcp_response_full(ip_data)
+                        {
                             // Match response to probe by src_port (target's src = our dst_port)
-                            if let Some(info) = probe_infos
-                                .iter()
-                                .find(|p| response.src_port == p.dst_port && response.dst_port == p.src_port)
-                            {
+                            if let Some(info) = probe_infos.iter().find(|p| {
+                                response.src_port == p.dst_port && response.dst_port == p.src_port
+                            }) {
                                 // Check if we already have a result for this probe
                                 let already_matched = results.iter().any(|(n, _)| n == info.name);
                                 if !already_matched {
@@ -1769,8 +1796,7 @@ impl OsDetector {
                                     // Extract raw TCP options
                                     let ip_hlen = (ip_data[0] & 0x0F) as usize * 4;
                                     let raw_options = if ip_data.len() >= ip_hlen + 20 {
-                                        let tcp_doff =
-                                            (ip_data[ip_hlen + 12] >> 4) as usize * 4;
+                                        let tcp_doff = (ip_data[ip_hlen + 12] >> 4) as usize * 4;
                                         if tcp_doff > 20 && ip_data.len() >= ip_hlen + tcp_doff {
                                             ip_data[ip_hlen + 20..ip_hlen + tcp_doff].to_vec()
                                         } else {
@@ -1809,7 +1835,11 @@ impl OsDetector {
             } else {
                 debug!("TCP test {name}: NO RESPONSE");
                 let mut result = TestResult::new(*name);
-                result.sent_seq = probe_infos.iter().find(|p| p.name == *name).map(|p| p.sent_seq).unwrap_or(0);
+                result.sent_seq = probe_infos
+                    .iter()
+                    .find(|p| p.name == *name)
+                    .map(|p| p.sent_seq)
+                    .unwrap_or(0);
                 final_results.push(result);
             }
         }

@@ -18,4 +18,4 @@
 
 pub mod auth;
 
-pub use auth::AuthMiddleware;
+pub use auth::{auth_middleware, extract_api_key};

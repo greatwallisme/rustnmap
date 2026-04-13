@@ -23,6 +23,9 @@ use std::{convert::Infallible, time::Duration};
 
 use crate::error::{ApiError, ApiResult};
 
+/// Maximum time to wait for a scan to reach terminal state (30 minutes).
+const SSE_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+
 /// Handler for GET /api/v1/scans/{id}/stream
 ///
 /// # Errors
@@ -38,11 +41,23 @@ pub async fn scan_stream(
         .get_scan_summary(&scan_id)
         .ok_or_else(|| ApiError::ScanNotFound(scan_id.clone()))?;
 
-    // Create SSE stream
+    // Create SSE stream with timeout
     let stream = async_stream::stream! {
         let mut interval = tokio::time::interval(Duration::from_secs(1));
+        let deadline = tokio::time::Instant::now() + SSE_TIMEOUT;
 
         loop {
+            // Check timeout
+            if tokio::time::Instant::now() >= deadline {
+                let timeout_event = serde_json::json!({
+                    "type": "timeout",
+                    "scan_id": scan_id,
+                    "message": "SSE stream timed out waiting for scan completion"
+                });
+                yield Ok(Event::default().event("timeout").data(timeout_event.to_string()));
+                break;
+            }
+
             interval.tick().await;
 
             // Get current scan status

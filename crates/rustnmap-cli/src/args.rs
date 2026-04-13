@@ -36,6 +36,8 @@ pub enum OutputFormat {
     Grepable(PathBuf),
     /// All formats (-oA), takes basename and outputs to .nmap, .xml, .gnmap
     All(PathBuf),
+    /// JSON output (-oJ)
+    Json(PathBuf),
 }
 
 impl OutputFormat {
@@ -43,7 +45,7 @@ impl OutputFormat {
     #[must_use]
     pub const fn path(&self) -> &PathBuf {
         match self {
-            Self::Normal(p) | Self::Xml(p) | Self::Grepable(p) | Self::All(p) => p,
+            Self::Normal(p) | Self::Xml(p) | Self::Grepable(p) | Self::All(p) | Self::Json(p) => p,
         }
     }
 }
@@ -385,6 +387,7 @@ impl Args {
                             "X" => args.output = Some(OutputFormat::Xml(path)),
                             "G" => args.output = Some(OutputFormat::Grepable(path)),
                             "A" => args.output = Some(OutputFormat::All(path)),
+                            "J" => args.output = Some(OutputFormat::Json(path)),
                             _ => return Err(ParseError::UnknownOption(format!("-o{format_char}"))),
                         }
                     } else {
@@ -399,6 +402,7 @@ impl Args {
                                 "X" => args.output = Some(OutputFormat::Xml(path)),
                                 "G" => args.output = Some(OutputFormat::Grepable(path)),
                                 "A" => args.output = Some(OutputFormat::All(path)),
+                                "J" => args.output = Some(OutputFormat::Json(path)),
                                 _ => return Err(ParseError::UnknownOption(format!("-o{format}"))),
                             }
                         } else {
@@ -531,20 +535,19 @@ impl Args {
                     args.interface = Some(parser.value()?.string()?);
                 }
 
-                // Fragment MTU
+                // Fragment MTU (-f or -f16)
+                // In nmap, -f is a flag (no separate value). Use --mtu or
+                // --fragment-mtu for custom MTU. We also support -f16 (attached).
                 Arg::Short('f') => {
-                    // Check if value is attached (e.g., -f16)
                     if let Some(mtu_os) = parser.optional_value() {
                         let mtu_str = mtu_os.to_string_lossy();
                         if let Ok(mtu) = mtu_str.parse::<u16>() {
                             args.fragment_mtu = Some(mtu);
                         } else {
-                            // Just set flag without MTU
-                            args.fragment_mtu = Some(16); // default MTU
+                            args.fragment_mtu = Some(16);
                         }
                     } else {
-                        // Flag without value
-                        args.fragment_mtu = Some(16); // default MTU
+                        args.fragment_mtu = Some(16);
                     }
                 }
                 Arg::Long("fragment-mtu" | "mtu") => {
@@ -655,8 +658,8 @@ impl Args {
                     }
                 }
 
-                // Exclude ports
-                Arg::Long("exclude-ports") => {
+                // Exclude ports (nmap accepts both --exclude-ports and --exclude-port)
+                Arg::Long("exclude-ports" | "exclude-port") => {
                     args.exclude_port = Some(parser.value()?.string()?);
                 }
 
@@ -730,8 +733,8 @@ impl Args {
                     args.packet_trace = true;
                 }
 
-                // Interface list
-                Arg::Long("iflist") => {
+                // Interface list (nmap uses --iflist, also accept --if-list)
+                Arg::Long("iflist" | "if-list") => {
                     args.if_list = true;
                 }
 
@@ -1029,6 +1032,14 @@ impl Args {
                     "Fragment MTU must be between 8 and 1500, got {mtu}"
                 ));
             }
+        }
+
+        // Cannot specify both -p and -F (fast scan)
+        if self.ports.is_some() && self.fast_scan {
+            return Err(
+                "Cannot specify both --ports/-p and --fast-scan/-F. Use one or the other."
+                    .to_string(),
+            );
         }
 
         // Validate source port

@@ -256,8 +256,9 @@ async fn test_full_scan_lifecycle() {
     assert_eq!(status, StatusCode::OK);
 
     let cancel_json: serde_json::Value = serde_json::from_str(&response).unwrap();
-    assert_eq!(cancel_json["id"], scan_id);
-    assert_eq!(cancel_json["status"], "cancelled");
+    assert_eq!(cancel_json["success"], true);
+    assert_eq!(cancel_json["data"]["id"], scan_id);
+    assert_eq!(cancel_json["data"]["status"], "cancelled");
 }
 
 // ==================== Validation Tests ====================

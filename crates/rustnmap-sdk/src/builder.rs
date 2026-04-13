@@ -30,7 +30,7 @@ use crate::models::ScanOutput;
 use crate::profile::ScanProfile;
 
 /// Main scanner entry point
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Scanner {
     config: ScanConfig,
     targets_string: Option<String>,
@@ -80,6 +80,7 @@ impl Scanner {
     /// # Errors
     ///
     /// Returns an error if the scan fails due to network issues or invalid configuration.
+    #[must_use = "scan results should be checked for errors"]
     pub async fn run(&self) -> ScanResult<ScanOutput> {
         // Get targets (require targets to be set)
         let targets_str = self
@@ -134,12 +135,6 @@ impl Scanner {
     }
 }
 
-impl Default for Scanner {
-    fn default() -> Self {
-        Self::new().unwrap()
-    }
-}
-
 /// Scanner builder for fluent API
 #[derive(Debug)]
 pub struct ScannerBuilder {
@@ -177,21 +172,11 @@ impl ScannerBuilder {
     /// Set specific port list
     #[must_use]
     pub fn port_list(mut self, ports: &[u16]) -> Self {
-        // Build port spec from port list
         if ports.is_empty() {
             return self;
         }
 
-        // For simplicity, use Top(N) for the count or build ranges
-        if ports.len() == 1 {
-            self.config.port_spec = PortSpec::Range {
-                start: ports[0],
-                end: ports[0],
-            };
-        } else {
-            // Use Top(N) based on port count as a reasonable default
-            self.config.port_spec = PortSpec::Top(ports.len());
-        }
+        self.config.port_spec = PortSpec::List(ports.to_vec());
         self
     }
 }
@@ -203,6 +188,14 @@ fn parse_port_spec(spec: &str) -> Option<PortSpec> {
         s if s.starts_with("top") => {
             let n = s.trim_start_matches("top").trim().parse().ok()?;
             Some(PortSpec::Top(n))
+        }
+        s if s.contains(',') => {
+            // Comma-separated list: "22,80,443"
+            let ports: Vec<u16> = s.split(',').filter_map(|p| p.trim().parse().ok()).collect();
+            if ports.is_empty() {
+                return None;
+            }
+            Some(PortSpec::List(ports))
         }
         s => {
             // Try to parse as single range like "1-1000"
@@ -302,10 +295,16 @@ impl ScannerBuilder {
 
     /// Enable vulnerability scanning
     #[must_use]
-    pub fn vulnerability_scan(self, enable: bool) -> Self {
-        // Note: vulnerability_scan is not a direct field in ScanConfig
-        // It would be handled by the rustnmap-vuln crate integration
-        let _ = enable;
+    pub fn vulnerability_scan(mut self, enable: bool) -> Self {
+        if enable {
+            self.config.nse_scripts = true;
+            // Append "vuln" category to any existing selector
+            let selector = self.config.nse_selector.get_or_insert_with(String::new);
+            if !selector.is_empty() {
+                selector.push_str(" or ");
+            }
+            selector.push_str("vuln");
+        }
         self
     }
 
@@ -336,6 +335,7 @@ impl ScannerBuilder {
     /// # Errors
     ///
     /// Returns an error if the scan fails due to network issues or invalid configuration.
+    #[must_use = "scan results should be checked for errors"]
     pub async fn run(self) -> ScanResult<ScanOutput> {
         let scanner = Scanner {
             config: self.config,

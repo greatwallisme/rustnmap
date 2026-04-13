@@ -184,6 +184,15 @@ impl ScanProfile {
                     let n: usize = s.trim_start_matches("top").trim().parse().unwrap_or(1000);
                     rustnmap_core::session::PortSpec::Top(n)
                 }
+                s if s.contains(',') => {
+                    let port_list: Vec<u16> =
+                        s.split(',').filter_map(|p| p.trim().parse().ok()).collect();
+                    if port_list.is_empty() {
+                        rustnmap_core::session::PortSpec::Top(1000)
+                    } else {
+                        rustnmap_core::session::PortSpec::List(port_list)
+                    }
+                }
                 s => {
                     // Try to parse as single range like "1-1000"
                     if let Some((start, end)) = s.split_once('-') {
@@ -217,11 +226,18 @@ impl ScanProfile {
             "window" => vec![rustnmap_core::session::ScanType::TcpWindow],
             "maimon" => vec![rustnmap_core::session::ScanType::TcpMaimon],
             "udp" => vec![rustnmap_core::session::ScanType::Udp],
+            "sctp_init" => vec![rustnmap_core::session::ScanType::SctpInit],
+            "sctp_cookie" | "idle" => {
+                return Err(ScanError::InvalidRequest(format!(
+                    "Scan type '{}' is not yet supported by the scanning engine",
+                    self.scan.scan_type
+                )));
+            }
             _ => {
                 return Err(ScanError::InvalidRequest(format!(
                     "Unknown scan type: {}",
                     self.scan.scan_type
-                )))
+                )));
             }
         };
 

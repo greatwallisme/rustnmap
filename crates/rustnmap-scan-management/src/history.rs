@@ -40,7 +40,7 @@ impl ScanHistory {
             path: db_path.to_string(),
             ..Default::default()
         };
-        let db = ScanDatabase::open(config)?;
+        let db = ScanDatabase::open(&config)?;
         Ok(Self { db })
     }
 

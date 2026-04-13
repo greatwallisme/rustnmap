@@ -54,13 +54,15 @@ impl UdpTraceroute {
     /// Returns an error if socket creation fails.
     pub fn new(config: TracerouteConfig, local_addr: Ipv4Addr) -> Result<Self> {
         // Use IPPROTO_UDP (17) for sending probes
-        let send_socket = RawSocket::with_protocol(17).map_err(|e| TracerouteError::SocketCreation {
-            source: io::Error::other(e),
-        })?;
+        let send_socket =
+            RawSocket::with_protocol(17).map_err(|e| TracerouteError::SocketCreation {
+                source: io::Error::other(e),
+            })?;
         // Use IPPROTO_ICMP (1) for receiving ICMP responses (Time Exceeded, Port Unreachable)
-        let recv_socket = RawSocket::with_protocol(1).map_err(|e| TracerouteError::SocketCreation {
-            source: io::Error::other(e),
-        })?;
+        let recv_socket =
+            RawSocket::with_protocol(1).map_err(|e| TracerouteError::SocketCreation {
+                source: io::Error::other(e),
+            })?;
 
         Ok(Self {
             config,

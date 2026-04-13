@@ -38,14 +38,12 @@
 //! # }
 //! ```
 
-pub mod database_context;
 pub mod error;
 pub mod formatter;
 pub mod models;
 pub mod writer;
 pub mod xml_parser;
 
-pub use database_context::DatabaseContext;
 pub use error::{OutputError, Result};
 pub use formatter::{
     GrepableFormatter, JsonFormatter, MarkdownFormatter, NdjsonFormatter, NormalFormatter,

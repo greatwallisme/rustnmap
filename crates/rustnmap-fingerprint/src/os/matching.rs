@@ -328,9 +328,12 @@ impl CompactFingerprint {
     /// Get a value by section and attribute enum (fast, no string parsing).
     #[must_use]
     pub fn get(&self, section: Section, attr: AttrKey) -> Option<&str> {
-        self.sections[section.idx()]
-            .as_ref()
-            .and_then(|attrs| attrs.iter().find(|(k, _)| *k == attr).map(|(_, v)| v.as_ref()))
+        self.sections[section.idx()].as_ref().and_then(|attrs| {
+            attrs
+                .iter()
+                .find(|(k, _)| *k == attr)
+                .map(|(_, v)| v.as_ref())
+        })
     }
 
     /// Get a value by section name and attribute name strings.
@@ -494,9 +497,8 @@ pub fn compare_fingerprints(
                 total_pts += points;
 
                 // TCP options fields use nested matching
-                let is_opts_field = attr_name == "O"
-                    || (test_name == "OPS"
-                        && attr_name.starts_with('O'));
+                let is_opts_field =
+                    attr_name == "O" || (test_name == "OPS" && attr_name.starts_with('O'));
 
                 if expr_match(obs_value, ref_expr, is_opts_field) {
                     matched_pts += points;
@@ -608,9 +610,7 @@ fn match_nested(value: &str, expr: &str) -> bool {
             if val_pos + literal_len > val_bytes.len() {
                 return false;
             }
-            if val_bytes[val_pos..val_pos + literal_len]
-                != expr_bytes[expr_pos..bracket_start]
-            {
+            if val_bytes[val_pos..val_pos + literal_len] != expr_bytes[expr_pos..bracket_start] {
                 return false;
             }
             val_pos += literal_len;
@@ -621,8 +621,7 @@ fn match_nested(value: &str, expr: &str) -> bool {
                 None => return false,
             };
 
-            let inner_expr =
-                &expr[bracket_start + 1..close];
+            let inner_expr = &expr[bracket_start + 1..close];
 
             // Extract hex digits from value at current position
             let hex_end = consume_hex_digits(val_bytes, val_pos);
@@ -650,12 +649,18 @@ fn match_nested(value: &str, expr: &str) -> bool {
 
 /// Find the position of a `[` in the expression starting from `start`.
 fn find_bracket(bytes: &[u8], start: usize) -> Option<usize> {
-    bytes[start..].iter().position(|&b| b == b'[').map(|p| p + start)
+    bytes[start..]
+        .iter()
+        .position(|&b| b == b'[')
+        .map(|p| p + start)
 }
 
 /// Find matching `]` for a `[` expression.
 fn find_closing_bracket(bytes: &[u8], start: usize) -> Option<usize> {
-    bytes[start..].iter().position(|&b| b == b']').map(|p| p + start)
+    bytes[start..]
+        .iter()
+        .position(|&b| b == b']')
+        .map(|p| p + start)
 }
 
 /// Consume consecutive hex digits from a byte slice.
@@ -713,7 +718,11 @@ struct TopLevelSplit<'a> {
 
 impl<'a> TopLevelSplit<'a> {
     fn new(data: &'a str, delim: u8) -> Self {
-        Self { data, delim, pos: 0 }
+        Self {
+            data,
+            delim,
+            pos: 0,
+        }
     }
 }
 

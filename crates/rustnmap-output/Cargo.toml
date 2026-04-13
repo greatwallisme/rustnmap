@@ -21,7 +21,8 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 
 # Internal dependencies
-rustnmap-fingerprint = { path = "../rustnmap-fingerprint" }
+# Note: rustnmap-fingerprint was previously a dependency for DatabaseContext,
+# but DatabaseContext was unused and has been removed.
 
 # Additional dependencies
 chrono = { version = "0.4", features = ["serde", "clock"] }

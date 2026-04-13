@@ -120,8 +120,7 @@ pub use database::{
 pub use error::FingerprintError;
 pub use os::{
     EcnFingerprint, FingerprintDatabase, IcmpTestResult, IpIdPattern, IpIdSeqClass, IsnClass,
-    OpsFingerprint, OsDetector, OsFingerprint, OsMatch, SeqFingerprint, TestResult,
-    UdpTestResult,
+    OpsFingerprint, OsDetector, OsFingerprint, OsMatch, SeqFingerprint, TestResult, UdpTestResult,
 };
 pub use service::{ProbeDatabase, ProbeDefinition, ServiceDetector, ServiceInfo};
 pub use tls::{CertificateInfo, TlsDetector, TlsInfo, TlsVersion};

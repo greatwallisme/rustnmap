@@ -15,8 +15,6 @@ categories = ["network-programming", "development-tools"]
 [dependencies]
 # Async
 tokio = { workspace = true }
-futures-util = "0.3"
-async-stream = "0.3"
 
 # Serialization
 serde = { workspace = true }

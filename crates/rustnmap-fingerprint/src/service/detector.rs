@@ -201,7 +201,10 @@ impl ServiceDetector {
         if !is_udp {
             let remaining = total_budget.saturating_sub(start.elapsed());
             if !remaining.is_zero() {
-                match self.grab_banner_and_keep_stream(target, port, remaining).await {
+                match self
+                    .grab_banner_and_keep_stream(target, port, remaining)
+                    .await
+                {
                     Ok((banner_opt, stream_opt)) => {
                         reusable_stream = stream_opt;
 

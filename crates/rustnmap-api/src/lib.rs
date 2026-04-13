@@ -50,6 +50,7 @@ pub mod handlers;
 pub mod manager;
 pub mod middleware;
 pub mod routes;
+pub mod runner;
 pub mod server;
 pub mod sse;
 
@@ -143,6 +144,8 @@ impl From<rustnmap_scan_management::ScanStatus> for ScanStatus {
             rustnmap_scan_management::ScanStatus::Completed => Self::Completed,
             rustnmap_scan_management::ScanStatus::Failed => Self::Failed,
             rustnmap_scan_management::ScanStatus::Cancelled => Self::Cancelled,
+            // Note: Queued is an API-only state, not present in scan-management.
+            // Scans start as Queued in the API and transition to Running when picked up.
         }
     }
 }

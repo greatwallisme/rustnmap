@@ -17,10 +17,11 @@
 //! Get scan results handler
 
 use axum::extract::{Path, State};
+use axum::http::StatusCode;
 
 use crate::error::{ApiError, ApiResult};
 use crate::server::ApiState;
-use crate::{ApiResponse, ScanResultsResponse};
+use crate::{ApiResponse, ScanResultsResponse, ScanStatus};
 
 /// Handler for GET /api/v1/scans/{id}/results
 ///
@@ -33,12 +34,33 @@ use crate::{ApiResponse, ScanResultsResponse};
 pub async fn get_scan_results(
     State(state): State<ApiState>,
     Path(scan_id): Path<String>,
-) -> ApiResult<axum::Json<ApiResponse<ScanResultsResponse>>> {
+) -> ApiResult<(StatusCode, axum::Json<ApiResponse<ScanResultsResponse>>)> {
+    // Check if scan exists first
+    let task = state
+        .scan_manager
+        .get_scan_summary(&scan_id)
+        .ok_or_else(|| ApiError::ScanNotFound(scan_id.clone()))?;
+
+    // If scan is not yet completed, return 202 Accepted
+    if !matches!(
+        task.status,
+        ScanStatus::Completed | ScanStatus::Failed | ScanStatus::Cancelled
+    ) {
+        return Err(ApiError::ScanPending(format!(
+            "Scan '{scan_id}' has status '{}', results not yet available",
+            task.status
+        )));
+    }
+
     // Get scan results from manager
     let results = state
         .scan_manager
         .get_scan_results(&scan_id)
-        .ok_or_else(|| ApiError::ScanNotFound(scan_id.clone()))?;
+        .ok_or_else(|| {
+            ApiError::ScanFailed(format!(
+                "Scan '{scan_id}' completed but results are unavailable"
+            ))
+        })?;
 
-    Ok(axum::Json(ApiResponse::success(results)))
+    Ok((StatusCode::OK, axum::Json(ApiResponse::success(results))))
 }

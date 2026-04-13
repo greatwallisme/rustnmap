@@ -86,6 +86,11 @@ fn validate_request(request: &crate::CreateScanRequest) -> Result<(), ApiError> 
         }
     }
 
+    // Validate port specification if provided
+    if let Some(ports) = &request.options.ports {
+        validate_port_spec(ports)?;
+    }
+
     Ok(())
 }
 
@@ -150,6 +155,63 @@ fn validate_target_format(target: &str) -> Result<(), ApiError> {
 
     // Validate as hostname
     validate_hostname(target)
+}
+
+/// Validate a port specification string.
+///
+/// Supports: "22", "1-1000", "22,80,443", "top100", "all".
+///
+/// # Errors
+///
+/// Returns an error if the port specification contains invalid port numbers or syntax.
+fn validate_port_spec(spec: &str) -> Result<(), ApiError> {
+    match spec {
+        "1-65535" | "all" | "*" => Ok(()),
+        s if s.starts_with("top") => {
+            let n = s.trim_start_matches("top").trim();
+            if n.parse::<usize>().is_err() {
+                return Err(ApiError::InvalidRequest(format!(
+                    "Invalid port spec: '{spec}'. 'top' must be followed by a number (e.g., top100)"
+                )));
+            }
+            Ok(())
+        }
+        s if s.contains(',') => {
+            for part in s.split(',') {
+                validate_single_port_or_range(part.trim(), spec)?;
+            }
+            Ok(())
+        }
+        s => validate_single_port_or_range(s, spec),
+    }
+}
+
+/// Validate a single port number or port range.
+fn validate_single_port_or_range(part: &str, full_spec: &str) -> Result<(), ApiError> {
+    if let Some((start, end)) = part.split_once('-') {
+        let start: u16 = start.parse().map_err(|_e| {
+            ApiError::InvalidRequest(format!(
+                "Invalid port in spec '{full_spec}': '{start}' is not a valid port number"
+            ))
+        })?;
+        let end: u16 = end.parse().map_err(|_e| {
+            ApiError::InvalidRequest(format!(
+                "Invalid port in spec '{full_spec}': '{end}' is not a valid port number"
+            ))
+        })?;
+        if start > end {
+            return Err(ApiError::InvalidRequest(format!(
+                "Invalid port range in spec '{full_spec}': start ({start}) > end ({end})"
+            )));
+        }
+    } else {
+        part.parse::<u16>().map_err(|_e| {
+            ApiError::InvalidRequest(format!(
+                "Invalid port in spec '{full_spec}': '{part}' is not a valid port number"
+            ))
+        })?;
+    }
+    Ok(())
 }
 
 /// Validate a hostname format.
@@ -536,5 +598,78 @@ mod tests {
                 "Timing template '{timing}' should be valid"
             );
         }
+    }
+
+    // ==================== port validation tests ====================
+
+    #[test]
+    fn test_validate_port_spec_single_port() {
+        validate_port_spec("80").unwrap();
+        validate_port_spec("443").unwrap();
+    }
+
+    #[test]
+    fn test_validate_port_spec_range() {
+        validate_port_spec("1-1000").unwrap();
+        validate_port_spec("22-80").unwrap();
+    }
+
+    #[test]
+    fn test_validate_port_spec_comma_separated() {
+        validate_port_spec("22,80,443").unwrap();
+        validate_port_spec("80,443").unwrap();
+    }
+
+    #[test]
+    fn test_validate_port_spec_top() {
+        validate_port_spec("top100").unwrap();
+        validate_port_spec("top1000").unwrap();
+    }
+
+    #[test]
+    fn test_validate_port_spec_all() {
+        validate_port_spec("all").unwrap();
+        validate_port_spec("1-65535").unwrap();
+        validate_port_spec("*").unwrap();
+    }
+
+    #[test]
+    fn test_validate_port_spec_invalid_port() {
+        let result = validate_port_spec("99999");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_port_spec_invalid_range() {
+        let result = validate_port_spec("80-22");
+        assert!(result.is_err());
+        if let ApiError::InvalidRequest(msg) = result.unwrap_err() {
+            assert!(msg.contains("start") && msg.contains("end"));
+        }
+    }
+
+    #[test]
+    fn test_validate_port_spec_invalid_comma() {
+        let result = validate_port_spec("22,abc,443");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_port_spec_invalid_top() {
+        let result = validate_port_spec("topabc");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_request_valid_ports() {
+        let request = CreateScanRequest {
+            targets: vec!["192.168.1.1".to_string()],
+            scan_type: "syn".to_string(),
+            options: ScanOptions {
+                ports: Some("22,80,443".to_string()),
+                ..Default::default()
+            },
+        };
+        validate_request(&request).unwrap();
     }
 }

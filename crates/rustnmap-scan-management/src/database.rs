@@ -52,7 +52,6 @@ impl Default for DbConfig {
 #[derive(Debug)]
 pub struct ScanDatabase {
     conn: Arc<Mutex<Connection>>,
-    config: DbConfig,
 }
 
 impl ScanDatabase {
@@ -61,40 +60,37 @@ impl ScanDatabase {
     /// # Errors
     ///
     /// Returns an error if the database cannot be opened or created.
-    pub fn open(config: DbConfig) -> Result<Self> {
+    pub fn open(config: &DbConfig) -> Result<Self> {
         let path = shellexpand::tilde(&config.path).to_string();
 
         // Ensure parent directory exists
         if let Some(parent) = Path::new(&path).parent() {
-            tokio::task::block_in_place(|| std::fs::create_dir_all(parent))?;
+            std::fs::create_dir_all(parent)?;
         }
 
         let flags = OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE;
-        let conn = Connection::open_with_flags(&path, flags)?;
+        let mut conn = Connection::open_with_flags(&path, flags)?;
+
+        // Initialize schema before wrapping in Mutex to avoid blocking_lock
+        // in async context
+        Self::init_schema_on_conn(&mut conn, config)?;
 
         let db = Self {
             conn: Arc::new(Mutex::new(conn)),
-            config,
         };
 
-        db.init_schema()?;
         Ok(db)
     }
 
-    /// Initialize database schema.
-    fn init_schema(&self) -> Result<()> {
-        let conn = self.conn.blocking_lock();
-
+    /// Initialize database schema on a raw connection.
+    fn init_schema_on_conn(conn: &mut Connection, config: &DbConfig) -> Result<()> {
         // Enable foreign keys
-        if self.config.foreign_keys {
+        if config.foreign_keys {
             conn.execute("PRAGMA foreign_keys = ON", [])?;
         }
 
         // Set journal mode
-        conn.execute_batch(&format!(
-            "PRAGMA journal_mode = {}",
-            self.config.journal_mode
-        ))?;
+        conn.execute_batch(&format!("PRAGMA journal_mode = {}", config.journal_mode))?;
 
         // Create scans table
         conn.execute(

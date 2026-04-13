@@ -18,6 +18,8 @@
 
 use chrono::{DateTime, Utc};
 use rustnmap_output::models::{PortState, ScanStatistics};
+use std::fmt::Write;
+use uuid::Uuid;
 
 /// Scan result containing all hosts and statistics
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -90,13 +92,18 @@ impl ScanOutput {
     ///
     /// Returns an error if XML serialization fails.
     pub fn to_xml(&self) -> crate::error::ScanResult<String> {
-        use std::fmt::Write;
+        fn escape_xml(s: &str) -> String {
+            s.replace('&', "&amp;")
+                .replace('<', "&lt;")
+                .replace('>', "&gt;")
+                .replace('"', "&quot;")
+                .replace('\'', "&apos;")
+        }
 
-        // Simple XML serialization
         let mut xml = String::new();
         writeln!(xml, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>")?;
         writeln!(xml, "<scan_result>")?;
-        writeln!(xml, "  <id>{}</id>", self.id)?;
+        writeln!(xml, "  <id>{}</id>", escape_xml(&self.id))?;
         writeln!(xml, "  <status>{:?}</status>", self.status)?;
         writeln!(
             xml,
@@ -110,6 +117,9 @@ impl ScanOutput {
                 "    <host ip=\"{}\" status=\"{:?}\">",
                 host.ip, host.status
             )?;
+            if let Some(ref hostname) = host.hostname {
+                writeln!(xml, "      <hostname>{}</hostname>", escape_xml(hostname))?;
+            }
             writeln!(xml, "      <ports>")?;
             for port in &host.ports {
                 writeln!(
@@ -117,8 +127,26 @@ impl ScanOutput {
                     "        <port number=\"{}\" state=\"{:?}\" />",
                     port.port, port.state
                 )?;
+                if let Some(ref svc) = port.service {
+                    write!(xml, "        <service name=\"{}\"", escape_xml(&svc.name))?;
+                    if let Some(ref product) = svc.product {
+                        write!(xml, " product=\"{}\"", escape_xml(product))?;
+                    }
+                    if let Some(ref version) = svc.version {
+                        write!(xml, " version=\"{}\"", escape_xml(version))?;
+                    }
+                    writeln!(xml, " />")?;
+                }
             }
             writeln!(xml, "      </ports>")?;
+            if let Some(ref os) = host.os {
+                writeln!(
+                    xml,
+                    "      <os name=\"{}\" accuracy=\"{}\" />",
+                    escape_xml(&os.name),
+                    os.accuracy
+                )?;
+            }
             writeln!(xml, "    </host>")?;
         }
         writeln!(xml, "  </hosts>")?;
@@ -289,8 +317,6 @@ impl VulnInfo {
 
 impl From<rustnmap_output::ScanResult> for ScanOutput {
     fn from(result: rustnmap_output::ScanResult) -> Self {
-        use uuid::Uuid;
-
         Self {
             id: Uuid::new_v4().to_string(),
             status: ScanStatus::Completed,

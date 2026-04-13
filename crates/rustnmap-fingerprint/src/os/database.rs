@@ -255,8 +255,13 @@ impl FingerprintDatabase {
         // but reference says R=N, or vice versa, the reference cannot match.
         // Checking multiple test R fields eliminates 50-80% of fingerprints.
         let obs_r_values: Vec<(Section, &str)> = [
-            Section::T1, Section::T2, Section::T3,
-            Section::T4, Section::T5, Section::T6, Section::T7,
+            Section::T1,
+            Section::T2,
+            Section::T3,
+            Section::T4,
+            Section::T5,
+            Section::T6,
+            Section::T7,
         ]
         .into_iter()
         .filter_map(|section| {
@@ -582,10 +587,7 @@ fn ops_to_string(ops: &OpsFingerprint) -> String {
 fn ecn_to_raw(ecn: &EcnFingerprint) -> HashMap<String, String> {
     let mut m = HashMap::new();
     m.insert("R".to_string(), "Y".to_string());
-    m.insert(
-        "DF".to_string(),
-        if ecn.df { "Y" } else { "N" }.to_string(),
-    );
+    m.insert("DF".to_string(), if ecn.df { "Y" } else { "N" }.to_string());
     // T field uses TTL guess (initial TTL estimate), not raw TTL
     if let Some(ttl) = ecn.ttl {
         let tg = get_initial_ttl_guess(ttl);
@@ -617,9 +619,7 @@ fn ecn_to_raw(ecn: &EcnFingerprint) -> HashMap<String, String> {
 }
 
 /// Convert `TestResult` to raw attribute map.
-fn test_result_to_raw(
-    test: &super::fingerprint::TestResult,
-) -> HashMap<String, String> {
+fn test_result_to_raw(test: &super::fingerprint::TestResult) -> HashMap<String, String> {
     let mut m = HashMap::new();
     m.insert(
         "R".to_string(),
@@ -765,18 +765,10 @@ fn raw_options_to_nmap_string(opts: &[u8]) -> String {
             8 => {
                 // Timestamp
                 if i + 9 < opts.len() {
-                    let tsval = u32::from_be_bytes([
-                        opts[i + 2],
-                        opts[i + 3],
-                        opts[i + 4],
-                        opts[i + 5],
-                    ]);
-                    let tsecr = u32::from_be_bytes([
-                        opts[i + 6],
-                        opts[i + 7],
-                        opts[i + 8],
-                        opts[i + 9],
-                    ]);
+                    let tsval =
+                        u32::from_be_bytes([opts[i + 2], opts[i + 3], opts[i + 4], opts[i + 5]]);
+                    let tsecr =
+                        u32::from_be_bytes([opts[i + 6], opts[i + 7], opts[i + 8], opts[i + 9]]);
                     // Nmap encodes as Thexval where hex is nonzero indicator
                     let ts_ind = if tsval != 0 { 1 } else { 0 };
                     let te_ind = if tsecr != 0 { 1 } else { 0 };
@@ -805,10 +797,7 @@ fn udp_test_to_raw(u1: &super::fingerprint::UdpTestResult) -> HashMap<String, St
 
     if u1.responded {
         m.insert("R".to_string(), "Y".to_string());
-        m.insert(
-            "DF".to_string(),
-            if u1.df { "Y" } else { "N" }.to_string(),
-        );
+        m.insert("DF".to_string(), if u1.df { "Y" } else { "N" }.to_string());
         if let Some(ttl) = u1.ttl {
             m.insert("T".to_string(), format!("{ttl:X}"));
             let tg = get_initial_ttl_guess(ttl);
@@ -1038,7 +1027,6 @@ impl NmapOsFingerprint {
 
         fp
     }
-
 }
 
 #[cfg(test)]
@@ -1174,10 +1162,16 @@ Class Unknown | UnknownOS
         let linux = db.fingerprints.get("Linux Test").expect("missing linux");
         assert!(matches!(linux.family, OsFamily::Linux));
 
-        let windows = db.fingerprints.get("Windows Test").expect("missing windows");
+        let windows = db
+            .fingerprints
+            .get("Windows Test")
+            .expect("missing windows");
         assert!(matches!(windows.family, OsFamily::Windows));
 
-        let unknown = db.fingerprints.get("Unknown Test").expect("missing unknown");
+        let unknown = db
+            .fingerprints
+            .get("Unknown Test")
+            .expect("missing unknown");
         assert!(matches!(unknown.family, OsFamily::Other(_)));
     }
 
