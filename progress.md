@@ -4,6 +4,47 @@
 
 ---
 
+## Session 10 (2026-04-12) - Phase 4 Memory Optimization
+
+### Completed
+
+- Phase 4 Memory Optimization: OS fingerprint compact representation
+- OS detection memory reduced from 135MB to 66-70MB (4.1x -> 2.0x nmap)
+
+### Fixes Applied
+
+1. **Compact Fingerprint Types** (`matching.rs`):
+   - `Section` enum (13 variants) replacing String section names
+   - `AttrKey` enum (41 variants) replacing String attribute names
+   - `CompactFingerprint` struct: `[Option<Vec<(AttrKey, Box<str>)>>; 13]`
+   - `CompiledMatchPoints` struct: pre-compiled enum-based match points
+   - `compare_compact()` function: enum-based iteration for matching
+
+2. **Database Storage Update** (`database.rs`):
+   - `OsReference.compact_fp: CompactFingerprint` (was `raw_fingerprint: RawFingerprint`)
+   - `build_compact_fingerprint()`: enum key parsing + Box<str> values
+   - `CompiledMatchPoints` pre-compiled at database load time
+   - `find_matches()` uses `compare_compact()` with pre-compiled match points
+
+### Memory Comparison
+
+| Category | Before | After | Reduction |
+|----------|--------|-------|-----------|
+| Per fingerprint | ~20KB | ~3.5KB | 5.7x |
+| Total 6036 fingerprints | ~120MB | ~21MB | 5.7x |
+| OS detection scan | 135MB | 70MB | 1.9x |
+| Ratio to nmap | 4.1x | 2.0x | - |
+
+### Design Reference
+
+Based on analysis of nmap C++ source code:
+- nmap uses `string_pool` for string interning
+- nmap uses `ShortStr<5>` for inline attribute names
+- nmap uses fixed 13-slot arrays (`FingerTest tests[NUM_FPTESTS]`)
+- Rust implementation uses enums + Vec + Box<str> for similar effect
+
+---
+
 ## Session 9 (2026-04-12) - Phase 3 Speed Optimization
 
 ### Completed

@@ -25,7 +25,7 @@ mkdir -p "$TEST_OUTPUT_DIR"
 
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 LOG_FILE="${LOG_DIR}/rustnmap_test_${TIMESTAMP}.log"
-REPORT_FILE="${REPORT_DIR}/rustnmap_test_report_${TIMESTAMP}.txt"
+REPORT_FILE="${REPORT_DIR}/rustnmap_test_report_${TIMESTAMP}.md"
 
 # Test tracking
 TOTAL_TESTS=0

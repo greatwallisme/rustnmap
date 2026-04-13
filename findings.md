@@ -1,10 +1,44 @@
 # Technical Findings
 
-> **Updated**: 2026-04-12 (Post Phase 3 Speed Optimization)
+> **Updated**: 2026-04-12 (Post Phase 4 Memory Optimization)
 
 ---
 
-## SPEED OPTIMIZATION RESULTS (Phase 3)
+## MEMORY OPTIMIZATION RESULTS (Phase 4)
+
+### OS Fingerprint Compact Representation (2026-04-12)
+
+**Problem**: OS detection memory 135MB (4.1x nmap's 33MB). Root cause: `RawFingerprint = HashMap<String, HashMap<String, String>>` with 6036 fingerprints, each storing ~14 sections of ~10 key-value String pairs.
+
+**nmap Reference Analysis** (from C++ source code):
+- `string_pool`: Global string interning for common values ("Y", "N", "S", etc.)
+- `ShortStr<5>`: Inline 5-char storage for attribute names (no heap allocation)
+- `FingerTest tests[NUM_FPTESTS]`: Fixed 13-slot array, not HashMap
+- `FingerTestDef::AttrIdx`: Maps attribute name -> index via `std::map<FPstr, u8>`
+
+**Fix**: Compact fingerprint representation:
+1. `Section` enum (13 variants): Zero-cost section key replacing String
+2. `AttrKey` enum (41 variants): Zero-cost attribute key replacing String
+3. `CompactFingerprint`: `[Option<Vec<(AttrKey, Box<str>)>>; 13]` replacing `HashMap<String, HashMap<String, String>>`
+4. `CompiledMatchPoints`: Pre-compiled enum-based match points
+5. `compare_compact()`: Enum iteration replacing string HashMap lookups
+
+**Files**: `matching.rs` (new types + compare_compact), `database.rs` (compact storage + parsing)
+
+**Result**: 135MB -> 70MB (2.0x nmap, was 4.1x). Per-fingerprint: 20KB -> 3.5KB (5.7x reduction).
+
+### Memory Savings Breakdown
+
+| Component | Before | After | Savings |
+|-----------|--------|-------|---------|
+| Section name Strings (6036 x 14) | ~2.3MB | 0 (enum) | 2.3MB |
+| Attribute name Strings (6036 x 14 x 10) | ~22.9MB | 0 (enum) | 22.9MB |
+| HashMap overhead (outer) | ~3MB | ~1.3MB (array) | 1.7MB |
+| HashMap overhead (inner, 6036 x 14) | ~31MB | 0 (Vec) | 31MB |
+| String value overhead (capacity field) | ~6.5MB | 0 (Box<str>) | 6.5MB |
+| **Total estimated** | **~84MB** | **~21MB** | **~63MB** |
+
+---
 
 ### OS Detection Speed (2026-04-12)
 
