@@ -1,0 +1,43 @@
+# LDAP initialization for RustNmap test range
+dn: dc=rustnmap,dc=test
+objectClass: top
+objectClass: dcObject
+objectClass: organization
+o: RustNmap Test
+dc: rustnmap
+
+dn: cn=admin,dc=rustnmap,dc=test
+objectClass: simpleSecurityObject
+objectClass: organizationalRole
+cn: admin
+description: LDAP administrator
+
+dn: ou=users,dc=rustnmap,dc=test
+objectClass: organizationalUnit
+ou: users
+
+dn: ou=groups,dc=rustnmap,dc=test
+objectClass: organizationalUnit
+ou: groups
+
+dn: cn=testuser,ou=users,dc=rustnmap,dc=test
+objectClass: inetOrgPerson
+cn: testuser
+sn: User
+uid: testuser
+mail: testuser@rustnmap.test
+userPassword: test123
+
+dn: cn=adminuser,ou=users,dc=rustnmap,dc=test
+objectClass: inetOrgPerson
+cn: adminuser
+sn: Admin
+uid: adminuser
+mail: admin@rustnmap.test
+userPassword: admin123
+
+dn: cn=testgroup,ou=groups,dc=rustnmap,dc=test
+objectClass: groupOfNames
+cn: testgroup
+member: cn=testuser,ou=users,dc=rustnmap,dc=test
+member: cn=adminuser,ou=users,dc=rustnmap,dc=test

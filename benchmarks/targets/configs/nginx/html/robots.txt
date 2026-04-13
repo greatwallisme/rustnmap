@@ -1,0 +1,16 @@
+# robots.txt for RustNmap HTTP testing
+User-agent: *
+Disallow: /admin/
+Disallow: /backup/
+Disallow: /config/
+Disallow: /.git/
+Disallow: /upload/
+Disallow: /phpmyadmin/
+Disallow: /private/
+Disallow: /test/
+Disallow: /debug/
+Disallow: /tmp/
+Disallow: /logs/
+Disallow: /internal/
+
+Sitemap: http://web.rustnmap.test/sitemap.xml

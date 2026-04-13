@@ -1,0 +1,4 @@
+# Dovecot users file
+# Format: username:password:uid:gid:gecos:home:shell
+testuser:{PLAIN}test123:1000:1000::/home/testuser:/bin/sh
+admin:{PLAIN}admin123:1001:1001::/home/admin:/bin/sh

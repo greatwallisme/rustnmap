@@ -1,4 +1,5 @@
 target
+.tokensave
 # Environment configuration files (may contain sensitive data)
 .env
 .env.local

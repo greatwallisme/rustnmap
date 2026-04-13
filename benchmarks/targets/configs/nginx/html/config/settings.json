@@ -1,0 +1,7 @@
+<?php
+// Database configuration
+$db_host = "localhost";
+$db_name = "rustnmap_test";
+$db_user = "admin";
+$db_pass = "admin123";
+?>
