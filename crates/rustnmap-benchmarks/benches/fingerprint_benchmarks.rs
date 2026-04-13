@@ -155,7 +155,6 @@ fn bench_os_fingerprint_construction(c: &mut Criterion) {
                 class: IsnClass::Random,
                 timestamp: true,
                 ts_val: 0xA,
-                ts_val: 0xA,
                 gcd: 1,
                 isr: 0,
                 sp: 0,
@@ -429,6 +428,9 @@ fn bench_ecn_fingerprint(c: &mut Criterion) {
                 cwr: true,
                 df: true,
                 tos: 0x02,
+                ttl: Some(64),
+                window: Some(65535),
+                raw_options: vec![0x02, 0x04, 0x05, 0xb4],
             };
             black_box(ecn);
         });
@@ -440,12 +442,18 @@ fn bench_ecn_fingerprint(c: &mut Criterion) {
             cwr: true,
             df: true,
             tos: 0x02,
+            ttl: Some(64),
+            window: Some(65535),
+            raw_options: vec![0x02, 0x04, 0x05, 0xb4],
         };
         let ecn2 = EcnFingerprint {
             ece: false,
             cwr: true,
             df: true,
             tos: 0x00,
+            ttl: Some(128),
+            window: Some(1024),
+            raw_options: vec![],
         };
 
         b.iter(|| {
