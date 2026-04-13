@@ -1,3 +1,19 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026  greatwallisme
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 //! OS fingerprint database loader.
 //!
 //! Parses nmap-os-db files containing reference fingerprints
@@ -9,7 +25,9 @@ use serde::{Deserialize, Serialize};
 use tracing::info;
 
 use super::fingerprint::{EcnFingerprint, IpIdSeqClass, OpsFingerprint, OsFingerprint};
-use super::matching::{self, MatchPointsDef, RawFingerprint};
+use super::matching::{
+    self, AttrKey, CompactFingerprint, CompiledMatchPoints, MatchPointsDef, RawFingerprint, Section,
+};
 use crate::{FingerprintError, Result};
 
 /// Database of OS fingerprints for matching.
@@ -24,6 +42,9 @@ pub struct FingerprintDatabase {
 
     /// Weighted scoring definition from MatchPoints section.
     match_points: MatchPointsDef,
+
+    /// Pre-compiled match points with enum keys for fast matching.
+    compiled_match_points: CompiledMatchPoints,
 }
 
 /// Reference OS fingerprint from database.
@@ -47,9 +68,11 @@ pub struct OsReference {
     /// CPE identifier.
     pub cpe: Option<String>,
 
-    /// Raw fingerprint with expression strings for matching.
+    /// Compact fingerprint with expression strings for matching.
+    /// Uses enum keys and Box<str> values to reduce memory from
+    /// ~20KB to ~3.5KB per fingerprint (6036 fingerprints total).
     #[serde(skip)]
-    pub raw_fingerprint: RawFingerprint,
+    pub compact_fp: CompactFingerprint,
 }
 
 /// Operating system family classification.
@@ -77,9 +100,12 @@ impl FingerprintDatabase {
     /// Create empty database.
     #[must_use]
     pub fn empty() -> Self {
+        let mp = default_match_points();
+        let compiled = CompiledMatchPoints::from_match_points(&mp);
         Self {
             fingerprints: HashMap::new(),
-            match_points: default_match_points(),
+            match_points: mp,
+            compiled_match_points: compiled,
         }
     }
 
@@ -200,6 +226,7 @@ impl FingerprintDatabase {
         if !match_points.is_empty() {
             db.match_points = match_points;
         }
+        db.compiled_match_points = CompiledMatchPoints::from_match_points(&db.match_points);
 
         info!(
             "Loaded {} OS fingerprints with {} match point tests from database",
@@ -223,35 +250,29 @@ impl FingerprintDatabase {
         // (OSSCAN_GUESS_THRESHOLD in nmap.h)
         let accuracy_threshold = 0.85;
 
-        // Pre-compute total match points once (used for early termination)
-        let total_points = matching::total_match_points(&self.match_points);
-
         // Pre-extract R (responded) fields for cheap pre-filter.
         // R fields carry 50-100 points each. If observed says R=Y for a test
         // but reference says R=N, or vice versa, the reference cannot match.
         // Checking multiple test R fields eliminates 50-80% of fingerprints.
-        let obs_r_values: Vec<(&str, &str)> = ["T1", "T2", "T3", "T4", "T5", "T6", "T7"]
-            .iter()
-            .filter_map(|&test| {
-                observed_raw
-                    .get(test)
-                    .and_then(|t| t.get("R"))
-                    .map(|v| (test, v.as_str()))
-            })
-            .collect();
+        let obs_r_values: Vec<(Section, &str)> = [
+            Section::T1, Section::T2, Section::T3,
+            Section::T4, Section::T5, Section::T6, Section::T7,
+        ]
+        .into_iter()
+        .filter_map(|section| {
+            observed_raw
+                .get(section.name())
+                .and_then(|t| t.get("R"))
+                .map(|v| (section, v.as_str()))
+        })
+        .collect();
 
         for reference in self.fingerprints.values() {
             // Pre-filter: check all observed R fields against reference.
-            // If observed responded (R=Y) but reference says no response (R=N),
-            // or vice versa, skip immediately.
             let mut skip = false;
-            for &(test_name, obs_r) in &obs_r_values {
-                if let Some(ref_r) = reference
-                    .raw_fingerprint
-                    .get(test_name)
-                    .and_then(|t| t.get("R"))
-                {
-                    if obs_r != ref_r.as_str() {
+            for &(section, obs_r) in &obs_r_values {
+                if let Some(ref_r) = reference.compact_fp.get(section, AttrKey::R) {
+                    if obs_r != ref_r {
                         skip = true;
                         break;
                     }
@@ -261,11 +282,10 @@ impl FingerprintDatabase {
                 continue;
             }
 
-            let accuracy = matching::compare_fingerprints(
+            let accuracy = matching::compare_compact(
                 &observed_raw,
-                &reference.raw_fingerprint,
-                &self.match_points,
-                total_points,
+                &reference.compact_fp,
+                &self.compiled_match_points,
                 accuracy_threshold,
             );
 
@@ -973,8 +993,8 @@ impl NmapOsFingerprint {
             _ => OsFamily::Other(family.to_string()),
         };
 
-        // Build raw fingerprint preserving expression strings
-        let raw_fingerprint = self.build_raw_fingerprint();
+        // Build compact fingerprint using enum keys and Box<str> values
+        let compact_fp = self.build_compact_fingerprint();
 
         Ok(OsReference {
             name: self.name,
@@ -983,32 +1003,40 @@ impl NmapOsFingerprint {
             generation: self.generation,
             device_type: self.device_type,
             cpe: self.cpe,
-            raw_fingerprint,
+            compact_fp,
         })
     }
 
-    /// Build raw fingerprint from test strings, preserving expressions.
+    /// Build compact fingerprint from test strings, preserving expressions.
     ///
-    /// Each test is stored as a map of attribute name -> expression string.
-    fn build_raw_fingerprint(&self) -> RawFingerprint {
-        let mut raw = RawFingerprint::new();
+    /// Uses `Section` and `AttrKey` enums instead of String keys,
+    /// and `Box<str>` instead of `String` for values.
+    /// Reduces per-fingerprint memory from ~20KB to ~3.5KB.
+    fn build_compact_fingerprint(&self) -> CompactFingerprint {
+        let mut fp = CompactFingerprint::new();
 
         for (test_name, values) in &self.tests {
-            let mut attrs = HashMap::new();
+            let Some(section) = Section::from_name(test_name) else {
+                continue;
+            };
+            let mut attrs = Vec::new();
             for part in values.split('%') {
                 if let Some((key, val)) = part.split_once('=') {
-                    attrs.insert(key.to_string(), val.to_string());
+                    if let Some(attr) = AttrKey::from_name(key) {
+                        attrs.push((attr, val.to_string().into_boxed_str()));
+                    }
                 } else if !part.is_empty() {
-                    // Handle empty value case like "Q=" -> key="Q", val=""
-                    attrs.insert(part.to_string(), String::new());
+                    if let Some(attr) = AttrKey::from_name(part) {
+                        attrs.push((attr, String::new().into_boxed_str()));
+                    }
                 }
             }
             if !attrs.is_empty() {
-                raw.insert(test_name.to_string(), attrs);
+                fp.set_section(section, attrs);
             }
         }
 
-        raw
+        fp
     }
 
 }
@@ -1093,9 +1121,9 @@ SEQ(SP=200-205%GCD=1%ISR=208)
         assert_eq!(fp1.generation, Some("1.0".to_string()));
         assert_eq!(fp1.device_type, Some("general purpose".to_string()));
 
-        // Verify raw fingerprint preserves expressions
-        let raw_seq = fp1.raw_fingerprint.get("SEQ").expect("missing SEQ");
-        assert_eq!(raw_seq.get("SP"), Some(&"100-105".to_string()));
+        // Verify compact fingerprint preserves expressions
+        let raw_seq = fp1.compact_fp.get_str("SEQ", "SP").expect("missing SEQ SP");
+        assert_eq!(raw_seq, "100-105");
 
         let fp2 = db.fingerprints.get("Test OS 2").expect("missing fp2");
         assert_eq!(fp2.name, "Test OS 2");
