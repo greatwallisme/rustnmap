@@ -81,10 +81,14 @@ cargo build --release
 
 ```bash
 # Comparison tests (rustnmap vs nmap)
-just bench-compare
+./benchmarks/comparison_test.sh
 
 # Standalone rustnmap CLI tests
-just bench-rustnmap-test
+./benchmarks/rustnmap_test.sh
+
+# Custom target/ports
+TARGET_IP=192.168.1.1 ./benchmarks/comparison_test.sh
+TEST_PORTS="22,80,443" ./benchmarks/comparison_test.sh
 ```
 
 ---
@@ -97,9 +101,6 @@ Compares rustnmap output against nmap to verify functional parity.
 
 ```bash
 # Run all 41 comparison tests
-just bench-compare
-
-# Direct script usage
 ./benchmarks/comparison_test.sh
 
 # Custom target/ports
@@ -144,17 +145,13 @@ Validates ALL 85 rustnmap CLI options across 12 categories.
 
 ```bash
 # Run all 104 CLI tests
-just bench-rustnmap-test
+./benchmarks/rustnmap_test.sh
 
 # Custom target
-just bench-rustnmap-target 192.168.1.1
+TARGET_IP=192.168.1.1 ./benchmarks/rustnmap_test.sh
 
 # Custom ports
-just bench-rustnmap-ports "22,80,443"
-
-# Direct script usage
-./benchmarks/rustnmap_test.sh
-TARGET_IP=192.168.1.1 ./benchmarks/rustnmap_test.sh
+TEST_PORTS="22,80,443" ./benchmarks/rustnmap_test.sh
 ```
 
 ### Test Coverage (104 tests covering 85 CLI options)
@@ -231,27 +228,6 @@ Invalid input validation (timing, intensity, MTU, port conflicts), boundary valu
 | `NMAP_BIN` | /usr/bin/nmap | Path to nmap binary (comparison tests only) |
 
 ---
-
-## Justfile Recipes
-
-### Comparison Tests
-
-```bash
-just bench-compare          # Run all comparison tests
-just bench-compare-target <ip>   # Custom target
-just bench-compare-ports <ports>  # Custom ports
-```
-
-### RustNmap CLI Tests
-
-```bash
-just bench-rustnmap-test         # Run all CLI tests
-just bench-rustnmap-target <ip>  # Custom target
-just bench-rustnmap-ports <ports> # Custom ports
-```
-
----
-
 
 ## Development
 

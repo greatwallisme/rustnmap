@@ -132,17 +132,20 @@ sudo rustnmap --script "http-*" 192.168.1.1             # Pattern
 ## Development
 
 ```bash
+# Build
+cargo build --release
+
 # Run tests
-just test
+cargo test --workspace
 
-# Run clippy
-just clippy
+# Run clippy (zero warnings required)
+cargo clippy --workspace -- -D warnings
 
-# Build release
-just release
+# Format check
+cargo fmt --all -- --check
 
 # Generate docs
-just doc
+cargo doc --workspace --no-deps --all-features
 ```
 
 ---

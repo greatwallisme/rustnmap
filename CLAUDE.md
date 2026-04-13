@@ -1,192 +1,132 @@
-# RustNmap - Rust Network Mapper
+# CLAUDE.md
 
-> **Version**: 2.0.0 | **Platform**: Linux x86_64 | **Rust**: 1.90+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
----
+## Project Overview
 
-## Develop and Test
--  Develop enviroment is a debian system with root previledge, any commond can be executed without `sudo` or password.
+RustNmap is a network scanner written in Rust, targeting 100% functional parity with Nmap. It supports 12 scan types, service/OS detection, NSE scripting, vulnerability intelligence, and a REST API.
 
-## CRITICAL RULES (Never Violate)
-0. **Optimization Compliance** - All optimization work must not just reduce timeout to speed things up. Fix actual logic is absolutely right.
-1. **Design Compliance** - All development must strictly follow the designs in the doc/ design documents. No alternative implementations are allowed. If a design is found to be unimplementable, user confirmation is required before modifying the technical approach.
-2. **Zero warnings, zero errors** - Never relax clippy standards in Cargo.toml
-3. **Code Quality Hook** - Pay attention to hook error messages, never bypass
-4. **No simplification** - 100% nmap parity required (12 scan types, 10 port states, T0-T5 timing)
-5. **No mock engines** - Testing must use actual network targets, not localhost
+**Platform**: Linux x86_64 | **Rust**: 1.90+ | **License**: GPL-3.0-or-later
 
+## Build & Test Commands
 
 ```bash
-# Before ANY commit:
-cargo test && cargo clippy -- -D warnings && cargo fmt --check
+# Build
+cargo build                    # Debug build
+cargo build --release          # Release build (LTO, opt-level=3)
+
+# Test
+cargo test --workspace         # All tests
+cargo test -p <crate>          # Single crate (e.g., rustnmap-scan)
+cargo test -p <crate> test_name  # Single test
+cargo test -- --skip requires_root  # Skip root-required tests
+
+# Lint & Format
+cargo clippy --workspace -- -D warnings   # Zero warnings required
+cargo fmt --all -- --check                # Format check
+
+# Full CI
+cargo fmt --all -- --check && cargo clippy --workspace -- -D warnings && cargo test --workspace
+
+# Benchmarks
+cargo bench -p rustnmap-benchmarks                          # All benchmarks
+cargo bench -p rustnmap-benchmarks -- <benchmark_name>      # Specific benchmark
+
+# Comparison tests (rustnmap vs nmap)
+cargo build --release && ./benchmarks/comparison_test.sh
+
+# Docs
+cargo doc --workspace --no-deps --all-features
 ```
 
----
+**Environment**: Debian system with root privileges. No `sudo` needed.
 
-## CURRENT FOCUS: NSE Script Timeout Configuration
+## Critical Rules
 
-> **Status**: Phase 10 Complete - Process isolation implemented
-> **Last Updated**: 2026-03-08
+0. **Optimization Compliance** - Do not reduce timeouts to fake speed improvements. Fix actual logic.
+1. **Design Compliance** - Follow `doc/` design documents. Unimplementable designs require user confirmation before changing approach.
+2. **Zero warnings, zero errors** - Never relax clippy standards in Cargo.toml.
+3. **No simplification** - 100% nmap parity required (12 scan types, 10 port states, T0-T5 timing).
+4. **No mock engines** - Testing must use actual network targets, not localhost.
+5. **Before ANY commit**: `cargo test && cargo clippy -- -D warnings && cargo fmt --check`
 
-### Recent Completions
+## Architecture
 
-**Packet Engine (Phase 40)**: COMPLETE
-- `MmapPacketEngine` with TPACKET_V2 ring buffer
-- `ZeroCopyPacket` with Arc lifecycle management
-- `AsyncPacketEngine` with Tokio AsyncFd
-- All scanners migrated to `ScannerPacketEngine`
-
-**NSE Resource Leak (Phase 10)**: COMPLETE
-- Process-based isolation for script execution
-- `rustnmap-nse-runner` binary for isolated execution
-- `ProcessExecutor` with reliable timeout handling
-- Default script timeout: 10 minutes (matching nmap)
-
-### Performance Targets (Packet Engine)
-| Metric | Target | Status |
-|--------|--------|--------|
-| PPS | ~1,000,000 | PENDING BENCHMARK |
-| CPU (T5) | 30% | PENDING BENCHMARK |
-| Packet Loss (T5) | <1% | PENDING BENCHMARK |
-| Zero-copy | Verified | COMPLETE |
-
-**See**: `task_plan.md` for current task plan
-
----
-
-## Project Structure
+### Workspace Crate Dependency Graph
 
 ```
-rust-nmap/
-├── crates/rustnmap-packet/    # PACKET_MMAP V2 engine (COMPLETE)
-├── crates/rustnmap-scan/      # 12 scan types (MIGRATED TO PacketEngine)
-├── crates/rustnmap-nse/       # NSE engine (PROCESS ISOLATION COMPLETE)
-├── crates/rustnmap-core/      # Orchestration
-├── crates/rustnmap-cli/       # CLI interface
-├── doc/                       # All documentation
-│   ├── architecture.md        # System architecture
-│   ├── modules/               # Module-specific docs
-│   └── manual/                # User manual
-├── reference/nmap/            # Original nmap C++ source (use as reference)
-├── task_plan.md               # Current task plan
-├── progress.md                # Progress tracking
-└── findings.md                # Research findings
+                    rustnmap-common (types, errors, databases)
+                    /     |      \      \       \        \
+             rustnmap-net  |  rustnmap-output  |    rustnmap-vuln
+              /     |      |       |           |         |
+    rustnmap-packet |      |       |     rustnmap-scan-management
+         |          |      |       |           |
+    rustnmap-target |      |       |     rustnmap-api (REST daemon)
+         |          |      |       |
+    rustnmap-scan   |      |       |
+         |          |      |       |
+    rustnmap-fingerprint    |       |
+         |          |      |       |
+    rustnmap-traceroute     |       |
+         |          |      |       |
+    rustnmap-evasion        |       |
+         \          |      |       /
+          rustnmap-core (orchestrator)
+                |              |
+         rustnmap-nse    rustnmap-stateless-scan
+                |              |
+          rustnmap-cli    rustnmap-sdk (builder API)
 ```
 
----
+### Crate Roles
 
-## Essential Commands
+| Crate | Role |
+|-------|------|
+| `rustnmap-common` | Foundation types (`Port`, `PortState`, `ScanType`), error types, `ServiceDatabase` global singleton |
+| `rustnmap-net` | Raw socket wrappers, packet construction helpers, checksums |
+| `rustnmap-packet` | PACKET_MMAP V2 ring buffer engine (`MmapPacketEngine`), zero-copy `AsyncPacketEngine` via `AsyncFd` |
+| `rustnmap-target` | Target parsing (CIDR, ranges, hostnames), host discovery (ICMP/TCP/ARP ping) |
+| `rustnmap-scan` | 12 scan types, `ParallelScanEngine` (ultrascan), adaptive RTT, congestion control |
+| `rustnmap-fingerprint` | Service detection (nmap-service-probes), OS fingerprinting (nmap-os-db), TLS cert analysis |
+| `rustnmap-traceroute` | Route tracing via ICMP/TCP/UDP probes with TTL manipulation |
+| `rustnmap-evasion` | Fragmentation, decoy rotation, source spoofing, timing control |
+| `rustnmap-nse` | Lua 5.4 script engine with process isolation (`rustnmap-nse-runner` binary) |
+| `rustnmap-output` | 5 output formats: Normal, XML, JSON, Grepable, Script Kiddie |
+| `rustnmap-core` | Central `ScanOrchestrator` coordinating all scan phases via `ScanSession` DI container |
+| `rustnmap-vuln` | CVE/CPE lookup, EPSS scoring, CISA KEV feed - backed by SQLite |
+| `rustnmap-scan-management` | Scan persistence (SQLite), diff between scans, YAML profiles |
+| `rustnmap-stateless-scan` | Masscan-like high-speed stateless scanning (SYN cookie based) |
+| `rustnmap-api` | REST API daemon (Axum) with SSE streaming, auth middleware |
+| `rustnmap-sdk` | Builder API for programmatic usage, supports local and remote (via API) scanning |
+| `rustnmap-cli` | CLI binary (`rustnmap`) with clap arg parsing, progress bars |
+| `rustnmap-benchmarks` | Criterion benchmarks for packet, scan, fingerprint, and NSE hot paths |
 
-```bash
-just build              # Build all crates
-just test               # Run all tests
-just clippy             # Zero warnings required
-just ci                 # Full CI pipeline
+### Key Design Patterns
 
-# Packet engine tests (requires root)
-sudo cargo test -p rustnmap-packet
-```
+**ScanSession** - DI container holding `Arc<ScanConfig>`, `Arc<dyn PacketEngine>`, `Arc<dyn OutputSink>`, `Arc<ScanStats>`.
 
----
+**PacketEngine** - Strategy pattern. `MmapPacketEngine` (production) vs `RecvfromPacketEngine` (fallback). All scanners use `ScannerPacketEngine` adapter.
 
-## Module Completion Criteria
+**Two-Stage Bind** (packet engine) - Bind with protocol=0 for ring buffer setup, then re-bind with ETH_P_ALL for reception. Follows nmap's `libpcap/pcap-linux.c`.
 
-- Unit tests coverage >= 80%
-- Zero compiler warnings (`cargo clippy -- -D warnings`)
-- All public APIs documented with `# Errors` and `# Panics` sections
-- Benchmarks for hot paths
-- Documentation in `doc/modules/` updated
+**Process Isolation** (NSE) - Scripts execute in `rustnmap-nse-runner` child process. `ProcessExecutor` enforces timeouts via OS-level process kill.
 
----
+**Zero-Copy** - `ZeroCopyPacket` holds `Arc<MmapPacketEngine>` to keep mmap alive; `Drop` releases frame back to kernel.
 
-## Network Volatility Handling (from nmap research)
-
-Required components (partially implemented):
-
-1. **Adaptive RTT** (RFC 6298): `SRTT = (7/8)*SRTT + (1/8)*RTT`
-2. **Congestion Control**: cwnd, ssthresh, slow start, congestion avoidance
-3. **Scan Delay Boost**: Exponential backoff on high drop rate
-4. **Rate Limiting**: Token bucket for `--max-rate`/`--min-rate`
-5. **ICMP Classification**: HOST_UNREACH, NET_UNREACH, PORT_UNREACH handling
-
-**See**: `doc/architecture.md` Section 2.3 for full architecture
-
----
-
-## Rust Code Standards (Mandatory)
+## Rust Code Standards
 
 ```rust
-// 1. Type names in docs use backticks
-/// Load database. Returns `OsReference` or error.
-
-// 2. Result functions MUST have # Errors section
-/// # Errors
-/// Returns error if file not found.
-
-// 3. Builder methods MUST have #[must_use]
-#[must_use]
-pub fn with_timeout(mut self, timeout: Duration) -> Self { ... }
-
-// 4. Numeric literals use separators
-let timeout = 1_000_000;  // NOT 1000000
-
-// 5. Use well-known constants
-let addr = Ipv4Addr::LOCALHOST;  // NOT Ipv4Addr::new(127, 0, 0, 1)
-
-// 6. Explicit casts with u64::from(x), NOT x as u64
-
-// 7. Inlined format strings
-format!("{var}")  // NOT format!("{}", var)
-
-// 8. Match arms combined when identical
-match x { "A" | "B" => result, _ => default }
-
-// 9. Lint attributes: #[expect(clippy::lint, reason = "...")] at item level
+// Type names in docs use backticks: `OsReference`
+// Result functions MUST have # Errors section
+// Builder methods MUST have #[must_use]
+// Numeric literals use separators: 1_000_000
+// Well-known constants: Ipv4Addr::LOCALHOST
+// Explicit casts: u64::from(x), NOT x as u64
+// Inlined format strings: format!("{var}")
+// Match arms combined when identical: "A" | "B" => result
+// Lint attributes: #[expect(clippy::lint, reason = "...")] at item level
 // NEVER use module-level #![allow(...)]
 ```
-
----
-
-## Key Design Patterns
-
-### ScanSession Context
-```rust
-pub struct ScanSession {
-    pub config: ScanConfig,
-    pub target_set: Arc<TargetSet>,
-    pub packet_engine: Arc<dyn PacketEngine>,  // Strategy pattern
-    pub output_sink: Arc<dyn OutputSink>,
-    pub stats: Arc<ScanStats>,
-}
-```
-
-### Memory Ordering (for ring buffers)
-```rust
-// Producer
-self.write_idx.fetch_add(1, Ordering::Relaxed);
-atomic::fence(Ordering::Release);
-
-// Consumer
-let value = self.read_idx.load(Ordering::Acquire);
-```
-
-**See**: `doc/architecture.md` for full pattern documentation
-
----
-
-## Documentation Index
-
-| What | Where |
-|------|-------|
-| System Architecture | `doc/architecture.md` |
-| Crate Structure | `doc/structure.md` |
-| Packet Engineering | `doc/modules/packet-engineering.md` |
-| Implementation Plan | `task_plan.md` |
-| Research Findings | `findings.md` |
-| Progress Log | `progress.md` |
-| Nmap Reference | `reference/nmap/` |
-
----
 
 ## Timing Template Parameters
 
@@ -196,9 +136,15 @@ let value = self.read_idx.load(Ordering::Acquire);
 | max_retries | 10 | 10 | 10 | 10 | 6 | 2 |
 | scan_delay | 5min | 15s | 400ms | 0ms | 0ms | 0ms |
 
----
+## Documentation
+
+| What | Where |
+|------|-------|
+| System Architecture | `doc/architecture.md` |
+| Crate Structure | `doc/structure.md` |
+| Packet Engineering | `doc/modules/packet-engineering.md` |
+| Nmap Reference Source | `reference/nmap/` |
 
 ## License
 
-GPL-3.0-or-later. Uses Nmap fingerprint databases under NPSL.
-See [LICENSE](LICENSE) and [NOTICE](NOTICE) for details.
+GPL-3.0-or-later. Uses Nmap fingerprint databases under NPSL. See [LICENSE](LICENSE) and [NOTICE](NOTICE).

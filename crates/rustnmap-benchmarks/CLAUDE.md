@@ -19,7 +19,7 @@ Criterion-based benchmarks for hot paths: packet processing, scan operations, fi
 
 ```bash
 # All benchmarks
-just bench
+cargo bench -p rustnmap-benchmarks
 
 # Specific benchmark
 cargo bench -p rustnmap-benchmarks -- scan
