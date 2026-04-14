@@ -1,132 +1,130 @@
-# RustNmap 设计文档
+# RustNmap Design Documentation
 
-> **版本**: 1.0.0
-> **状态**: 此文档描述 RustNmap 1.0.0 的设计。2.0 版本开发中，详见 [CHANGELOG.md](CHANGELOG.md)。
-> **日期**: 2026-02-11
-> **目标平台**: Linux x86_64 (AMD64)
+> **Version**: 1.0.0
+> **Status**: This document describes the design of RustNmap 1.0.0. Version 2.0 is under development, see [CHANGELOG.md](CHANGELOG.md).
+> **Date**: 2026-02-11
+> **Target Platform**: Linux x86_64 (AMD64)
 
 ---
 
-## RustNmap 2.0 路线图
+## RustNmap 2.0 Roadmap
 
-RustNmap 2.0 正在开发中，将从"端口扫描器"升级为"攻击面管理平台"。
+RustNmap 2.0 is under development, upgrading from a "port scanner" to an "attack surface management platform."
 
-### 2.0 新增功能预览
+### 2.0 New Features Preview
 
-| 功能类别 | 新增功能 | 优先级 | 预计完成 |
+| Feature Category | New Features | Priority | Expected Completion |
 |---------|---------|--------|---------|
-| 漏洞情报 | CVE/CPE 关联、EPSS 评分、KEV 标记 | P0 | Week 5-7 |
-| 流式输出 | NDJSON、Host 级流式 | P1 | Week 3-4 |
-| 扫描管理 | SQLite 持久化、Diff、YAML Profile | P1 | Week 8-9 |
-| 性能优化 | 两阶段扫描、自适应批量、无状态扫描 | P0 | Week 10-11 |
-| 平台化 | REST API、Rust SDK | P1 | Week 12 |
+| Vulnerability Intelligence | CVE/CPE correlation, EPSS scoring, KEV tagging | P0 | Week 5-7 |
+| Streaming Output | NDJSON, Host-level streaming | P1 | Week 3-4 |
+| Scan Management | SQLite persistence, Diff, YAML Profile | P1 | Week 8-9 |
+| Performance Optimization | Two-phase scanning, adaptive batching, stateless scanning | P0 | Week 10-11 |
+| Platform | REST API, Rust SDK | P1 | Week 12 |
 
-详见：[RETHINK.md](../RETHINK.md) - RustNmap 2.0 进化路线图
 
-### 文档状态
+### Documentation Status
 
-| 文档类型 | 状态 | 说明 |
+| Document Type | Status | Notes |
 |---------|------|------|
-| 核心设计文档 | 1.0 | 2.0 开发中将逐步更新 |
-| 用户手册 | 1.0 + 标记 | 已添加版本标记，2.0 完成后更新 |
-| 新增 2.0 文档 | 待创建 | 按 Phase 进度创建新文档 |
+| Core Design Documents | 1.0 | Will be updated progressively during 2.0 development |
+| User Manual | 1.0 + Markers | Version markers added, will be updated after 2.0 is complete |
+| New 2.0 Documents | To be created | New documents created per Phase progress |
 
 ---
 
-## 文档导航
+## Documentation Navigation
 
-本文档已按模块拆分，请从以下链接选择所需内容：
+This document has been split into modules. Please select the content you need from the links below:
 
-### 第一部分：项目概述与架构
+### Part 1: Project Overview and Architecture
 
-| 文档 | 描述 | 文件 |
+| Document | Description | File |
 |------|------|------|
-| 系统架构 | 整体架构图、模块依赖 | [architecture.md](architecture.md) |
-| 项目结构 | Cargo Workspace 结构 | [structure.md](structure.md) |
+| System Architecture | Overall architecture diagram, module dependencies | [architecture.md](architecture.md) |
+| Project Structure | Cargo Workspace structure | [structure.md](structure.md) |
 
-### 第二部分：核心功能模块
+### Part 2: Core Feature Modules
 
-| 模块 | 描述 | 文件 |
+| Module | Description | File |
 |------|------|------|
-| **CLI 接口** | **命令行参数解析 (lexopt, 2026-03-10 迁移)** | **[modules/cli.md](modules/cli.md)** |
-| 主机发现 | ICMP/TCP/UDP 主机发现技术 | [modules/host-discovery.md](modules/host-discovery.md) |
-| 端口扫描 | TCP SYN/CONNECT/UDP/扫描技术 | [modules/port-scanning.md](modules/port-scanning.md) |
-| 服务探测 | 服务版本识别与指纹匹配 | [modules/service-detection.md](modules/service-detection.md) |
-| OS 检测 | 操作系统指纹识别 | [modules/os-detection.md](modules/os-detection.md) |
-| NSE 引擎 | Lua 脚本引擎核心设计 | [modules/nse-engine.md](modules/nse-engine.md) |
-| Traceroute | 网络路由追踪 | [modules/traceroute.md](modules/traceroute.md) |
-| 规避技术 | 防火墙/IDS 规避 | [modules/evasion.md](modules/evasion.md) |
-| 输出模块 | 多格式输出设计 | [modules/output.md](modules/output.md) |
-| 目标解析 | 目标规格解析 | [modules/target-parsing.md](modules/target-parsing.md) |
-| 原始数据包 | Linux x86_64 数据包引擎 (旧架构) | [modules/raw-packet.md](modules/raw-packet.md) |
-| **数据包引擎** | **PACKET_MMAP V2 技术规范 (当前)** | **[modules/packet-engineering.md](modules/packet-engineering.md)** |
-| 并发模型 | Rust 并发与零拷贝优化 | [modules/concurrency.md](modules/concurrency.md) |
+| **CLI Interface** | **Command-line argument parsing (lexopt, migrated 2026-03-10)** | **[modules/cli.md](modules/cli.md)** |
+| Host Discovery | ICMP/TCP/UDP host discovery techniques | [modules/host-discovery.md](modules/host-discovery.md) |
+| Port Scanning | TCP SYN/CONNECT/UDP scanning techniques | [modules/port-scanning.md](modules/port-scanning.md) |
+| Service Detection | Service version identification and fingerprint matching | [modules/service-detection.md](modules/service-detection.md) |
+| OS Detection | Operating system fingerprinting | [modules/os-detection.md](modules/os-detection.md) |
+| NSE Engine | Lua script engine core design | [modules/nse-engine.md](modules/nse-engine.md) |
+| Traceroute | Network route tracing | [modules/traceroute.md](modules/traceroute.md) |
+| Evasion Techniques | Firewall/IDS evasion | [modules/evasion.md](modules/evasion.md) |
+| Output Module | Multi-format output design | [modules/output.md](modules/output.md) |
+| Target Parsing | Target specification parsing | [modules/target-parsing.md](modules/target-parsing.md) |
+| Raw Packets | Linux x86_64 packet engine (legacy architecture) | [modules/raw-packet.md](modules/raw-packet.md) |
+| **Packet Engine** | **PACKET_MMAP V2 technical specification (current)** | **[modules/packet-engineering.md](modules/packet-engineering.md)** |
+| Concurrency Model | Rust concurrency and zero-copy optimization | [modules/concurrency.md](modules/concurrency.md) |
 
-### 第三部分：数据库与项目结构
+### Part 3: Database and Project Structure
 
-| 文档 | 描述 | 文件 |
+| Document | Description | File |
 |------|------|------|
-| 数据库设计 | 服务探测与 OS 指纹数据库 | [database.md](database.md) |
-| 项目结构 | Cargo Workspace 结构 | [structure.md](structure.md) |
+| Database Design | Service detection and OS fingerprint database | [database.md](database.md) |
+| Project Structure | Cargo Workspace structure | [structure.md](structure.md) |
 
-### 第四部分：开发与实施
+### Part 4: Development and Implementation
 
-| 文档 | 描述 | 文件 |
+| Document | Description | File |
 |------|------|------|
-| 2.0 进化路线图 | RustNmap 2.0 完整路线图（12 周执行计划） | [../RETHINK.md](../RETHINK.md) |
-| 2.0 变更日志 | 2.0 开发过程中的文档变更记录 | [CHANGELOG.md](CHANGELOG.md) |
-| 开发路线图 | Phase 1-4 开发计划（1.0） | [roadmap.md](roadmap.md) |
+| 2.0 Evolution Roadmap | RustNmap 2.0 complete roadmap (12-week execution plan) | [../RETHINK.md](../RETHINK.md) |
+| 2.0 Change Log | Document change records during 2.0 development | [CHANGELOG.md](CHANGELOG.md) |
+| Development Roadmap | Phase 1-4 development plan (1.0) | [roadmap.md](roadmap.md) |
 
-### 用户文档
+### User Documentation
 
-| 文档 | 描述 | 文件 |
+| Document | Description | File |
 |------|------|------|
-| Man 页面 | Unix 手册页 | [rustnmap.1](rustnmap.1) |
-| 开发路线图 | Phase 1-4 开发计划（1.0） | [roadmap.md](roadmap.md) |
+| Man Page | Unix manual page | [rustnmap.1](rustnmap.1) |
+| Development Roadmap | Phase 1-4 development plan (1.0) | [roadmap.md](roadmap.md) |
 
-> **注意**: 完整用户指南将在 2.0 正式发布后提供。当前请参考 CLI 帮助 (`rustnmap --help`)。
+> **Note**: A complete user guide will be available after the official 2.0 release. Currently, please refer to the CLI help (`rustnmap --help`).
 
-### 附录
+### Appendix
 
-| 文档 | 描述 | 文件 |
+| Document | Description | File |
 |------|------|------|
-| Nmap 命令对照 | Nmap 命令参数对照 | [appendix/nmap-commands.md](appendix/nmap-commands.md) |
-| 数据结构参考 | Nmap 核心数据结构映射 | [appendix/nmap-data-structures.md](appendix/nmap-data-structures.md) |
-| 函数参考 | Nmap 核心函数签名参考 | [appendix/nmap-function-reference.md](appendix/nmap-function-reference.md) |
-| 常量参考 | Nmap 源码常量定义 | [appendix/nmap-constants.md](appendix/nmap-constants.md) |
-| 参考资料 | 相关技术文档链接 | [appendix/references.md](appendix/references.md) |
-| 部署指南 | Linux x86_64 部署指南 | [appendix/deployment.md](appendix/deployment.md) |
+| Nmap Command Reference | Nmap command parameter reference | [appendix/nmap-commands.md](appendix/nmap-commands.md) |
+| Data Structure Reference | Nmap core data structure mapping | [appendix/nmap-data-structures.md](appendix/nmap-data-structures.md) |
+| Function Reference | Nmap core function signature reference | [appendix/nmap-function-reference.md](appendix/nmap-function-reference.md) |
+| Constants Reference | Nmap source code constant definitions | [appendix/nmap-constants.md](appendix/nmap-constants.md) |
+| References | Related technical documentation links | [appendix/references.md](appendix/references.md) |
+| Deployment Guide | Linux x86_64 deployment guide | [appendix/deployment.md](appendix/deployment.md) |
 
 ---
 
-## 项目概述
+## Project Overview
 
-### 1.1 项目背景
+### 1.1 Project Background
 
-Nmap ("Network Mapper") 是网络安全领域最著名的开源工具之一，自1997年发布以来已成为行业标准。然而，Nmap存在以下局限性：
+Nmap ("Network Mapper") is one of the most well-known open-source tools in the network security field, and has been an industry standard since its release in 1997. However, Nmap has the following limitations:
 
-| 局限性 | 描述 |
+| Limitation | Description |
 |--------|------|
-| 单线程核心 | 虽然有并行扫描，但核心架构受限于C语言的历史包袱 |
-| 性能瓶颈 | 全端口扫描仍需数分钟 |
-| 内存安全 | C语言存在潜在的内存安全问题 |
-| 现代化不足 | 配置和扩展方式相对传统 |
+| Single-threaded Core | Although parallel scanning exists, the core architecture is constrained by C language legacy baggage |
+| Performance Bottleneck | Full port scans still take several minutes |
+| Memory Safety | C language has potential memory safety issues |
+| Insufficient Modernization | Configuration and extension methods are relatively traditional |
 
-### 1.2 项目目标
+### 1.2 Project Goals
 
-开发一个用 **Rust** 编写的现代化漏洞扫描工具，实现：
+Develop a modern vulnerability scanning tool written in **Rust**, achieving:
 
-1. **100% 功能对等** - 覆盖 Nmap 所有核心功能
-2. **性能飞跃** - 利用 Rust 的异步特性实现更高并发
-3. **内存安全** - 无 GC 的内存安全保障
-4. **现代架构** - 模块化、可扩展的设计
-5. **脚本兼容** - 保持 Lua 脚本引擎的完整兼容性
+1. **100% Feature Parity** - Cover all core Nmap functionality
+2. **Performance Leap** - Leverage Rust's async features for higher concurrency
+3. **Memory Safety** - GC-free memory safety guarantees
+4. **Modern Architecture** - Modular, extensible design
+5. **Script Compatibility** - Maintain full compatibility with the Lua scripting engine
 
-### 1.3 目标用户
+### 1.3 Target Users
 
-- 渗透测试人员
-- 安全研究人员
-- 系统管理员
-- DevSecOps 工程师
-- 企业安全团队
-
+- Penetration testers
+- Security researchers
+- System administrators
+- DevSecOps engineers
+- Enterprise security teams

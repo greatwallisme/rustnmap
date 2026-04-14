@@ -1,89 +1,89 @@
-# Nmap 核心数据结构参考
+# Nmap Core Data Structures Reference
 
-本文档详细列出 Nmap 源码中的核心数据结构，为 Rust 实现提供精确映射参考。
+This document details the core data structures in the Nmap source code, providing precise mapping references for the Rust implementation.
 
-## 目录
+## Table of Contents
 
-1. [扫描引擎结构](#1-扫描引擎结构)
-2. [端口管理结构](#2-端口管理结构)
-3. [OS 检测结构](#3-os-检测结构)
-4. [NSE 引擎结构](#4-nse-引擎结构)
-5. [目标管理结构](#5-目标管理结构)
-6. [输出系统结构](#6-输出系统结构)
+1. [Scan Engine Structures](#1-scan-engine-structures)
+2. [Port Management Structures](#2-port-management-structures)
+3. [OS Detection Structures](#3-os-detection-structures)
+4. [NSE Engine Structures](#4-nse-engine-structures)
+5. [Target Management Structures](#5-target-management-structures)
+6. [Output System Structures](#6-output-system-structures)
 
 ---
 
-## 1. 扫描引擎结构
+## 1. Scan Engine Structures
 
 ### UltraScanInfo (scan_engine.h)
 
 ```cpp
-// Nmap C++ 定义
+// Nmap C++ definition
 class UltraScanInfo {
 private:
-    // 扫描类型
+    // Scan type
     stype scantype;
 
-    // 超时信息
+    // Timeout information
     struct timeout_info *to;
 
-    // 性能配置
+    // Performance configuration
     struct ultra_scan_performance_vars perf;
 
-    // 完成主机列表
+    // Completed host list
     std::list<HostScanStats *> completedHosts;
     std::list<HostScanStats *> activeHosts;
     std::list<HostScanStats *> incompleteHosts;
 
-    // 探测管理
+    // Probe management
     std::vector<UltraProbe *> probes;
     std::vector<UltraProbe *> freshProbes;
 
-    // 速率计量
+    // Rate metering
     PacketRateMeter send_rate_meter;
 
-    // 时间戳
+    // Timestamp
     struct timeval now;
 
-    // 扫描组大小
+    // Scan group size
     int group_scan_goal;
 
-    // 是否完成
+    // Whether completed
     bool anyCompleted;
 };
 ```
 
 ```rust
-// RustNmap 对应结构
+// RustNmap corresponding structure
 pub struct UltraScanInfo {
-    // 扫描类型
+    // Scan type
     pub scan_type: ScanType,
 
-    // 超时信息
+    // Timeout information
     pub timeout: TimeoutInfo,
 
-    // 性能配置
+    // Performance configuration
     pub perf: ScanPerformanceVars,
 
-    // 主机统计
+    // Host statistics
     pub completed_hosts: Vec<HostScanStats>,
     pub active_hosts: Vec<HostScanStats>,
     pub incomplete_hosts: Vec<HostScanStats>,
 
-    // 待发送探测
+    // Pending probes
     pub pending_probes: Vec<UltraProbe>,
     pub fresh_probes: Vec<UltraProbe>,
 
-    // 速率计量器
+    // Rate meter
     pub send_rate_meter: PacketRateMeter,
 
-    // 当前时间
+    // Current time
     pub now: TimeVal,
 
-    // 目标组大小
+    // Target group size
     pub group_scan_goal: usize,
 
-    // 是否有主机完成
+    // Whether any host has completed
     pub any_completed: bool,
 }
 ```
@@ -91,47 +91,47 @@ pub struct UltraScanInfo {
 ### HostScanStats (scan_engine.h)
 
 ```cpp
-// Nmap C++ 定义
+// Nmap C++ definition
 class HostScanStats {
 public:
     Target *target;
 
-    // 已发送探测数
+    // Number of probes sent
     int probes_sent;
 
-    // 超时探测数
+    // Number of timed-out probes
     int probes_timedout;
 
-    // 不同端口状态计数
+    // Different port state counts
     int numopenports;
     int numclosedports;
     int numfilteredports;
     int numuntestableports;
 
-    // 发送速率
+    // Sending rate
     double sending_rate;
 };
 ```
 
 ```rust
-// RustNmap 对应结构
+// RustNmap corresponding structure
 pub struct HostScanStats {
-    // 目标主机
+    // Target host
     pub target: Target,
 
-    // 已发送探测数
+    // Number of probes sent
     pub probes_sent: usize,
 
-    // 超时探测数
+    // Number of timed-out probes
     pub probes_timedout: usize,
 
-    // 端口状态计数
+    // Port state counts
     pub num_open_ports: usize,
     pub num_closed_ports: usize,
     pub num_filtered_ports: usize,
     pub num_untestable_ports: usize,
 
-    // 发送速率 (探测/秒)
+    // Sending rate (probes/second)
     pub sending_rate: f64,
 }
 ```
@@ -139,10 +139,10 @@ pub struct HostScanStats {
 ### UltraProbe (scan_engine.h)
 
 ```cpp
-// Nmap C++ 定义
+// Nmap C++ definition
 class UltraProbe {
 public:
-    // 探测类型
+    // Probe type
     enum ProbeType {
         UP_UNSET,
         UP_IP,
@@ -151,46 +151,46 @@ public:
         UP_ND,
     } type;
 
-    // 重试号
+    // Retry number
     tryno_t tryno;
 
     union {
-        struct probespec pspec;  // IP/ARP/ND 探测
-        ConnectProbe *CP;        // Connect 扫描
+        struct probespec pspec;  // IP/ARP/ND probe
+        ConnectProbe *CP;        // Connect scan
     } mypspec;
 
-    // 发送时间
+    // Send time
     struct timeval sent;
     struct timeval prevSent;
 
-    // 状态标志
+    // Status flags
     bool timedout;
     bool retransmitted;
 };
 ```
 
 ```rust
-// RustNmap 对应结构
+// RustNmap corresponding structure
 pub struct UltraProbe {
-    // 探测类型
+    // Probe type
     pub probe_type: ProbeType,
 
-    // 重试信息
+    // Retry information
     pub try_no: TryNo,
 
-    // 探测规格
+    // Probe specification
     pub spec: ProbeSpec,
 
-    // 发送时间
+    // Send time
     pub sent: Option<TimeVal>,
     pub prev_sent: Option<TimeVal>,
 
-    // 状态标志
+    // Status flags
     pub timed_out: bool,
     pub retransmitted: bool,
 }
 
-// TryNo 结构 (对应 tryno_t)
+// TryNo structure (corresponding to tryno_t)
 #[repr(C)]
 pub union TryNo {
     raw: u8,
@@ -199,60 +199,60 @@ pub union TryNo {
 
 #[repr(C)]
 pub struct TryNoFields {
-    pub is_ping: u8,   // bit 0: 是否为 ping
-    pub seq_num: u8,  // bit 1-7: 序列号 (0-127)
+    pub is_ping: u8,   // bit 0: whether this is a ping
+    pub seq_num: u8,  // bit 1-7: sequence number (0-127)
 }
 ```
 
 ---
 
-## 2. 端口管理结构
+## 2. Port Management Structures
 
 ### Port (portlist.h)
 
 ```cpp
-// Nmap C++ 定义
+// Nmap C++ definition
 class Port {
 private:
-    // 端口号
+    // Port number
     u16 portno;
 
-    // 协议
+    // Protocol
     u8 proto;
 
-    // 端口状态
+    // Port state
     u8 state;
 
-    // 推理结果
+    // Deduction results
     struct serviceDeductions service;
 
-    // 状态原因
+    // State reason
     struct port_reason reason;
 
-    // 脚本结果
+    // Script results
     ScriptResults scriptResults;
 };
 ```
 
 ```rust
-// RustNmap 对应结构
+// RustNmap corresponding structure
 pub struct Port {
-    // 端口号
+    // Port number
     pub port_no: u16,
 
-    // 协议 (TCP/UDP/SCTP)
+    // Protocol (TCP/UDP/SCTP)
     pub protocol: Protocol,
 
-    // 端口状态
+    // Port state
     pub state: PortState,
 
-    // 服务推论
+    // Service deductions
     pub service: Option<ServiceDeductions>,
 
-    // 状态原因
+    // State reason
     pub reason: PortReason,
 
-    // 脚本执行结果
+    // Script execution results
     pub script_results: Vec<ScriptResult>,
 }
 ```
@@ -260,60 +260,60 @@ pub struct Port {
 ### serviceDeductions (portlist.h)
 
 ```cpp
-// Nmap C++ 定义
+// Nmap C++ definition
 struct serviceDeductions {
-    const char *name;              // 服务名称
-    int name_confidence;          // 名称置信度 (0-10)
-    char *product;               // 产品名
-    char *version;               // 版本号
-    char *extrainfo;            // 额外信息
-    char *hostname;              // 主机名
-    char *ostype;                // 操作系统类型
-    char *devicetype;           // 设备类型
-    std::vector<char *> cpe;   // CPE 标识符
-    enum service_tunnel_type service_tunnel;  // SSL 隧道
-    const char *service_fp;       // 服务指纹 (用于提交)
-    enum service_detection_type dtype;      // 检测类型
+    const char *name;              // Service name
+    int name_confidence;          // Name confidence (0-10)
+    char *product;               // Product name
+    char *version;               // Version number
+    char *extrainfo;            // Extra information
+    char *hostname;              // Hostname
+    char *ostype;                // OS type
+    char *devicetype;           // Device type
+    std::vector<char *> cpe;   // CPE identifiers
+    enum service_tunnel_type service_tunnel;  // SSL tunnel
+    const char *service_fp;       // Service fingerprint (for submission)
+    enum service_detection_type dtype;      // Detection type
 };
 ```
 
 ```rust
-// RustNmap 对应结构
+// RustNmap corresponding structure
 pub struct ServiceDeductions {
-    // 服务名称
+    // Service name
     pub name: Option<String>,
 
-    // 置信度 (0-10)
+    // Confidence (0-10)
     pub name_confidence: u8,
 
-    // 产品信息
+    // Product information
     pub product: Option<String>,
 
-    // 版本信息
+    // Version information
     pub version: Option<String>,
 
-    // 额外信息
+    // Extra information
     pub extrainfo: Option<String>,
 
-    // 主机名
+    // Hostname
     pub hostname: Option<String>,
 
-    // OS 类型
+    // OS type
     pub ostype: Option<String>,
 
-    // 设备类型
+    // Device type
     pub devicetype: Option<String>,
 
-    // CPE 标识符
+    // CPE identifiers
     pub cpe: Vec<String>,
 
-    // SSL 隧道
+    // SSL tunnel
     pub service_tunnel: ServiceTunnelType,
 
-    // 服务指纹
+    // Service fingerprint
     pub service_fp: Option<String>,
 
-    // 检测类型
+    // Detection type
     pub dtype: ServiceDetectionType,
 }
 
@@ -323,45 +323,45 @@ pub enum ServiceTunnelType {
 }
 
 pub enum ServiceDetectionType {
-    Table,    // 基于端口表
-    Probed,    // 主动探测
+    Table,    // Port table-based
+    Probed,    // Active probing
 }
 ```
 
 ### port_reason (portreasons.h)
 
 ```cpp
-// Nmap C++ 定义
+// Nmap C++ definition
 struct port_reason {
-    reason_id_t reason_id;   // 原因 ID
-    u8 ttl;                    // IP TTL 值
-    u32 ip_addr;               // 相关 IP 地址
-    int state;                  // 相关状态
-    const char *hostname;     // 相关主机名
+    reason_id_t reason_id;   // Reason ID
+    u8 ttl;                    // IP TTL value
+    u32 ip_addr;               // Related IP address
+    int state;                  // Related state
+    const char *hostname;     // Related hostname
 };
 ```
 
 ```rust
-// RustNmap 对应结构
+// RustNmap corresponding structure
 pub struct PortReason {
-    // 原因 ID
+    // Reason ID
     pub reason_id: ReasonId,
 
-    // IP TTL 值
+    // IP TTL value
     pub ttl: u8,
 
-    // 相关 IP 地址
+    // Related IP address
     pub ip_addr: IpAddr,
 
-    // 相关状态
+    // Related state
     pub state: Option<PortState>,
 
-    // 相关主机名
+    // Related hostname
     pub hostname: Option<String>,
 }
 
 pub enum ReasonId {
-    // ICMP 不可达原因
+    // ICMP unreachable reasons
     IcmpUnreachable,
     IcmpNetUnreachable,
     IcmpHostUnreachable,
@@ -369,12 +369,12 @@ pub enum ReasonId {
     IcmpPortUnreachable,
     IcmpAdminProhibited,
 
-    // TCP 响应原因
+    // TCP response reasons
     SynAck,
     Rst,
     SynRstAck,
 
-    // 其他
+    // Other
     TcpWrapper,
     LocalPacket,
     // ...
@@ -383,104 +383,104 @@ pub enum ReasonId {
 
 ---
 
-## 3. OS 检测结构
+## 3. OS Detection Structures
 
 ### FPHost (FPEngine.h)
 
 ```cpp
-// Nmap C++ 定义
+// Nmap C++ definition
 class FPHost {
 protected:
-    unsigned int total_probes;      // 总探测数
-    unsigned int timed_probes;      // 定时探测数
-    unsigned int probes_sent;       // 已发送探测数
-    unsigned int probes_answered;   // 收到响应数
-    unsigned int probes_unanswered; // 未响应探测数
-    bool incomplete_fp;             // 是否完整
-    bool detection_done;            // 是否完成检测
-    bool timedprobes_sent;          // 定时探测是否已发送
+    unsigned int total_probes;      // Total probes
+    unsigned int timed_probes;      // Timed probes
+    unsigned int probes_sent;       // Probes sent
+    unsigned int probes_answered;   // Responses received
+    unsigned int probes_unanswered; // Unanswered probes
+    bool incomplete_fp;             // Whether complete
+    bool detection_done;            // Whether detection is complete
+    bool timedprobes_sent;          // Whether timed probes have been sent
 
-    Target *target_host;            // 目标主机
-    FPNetworkControl *netctl;       // 网络控制器
-    bool netctl_registered;         // 是否已注册
+    Target *target_host;            // Target host
+    FPNetworkControl *netctl;       // Network controller
+    bool netctl_registered;         // Whether registered
 
-    u32 tcpSeqBase;                 // TCP 序列号基数
-    int open_port_tcp;              // 开放 TCP 端口
-    int closed_port_tcp;            // 关闭 TCP 端口
-    int closed_port_udp;            // 关闭 UDP 端口
-    int tcp_port_base;              // TCP 基端口
-    int udp_port_base;              // UDP 基端口
-    u16 icmp_seq_counter;           // ICMP 序列计数器
-    int rto;                        // 重传超时
-    int rttvar;                     // RTT 方差
-    int srtt;                       // 平滑 RTT
+    u32 tcpSeqBase;                 // TCP sequence number base
+    int open_port_tcp;              // Open TCP port
+    int closed_port_tcp;            // Closed TCP port
+    int closed_port_udp;            // Closed UDP port
+    int tcp_port_base;              // TCP base port
+    int udp_port_base;              // UDP base port
+    u16 icmp_seq_counter;           // ICMP sequence counter
+    int rto;                        // Retransmission timeout
+    int rttvar;                     // RTT variance
+    int srtt;                       // Smoothed RTT
 };
 ```
 
 ```rust
-// RustNmap 对应结构
+// RustNmap corresponding structure
 pub struct FpHost {
-    // 总探测数
+    // Total probes
     pub total_probes: u32,
 
-    // 定时探测数
+    // Timed probes
     pub timed_probes: u32,
 
-    // 已发送探测数
+    // Probes sent
     pub probes_sent: u32,
 
-    // 收到响应数
+    // Responses received
     pub probes_answered: u32,
 
-    // 未响应探测数
+    // Unanswered probes
     pub probes_unanswered: u32,
 
-    // 是否完成
+    // Whether complete
     pub incomplete_fp: bool,
 
-    // 检测是否完成
+    // Whether detection is complete
     pub detection_done: bool,
 
-    // 定时探测是否已发送
+    // Whether timed probes have been sent
     pub timed_probes_sent: bool,
 
-    // 目标主机
+    // Target host
     pub target_host: Target,
 
-    // 网络控制器
+    // Network controller
     pub netctl: Option<FpNetworkControl>,
 
-    // 是否已在网络控制器注册
+    // Whether registered with network controller
     pub netctl_registered: bool,
 
-    // TCP 序列号基数
+    // TCP sequence number base
     pub tcp_seq_base: u32,
 
-    // 开放 TCP 端口
+    // Open TCP port
     pub open_port_tcp: i32,
 
-    // 关闭 TCP 端口
+    // Closed TCP port
     pub closed_port_tcp: i32,
 
-    // 关闭 UDP 端口
+    // Closed UDP port
     pub closed_port_udp: i32,
 
-    // TCP 基端口
+    // TCP base port
     pub tcp_port_base: i32,
 
-    // UDP 基端口
+    // UDP base port
     pub udp_port_base: i32,
 
-    // ICMP 序列计数器
+    // ICMP sequence counter
     pub icmp_seq_counter: u16,
 
-    // 重传超时
+    // Retransmission timeout
     pub rto: i32,
 
-    // RTT 方差
+    // RTT variance
     pub rttvar: i32,
 
-    // 平滑 RTT
+    // Smoothed RTT
     pub srtt: i32,
 }
 ```
@@ -488,48 +488,48 @@ pub struct FpHost {
 ### FPProbe (FPEngine.h)
 
 ```cpp
-// Nmap C++ 定义
+// Nmap C++ definition
 class FPProbe : public FPPacket {
 private:
-    const char *probe_id;      // 探测 ID
-    int probe_no;                // 探测编号
-    int retransmissions;          // 重传次数
-    int times_replied;           // 响应次数
-    bool failed;                // 是否失败
-    bool timed;                 // 是否为定时装
+    const char *probe_id;      // Probe ID
+    int probe_no;                // Probe number
+    int retransmissions;          // Retransmission count
+    int times_replied;           // Reply count
+    bool failed;                // Whether failed
+    bool timed;                 // Whether timed
 
-    FPHost *host;              // 关联主机
+    FPHost *host;              // Associated host
 };
 ```
 
 ```rust
-// RustNmap 对应结构
+// RustNmap corresponding structure
 pub struct FpProbe {
-    // 探测 ID (如 "SEQ", "T1", "IE1", etc.)
+    // Probe ID (e.g. "SEQ", "T1", "IE1", etc.)
     pub probe_id: Cow<'static, str>,
 
-    // 探测编号
+    // Probe number
     pub probe_no: i32,
 
-    // 重传次数
+    // Retransmission count
     pub retransmissions: i32,
 
-    // 收到响应次数
+    // Number of responses received
     pub times_replied: i32,
 
-    // 是否失败
+    // Whether failed
     pub failed: bool,
 
-    // 是否为定时装
+    // Whether timed
     pub timed: bool,
 
-    // 关联的主机
+    // Associated host
     pub host: *mut FpHost,
 
-    // 包数据 (继承自 FPPacket)
+    // Packet data (inherited from FPPacket)
     pub packet: PacketData,
 
-    // 发送时间
+    // Send time
     pub sent_time: TimeVal,
 }
 ```
@@ -537,78 +537,78 @@ pub struct FpProbe {
 ### FPNetworkControl (FPEngine.h)
 
 ```cpp
-// Nmap C++ 定义
+// Nmap C++ definition
 class FPNetworkControl {
 private:
-    nsock_pool nsp;            // Nsock 连接池
-    nsock_iod pcap_nsi;        // Pcap 描述符
-    nsock_event_id pcap_ev_id; // 上次 pcap 事件 ID
-    bool first_pcap_scheduled;  // 是否已调度第一个 pcap
-    bool nsock_init;           // Nsock 是否已初始化
-    int rawsd;                 // 原始套接字
-    std::vector<FPHost *> callers;  // 调用者列表
+    nsock_pool nsp;            // Nsock connection pool
+    nsock_iod pcap_nsi;        // Pcap descriptor
+    nsock_event_id pcap_ev_id; // Last pcap event ID
+    bool first_pcap_scheduled;  // Whether first pcap has been scheduled
+    bool nsock_init;           // Whether Nsock is initialized
+    int rawsd;                 // Raw socket
+    std::vector<FPHost *> callers;  // Caller list
 
-    int probes_sent;           // 已发送探测数
-    int responses_recv;        // 收到响应数
-    int probes_timedout;       // 超时探测数
-    float cc_cwnd;             // 拥塞窗口
-    float cc_ssthresh;         // 慢启动阈值
+    int probes_sent;           // Probes sent
+    int responses_recv;        // Responses received
+    int probes_timedout;       // Timed-out probes
+    float cc_cwnd;             // Congestion window
+    float cc_ssthresh;         // Slow start threshold
 };
 ```
 
 ```rust
-// RustNmap 对应结构
+// RustNmap corresponding structure
 pub struct FpNetworkControl {
-    // Nsock 连接池
+    // Nsock connection pool
     pub nsock_pool: NsockPool,
 
-    // Pcap 描述符
+    // Pcap descriptor
     pub pcap_nsi: NsockIod,
 
-    // 上次调度的 pcap 事件 ID
+    // Last scheduled pcap event ID
     pub pcap_ev_id: NsockEventId,
 
-    // 是否已调度第一个 pcap
+    // Whether first pcap has been scheduled
     pub first_pcap_scheduled: bool,
 
-    // Nsock 是否已初始化
+    // Whether Nsock is initialized
     pub nsock_init: bool,
 
-    // 原始套接字
+    // Raw socket
     pub raw_sd: i32,
 
-    // 调用者列表 (FPHost 列表)
+    // Caller list (FPHost list)
     pub callers: Vec<*mut FpHost>,
 
-    // 已发送探测数
+    // Probes sent
     pub probes_sent: i32,
 
-    // 收到响应数
+    // Responses received
     pub responses_recv: i32,
 
-    // 超时探测数
+    // Timed-out probes
     pub probes_timedout: i32,
 
-    // 拥塞窗口
+    // Congestion window
     pub cc_cwnd: f32,
 
-    // 慢启动阈值
+    // Slow start threshold
     pub cc_ssthresh: f32,
 }
 ```
 
 ---
 
-## 4. NSE 引擎结构
+## 4. NSE Engine Structures
 
 ### ScriptResult (nse_main.h)
 
 ```cpp
-// Nmap C++ 定义
+// Nmap C++ definition
 class ScriptResult {
 private:
-    const char *id;              // 脚本 ID
-    int output_ref;              // 输出表引用 (LUA_REGISTRYINDEX)
+    const char *id;              // Script ID
+    int output_ref;              // Output table reference (LUA_REGISTRYINDEX)
 
 public:
     ScriptResult();
@@ -625,39 +625,39 @@ public:
 ```
 
 ```rust
-// RustNmap 对应结构
+// RustNmap corresponding structure
 pub struct ScriptResult {
-    // 脚本标识符 (文件名不含 .nse)
+    // Script identifier (filename without .nse)
     pub id: Cow<'static, str>,
 
-    // 输出表引用 (在 LUA_REGISTRYINDEX 中)
+    // Output table reference (in LUA_REGISTRYINDEX)
     pub output_ref: i32,
 
-    // 原始输出字符串
+    // Raw output string
     pub output_str: String,
 }
 
 impl ScriptResult {
-    // 对应 get_output_str()
+    // Corresponds to get_output_str()
     pub fn get_output_string(&self) -> Cow<'static, str> {
         if self.output_ref != LUA_NOREF {
-            // 从注册表获取输出
+            // Get output from registry
             get_registry_output(self.output_ref)
         } else {
             Cow::Borrowed(&self.output_str)
         }
     }
 
-    // 对应 write_xml()
+    // Corresponds to write_xml()
     pub fn write_xml(&self) {
-        // 将脚本结果输出为 XML
+        // Output script results as XML
         xml::start_element("script");
         xml::attribute("id", self.id);
         xml::attribute("output", self.get_output_string());
         xml::end_element();
     }
 
-    // 对应 operator<
+    // Corresponds to operator<
     impl Ord for ScriptResult {
         fn cmp(&self, other: &Self) -> Ordering {
             strcmp(self.id, other.id) < 0
@@ -669,17 +669,17 @@ impl ScriptResult {
 ### ScriptResults (nse_main.h)
 
 ```cpp
-// Nmap C++ 定义
+// Nmap C++ definition
 typedef std::multiset<ScriptResult *> ScriptResults;
 
-// 获取结果对象
+// Get results object
 ScriptResults *get_script_scan_results_obj(void);
 ```
 
 ```rust
-// RustNmap 对应结构
+// RustNmap corresponding structure
 pub struct ScriptResults {
-    // 使用 BTreeSet 保持排序 (std::multiset 的等价物)
+    // Use BTreeSet to maintain ordering (equivalent to std::multiset)
     results: BTreeSet<ScriptResult>,
 }
 
@@ -702,77 +702,77 @@ impl ScriptResults {
 
 ---
 
-## 5. 目标管理结构
+## 5. Target Management Structures
 
 ### Target (Target.h)
 
 ```cpp
-// Nmap C++ 核心字段
+// Nmap C++ core fields
 class Target {
 private:
-    // 地址信息
+    // Address information
     struct sockaddr_storage targetsock;
     struct sockaddr_storage sourcesock;
     char *hostname;
-    char *targetname;  // 用户指定的名称
+    char *targetname;  // User-specified name
 
-    // MAC 地址
+    // MAC address
     u8 MACaddress[6];
     bool MACaddress_set;
 
-    // 状态标志
-    bool af;                      // 地址族
-    bool up;                       // 是否在线
-    bool wping;                    // 是否需要 ping
-    bool osscan_done;              // OS 扫描完成
+    // Status flags
+    bool af;                      // Address family
+    bool up;                       // Whether online
+    bool wping;                    // Whether ping is needed
+    bool osscan_done;              // OS scan complete
 
-    // 端口列表
+    // Port list
     PortList ports;
 
-    // OS 指纹结果
+    // OS fingerprint results
     FingerPrintResults OSs;
 
-    // 时间戳
+    // Timestamps
     struct timeval systime;
     struct timeval probe_timeout;
 };
 ```
 
 ```rust
-// RustNmap 对应结构
+// RustNmap corresponding structure
 pub struct Target {
-    // 地址信息
+    // Address information
     pub target_sock: SocketAddr,
     pub source_sock: Option<SocketAddr>,
 
-    // 主机名
+    // Hostname
     pub hostname: Option<String>,
 
-    // 用户指定的目标名称
+    // User-specified target name
     pub target_name: Option<String>,
 
-    // MAC 地址
+    // MAC address
     pub mac_address: Option<[u8; 6]>,
     pub mac_address_set: bool,
 
-    // 地址族
+    // Address family
     pub address_family: AddressFamily,
 
-    // 状态标志
+    // Status flags
     pub is_up: bool,
     pub wants_ping: bool,
     pub os_scan_done: bool,
 
-    // 端口列表
+    // Port list
     pub ports: PortList,
 
-    // OS 指纹结果
+    // OS fingerprint results
     pub os_results: Option<FingerprintResults>,
 
-    // 系统时间
+    // System time
     pub sys_time: Option<TimeVal>,
 
-    // 探测超时
+    // Probe timeout
     pub probe_timeout: Duration,
 }
 ```
@@ -780,43 +780,43 @@ pub struct Target {
 ### TargetGroup (TargetGroup.h)
 
 ```cpp
-// Nmap C++ 定义
+// Nmap C++ definition
 class TargetGroup {
 private:
-    // 目标表达式
+    // Target expressions
     std::vector<std::string> expressions;
 
-    // 当前批处理
+    // Current batch
     std::vector<Target *> current_batch;
 
-    // 批大小
+    // Batch size
     int max_batch_size;
 
-    // 索引
+    // Indices
     int current_expr_idx;
     int current_target_idx;
 };
 ```
 
 ```rust
-// RustNmap 对应结构
+// RustNmap corresponding structure
 pub struct TargetGroup {
-    // 目标表达式 (如 "192.168.1.0/24", "example.com")
+    // Target expressions (e.g. "192.168.1.0/24", "example.com")
     pub expressions: Vec<String>,
 
-    // 当前批处理
+    // Current batch
     pub current_batch: Vec<Target>,
 
-    // 批大小
+    // Batch size
     pub max_batch_size: usize,
 
-    // 索引
+    // Indices
     pub current_expr_idx: usize,
     pub current_target_idx: usize,
 }
 
 impl TargetGroup {
-    // 获取下一批目标
+    // Get next batch of targets
     pub fn next_batch(&mut self) -> Option<Vec<Target>> {
         if self.current_expr_idx >= self.expressions.len() {
             return None;
@@ -842,51 +842,51 @@ impl TargetGroup {
 
 ---
 
-## 6. 输出系统结构
+## 6. Output System Structures
 
 ### NmapOutputTable (NmapOutputTable.h)
 
 ```cpp
-// Nmap C++ 定义
+// Nmap C++ definition
 class NmapOutputTable {
 private:
-    unsigned int ncolumns;       // 列数
-    unsigned int nrows;          // 行数
-    unsigned int maxncolumns;    // 最大列数
-    unsigned int maxnrows;       // 最大行数
+    unsigned int ncolumns;       // Number of columns
+    unsigned int nrows;          // Number of rows
+    unsigned int maxncolumns;    // Maximum columns
+    unsigned int maxnrows;       // Maximum rows
 
-    bool **table;               // 表数据
-    unsigned short *tableitemvalid;  // 项有效性
-    bool items_dont_print;      // 是否打印项
+    bool **table;               // Table data
+    unsigned short *tableitemvalid;  // Item validity
+    bool items_dont_print;      // Whether to print items
 
 public:
-    unsigned int size();         // 获取表大小
-    bool isSet();             // 检查是否设置
+    unsigned int size();         // Get table size
+    bool isSet();             // Check if set
 };
 ```
 
 ```rust
-// RustNmap 对应结构
+// RustNmap corresponding structure
 pub struct NmapOutputTable {
-    // 列数
+    // Number of columns
     pub num_columns: usize,
 
-    // 行数
+    // Number of rows
     pub num_rows: usize,
 
-    // 最大列数
+    // Maximum columns
     pub max_num_columns: usize,
 
-    // 最大行数
+    // Maximum rows
     pub max_num_rows: usize,
 
-    // 表数据 (二维数组)
+    // Table data (2D array)
     pub table: Vec<Vec<Option<String>>>,
 
-    // 项有效性
+    // Item validity
     pub item_valid: Vec<Vec<bool>>,
 
-    // 是否打印项
+    // Whether to print items
     pub items_dont_print: bool,
 }
 
@@ -903,7 +903,7 @@ impl NmapOutputTable {
         }
     }
 
-    // 添加一行
+    // Add a row
     pub fn add_row(&mut self, row: Vec<Option<String>>) -> Result<()> {
         if self.num_rows >= self.max_num_rows {
             return Err(Error::TableFull);
@@ -922,9 +922,9 @@ impl NmapOutputTable {
 
 ---
 
-## 常量映射表
+## Constants Mapping Table
 
-| Nmap 常量 | 值 | Rust 常量名 |
+| Nmap Constant | Value | Rust Constant Name |
 |------------|-----|------------|
 | PORT_UNKNOWN | 0 | PortState::Unknown |
 | PORT_CLOSED | 1 | PortState::Closed |

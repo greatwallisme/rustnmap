@@ -1,71 +1,65 @@
-# RustNmap Configuration File / 配置文件
+# Configuration File
 
-> **版本**: 1.0.0
-> **状态**: 此文档描述 RustNmap 1.0.0 的配置文件。2.0 版本开发中，详见 [CHANGELOG.md](../CHANGELOG.md)。
+> **Version**: 1.0.0
+> **Status**: This document describes the RustNmap 1.0.0 configuration file. Version 2.0 is under development; see [CHANGELOG.md](../CHANGELOG.md).
 
-> **Configuration file format and options** / 配置文件格式和选项
+> **Configuration file format and options**
 
 ---
 
-## Overview / 概述
+## Overview
 
 RustNmap supports configuration files for persistent settings. Configuration files use a simple key-value format similar to INI files.
 
-RustNmap 支持配置文件用于持久化设置。配置文件使用类似于 INI 文件的简单键值格式。
-
 ---
 
-## Configuration File Locations / 配置文件位置
+## Configuration File Locations
 
 RustNmap searches for configuration files in the following order:
 
-RustNmap 按以下顺序搜索配置文件：
-
 | Order | Location | Description |
 |-------|----------|-------------|
-| 1 | `./rustnmap.conf` | Current directory / 当前目录 |
-| 2 | `~/.rustnmap/rustnmap.conf` | User home directory / 用户主目录 |
-| 3 | `~/.rustnmap.conf` | User home (alternate) / 用户主目录（备用） |
-| 4 | `/etc/rustnmap/rustnmap.conf` | System-wide / 系统范围 |
-| 5 | `/etc/rustnmap.conf` | System-wide (alternate) / 系统范围（备用） |
+| 1 | `./rustnmap.conf` | Current directory |
+| 2 | `~/.rustnmap/rustnmap.conf` | User home directory |
+| 3 | `~/.rustnmap.conf` | User home (alternate) |
+| 4 | `/etc/rustnmap/rustnmap.conf` | System-wide |
+| 5 | `/etc/rustnmap.conf` | System-wide (alternate) |
 
 ---
 
-## Configuration File Format / 配置文件格式
+## Configuration File Format
 
-### Basic Syntax / 基本语法
+### Basic Syntax
 
 ```ini
-# This is a comment / 这是注释
+# This is a comment
 key = value
 
-# Boolean values / 布尔值
+# Boolean values
 debug = true
 verbose = yes
 quiet = no
 
-# Numeric values / 数值
+# Numeric values
 timing = 4
 max-retries = 3
 
-# String values / 字符串值
+# String values
 output-format = xml
 log-file = /var/log/rustnmap.log
 
-# Lists (comma-separated) / 列表（逗号分隔）
+# Lists (comma-separated)
 default-ports = 22,80,443
 exclude-ports = 25,110,143
 
-# Multiple values per key / 每键多个值
+# Multiple values per key
 exclude = 192.168.1.1
 exclude = 192.168.1.254
 ```
 
-### Sections / 节
+### Sections
 
 Configuration files support sections for organizing options:
-
-配置文件支持节用于组织选项：
 
 ```ini
 [default]
@@ -87,9 +81,9 @@ args = http.useragent=Mozilla/5.0
 
 ---
 
-## Configuration Options / 配置选项
+## Configuration Options
 
-### Scan Options / 扫描选项
+### Scan Options
 
 | Option | Type | Description | Default |
 |--------|------|-------------|---------|
@@ -101,7 +95,7 @@ args = http.useragent=Mozilla/5.0
 | `min-rate` | integer | Minimum packets per second | `0` |
 | `max-rate` | integer | Maximum packets per second | `0` |
 
-**Example / 示例:**
+**Example:**
 
 ```ini
 [scan]
@@ -113,7 +107,7 @@ host-timeout = 300
 
 ---
 
-### Port Options / 端口选项
+### Port Options
 
 | Option | Type | Description | Default |
 |--------|------|-------------|---------|
@@ -122,7 +116,7 @@ host-timeout = 300
 | `fast-scan` | boolean | Use fast scan (top 100) | `false` |
 | `all-ports` | boolean | Scan all 65535 ports | `false` |
 
-**Example / 示例:**
+**Example:**
 
 ```ini
 [ports]
@@ -133,7 +127,7 @@ fast-scan = false
 
 ---
 
-### Host Discovery / 主机发现
+### Host Discovery
 
 | Option | Type | Description | Default |
 |--------|------|-------------|---------|
@@ -142,7 +136,7 @@ fast-scan = false
 | `tcp-ping-ports` | list | TCP ping ports | `80,443` |
 | `udp-ping-ports` | list | UDP ping ports | `53,161` |
 
-**Example / 示例:**
+**Example:**
 
 ```ini
 [discovery]
@@ -154,7 +148,7 @@ udp-ping-ports = 53,161,162
 
 ---
 
-### Service Detection / 服务检测
+### Service Detection
 
 | Option | Type | Description | Default |
 |--------|------|-------------|---------|
@@ -163,7 +157,7 @@ udp-ping-ports = 53,161,162
 | `version-light` | boolean | Use light version detection | `false` |
 | `version-all` | boolean | Use all version probes | `false` |
 
-**Example / 示例:**
+**Example:**
 
 ```ini
 [service]
@@ -174,7 +168,7 @@ version-light = false
 
 ---
 
-### OS Detection / 操作系统检测
+### OS Detection
 
 | Option | Type | Description | Default |
 |--------|------|-------------|---------|
@@ -182,7 +176,7 @@ version-light = false
 | `oscan-limit` | boolean | Limit OS detection | `false` |
 | `oscan-guess` | boolean | Aggressive OS guessing | `false` |
 
-**Example / 示例:**
+**Example:**
 
 ```ini
 [os]
@@ -193,7 +187,7 @@ oscan-guess = true
 
 ---
 
-### Output Options / 输出选项
+### Output Options
 
 | Option | Type | Description | Default |
 |--------|------|-------------|---------|
@@ -204,7 +198,7 @@ oscan-guess = true
 | `open-only` | boolean | Show only open ports | `false` |
 | `packet-trace` | boolean | Show packet trace | `false` |
 
-**Example / 示例:**
+**Example:**
 
 ```ini
 [output]
@@ -217,7 +211,7 @@ open-only = false
 
 ---
 
-### NSE Scripts / NSE 脚本
+### NSE Scripts
 
 | Option | Type | Description | Default |
 |--------|------|-------------|---------|
@@ -226,7 +220,7 @@ open-only = false
 | `script-args` | string | Default script arguments | (none) |
 | `script-categories` | list | Script categories to run | (none) |
 
-**Example / 示例:**
+**Example:**
 
 ```ini
 [scripts]
@@ -238,7 +232,7 @@ script-categories = safe,discovery
 
 ---
 
-### Evasion Options / 规避选项
+### Evasion Options
 
 | Option | Type | Description | Default |
 |--------|------|-------------|---------|
@@ -249,7 +243,7 @@ script-categories = safe,discovery
 | `data-length` | integer | Random data length | `0` |
 | `randomize-hosts` | boolean | Randomize target order | `false` |
 
-**Example / 示例:**
+**Example:**
 
 ```ini
 [evasion]
@@ -260,7 +254,7 @@ randomize-hosts = true
 
 ---
 
-### Network Options / 网络选项
+### Network Options
 
 | Option | Type | Description | Default |
 |--------|------|-------------|---------|
@@ -269,7 +263,7 @@ randomize-hosts = true
 | `dns-servers` | list | Custom DNS servers | (system) |
 | `system-dns` | boolean | Use system DNS | `true` |
 
-**Example / 示例:**
+**Example:**
 
 ```ini
 [network]
@@ -281,7 +275,7 @@ system-dns = false
 
 ---
 
-### Logging Options / 日志选项
+### Logging Options
 
 | Option | Type | Description | Default |
 |--------|------|-------------|---------|
@@ -290,7 +284,7 @@ system-dns = false
 | `quiet` | boolean | Quiet mode | `false` |
 | `log-file` | string | Log file path | (none) |
 
-**Example / 示例:**
+**Example:**
 
 ```ini
 [logging]
@@ -302,29 +296,29 @@ log-file = /var/log/rustnmap.log
 
 ---
 
-## Complete Configuration Example / 完整配置示例
+## Complete Configuration Example
 
-### Basic Configuration / 基本配置
+### Basic Configuration
 
 ```ini
 # ~/.rustnmap/rustnmap.conf
 # Basic RustNmap configuration
 
 [default]
-# Scan options / 扫描选项
+# Scan options
 timing = 3
 max-retries = 3
 
-# Output options / 输出选项
+# Output options
 verbose = 1
 show-reason = true
 
-# Service detection / 服务检测
+# Service detection
 service-detection = true
 version-intensity = 5
 ```
 
-### Security Analyst / 安全分析师
+### Security Analyst
 
 ```ini
 # ~/.rustnmap/rustnmap.conf
@@ -360,7 +354,7 @@ log-file = ~/.rustnmap/scans.log
 verbose = 2
 ```
 
-### Stealth Scanning / 隐秘扫描
+### Stealth Scanning
 
 ```ini
 # ~/.rustnmap/rustnmap.conf
@@ -378,16 +372,16 @@ source-port = 53
 randomize-hosts = true
 
 [network]
-# Use specific interface / 使用特定接口
+# Use specific interface
 interface = eth0
 
 [output]
-# Minimal output / 最小输出
+# Minimal output
 quiet = true
 show-reason = false
 ```
 
-### Network Administrator / 网络管理员
+### Network Administrator
 
 ```ini
 # /etc/rustnmap/rustnmap.conf
@@ -414,87 +408,79 @@ verbose = 1
 
 ---
 
-## Configuration with Environment Variables / 使用环境变量配置
+## Configuration with Environment Variables
 
 Configuration files can reference environment variables:
 
-配置文件可以引用环境变量：
-
 ```ini
 [default]
-# Use environment variable / 使用环境变量
+# Use environment variable
 output-directory = ${HOME}/scans
 
-# With default value / 带默认值
+# With default value
 log-file = ${RUSTNMAP_LOG_FILE:-/tmp/rustnmap.log}
 
 [scripts]
-# Script directory from env / 从环境变量获取脚本目录
+# Script directory from env
 script-directory = ${RUSTNMAP_SCRIPTS}
 ```
 
 ---
 
-## Loading Configuration / 加载配置
+## Loading Configuration
 
-### Automatic Loading / 自动加载
+### Automatic Loading
 
 RustNmap automatically loads configuration from the locations listed above.
 
-RustNmap 自动从上面列出的位置加载配置。
-
 ---
 
-## Configuration Precedence / 配置优先级
+## Configuration Precedence
 
 Options are applied in the following order (later overrides earlier):
 
-选项按以下顺序应用（后面的覆盖前面的）：
-
-1. Built-in defaults / 内置默认值
-2. System-wide configuration (`/etc/rustnmap.conf`) / 系统范围配置
-3. User configuration (`~/.rustnmap.conf`) / 用户配置
-4. Local configuration (`./rustnmap.conf`) / 本地配置
-5. Environment variables / 环境变量
-6. Command-line options / 命令行选项
+1. Built-in defaults
+2. System-wide configuration (`/etc/rustnmap.conf`)
+3. User configuration (`~/.rustnmap.conf`)
+4. Local configuration (`./rustnmap.conf`)
+5. Environment variables
+6. Command-line options
 
 ---
 
-## Troubleshooting / 故障排除
+## Troubleshooting
 
-### Configuration Not Loading / 配置未加载
+### Configuration Not Loading
 
 ```bash
-# Check file permissions / 检查文件权限
+# Check file permissions
 ls -la ~/.rustnmap/rustnmap.conf
 
-# Check file location / 检查文件位置
+# Check file location
 find ~ -name "rustnmap.conf" 2>/dev/null
 
-# Verify syntax / 验证语法
+# Verify syntax
 cat ~/.rustnmap/rustnmap.conf | grep -v "^#" | grep -v "^$"
 ```
 
-### Invalid Option / 无效选项
+### Invalid Option
 
 ```bash
 # Error: Invalid option 'timingg'
-# Check spelling / 检查拼写
+# Check spelling
 # timingg -> timing
 
-# Check available options / 检查可用选项
+# Check available options
 rustnmap --help
 ```
 
 ---
 
-## Configuration Templates / 配置模板
+## Configuration Templates
 
-### Quick Templates / 快速模板
+### Quick Templates
 
 Save these as starting points:
-
-保存这些作为起点：
 
 **fast-scan.conf:**
 ```ini
@@ -537,7 +523,7 @@ output-format = xml
 
 ---
 
-## Related Documentation / 相关文档
+## Related Documentation
 
-- [Environment Variables](environment.md) - Environment configuration / 环境配置
-- [Options Reference](options.md) - Command-line options / 命令行选项
+- [Environment Variables](environment.md) - Environment configuration
+- [Options Reference](options.md) - Command-line options

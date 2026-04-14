@@ -1,24 +1,24 @@
-# 4. 数据库与指纹文件设计
+# 4. Database and Fingerprint File Design
 
-## 4.1 数据库文件清单
+## 4.1 Database File List
 
-| 数据库文件               | 功能         | 对应 Nmap 文件            | 更新频率 |
-| ------------------- | ---------- | --------------------- | ---- |
-| `service-probes`    | 服务探测规则     | `nmap-service-probes` | 高    |
-| `os-fingerprints`   | 操作系统指纹     | `nmap-os-db`          | 中    |
-| `rpc-procedures`    | RPC 程序号映射  | `nmap-rpc`            | 低    |
-| `nmap-mac-prefixes` | MAC 地址厂商前缀 | `nmap-mac-prefixes`   | 中    |
-| `payloads`          | UDP/协议载荷   | `nmap-payloads`       | 低    |
-| `script-db`         | NSE 脚本索引   | `script.db`           | 中    |
+| Database File | Function | Nmap Equivalent | Update Frequency |
+|---------------|----------|-----------------|------------------|
+| `service-probes` | Service detection rules | `nmap-service-probes` | High |
+| `os-fingerprints` | OS fingerprints | `nmap-os-db` | Medium |
+| `rpc-procedures` | RPC program number mapping | `nmap-rpc` | Low |
+| `nmap-mac-prefixes` | MAC address vendor prefixes | `nmap-mac-prefixes` | Medium |
+| `payloads` | UDP/protocol payloads | `nmap-payloads` | Low |
+| `script-db` | NSE script index | `script.db` | Medium |
 
-**重要**: `nmap-mac-prefixes` 文件支持**三种** IEEE OUI 格式：
-- **MA-S (9字符)**: 36位扩展OUI - `001BC5000 Converging Systems`
-- **MA-M (7字符)**: 28位中等OUI - `0055DA0 Shinko Technos`
-- **MA-L (6字符)**: 24位标准OUI - `0055DA Ieee Registration Authority`
+**Important**: The `nmap-mac-prefixes` file supports **three** IEEE OUI formats:
+- **MA-S (9 characters)**: 36-bit extended OUI - `001BC5000 Converging Systems`
+- **MA-M (7 characters)**: 28-bit medium OUI - `0055DA0 Shinko Technos`
+- **MA-L (6 characters)**: 24-bit standard OUI - `0055DA Ieee Registration Authority`
 
-查找时按**最长前缀优先**原则（先9→再7→最后6）。
+Lookup follows **longest prefix first** principle (9 first, then 7, then 6).
 
-## 4.2 服务探测数据库格式
+## 4.2 Service Detection Database Format
 
 ```
 # ==========================
@@ -26,22 +26,22 @@
 # Format: Compatible with Nmap nmap-service-probes
 # ==========================
 
-# 排除端口 (通常不探测)
+# Excluded ports (typically not probed)
 ExcludePorts T:9100-9107,T:111,U:111
 
 # ============ TCP Probes ============
 
-# Null Probe (无数据发送，等待 banner)
+# Null Probe (no data sent, wait for banner)
 Probe TCP NULL q||
 
-# 等待时间
+# Wait time
 totalwaitms 6000
 
-# 匹配规则
+# Match rules
 match 1c-server m|^1C:Enterprise\r?\n| p/1C:Enterprise server/
 match 4d-server m|^</html><html>\r?\n<head><title>4D WebStar</title>| p/4D WebStar/
 
-# GenericLines Probe (发送 \r\n\r\n)
+# GenericLines Probe (send \r\n\r\n)
 Probe TCP GenericLines q|\r\n\r\n|
 match acap m|^\* ACAP \(IMPLEMENTATION \"([^\)]+)\"\)| p/ACAP server/ i/$1/
 match ajetp m|^D \d+\.\d+ AjetP ([\d.]+)\r?\n| p/AjetP print daemon/ v/$1/
@@ -74,18 +74,18 @@ match http m|^HTTP/1\.1 (\d\d\d) | p/HTTP/ i/status $1/
 rarity 1
 fallback GenericLines
 
-# 复杂匹配示例 (使用捕获组和 CPE)
+# Complex match example (using capture groups and CPE)
 match ssh m|^SSH-([\d.]+)-OpenSSH_([\w.+-]+)(?:\s|$)| p/OpenSSH/ v/$2/ i/protocol $1/ cpe:/a:openbsd:openssh:$2/
 
-# 软匹配 - 不确认服务但缩小范围
-softmatch ssh m|^SSH-\d\.\d-| 
+# Soft match - does not confirm service but narrows scope
+softmatch ssh m|^SSH-\d\.\d-|
 
-# Missed service (否定匹配)
+# Missed service (negative match)
 match ftp m|^220 Welcome to Pure-FTPd| p/Pure-FTPd/ o/Linux/
 match http m|^HTTP/1\.[01] \d\d\d .*\r\nServer: nginx/([\d.]+)|s p/nginx/ v/$1/ cpe:/a:nginx:nginx:$1/
 ```
 
-## 4.3 OS 指纹数据库格式
+## 4.3 OS Fingerprint Database Format
 
 ```
 # ==========================
@@ -93,11 +93,11 @@ match http m|^HTTP/1\.[01] \d\d\d .*\r\nServer: nginx/([\d.]+)|s p/nginx/ v/$1/ 
 # Format: Compatible with Nmap nmap-os-db
 # ==========================
 
-# 指纹条目结构:
+# Fingerprint entry structure:
 # Fingerprint <OS Name>
 #   Class <Vendor> <OS Family> <Generation> <Device Type>
 #   CPE <CPE String>
-#   SEQ, OPS, WIN, ECN, T1-T7, U1, IE 字段
+#   SEQ, OPS, WIN, ECN, T1-T7, U1, IE fields
 
 Fingerprint Linux 5.4-5.10
 Class Linux | Linux | 5.X | general purpose
@@ -150,7 +150,7 @@ U1(R=Y|DF=N|T=80|TOS=0|IPL=128|UN=0|RIPL=G|RID=G|RIPCK=G|RUCK=G|RUL=G|RUD=G)
 IE(R=Y|DFI=N|T=80|TOSI=S|CD=S|SI=S|DL=S)
 ```
 
-## 4.4 数据库加载器设计
+## 4.4 Database Loader Design
 
 ```
 // ============================================
@@ -160,7 +160,7 @@ IE(R=Y|DFI=N|T=80|TOSI=S|CD=S|SI=S|DL=S)
 use std::collections::HashMap;
 use regex::Regex;
 
-/// 数据库管理器
+/// Database Manager
 pub struct DatabaseManager {
     pub services: ServiceProbeDatabase,
     pub os: OsFingerprintDatabase,
@@ -169,13 +169,13 @@ pub struct DatabaseManager {
     pub payloads: PayloadDatabase,
 }
 
-/// 服务探测数据库
+/// Service Probe Database
 pub struct ServiceProbeDatabase {
     probes: Vec<ServiceProbe>,
     match_cache: HashMap<String, CompiledMatch>,
 }
 
-/// 服务探测定
+/// Service Probe Definition
 pub struct ServiceProbe {
     pub name: String,
     pub protocol: Protocol,
@@ -189,7 +189,7 @@ pub struct ServiceProbe {
     pub fallback: Option<String>,
 }
 
-/// 匹配规则
+/// Match Rule
 pub struct MatchRule {
     pub service: String,
     pub pattern: CompiledRegex,
@@ -203,13 +203,13 @@ pub struct MatchRule {
     pub is_soft: bool,
 }
 
-/// 编译后的正则表达式 (优化性能)
+/// Compiled Regular Expression (performance optimized)
 pub struct CompiledRegex {
     regex: Regex,
     capture_count: usize,
 }
 
-/// OS 指纹数据库
+/// OS Fingerprint Database
 pub struct OsFingerprintDatabase {
     fingerprints: Vec<OsFingerprint>,
 }
@@ -230,7 +230,7 @@ pub struct OsFingerprint {
     pub icmp_test: IcmpTestFingerprint,
 }
 
-/// 数据库加载器
+/// Database Loader
 impl DatabaseManager {
     pub fn load(data_dir: &Path) -> Result<Self, DatabaseError> {
         Ok(Self {
@@ -241,20 +241,20 @@ impl DatabaseManager {
             payloads: PayloadLoader::load(&data_dir.join("payloads"))?,
         })
     }
-    
-    /// 更新数据库 (从网络下载)
+
+    /// Update databases (download from network)
     pub async fn update(&mut self) -> Result<(), DatabaseError> {
-        // 从官方仓库下载最新数据库
+        // Download latest databases from official repository
         unimplemented!()
     }
 }
 ```
 
-## 4.5 MAC 前缀数据库格式
+## 4.5 MAC Prefix Database Format
 
-`nmap-mac-prefixes` 文件存储 MAC 地址 OUI (Organizationally Unique Identifier) 到厂商名称的映射。
+The `nmap-mac-prefixes` file stores mappings from MAC address OUI (Organizationally Unique Identifier) to vendor names.
 
-### 4.5.1 文件格式
+### 4.5.1 File Format
 
 ```
 # $Id$
@@ -278,34 +278,34 @@ impl DatabaseManager {
 001BC5001 OpenRB.com               # MA-S (36-bit)
 ```
 
-### 4.5.2 OUI 格式说明
+### 4.5.2 OUI Format Description
 
-参考 `reference/nmap/MACLookup.cc:119-147`
+Reference: `reference/nmap/MACLookup.cc:119-147`
 
-**MA-L (6字符, 24位) - MAC Address Block Large**
-- IEEE 标准 OUI 分配
-- 前 24 位标识厂商
-- 示例: `0050C2 Cisco Systems`
+**MA-L (6 characters, 24-bit) - MAC Address Block Large**
+- Standard IEEE OUI allocation
+- First 24 bits identify vendor
+- Example: `0050C2 Cisco Systems`
 
-**MA-M (7字符, 28位) - MAC Address Block Medium**
-- IEEE 扩展格式
-- 前 28 位标识特定子厂商/产品线
-- 示例: `0055DA0 Shinko Technos`
+**MA-M (7 characters, 28-bit) - MAC Address Block Medium**
+- IEEE extended format
+- First 28 bits identify specific sub-vendor/product line
+- Example: `0055DA0 Shinko Technos`
 
-**MA-S (9字符, 36位) - MAC Address Block Small**
-- IEEE 小型块分配
-- 前 36 位提供更细粒度的标识
-- 示例: `001BC5000 Converging Systems`
+**MA-S (9 characters, 36-bit) - MAC Address Block Small**
+- IEEE small block allocation
+- First 36 bits provide finer-grained identification
+- Example: `001BC5000 Converging Systems`
 
-**统计数据** (2026-03-09 当前数据库):
-- 总条目数: ~49,000
-- 6 字符 (MA-L): ~37,000 (75%)
-- 7 字符 (MA-M): ~5,700 (12%)
-- 9 字符 (MA-S): ~6,400 (13%)
+**Statistics** (2026-03-09 current database):
+- Total entries: ~49,000
+- 6 characters (MA-L): ~37,000 (75%)
+- 7 characters (MA-M): ~5,700 (12%)
+- 9 characters (MA-S): ~6,400 (13%)
 
-### 4.5.3 查找逻辑（最长前缀优先）
+### 4.5.3 Lookup Logic (Longest Prefix First)
 
-实际实现在 `crates/rustnmap-fingerprint/src/database/mac.rs`:
+Actual implementation in `crates/rustnmap-fingerprint/src/database/mac.rs`:
 
 ```rust
 pub fn lookup(&self, mac: &str) -> Option<&str> {
@@ -324,11 +324,11 @@ pub fn lookup(&self, mac: &str) -> Option<&str> {
 }
 ```
 
-支持 6-12 字符的 OUI 长度，自动匹配最长前缀。
+Supports OUI lengths from 6 to 12 characters, automatically matching the longest prefix.
 
-### 4.5.4 解析器实现
+### 4.5.4 Parser Implementation
 
-实际实现在 `crates/rustnmap-fingerprint/src/database/mac.rs`:
+Actual implementation in `crates/rustnmap-fingerprint/src/database/mac.rs`:
 
 ```rust
 pub struct MacPrefixDatabase {

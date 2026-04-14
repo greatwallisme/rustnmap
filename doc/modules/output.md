@@ -1,8 +1,8 @@
-## 3.8 输出模块设计
+## 3.8 Output Module Design
 
-对应 Nmap 命令: `-oN`, `-oX`, `-oG`, `-oA`, `-v`, `-d`
+Corresponding Nmap commands: `-oN`, `-oX`, `-oG`, `-oA`, `-v`, `-d`
 
-### 3.8.1 输出格式架构
+### 3.8.1 Output Format Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -14,7 +14,7 @@
 │  │  ┌────────────┐ ┌────────────┐ ┌────────────┐ ┌────────────────┐ │  │
 │  │  │   Normal   │ │    XML     │ │   JSON     │ │   Grepable     │ │  │
 │  │  │   Format   │ │   Format   │ │   Format   │ │    Format      │ │  │
-│  │  │  (.nmap)   │ │   (.xml)   │ │  (.json)   │ │    (.gnmap)    │ │  │
+│  │  │  (.nmap)   │ │   (.xml)   │ │   (.json)   │ │    (.gnmap)    │ │  │
 │  │  └────────────┘ └────────────┘ └────────────┘ └────────────────┘ │  │
 │  │  ┌────────────┐ ┌────────────┐ ┌────────────┐                    │  │
 │  │  │   HTML     │ │   CSV      │ │  Markdown  │                    │  │
@@ -46,7 +46,7 @@
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
-### 3.8.2 输出格式详细设计
+### 3.8.2 Output Format Detailed Design
 
 ```
 # RustNmap 1.0.0 scan initiated Wed Feb 11 01:56:58 2026 as:
@@ -66,7 +66,7 @@ PORT     STATE SERVICE     VERSION
 | Public Key bits: 2048
 | Signature Algorithm: sha256WithRSAEncryption
 |_Not valid before: 2025-01-01T00:00:00
-| http-headers: 
+| http-headers:
 |   Server: nginx/1.18.0
 |   Date: Wed, 11 Feb 2026 01:56:58 GMT
 |_  Content-Type: text/html
@@ -266,35 +266,35 @@ RustNmap done: 1 IP address (1 host up) scanned in 45.23 seconds
 }
 ```
 
-### 3.8.3 输出模块类型定义
+### 3.8.3 Output Module Type Definitions
 
 ```
 // ============================================
 // Output Module Types
 // ============================================
 
-/// 输出格式化器 Trait
+/// Output Formatter Trait
 pub trait OutputFormatter: Send + Sync {
-    /// 格式化完整扫描结果
+    /// Format complete scan result
     fn format_scan_result(&self, result: &ScanResult) -> Result<String, OutputError>;
-    
-    /// 格式化单个主机结果
+
+    /// Format single host result
     fn format_host(&self, host: &HostResult) -> Result<String, OutputError>;
-    
-    /// 格式化端口结果
+
+    /// Format port result
     fn format_port(&self, port: &PortResult) -> Result<String, OutputError>;
-    
-    /// 格式化脚本结果
+
+    /// Format script result
     fn format_script(&self, script: &ScriptResult) -> Result<String, OutputError>;
-    
-    /// 文件扩展名
+
+    /// File extension
     fn file_extension(&self) -> &str;
-    
-    /// 格式名称
+
+    /// Format name
     fn format_name(&self) -> &str;
 }
 
-/// 输出管理器
+/// Output Manager
 pub struct OutputManager {
     formatters: Vec<Box<dyn OutputFormatter>>,
     writers: Vec<Box<dyn OutputWriter>>,
@@ -303,7 +303,7 @@ pub struct OutputManager {
     progress_reporter: Option<ProgressReporter>,
 }
 
-/// 输出写入器
+/// Output Writer
 pub enum OutputWriter {
     Stdout,
     File { path: PathBuf, file: File },
@@ -311,11 +311,11 @@ pub enum OutputWriter {
     Memory { buffer: Vec<u8> },
 }
 
-/// 详细程度级别
+/// Verbosity Level
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VerbosityLevel {
-    Quiet = -1,      // -q: 静默模式
-    Normal = 0,      // 默认
+    Quiet = -1,      // -q: Quiet mode
+    Normal = 0,      // Default
     Verbose1 = 1,    // -v
     Verbose2 = 2,    // -vv
     Verbose3 = 3,    // -vvv
@@ -324,10 +324,10 @@ pub enum VerbosityLevel {
     Debug3 = 6,      // -ddd
     Debug4 = 7,      // -dddd
     Debug5 = 8,      // -ddddd
-    Debug6 = 9,      // -dddddd (最高调试级别)
+    Debug6 = 9,      // -dddddd (Highest debug level)
 }
 
-/// 进度报告器
+/// Progress Reporter
 pub struct ProgressReporter {
     start_time: Instant,
     total_tasks: usize,
@@ -345,7 +345,7 @@ pub enum ScanPhase {
     Complete,
 }
 
-/// 扫描结果总结构
+/// Scan Result Root Structure
 pub struct ScanResult {
     pub metadata: ScanMetadata,
     pub hosts: Vec<HostResult>,
@@ -418,7 +418,7 @@ pub struct ScanStatistics {
 // Formatter Implementations
 // ============================================
 
-/// Normal 文本格式化器
+/// Normal Text Formatter
 pub struct NormalFormatter {
     verbosity: VerbosityLevel,
 }
@@ -426,41 +426,41 @@ pub struct NormalFormatter {
 impl OutputFormatter for NormalFormatter {
     fn format_scan_result(&self, result: &ScanResult) -> Result<String, OutputError> {
         let mut output = String::new();
-        
-        // 头部信息
+
+        // Header information
         output.push_str(&format!(
             "# RustNmap {} scan initiated {} as:\n",
             result.metadata.scanner_version,
             result.metadata.start_time.format("%c")
         ));
         output.push_str(&format!("# {}\n\n", result.metadata.command_line));
-        
-        // 每个主机
+
+        // Each host
         for host in &result.hosts {
             output.push_str(&self.format_host(host)?);
             output.push_str("\n");
         }
-        
-        // 统计信息
+
+        // Statistics
         output.push_str(&format!(
             "Nmap done: {} IP address ({} host up) scanned in {:.2} seconds\n",
             result.statistics.total_hosts,
             result.statistics.hosts_up,
             result.metadata.elapsed.as_secs_f64()
         ));
-        
+
         Ok(output)
     }
-    
+
     fn format_host(&self, host: &HostResult) -> Result<String, OutputError> {
         let mut output = String::new();
-        
-        // 主机基本信息
+
+        // Host basic information
         output.push_str(&format!("Nmap scan report for {}\n", host.ip));
         if let Some(ref hostname) = host.hostname {
             output.push_str(&format!("rDNS record for {}: {}\n", host.ip, hostname));
         }
-        output.push_str(&format!("Host is {} ({}s latency).\n", 
+        output.push_str(&format!("Host is {} ({}s latency).\n",
             match host.status {
                 HostStatus::Up => "up",
                 HostStatus::Down => "down",
@@ -468,12 +468,12 @@ impl OutputFormatter for NormalFormatter {
             },
             host.latency.as_secs_f64()
         ));
-        
+
         if let Some(ref mac) = host.mac {
             output.push_str(&format!("MAC Address: {} ({})\n", mac.address, mac.vendor));
         }
-        
-        // 端口信息
+
+        // Port information
         if !host.ports.is_empty() {
             let closed_count = host.ports.iter().
 ```

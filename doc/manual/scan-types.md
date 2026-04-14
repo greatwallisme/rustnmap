@@ -1,31 +1,25 @@
-# RustNmap Scan Types / 扫描类型
+# RustNmap Scan Types
 
-> **版本**: 1.0.0
-> **状态**: 此文档描述 RustNmap 1.0.0 的扫描类型。2.0 版本开发中，详见 [CHANGELOG.md](../CHANGELOG.md)。
+> **Version**: 1.0.0
+> **Status**: This document describes the scan types in RustNmap 1.0.0. Version 2.0 is under development; see [CHANGELOG.md](../CHANGELOG.md).
 
-> **Detailed documentation for each scan type** / 每种扫描类型的详细文档
+> Detailed documentation for each scan type
 
 ---
 
-## Overview / 概述
+## Overview
 
 RustNmap supports 12 different scan types, each designed for specific scenarios. Understanding how each scan works helps you choose the right technique for your target environment.
-
-RustNmap 支持 12 种不同的扫描类型，每种都为特定场景设计。了解每种扫描的工作原理有助于您为目标环境选择正确的技术。
 
 ---
 
 ## TCP SYN Scan (`-sS`)
 
-**TCP SYN 扫描 (`-sS`)**
-
-### Description / 描述
+### Description
 
 TCP SYN scan is the default and most popular scan type. It performs a "half-open" scan by sending SYN packets and analyzing responses without completing the TCP 3-way handshake.
 
-TCP SYN 扫描是默认且最受欢迎的扫描类型。它通过发送 SYN 数据包并分析响应来执行"半开"扫描，而不完成 TCP 三次握手。
-
-### How It Works / 工作原理
+### How It Works
 
 ```
 Scanner          Target
@@ -47,36 +41,36 @@ Scanner          Target
    |             |
 ```
 
-### Usage / 用法
+### Usage
 
 ```bash
-# Default scan / 默认扫描
+# Default scan
 sudo rustnmap -sS 192.168.1.1
 
-# With port specification / 指定端口
+# With port specification
 sudo rustnmap -sS -p 22,80,443 192.168.1.1
 
-# With service detection / 带服务检测
+# With service detection
 sudo rustnmap -sS -sV 192.168.1.1
 ```
 
-### Characteristics / 特性
+### Characteristics
 
-| Feature | Value | 值 |
-|---------|-------|-----|
-| Requires root | Yes | 是 |
-| Stealthy | Yes | 是 |
-| Speed | Fast | 快 |
-| Reliability | High | 高 |
-| Firewall friendly | Moderate | 中等 |
+| Feature | Value |
+|---------|-------|
+| Requires root | Yes |
+| Stealthy | Yes |
+| Speed | Fast |
+| Reliability | High |
+| Firewall friendly | Moderate |
 
-### Advantages / 优点
+### Advantages
 
-1. **Stealthy / 隐秘**: Does not complete TCP connection, less likely to be logged
-2. **Fast / 快速**: No need to complete 3-way handshake
-3. **Reliable / 可靠**: Works against most TCP stacks
+1. **Stealthy**: Does not complete TCP connection, less likely to be logged
+2. **Fast**: No need to complete 3-way handshake
+3. **Reliable**: Works against most TCP stacks
 
-### Disadvantages / 缺点
+### Disadvantages
 
 1. Requires root/administrator privileges
 2. May still be detected by modern IDS/IPS systems
@@ -85,15 +79,11 @@ sudo rustnmap -sS -sV 192.168.1.1
 
 ## TCP Connect Scan (`-sT`)
 
-**TCP Connect 扫描 (`-sT`)**
-
-### Description / 描述
+### Description
 
 TCP Connect scan performs a full 3-way TCP handshake. This is the default when SYN scan is not available (no root privileges).
 
-TCP Connect 扫描执行完整的三次 TCP 握手。当 SYN 扫描不可用时（无 root 权限），这是默认选项。
-
-### How It Works / 工作原理
+### How It Works
 
 ```
 Scanner          Target
@@ -114,54 +104,50 @@ Scanner          Target
    | <---------- |
 ```
 
-### Usage / 用法
+### Usage
 
 ```bash
-# Without root / 无 root 权限
+# Without root
 rustnmap -sT 192.168.1.1
 
-# Full port scan / 全端口扫描
+# Full port scan
 rustnmap -sT -p- 192.168.1.1
 
-# With OS detection / 带操作系统检测
+# With OS detection
 rustnmap -sT -O 192.168.1.1
 ```
 
-### Characteristics / 特性
+### Characteristics
 
-| Feature | Value | 值 |
-|---------|-------|-----|
-| Requires root | No | 否 |
-| Stealthy | No | 否 |
-| Speed | Moderate | 中等 |
-| Reliability | High | 高 |
-| Logged | Yes | 是 |
+| Feature | Value |
+|---------|-------|
+| Requires root | No |
+| Stealthy | No |
+| Speed | Moderate |
+| Reliability | High |
+| Logged | Yes |
 
-### Advantages / 优点
+### Advantages
 
-1. **No root required / 无需 root**: Works with standard user privileges
-2. **Reliable / 可靠**: Standard TCP connection
-3. **Universal / 通用**: Works on all systems
+1. **No root required**: Works with standard user privileges
+2. **Reliable**: Standard TCP connection
+3. **Universal**: Works on all systems
 
-### Disadvantages / 缺点
+### Disadvantages
 
-1. **Logged / 记录**: Full connection is logged by target
-2. **Slower / 较慢**: Must complete full handshake
-3. **Resource intensive / 资源密集**: Uses more resources on target
+1. **Logged**: Full connection is logged by target
+2. **Slower**: Must complete full handshake
+3. **Resource intensive**: Uses more resources on target
 
 ---
 
 ## UDP Scan (`-sU`)
 
-**UDP 扫描 (`-sU`)**
-
-### Description / 描述
+### Description
 
 UDP scan detects open UDP ports by sending UDP packets and analyzing responses (or lack thereof). UDP scanning is generally slower than TCP scanning due to the connectionless nature of UDP.
 
-UDP 扫描通过发送 UDP 数据包并分析响应（或缺乏响应）来检测开放的 UDP 端口。由于 UDP 的无连接特性，UDP 扫描通常比 TCP 扫描慢。
-
-### How It Works / 工作原理
+### How It Works
 
 ```
 Scanner          Target
@@ -182,23 +168,23 @@ Scanner          Target
    |             |
 ```
 
-### Usage / 用法
+### Usage
 
 ```bash
-# UDP scan / UDP 扫描
+# UDP scan
 sudo rustnmap -sU 192.168.1.1
 
-# Common UDP ports / 常见 UDP 端口
+# Common UDP ports
 sudo rustnmap -sU -p 53,67,68,123,161,162 192.168.1.1
 
-# With version detection / 带版本检测
+# With version detection
 sudo rustnmap -sU -sV 192.168.1.1
 
-# Combine with TCP / 与 TCP 结合
+# Combine with TCP
 sudo rustnmap -sS -sU 192.168.1.1
 ```
 
-### Common UDP Ports / 常见 UDP 端口
+### Common UDP Ports
 
 | Port | Service | Description |
 |------|---------|-------------|
@@ -211,40 +197,36 @@ sudo rustnmap -sS -sU 192.168.1.1
 | 514 | Syslog | System Logging |
 | 520 | RIP | Routing Information |
 
-### Characteristics / 特性
+### Characteristics
 
-| Feature | Value | 值 |
-|---------|-------|-----|
-| Requires root | Yes | 是 |
-| Stealthy | Moderate | 中等 |
-| Speed | Slow | 慢 |
-| Reliability | Moderate | 中等 |
-| Firewall friendly | Low | 低 |
+| Feature | Value |
+|---------|-------|
+| Requires root | Yes |
+| Stealthy | Moderate |
+| Speed | Slow |
+| Reliability | Moderate |
+| Firewall friendly | Low |
 
-### Advantages / 优点
+### Advantages
 
-1. **Finds UDP services / 发现 UDP 服务**: Detects services TCP scans miss
-2. **Standard method / 标准方法**: Well-established technique
+1. **Finds UDP services**: Detects services TCP scans miss
+2. **Standard method**: Well-established technique
 
-### Disadvantages / 缺点
+### Disadvantages
 
-1. **Slow / 慢**: Many timeouts due to no response
-2. **Ambiguous results / 模糊结果**: Difficult to distinguish open from filtered
-3. **Resource intensive / 资源密集**: Requires sending many packets
+1. **Slow**: Many timeouts due to no response
+2. **Ambiguous results**: Difficult to distinguish open from filtered
+3. **Resource intensive**: Requires sending many packets
 
 ---
 
 ## TCP FIN Scan (`-sF`)
 
-**TCP FIN 扫描 (`-sF`)**
-
-### Description / 描述
+### Description
 
 FIN scan sends packets with only the FIN flag set. According to RFC 793, closed ports should respond with RST, while open ports should ignore the packet.
 
-FIN 扫描发送仅设置 FIN 标志的数据包。根据 RFC 793，关闭的端口应该回复 RST，而开放的端口应该忽略该数据包。
-
-### How It Works / 工作原理
+### How It Works
 
 ```
 Scanner          Target
@@ -264,48 +246,44 @@ Scanner          Target
    | <---------- |     or CLOSED/FILTERED
 ```
 
-### Usage / 用法
+### Usage
 
 ```bash
-# FIN scan / FIN 扫描
+# FIN scan
 sudo rustnmap -sF 192.168.1.1
 
-# Specific ports / 特定端口
+# Specific ports
 sudo rustnmap -sF -p 22,80,443 192.168.1.1
 ```
 
-### Characteristics / 特性
+### Characteristics
 
-| Feature | Value | 值 |
-|---------|-------|-----|
-| Requires root | Yes | 是 |
-| Stealthy | Yes | 是 |
-| Speed | Fast | 快 |
-| Best for | UNIX systems | UNIX 系统 |
-| Windows response | All closed | 全部关闭 |
+| Feature | Value |
+|---------|-------|
+| Requires root | Yes |
+| Stealthy | Yes |
+| Speed | Fast |
+| Best for | UNIX systems |
+| Windows response | All closed |
 
-### Platform Differences / 平台差异
+### Platform Differences
 
-| OS | Behavior | 行为 |
-|----|----------|------|
-| UNIX/Linux | Follows RFC 793 | 遵循 RFC 793 |
-| Windows | Sends RST for all | 对所有端口发送 RST |
-| Cisco | Follows RFC 793 | 遵循 RFC 793 |
-| BSD | Follows RFC 793 | 遵循 RFC 793 |
+| OS | Behavior |
+|----|----------|
+| UNIX/Linux | Follows RFC 793 |
+| Windows | Sends RST for all ports |
+| Cisco | Follows RFC 793 |
+| BSD | Follows RFC 793 |
 
 ---
 
 ## TCP NULL Scan (`-sN`)
 
-**TCP NULL 扫描 (`-sN`)**
-
-### Description / 描述
+### Description
 
 NULL scan sends packets with no TCP flags set. Like FIN scan, RFC 793 specifies that closed ports should respond with RST while open ports ignore the packet.
 
-NULL 扫描发送没有设置任何 TCP 标志的数据包。与 FIN 扫描类似，RFC 793 规定关闭的端口应该回复 RST，而开放的端口忽略该数据包。
-
-### How It Works / 工作原理
+### How It Works
 
 ```
 Scanner          Target
@@ -320,35 +298,31 @@ Scanner          Target
    | <---------- |
 ```
 
-### Usage / 用法
+### Usage
 
 ```bash
-# NULL scan / NULL 扫描
+# NULL scan
 sudo rustnmap -sN 192.168.1.1
 ```
 
-### Characteristics / 特性
+### Characteristics
 
-| Feature | Value | 值 |
-|---------|-------|-----|
-| Requires root | Yes | 是 |
-| Stealthy | Yes | 是 |
-| Speed | Fast | 快 |
-| Best for | UNIX systems | UNIX 系统 |
+| Feature | Value |
+|---------|-------|
+| Requires root | Yes |
+| Stealthy | Yes |
+| Speed | Fast |
+| Best for | UNIX systems |
 
 ---
 
 ## TCP XMAS Scan (`-sX`)
 
-**TCP XMAS 扫描 (`-sX`)**
-
-### Description / 描述
+### Description
 
 XMAS scan sends packets with FIN, PSH, and URG flags set, "lighting up the packet like a Christmas tree." Like other stealth scans, it relies on RFC 793 behavior.
 
-XMAS 扫描发送设置了 FIN、PSH 和 URG 标志的数据包，"像圣诞树一样点亮数据包"。与其他隐秘扫描类似，它依赖于 RFC 793 的行为。
-
-### How It Works / 工作原理
+### How It Works
 
 ```
 Scanner          Target
@@ -363,36 +337,32 @@ Scanner          Target
    | <---------- |
 ```
 
-### Usage / 用法
+### Usage
 
 ```bash
-# XMAS scan / XMAS 扫描
+# XMAS scan
 sudo rustnmap -sX 192.168.1.1
 ```
 
-### Characteristics / 特性
+### Characteristics
 
-| Feature | Value | 值 |
-|---------|-------|-----|
-| Requires root | Yes | 是 |
-| Stealthy | Yes | 是 |
-| Speed | Fast | 快 |
-| Best for | UNIX systems | UNIX 系统 |
-| Packet appearance | Unusual | 异常 |
+| Feature | Value |
+|---------|-------|
+| Requires root | Yes |
+| Stealthy | Yes |
+| Speed | Fast |
+| Best for | UNIX systems |
+| Packet appearance | Unusual |
 
 ---
 
 ## TCP ACK Scan (`-sA`)
 
-**TCP ACK 扫描 (`-sA`)**
-
-### Description / 描述
+### Description
 
 ACK scan is used to map firewall rulesets, not to determine open ports. It sends ACK packets and analyzes whether ports are filtered or unfiltered.
 
-ACK 扫描用于映射防火墙规则集，而非确定开放端口。它发送 ACK 数据包并分析端口是被过滤还是未被过滤。
-
-### How It Works / 工作原理
+### How It Works
 
 ```
 Scanner          Target
@@ -409,45 +379,41 @@ Scanner          Target
    |  admin-proh |
 ```
 
-### Usage / 用法
+### Usage
 
 ```bash
-# ACK scan for firewall mapping / ACK 扫描用于防火墙映射
+# ACK scan for firewall mapping
 sudo rustnmap -sA 192.168.1.1
 
-# Determine firewall rules / 确定防火墙规则
+# Determine firewall rules
 sudo rustnmap -sA -p 1-65535 192.168.1.1
 ```
 
-### Port States / 端口状态
+### Port States
 
 | Response | State | Meaning |
 |----------|-------|---------|
 | RST | unfiltered | Port is not filtered by firewall |
 | Timeout/ICMP | filtered | Port is filtered by firewall |
 
-### Characteristics / 特性
+### Characteristics
 
-| Feature | Value | 值 |
-|---------|-------|-----|
-| Requires root | Yes | 是 |
-| Stealthy | Yes | 是 |
-| Best for | Firewall mapping | 防火墙映射 |
-| Determines | Filtered status | 过滤状态 |
+| Feature | Value |
+|---------|-------|
+| Requires root | Yes |
+| Stealthy | Yes |
+| Best for | Firewall mapping |
+| Determines | Filtered status |
 
 ---
 
 ## TCP Window Scan (`-sW`)
 
-**TCP Window 扫描 (`-sW`)**
-
-### Description / 描述
+### Description
 
 Window scan is similar to ACK scan but examines the TCP Window field of RST responses to determine if ports are open or closed.
 
-Window 扫描类似于 ACK 扫描，但检查 RST 响应的 TCP Window 字段来确定端口是开放还是关闭。
-
-### How It Works / 工作原理
+### How It Works
 
 ```
 Scanner          Target
@@ -457,35 +423,31 @@ Scanner          Target
    | <---------- |     Window = 0: CLOSED
 ```
 
-### Usage / 用法
+### Usage
 
 ```bash
-# Window scan / Window 扫描
+# Window scan
 sudo rustnmap -sW 192.168.1.1
 ```
 
-### Characteristics / 特性
+### Characteristics
 
-| Feature | Value | 值 |
-|---------|-------|-----|
-| Requires root | Yes | 是 |
-| Stealthy | Yes | 是 |
-| Reliability | Low (system dependent) | 低（依赖系统） |
-| Best for | Specific systems | 特定系统 |
+| Feature | Value |
+|---------|-------|
+| Requires root | Yes |
+| Stealthy | Yes |
+| Reliability | Low (system dependent) |
+| Best for | Specific systems |
 
 ---
 
 ## TCP Maimon Scan (`-sM`)
 
-**TCP Maimon 扫描 (`-sM`)**
-
-### Description / 描述
+### Description
 
 Maimon scan (named after Uriel Maimon) sends packets with FIN and ACK flags. Some BSD systems drop the packet if port is open (revealing it).
 
-Maimon 扫描（以 Uriel Maimon 命名）发送带有 FIN 和 ACK 标志的数据包。某些 BSD 系统在端口开放时会丢弃该数据包（从而暴露端口状态）。
-
-### How It Works / 工作原理
+### How It Works
 
 ```
 Scanner          Target
@@ -500,34 +462,30 @@ Scanner          Target
    | <---------- |
 ```
 
-### Usage / 用法
+### Usage
 
 ```bash
-# Maimon scan / Maimon 扫描
+# Maimon scan
 sudo rustnmap -sM 192.168.1.1
 ```
 
-### Characteristics / 特性
+### Characteristics
 
-| Feature | Value | 值 |
-|---------|-------|-----|
-| Requires root | Yes | 是 |
-| Stealthy | Yes | 是 |
-| Best for | BSD systems | BSD 系统 |
+| Feature | Value |
+|---------|-------|
+| Requires root | Yes |
+| Stealthy | Yes |
+| Best for | BSD systems |
 
 ---
 
 ## FTP Bounce Scan (`-b`)
 
-**FTP Bounce 扫描 (`-b`)**
-
-### Description / 描述
+### Description
 
 FTP bounce attack exploits FTP servers with proxy capabilities to bounce scans through them. The FTP server acts as a proxy, making the scan appear to originate from the FTP server.
 
-FTP Bounce 攻击利用具有代理功能的 FTP 服务器来反弹扫描。FTP 服务器充当代理，使扫描看起来源自 FTP 服务器。
-
-### How It Works / 工作原理
+### How It Works
 
 ```
 Scanner        FTP Server      Target
@@ -547,39 +505,39 @@ Scanner        FTP Server      Target
    | <--------- |              |
 ```
 
-### Usage / 用法
+### Usage
 
 ```bash
-# FTP bounce scan / FTP Bounce 扫描
+# FTP bounce scan
 rustnmap -b ftp.example.com 192.168.1.1
 
-# With username/password / 使用用户名/密码
+# With username/password
 rustnmap -b user:pass@ftp.example.com:21 192.168.1.1
 ```
 
-### Characteristics / 特性
+### Characteristics
 
-| Feature | Value | 值 |
-|---------|-------|-----|
-| Requires root | No | 否 |
-| Stealthy | Yes | 是 |
-| Requires | Vulnerable FTP server | 易受攻击的 FTP 服务器 |
-| Modern usage | Rare | 罕见 |
+| Feature | Value |
+|---------|-------|
+| Requires root | No |
+| Stealthy | Yes |
+| Requires | Vulnerable FTP server |
+| Modern usage | Rare |
 
-### Advantages / 优点
+### Advantages
 
-1. **No root required / 无需 root**
-2. **Hides source / 隐藏源地址**
+1. **No root required**
+2. **Hides source address**
 
-### Disadvantages / 缺点
+### Disadvantages
 
-1. **Rare today / 现今罕见**: Modern FTP servers don't allow this
-2. **Slow / 慢**: Requires FTP protocol overhead
-3. **Limited ports / 有限端口**: Can only scan ports FTP server can reach
+1. **Rare today**: Modern FTP servers don't allow this
+2. **Slow**: Requires FTP protocol overhead
+3. **Limited ports**: Can only scan ports FTP server can reach
 
 ---
 
-## Scan Type Comparison / 扫描类型对比
+## Scan Type Comparison
 
 | Scan Type | Root | Stealth | Speed | Reliability | Best For |
 |-----------|------|---------|-------|-------------|----------|
@@ -596,66 +554,66 @@ rustnmap -b user:pass@ftp.example.com:21 192.168.1.1
 
 ---
 
-## Choosing the Right Scan / 选择正确的扫描
+## Choosing the Right Scan
 
-### Quick Decision Guide / 快速决策指南
+### Quick Decision Guide
 
 ```
-Do you have root/admin? / 你有 root/管理员权限吗？
-├── No → Use -sT (Connect scan) / 使用 -sT (Connect 扫描)
-└── Yes → What is your goal? / 你的目标是什么？
-    ├── General port scanning → -sS (SYN scan) / -sS (SYN 扫描)
-    ├── UDP services → -sU (UDP scan) / -sU (UDP 扫描)
-    ├── Firewall rule mapping → -sA (ACK scan) / -sA (ACK 扫描)
-    └── IDS evasion on UNIX → -sF/-sN/-sX / -sF/-sN/-sX
+Do you have root/admin?
++-- No  -> Use -sT (Connect scan)
++-- Yes -> What is your goal?
+    +-- General port scanning   -> -sS (SYN scan)
+    +-- UDP services            -> -sU (UDP scan)
+    +-- Firewall rule mapping   -> -sA (ACK scan)
+    +-- IDS evasion on UNIX     -> -sF/-sN/-sX
 ```
 
-### Scenario Examples / 场景示例
+### Scenario Examples
 
-#### Internal Network Audit / 内部网络审计
+#### Internal Network Audit
 
 ```bash
-# Fast SYN scan with service detection / 快速 SYN 扫描带服务检测
+# Fast SYN scan with service detection
 sudo rustnmap -sS -sV -T4 -p- 192.168.1.0/24
 ```
 
-#### External Penetration Test / 外部渗透测试
+#### External Penetration Test
 
 ```bash
-# Stealthy scan with decoys / 带诱饵的隐秘扫描
+# Stealthy scan with decoys
 sudo rustnmap -sS -T2 -f -D RND:10 10.0.0.1
 ```
 
-#### Firewall Assessment / 防火墙评估
+#### Firewall Assessment
 
 ```bash
-# ACK scan to map rules / ACK 扫描映射规则
+# ACK scan to map rules
 sudo rustnmap -sA -p- 192.168.1.1
 ```
 
-#### No Root Access / 无 Root 权限
+#### No Root Access
 
 ```bash
-# Connect scan / Connect 扫描
+# Connect scan
 rustnmap -sT -p 22,80,443,8080 target.example.com
 ```
 
 ---
 
-## Port State Definitions / 端口状态定义
+## Port State Definitions
 
-| State | Meaning | 含义 |
-|-------|---------|------|
-| `open` | Service is listening | 服务正在监听 |
-| `closed` | Port accessible, no service | 端口可访问，无服务 |
-| `filtered` | Cannot determine state (firewall) | 无法确定状态（防火墙） |
-| `unfiltered` | Port accessible (ACK scan) | 端口可访问（ACK 扫描） |
-| `open|filtered` | Cannot determine if open or filtered | 无法确定开放或过滤 |
-| `closed|filtered` | Cannot determine if closed or filtered | 无法确定关闭或过滤 |
+| State | Meaning |
+|-------|---------|
+| `open` | Service is listening |
+| `closed` | Port accessible, no service |
+| `filtered` | Cannot determine state (firewall) |
+| `unfiltered` | Port accessible (ACK scan) |
+| `open|filtered` | Cannot determine if open or filtered |
+| `closed|filtered` | Cannot determine if closed or filtered |
 
 ---
 
-## References / 参考
+## References
 
 - [RFC 793](https://tools.ietf.org/html/rfc793) - TCP Specification
 - Nmap Scan Types Documentation

@@ -1,32 +1,32 @@
-## 3.9 目标规格与解析模块
+## 3.9 Target Specification and Parsing Module
 
-对应 Nmap 命令: 目标 IP/主机名、`-iL`、`-iR`、`--exclude`、`--excludefile`
+Corresponding Nmap commands: target IP/hostname, `-iL`, `-iR`, `--exclude`, `--excludefile`
 
-### 3.9.1 目标解析流程
+### 3.9.1 Target Parsing Flow
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                      Target Specification Parser                        │
 ├─────────────────────────────────────────────────────────────────────────┤
 │                                                                         │
-│  输入格式支持:                                                          │
+│  Supported input formats:                                               │
 │  ┌───────────────────────────────────────────────────────────────────┐  │
-│  │  格式类型          │ 示例                         │ 解析方法      │  │
+│  │  Format Type       │ Example                      │ Parser Method │  │
 │  ├────────────────────┼──────────────────────────────┼───────────────┤  │
-│  │  单个 IP           │ 192.168.1.1                  │ parse_ipv4    │  │
-│  │  IPv6 地址         │ 2001:db8::1                  │ parse_ipv6    │  │
-│  │  主机名            │ example.com                  │ dns_resolve   │  │
-│  │  CIDR 块           │ 192.168.1.0/24               │ expand_cidr   │  │
-│  │  IP 范围           │ 192.168.1.1-10               │ expand_range  │  │
-│  │  IP 掩码           │ 192.168.1.0/255.255.255.0    │ expand_mask   │  │
-│  │  八位组通配        │ 192.168.1.*                   │ expand_wild   │  │
-│  │  多目标            │ 192.168.1.1,192.168.2.1      │ split_parse   │  │
-│  │  端口指定          │ example.com:80,443           │ parse_target  │  │
-│  │  从文件读取        │ -iL targets.txt              │ read_file     │  │
-│  │  随机目标          │ -iR 100                      │ random_ips    │  │
+│  │  Single IP         │ 192.168.1.1                  │ parse_ipv4    │  │
+│  │  IPv6 address      │ 2001:db8::1                  │ parse_ipv6    │  │
+│  │  Hostname          │ example.com                  │ dns_resolve   │  │
+│  │  CIDR block        │ 192.168.1.0/24               │ expand_cidr   │  │
+│  │  IP range          │ 192.168.1.1-10               │ expand_range  │  │
+│  │  IP mask           │ 192.168.1.0/255.255.255.0    │ expand_mask   │  │
+│  │  Octet wildcard    │ 192.168.1.*                   │ expand_wild   │  │
+│  │  Multiple targets  │ 192.168.1.1,192.168.2.1      │ split_parse   │  │
+│  │  Port specification│ example.com:80,443           │ parse_target  │  │
+│  │  Read from file    │ -iL targets.txt              │ read_file     │  │
+│  │  Random targets    │ -iR 100                      │ random_ips    │  │
 │  └───────────────────────────────────────────────────────────────────┘  │
 │                                                                         │
-│  解析流程:                                                              │
+│  Parsing flow:                                                          │
 │  ┌───────────────────────────────────────────────────────────────────┐  │
 │  │                                                                   │  │
 │  │   ┌─────────────┐    ┌─────────────┐    ┌─────────────────────┐  │  │
@@ -64,28 +64,28 @@
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
-### 3.9.2 目标规格类型定义
+### 3.9.2 Target Specification Type Definitions
 
 ```
 // ============================================
 // Target Specification Types
 // ============================================
 
-/// 目标规格解析器
+/// Target specification parser
 pub struct TargetSpecParser {
     dns_resolver: Option<DnsResolver>,
     exclude_list: Vec<TargetSpec>,
 }
 
-/// 单个目标
+/// Single target
 pub struct Target {
     pub ip: IpAddr,
     pub hostname: Option<String>,
-    pub ports: Option<Vec<u16>>,  // 如果指定，覆盖全局端口
+    pub ports: Option<Vec<u16>>,  // If specified, overrides global ports
     pub ipv6_scope: Option<u8>,    // IPv6 zone ID
 }
 
-/// 目标规格 (解析前)
+/// Target specification (before parsing)
 pub enum TargetSpec {
     SingleIpv4(Ipv4Addr),
     SingleIpv6(Ipv6Addr),
@@ -101,14 +101,14 @@ pub enum TargetSpec {
     Multiple(Vec<TargetSpec>),
 }
 
-/// 八位组规格 (用于 192.168.1-10.* 类型的解析)
+/// Octet specification (for parsing patterns like 192.168.1-10.*)
 pub enum OctetSpec {
     Single(u8),
     Range(u8, u8),
     All,
 }
 
-/// 目标组 (扫描器的输入)
+/// Target group (input for the scanner)
 pub struct TargetGroup {
     pub targets: Vec<Target>,
     pub total_count: usize,
@@ -118,21 +118,21 @@ pub struct TargetGroup {
 }
 
 impl TargetSpecParser {
-    /// 解析输入字符串
+    /// Parse input string
     pub fn parse(&self, input: &str) -> Result<TargetGroup, ParseError> {
         let mut targets = Vec::new();
         
-        // 1. 标准化输入 (处理换行、逗号等)
+        // 1. Normalize input (handle newlines, commas, etc.)
         let tokens = self.tokenize(input)?;
         
-        // 2. 解析每个 token
+        // 2. Parse each token
         for token in tokens {
             let spec = self.parse_token(&token)?;
             
-            // 3. 展开为具体 IP 列表
+            // 3. Expand into concrete IP list
             let expanded = self.expand_spec(&spec)?;
             
-            // 4. DNS 解析 (如果需要)
+            // 4. DNS resolution (if needed)
             for mut target in expanded {
                 if let Some(ref resolver) = self.dns_resolver {
                     if target.hostname.is_none() {
@@ -143,10 +143,10 @@ impl TargetSpecParser {
             }
         }
         
-        // 5. 应用排除规则
+        // 5. Apply exclusion rules
         targets.retain(|t| !self.is_excluded(t));
         
-        // 6. 去重
+        // 6. Deduplicate
         targets.sort_by(|a, b| a.ip.cmp(&b.ip));
         targets.dedup_by(|a, b| a.ip == b.ip);
         
@@ -159,7 +159,7 @@ impl TargetSpecParser {
         })
     }
     
-    /// 展开目标规格
+    /// Expand target specification
     fn expand_spec(&self, spec: &TargetSpec) -> Result<Vec<Target>, ParseError> {
         match spec {
             TargetSpec::SingleIpv4(ip) => Ok(vec![Target::from(*ip)]),
@@ -168,12 +168,12 @@ impl TargetSpecParser {
             TargetSpec::Ipv4Cidr { base, prefix } => self.expand_cidr_v4(base, prefix),
             TargetSpec::Ipv4Range { start, end } => self.expand_range_v4(start, end),
             TargetSpec::Ipv4OctetRange { octets } => self.expand_octets(octets),
-            // ... 其他展开逻辑
+            // ... other expansion logic
             _ => unimplemented!(),
         }
     }
     
-    /// 展开八位组范围 (如 192.168.1-10.*)
+    /// Expand octet ranges (e.g., 192.168.1-10.*)
     fn expand_octets(&self, octets: &[Option<OctetSpec>; 4]) -> Result<Vec<Target>, ParseError> {
         let mut results = Vec::new();
         let mut current = [0u8; 4];

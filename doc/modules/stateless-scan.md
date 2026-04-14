@@ -1,97 +1,97 @@
-# 无状态扫描模块 (rustnmap-stateless-scan)
+# Stateless Scan Module (rustnmap-stateless-scan)
 
-> **版本**: 2.0.0 (开发中)
-> **对应 Phase**: Phase 4 (Week 10-11)
-> **优先级**: P1
-
----
-
-## 概述
-
-无状态扫描模块实现类似 masscan 的高速扫描能力，通过加密 Cookie 编码源端口和序列号，无需维护连接状态表即可匹配响应。这是 RustNmap 2.0 性能飞跃的核心组件。
+> **Version**: 2.0.0 (in development)
+> **Phase**: Phase 4 (Week 10-11)
+> **Priority**: P1
 
 ---
 
-## 功能特性
+## Overview
 
-### 1. 无状态 SYN 扫描
-
-- 无需维护连接状态表
-- 发送和接收完全解耦
-- 理论上可达到线速扫描
-
-### 2. Cookie 编码
-
-- 使用加密 Cookie 编码源端口
-- Cookie 编码序列号
-- 无需状态表即可验证响应
-
-### 3. 高速率扫描
-
-- 目标速率：1000 万 PPS (包/秒)
-- 适用于大规模网络资产发现
-- 支持 Rate 限制
-
-### 4. 实验特性标志
-
-- 通过 `--fast` 或 `-F2` 选项启用
-- 默认禁用（需要显式启用）
-- 仅支持 SYN 扫描模式
+The stateless scan module implements masscan-like high-speed scanning capabilities. By using encrypted cookies to encode source ports and sequence numbers, it can match responses without maintaining a connection state table. This is the core component of the RustNmap 2.0 performance leap.
 
 ---
 
-## 工作原理
+## Features
 
-### 传统有状态扫描
+### 1. Stateless SYN Scan
+
+- No connection state table to maintain
+- Sending and receiving are completely decoupled
+- Theoretically capable of line-rate scanning
+
+### 2. Cookie Encoding
+
+- Uses encrypted cookies to encode source ports
+- Cookies encode sequence numbers
+- Responses can be verified without a state table
+
+### 3. High-Rate Scanning
+
+- Target rate: 10 million PPS (packets per second)
+- Suitable for large-scale network asset discovery
+- Supports rate limiting
+
+### 4. Experimental Feature Flag
+
+- Enabled via `--fast` or `-F2` option
+- Disabled by default (requires explicit enablement)
+- Only supports SYN scan mode
+
+---
+
+## How It Works
+
+### Traditional Stateful Scanning
 
 ```
-发送线程                          接收线程
-   │                                │
-   ├──> 发送 SYN (src_port=12345)   │
-   │    记录状态表 {12345 -> target} │
-   │                                │
-   │              SYN-ACK <─────────┤
-   │                                │
-   ├──> 查找状态表 [12345]          │
-   │    匹配到 target               │
-   │    发送 RST                    │
+Sender Thread                      Receiver Thread
+   |                                |
+   |---> Send SYN (src_port=12345)  |
+   |     Record state table {12345 -> target}
+   |                                |
+   |              SYN-ACK <---------|
+   |                                |
+   |---> Lookup state table [12345] |
+   |     Matched target             |
+   |     Send RST                   |
 ```
 
-### 无状态扫描
+### Stateless Scanning
 
 ```
-发送线程                          接收线程
-   │                                │
-   ├──> 计算 Cookie = HMAC(key, target_ip)
-   ├──> src_port = Cookie >> 16     │
-   ├──> seq_num = Cookie & 0xFFFF   │
-   ├──> 发送 SYN (src_port, seq)    │
-   │    (无状态记录)                │
-   │                                │
-   │              SYN-ACK <─────────┤
-   │              (携带 src_port,   │
-   │               ack_num = seq+1) │
-   │                                │
-   │                                ├──> 接收 SYN-ACK
-   │                                ├──> 重建 Cookie
-   │                                │   = (src_port << 16) | (ack_num - 1)
-   │                                ├──> 验证 Cookie = HMAC(key, target_ip)
-   │                                │   匹配 -> 端口开放
-   │                                │   不匹配 -> 丢弃
+Sender Thread                      Receiver Thread
+   |                                |
+   |---> Compute Cookie = HMAC(key, target_ip)
+   |---> src_port = Cookie >> 16    |
+   |---> seq_num = Cookie & 0xFFFF  |
+   |---> Send SYN (src_port, seq)   |
+   |     (no state recording)       |
+   |                                |
+   |              SYN-ACK <---------|
+   |              (carries src_port,|
+   |               ack_num = seq+1) |
+   |                                |
+   |                                |---> Receive SYN-ACK
+   |                                |---> Reconstruct Cookie
+   |                                |   = (src_port << 16) | (ack_num - 1)
+   |                                |---> Verify Cookie = HMAC(key, target_ip)
+   |                                |   Match -> port open
+   |                                |   No match -> discard
 ```
 
 ---
 
-## 核心算法
+## Core Algorithms
 
-### Cookie 生成
+### Cookie Generation
 
 ```rust
 use blake3::Hasher;
 
-/// 无状态扫描 Cookie 生成器
+/// Stateless scan cookie generator
 pub struct StatelessCookie {
-    /// 加密密钥（随机生成）
+    /// Encryption key (randomly generated)
     key: [u8; 32],
 }
 
@@ -102,7 +102,7 @@ impl StatelessCookie {
         Self { key }
     }
 
-    /// 为 target IP 生成 Cookie
+    /// Generate a cookie for a target IP
     pub fn generate(&self, target: IpAddr, timestamp: u64) -> Cookie {
         let mut hasher = Hasher::new();
         hasher.update(&self.key);
@@ -112,10 +112,10 @@ impl StatelessCookie {
         let hash = hasher.finalize();
         let hash_bytes = hash.as_bytes();
 
-        // 源端口：使用 hash 的高 16 位（排除特权端口）
+        // Source port: use upper 16 bits of hash (excluding privileged ports)
         let source_port = 1024 + ((u16::from_le_bytes([hash_bytes[0], hash_bytes[1]]) % 64511) as u16);
 
-        // 序列号：使用 hash 的低 32 位
+        // Sequence number: use lower 32 bits of hash
         let sequence_num = u32::from_le_bytes([
             hash_bytes[4], hash_bytes[5], hash_bytes[6], hash_bytes[7],
         ]);
@@ -127,12 +127,12 @@ impl StatelessCookie {
         }
     }
 
-    /// 验证接收的响应
+    /// Verify a received response
     pub fn verify(&self, target: IpAddr, source_port: u16, ack_num: u32, max_age: Duration) -> VerifyResult {
-        // 重建序列号
+        // Reconstruct sequence number
         let sequence_num = ack_num - 1;
 
-        // 验证时间窗口（防止重放攻击）
+        // Verify time window (prevent replay attacks)
         let current_time = current_timestamp();
         let cookie_timestamp = extract_timestamp(sequence_num);
 
@@ -140,7 +140,7 @@ impl StatelessCookie {
             return VerifyResult::Expired;
         }
 
-        // 重新计算并验证 Cookie
+        // Recompute and verify cookie
         let expected = self.generate(target, cookie_timestamp);
         if expected.source_port == source_port && expected.sequence_num == sequence_num {
             VerifyResult::Valid
@@ -150,14 +150,14 @@ impl StatelessCookie {
     }
 }
 
-/// Cookie 结构
+/// Cookie structure
 pub struct Cookie {
     pub source_port: u16,
     pub sequence_num: u32,
     pub timestamp: u64,
 }
 
-/// 验证结果
+/// Verification result
 pub enum VerifyResult {
     Valid,
     Invalid,
@@ -165,10 +165,10 @@ pub enum VerifyResult {
 }
 ```
 
-### 发送器
+### Sender
 
 ```rust
-/// 无状态 SYN 发送器
+/// Stateless SYN sender
 pub struct StatelessSender {
     socket: RawSocket,
     cookie_gen: StatelessCookie,
@@ -177,15 +177,15 @@ pub struct StatelessSender {
 }
 
 impl StatelessSender {
-    /// 创建发送器
+    /// Create sender
     pub fn new(config: StatelessConfig) -> Result<Self>;
 
-    /// 发送 SYN 包（无状态）
+    /// Send SYN packet (stateless)
     pub async fn send_syn(&self, target: IpAddr, port: u16) -> Result<()> {
-        // 生成 Cookie
+        // Generate cookie
         let cookie = self.cookie_gen.generate(target, current_timestamp());
 
-        // 构建 SYN 包
+        // Build SYN packet
         let mut packet = TcpPacket::new();
         packet.set_source(self.local_ip);
         packet.set_destination(target);
@@ -194,14 +194,14 @@ impl StatelessSender {
         packet.set_seq(cookie.sequence_num);
         packet.set_syn(true);
 
-        // 发送
+        // Send
         self.socket.send(packet.build()).await?;
         self.rate_limiter.tick().await;
 
         Ok(())
     }
 
-    /// 批量发送（优化性能）
+    /// Batch send (performance optimization)
     pub async fn send_batch(&self, targets: &[(IpAddr, u16)]) -> Result<usize> {
         let mut packets = Vec::with_capacity(targets.len());
 
@@ -217,7 +217,7 @@ impl StatelessSender {
             packets.push(packet.build());
         }
 
-        // 批量发送（使用 sendmmsg）
+        // Batch send (using sendmmsg)
         let sent = self.socket.send_batch(packets).await?;
         for _ in 0..sent {
             self.rate_limiter.tick().await;
@@ -228,10 +228,10 @@ impl StatelessSender {
 }
 ```
 
-### 接收器
+### Receiver
 
 ```rust
-/// 无状态 SYN 接收器
+/// Stateless SYN receiver
 pub struct StatelessReceiver {
     socket: RawSocket,
     cookie_gen: StatelessCookie,
@@ -239,19 +239,19 @@ pub struct StatelessReceiver {
 }
 
 impl StatelessReceiver {
-    /// 创建接收器
+    /// Create receiver
     pub fn new(config: StatelessConfig, results_tx: mpsc::Sender<ScanResult>) -> Self;
 
-    /// 接收并验证响应
+    /// Receive and verify responses
     pub async fn recv_loop(&self) -> Result<()> {
         loop {
-            // 接收数据包
+            // Receive packet
             let packet = self.socket.recv().await?;
 
-            // 解析 TCP 头
+            // Parse TCP header
             let tcp = TcpPacket::parse(&packet)?;
 
-            // 仅处理 SYN-ACK
+            // Only process SYN-ACK
             if !tcp.get_syn() || !tcp.get_ack() {
                 continue;
             }
@@ -260,10 +260,10 @@ impl StatelessReceiver {
             let source_port = tcp.get_source_port();
             let ack_num = tcp.get_ack();
 
-            // 验证 Cookie
+            // Verify cookie
             match self.cookie_gen.verify(target, source_port, ack_num, Duration::from_secs(30)) {
                 VerifyResult::Valid => {
-                    // 端口开放
+                    // Port open
                     let result = ScanResult {
                         ip: target,
                         port: tcp.get_dest_port(),
@@ -271,27 +271,27 @@ impl StatelessReceiver {
                     };
                     self.results_tx.send(result).await?;
 
-                    // 发送 RST 关闭连接
+                    // Send RST to close connection
                     self.send_rst(target, source_port, ack_num).await?;
                 }
                 VerifyResult::Invalid => {
-                    // Cookie 不匹配，可能是伪造响应
+                    // Cookie mismatch, possible forged response
                     continue;
                 }
                 VerifyResult::Expired => {
-                    // Cookie 过期，可能是重放攻击
+                    // Cookie expired, possible replay attack
                     continue;
                 }
             }
         }
     }
 
-    /// 发送 RST 包
+    /// Send RST packet
     async fn send_rst(&self, target: IpAddr, source_port: u16, ack_num: u32) -> Result<()> {
         let mut packet = TcpPacket::new();
         packet.set_source(self.local_ip);
         packet.set_destination(target);
-        packet.set_source_port(0);  // 任意端口
+        packet.set_source_port(0);  // Arbitrary port
         packet.set_dest_port(source_port);
         packet.set_seq(ack_num);
         packet.set_ack(0);
@@ -305,24 +305,24 @@ impl StatelessReceiver {
 
 ---
 
-## 架构设计
+## Architecture Design
 
-### 模块结构
+### Module Structure
 
 ```
 rustnmap-stateless/
 ├── src/
-│   ├── lib.rs           # 公共 API
-│   ├── cookie.rs        # Cookie 生成与验证
-│   ├── sender.rs        # 无状态发送器
-│   ├── receiver.rs      # 无状态接收器
-│   ├── rate_limiter.rs  # 速率限制器
-│   └── config.rs        # 配置管理
+│   ├── lib.rs           # Public API
+│   ├── cookie.rs        # Cookie generation and verification
+│   ├── sender.rs        # Stateless sender
+│   ├── receiver.rs      # Stateless receiver
+│   ├── rate_limiter.rs  # Rate limiter
+│   └── config.rs        # Configuration management
 └── tests/
-    └── integration.rs   # 集成测试
+    └── integration.rs   # Integration tests
 ```
 
-### 扫描流程
+### Scan Flow
 
 ```
                     ┌─────────────────┐
@@ -334,7 +334,8 @@ rustnmap-stateless/
               ▼              ▼              ▼
     ┌────────────────┐ ┌───────────┐ ┌───────────┐
     │StatelessSender │ │ Receiver  │ │RateLimiter│
-    │ (发送 SYN 包)    │ │(接收 SYN-ACK)│ │ (限流)    │
+    │ (Send SYN pkts)│ │(Recv SYN- │ │ (Rate     │
+    │                │ │ ACK)      │ │  limiting)│
     └───────┬────────┘ └─────┬─────┘ └─────┬─────┘
             │                │             │
             │                │             │
@@ -349,50 +350,51 @@ rustnmap-stateless/
                             ▼
                    ┌─────────────────┐
                    │ OutputSink      │
-                   │ (流式输出结果)   │
+                   │ (Stream output  │
+                   │  results)       │
                    └─────────────────┘
 ```
 
 ---
 
-## CLI 选项
+## CLI Options
 
-### 启用无状态扫描
+### Enabling Stateless Scanning
 
 ```bash
-# 基本用法
+# Basic usage
 rustnmap --fast -p 1-65535 192.168.1.0/8
 
-# 或者使用 -F2（区别于 -F 快速扫描）
+# Or use -F2 (distinct from -F fast scan)
 rustnmap -F2 -p 1-10000 10.0.0.0/8
 
-# 设置发送速率（包/秒）
+# Set send rate (packets per second)
 rustnmap --fast --rate 1000000 -p 80,443 192.168.1.0/24
 
-# 仅发现开放端口（不进行服务检测）
+# Only discover open ports (no service detection)
 rustnmap --fast --ports-only -p 1-1000 192.168.1.0/24
 ```
 
-### 两阶段扫描
+### Two-Phase Scanning
 
 ```bash
-# 阶段 1：无状态快速发现
+# Phase 1: Stateless fast discovery
 rustnmap --fast -p 1-65535 192.168.1.0/24 -oG fast-results.gnmap
 
-# 阶段 2：精细分析（仅针对发现的开放端口）
+# Phase 2: Detailed analysis (only for discovered open ports)
 rustnmap -iL open-ports.txt -sV -sC -O 192.168.1.0/24
 ```
 
 ---
 
-## 性能优化
+## Performance Optimization
 
-### 批处理发送
+### Batch Sending
 
 ```rust
-/// 使用 sendmmsg 批量发送
+/// Batch send using sendmmsg
 pub async fn send_batch_optimized(&self, packets: &[TcpPacket]) -> Result<usize> {
-    // 准备 iovec 数组
+    // Prepare iovec array
     let mut iovs: Vec<libc::iovec> = packets
         .iter()
         .map(|pkt| libc::iovec {
@@ -401,7 +403,7 @@ pub async fn send_batch_optimized(&self, packets: &[TcpPacket]) -> Result<usize>
         })
         .collect();
 
-    // 准备 mmsghdr 数组
+    // Prepare mmsghdr array
     let mut msgs: Vec<libc::mmsghdr> = iovs
         .iter_mut()
         .map(|iov| libc::mmsghdr {
@@ -418,7 +420,7 @@ pub async fn send_batch_optimized(&self, packets: &[TcpPacket]) -> Result<usize>
         })
         .collect();
 
-    // 批量发送
+    // Batch send
         unsafe {
         libc::sendmmsg(
             self.socket_fd,
@@ -432,18 +434,18 @@ pub async fn send_batch_optimized(&self, packets: &[TcpPacket]) -> Result<usize>
 }
 ```
 
-### 零拷贝接收
+### Zero-Copy Receiving
 
 ```rust
-/// 使用 PACKET_MMAP V2 零拷贝接收
-/// 参考: doc/modules/packet-engineering.md, reference/nmap/libpcap/pcap-linux.c
+/// Zero-copy receive using PACKET_MMAP V2
+/// Reference: doc/modules/packet-engineering.md, reference/nmap/libpcap/pcap-linux.c
 pub struct ZeroCopyReceiver {
     engine: MmapPacketEngine,
 }
 
 impl ZeroCopyReceiver {
     pub async fn recv_next(&mut self) -> Result<Option<&TcpPacket>> {
-        // 直接从 ring buffer 获取引用，无需拷贝
+        // Get reference directly from ring buffer, no copy needed
         let packet = self.engine.recv_packet();
         if let Some(pkt) = packet {
             let tcp = TcpPacket::parse(&pkt.data)?;
@@ -457,20 +459,20 @@ impl ZeroCopyReceiver {
 
 ---
 
-## 安全考虑
+## Security Considerations
 
-### 1. Cookie 密钥保护
+### 1. Cookie Key Protection
 
 ```rust
-/// 安全密钥生成
+/// Secure key generation
 fn generate_secure_key() -> [u8; 32] {
     let mut key = [0u8; 32];
-    // 使用系统 RNG
+    // Use system RNG
     getrandom::getrandom(&mut key).expect("Failed to generate random key");
     key
 }
 
-/// 密钥轮换（每 24 小时）
+/// Key rotation (every 24 hours)
 pub struct KeyRotator {
     current_key: [u8; 32],
     previous_key: [u8; 32],
@@ -479,16 +481,16 @@ pub struct KeyRotator {
 }
 ```
 
-### 2. 重放攻击防护
+### 2. Replay Attack Prevention
 
-- Cookie 包含时间戳
-- 验证时间窗口（默认 30 秒）
-- 过期 Cookie 自动拒绝
+- Cookies include timestamps
+- Time window verification (default 30 seconds)
+- Expired cookies are automatically rejected
 
-### 3. 速率限制
+### 3. Rate Limiting
 
 ```rust
-/// Token Bucket 限流器
+/// Token Bucket rate limiter
 pub struct TokenBucket {
     tokens: f64,
     max_tokens: f64,
@@ -509,28 +511,28 @@ impl TokenBucket {
 
 ---
 
-## 与 RETHINK.md 对齐
+## Alignment with RETHINK.md
 
-| 章节 | 对应内容 |
-|------|---------|
-| 4.2.3 无状态扫描 | 加密 Cookie 编码、stateless SYN |
-| 12.3 Phase 4 | 性能主干优化（Week 10-11） |
-| 14.5 Phase 4-5 | 扫描主循环改造 |
+| Section | Corresponding Content |
+|---------|----------------------|
+| 4.2.3 Stateless Scanning | Encrypted cookie encoding, stateless SYN |
+| 12.3 Phase 4 | Performance backbone optimization (Week 10-11) |
+| 14.5 Phase 4-5 | Scan main loop refactoring |
 
 ---
 
-## 依赖关系
+## Dependencies
 
 ```toml
 [dependencies]
-# 加密
+# Cryptography
 blake3 = "1"
 getrandom = "0.2"
 
-# 异步
+# Async
 tokio = { version = "1", features = ["full"] }
 
-# 内部依赖
+# Internal dependencies
 rustnmap-common = { path = "../rustnmap-common" }
 rustnmap-net = { path = "../rustnmap-net" }
 rustnmap-packet = { path = "../rustnmap-packet" }
@@ -538,9 +540,9 @@ rustnmap-packet = { path = "../rustnmap-packet" }
 
 ---
 
-## 测试
+## Testing
 
-### 单元测试
+### Unit Tests
 
 ```rust
 #[cfg(test)]
@@ -555,7 +557,7 @@ mod tests {
         let cookie1 = cookie_gen.generate(target, 1000);
         let cookie2 = cookie_gen.generate(target, 1000);
 
-        // 相同 target 和 timestamp 应生成相同 Cookie
+        // Same target and timestamp should generate the same cookie
         assert_eq!(cookie1.source_port, cookie2.source_port);
         assert_eq!(cookie1.sequence_num, cookie2.sequence_num);
     }
@@ -566,7 +568,7 @@ mod tests {
         let target: IpAddr = "192.168.1.1".parse().unwrap();
         let cookie = cookie_gen.generate(target, 1000);
 
-        // 验证应成功
+        // Verification should succeed
         let result = cookie_gen.verify(
             target,
             cookie.source_port,
@@ -580,17 +582,17 @@ mod tests {
 
 ---
 
-## 下一步
+## Next Steps
 
-1. **Week 10**: 实现 Cookie 生成和验证算法
-2. **Week 10**: 实现无状态发送器和接收器
-3. **Week 11**: 集成速率限制和批量发送
-4. **Week 11**: 编写集成测试和性能基准
+1. **Week 10**: Implement cookie generation and verification algorithms
+2. **Week 10**: Implement stateless sender and receiver
+3. **Week 11**: Integrate rate limiting and batch sending
+4. **Week 11**: Write integration tests and performance benchmarks
 
 ---
 
-## 参考链接
+## References
 
-- [masscan 原理](https://github.com/robertdavidgraham/masscan)
+- [masscan Principles](https://github.com/robertdavidgraham/masscan)
 - [TCP Cookie TCP (RFC 6013)](https://datatracker.ietf.org/doc/html/rfc6013)
-- [BLAKE3 哈希函数](https://docs.rs/blake3)
+- [BLAKE3 Hash Function](https://docs.rs/blake3)

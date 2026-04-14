@@ -1,6 +1,6 @@
-## 3.11 并发模型设计
+## 3.11 Concurrency Model Design
 
-### 3.11.1 整体架构
+### 3.11.1 Overall Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -9,16 +9,16 @@
 │                                                                         │
 │  ┌─────────────────────────────────────────────────────────────────┐   │
 │  │                    Main Thread (CLI)                           │   │
-│  │                    - 配置解析                                   │   │
-│  │                    - 输出协调                                   │   │
-│  │                    - 进度显示                                   │   │
+│  │                    - Configuration parsing                    │   │
+│  │                    - Output coordination                      │   │
+│  │                    - Progress display                         │   │
 │  └─────────────────────────┬───────────────────────────────────────┘   │
 │                            │                                       │
 │  ┌─────────────────────────▼───────────────────────────────────────┐   │
 │  │                  Scan Orchestrator (async)                     │   │
-│  │                  - 目标分组调度                               │   │
-│  │                  - 时序控制 (T0-T5)                          │   │
-│  │                  - 速率限制                                   │   │
+│  │                  - Target group scheduling                    │   │
+│  │                  - Timing control (T0-T5)                     │   │
+│  │                  - Rate limiting                              │   │
 │  └─────────────────────────┬───────────────────────────────────────┘   │
 │                            │                                       │
 │        ┌───────────────────┼───────────────────┐                    │
@@ -36,51 +36,51 @@
 │                            │                                   │
 │  ┌─────────────────────────▼─────────────────────────────────────┐   │
 │  │              Zero-Copy Packet Queues                       │   │
-│  │              - MPSC (多生产者单消费者)                      │   │
+│  │              - MPSC (Multi-Producer Single-Consumer)        │   │
 │  │              - Lock-free Ring Buffer                         │   │
 │  └───────────────────────────────────────────────────────────────┘   │
 │                                                                         │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
-### 3.11.2 内存序指南
+### 3.11.2 Memory Ordering Guidelines
 
-基于 `rust-concurrency/atomic/memory-ordering.md`:
+Based on `rust-concurrency/atomic/memory-ordering.md`:
 
-#### 核心原则
+#### Core Principles
 
-| 场景 | 内存序 | 说明 |
-|--------|---------|------|
-| 简单计数器 | `Relaxed` | 只需原子性，不涉及同步 |
-| 生产者-消费者标志 | `Release/Acquire` | 生产者用Release，消费者用Acquire |
-| 状态机转换 | `AcqRel` | CAS操作需要同时保证 |
-| 全局一致性需求 | `SeqCst` | 代价高，仅在必要时使用 |
+| Scenario | Memory Ordering | Description |
+|----------|-----------------|-------------|
+| Simple counter | `Relaxed` | Only atomicity needed, no synchronization involved |
+| Producer-consumer flag | `Release/Acquire` | Producer uses Release, consumer uses Acquire |
+| State machine transition | `AcqRel` | CAS operations require both guarantees |
+| Global consistency requirement | `SeqCst` | High cost, use only when necessary |
 
-#### 数据包队列内存序
+#### Packet Queue Memory Ordering
 
 ```rust
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-/// MPSC 无锁队列 (多生产者单消费者)
+/// MPSC lock-free queue (Multi-Producer Single-Consumer)
 pub struct PacketQueue {
-    /// 写入索引 (多生产者竞争)
+    /// Write index (contended by multiple producers)
     write_idx: AtomicUsize,
-    /// 读取索引 (仅消费者修改)
+    /// Read index (modified by consumer only)
     read_idx: AtomicUsize,
-    /// 环形缓冲区
+    /// Ring buffer
     buffer: Vec<Option<PacketBuffer>>,
-    /// 容量
+    /// Capacity
     capacity: usize,
 }
 
 impl PacketQueue {
-    /// 生产者入队 (Release 语义)
+    /// Producer enqueue (Release semantics)
     pub fn push(&self, packet: PacketBuffer) -> Result<(), PacketError> {
-        // 获取当前写入位置
+        // Get current write position
         let idx = self.write_idx.fetch_add(1, Ordering::Relaxed);
 
         if idx - self.load_read(Ordering::Acquire) >= self.capacity {
-            // 队列满，回滚
+            // Queue full, rollback
             self.write_idx.fetch_sub(1, Ordering::Relaxed);
             return Err(PacketError::QueueFull);
         }
@@ -88,29 +88,29 @@ impl PacketQueue {
         let pos = idx % self.capacity;
         self.buffer[pos] = Some(packet);
 
-        // Release 语义: 确保数据写入完成后再更新可见性
+        // Release semantics: ensure data write completes before updating visibility
         atomic::fence(Ordering::Release);
         Ok(())
     }
 
-    /// 消费者出队 (Acquire 语义)
+    /// Consumer dequeue (Acquire semantics)
     pub fn pop(&self) -> Option<PacketBuffer> {
         let read = self.read_idx.load(Ordering::Acquire);
         let write = self.write_idx.load(Ordering::Acquire);
 
         if read == write {
-            return None;  // 队列空
+            return None;  // Queue empty
         }
 
         let pos = read % self.capacity;
         let packet = self.buffer[pos].take()?;
 
-        // Acquire 语义: 确保看到之前所有 Release 操作
+        // Acquire semantics: ensure all prior Release operations are visible
         self.read_idx.fetch_add(1, Ordering::Acquire);
         Some(packet)
     }
 
-    /// 获取读取位置 (仅消费者调用)
+    /// Get read position (consumer only)
     #[inline]
     fn load_read(&self, ordering: Ordering) -> usize {
         self.read_idx.load(ordering)
@@ -118,9 +118,9 @@ impl PacketQueue {
 }
 ```
 
-### 3.11.3 工作窃取线程池
+### 3.11.3 Work-Stealing Thread Pool
 
-基于 `rust-concurrency/threading/work-stealing.md`:
+Based on `rust-concurrency/threading/work-stealing.md`:
 
 ```rust
 use std::collections::VecDeque;
@@ -130,18 +130,18 @@ use std::task::Wake;
 
 type Job = Box<dyn FnOnce() + Send + 'static>;
 
-/// 工作窃取线程池
+/// Work-stealing thread pool
 pub struct WorkStealingPool {
-    /// 每个线程的本地队列
+    /// Per-thread local queues
     workers: Vec<Arc<Mutex<VecDeque<Job>>>>,
-    /// 工作线程句柄
+    /// Worker thread handles
     handles: Vec<thread::JoinHandle<()>>,
-    /// 线程数
+    /// Number of workers
     num_workers: usize,
 }
 
 impl WorkStealingPool {
-    /// 创建新的工作窃取池
+    /// Create a new work-stealing pool
     pub fn new(num_workers: usize) -> Self {
         let mut workers = Vec::with_capacity(num_workers);
         let mut handles = Vec::with_capacity(num_workers);
@@ -169,7 +169,7 @@ impl WorkStealingPool {
         }
     }
 
-    /// 提交任务到指定线程
+    /// Submit a job to a specific thread
     pub fn submit_to(&self, worker_id: usize, job: Job) {
         if worker_id < self.num_workers {
             let mut queue = self.workers[worker_id].lock().unwrap();
@@ -177,7 +177,7 @@ impl WorkStealingPool {
         }
     }
 
-    /// 提交任务到随机线程 (负载均衡)
+    /// Submit a job to a random thread (load balancing)
     pub fn submit(&self, job: Job) {
         let worker_id = fastrand::usize(0..self.num_workers);
         self.submit_to(worker_id, job);
@@ -193,37 +193,37 @@ struct Worker {
 impl Worker {
     fn run(&self) {
         loop {
-            // 1. 尝试从本地队列获取任务
+            // 1. Try to get a task from local queue
             if let Some(job) = self.try_local_job() {
                 job();
                 continue;
             }
 
-            // 2. 本地队列为空，尝试窃取任务
+            // 2. Local queue empty, try to steal a task
             if let Some(job) = self.try_steal_job() {
                 job();
                 continue;
             }
 
-            // 3. 没有任务，yield
+            // 3. No tasks available, yield
             std::hint::spin_loop();
         }
     }
 
     fn try_local_job(&self) -> Option<Job> {
         let mut queue = self.local_queue.lock().unwrap();
-        queue.pop_front()  // 从头部获取
+        queue.pop_front()  // Take from front
     }
 
     fn try_steal_job(&self) -> Option<Job> {
-        // 随机选择其他队列进行窃取
+        // Randomly select other queues to steal from
         let num_workers = self.all_queues.len();
         let start = (self.id + 1) % num_workers;
 
         for i in 0..num_workers {
             let target_id = (start + i) % num_workers;
             if target_id == self.id {
-                continue;  // 不从自己队列窃取
+                continue;  // Don't steal from own queue
             }
 
             if let Some(job) = self.steal_from_queue(target_id) {
@@ -235,30 +235,30 @@ impl Worker {
 
     fn steal_from_queue(&self, target_id: usize) -> Option<Job> {
         let mut queue = self.all_queues[target_id].lock().unwrap();
-        queue.pop_back()  // 从尾部窃取
+        queue.pop_back()  // Steal from back
     }
 }
 ```
 
-### 3.11.4 死锁预防
+### 3.11.4 Deadlock Prevention
 
-基于 `rust-concurrency/sync/mutex-rwlock.md`:
+Based on `rust-concurrency/sync/mutex-rwlock.md`:
 
-#### 全局锁顺序定义
+#### Global Lock Ordering Definition
 
 ```rust
-/// 全局锁顺序 (避免死锁)
+/// Global lock ordering (to prevent deadlocks)
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
 pub enum LockOrder {
-    SessionConfig = 0,     // 配置锁
-    TargetSet = 1,          // 目标集合锁
-    PacketEngine = 2,        // 包引擎锁
-    PortList = 3,           // 端口列表锁
-    Results = 4,             // 结果锁
-    Output = 5,              // 输出锁
+    SessionConfig = 0,     // Configuration lock
+    TargetSet = 1,          // Target set lock
+    PacketEngine = 2,        // Packet engine lock
+    PortList = 3,           // Port list lock
+    Results = 4,             // Results lock
+    Output = 5,              // Output lock
 }
 
-/// 有序锁包装器
+/// Ordered mutex wrapper
 pub struct OrderedMutex<T> {
     order: LockOrder,
     inner: Mutex<T>,
@@ -277,36 +277,36 @@ impl<T> OrderedMutex<T> {
     }
 }
 
-/// 正确的锁定顺序示例
+/// Correct lock ordering example
 fn scan_host_with_port_check(
     session: &OrderedMutex<ScanSession>,
     ports: &OrderedMutex<PortList>,
 ) {
-    // 总是按照 LockOrder 顺序获取锁
+    // Always acquire locks in LockOrder sequence
     let _s1 = session.lock();  // SessionConfig < PortList
     let _s2 = ports.lock();
-    // ... 扫描逻辑
+    // ... scan logic
 }
 ```
 
-### 3.11.5 热路径内存分配策略
+### 3.11.5 Hot Path Memory Allocation Strategy
 
-基于 Deepseek 设计和 rust-guidelines:
+Based on Deepseek design and rust-guidelines:
 
-#### 禁止动态分配的场景
+#### Scenarios Where Dynamic Allocation Is Prohibited
 
 ```rust
-/// 热路径：数据包接收循环
-/// ❌ 错误：使用 Vec 动态分配
+/// Hot path: packet receive loop
+/// Wrong: using Vec for dynamic allocation
 pub fn recv_packet_bad() -> Vec<u8> {
-    let mut buffer = Vec::with_capacity(65535);  // 堆分配
-    // ... 填充数据
+    let mut buffer = Vec::with_capacity(65535);  // Heap allocation
+    // ... fill data
     buffer
 }
 
-/// ✅ 正确：使用栈上数组或预分配池
+/// Correct: use stack-allocated array or pre-allocated pool
 pub struct PacketPool {
-    buffers: Box<[u8; 65535 * 256]>,  // 预分配 16MB
+    buffers: Box<[u8; 65535 * 256]>,  // Pre-allocate 16MB
     free_list: AtomicUsize,
 }
 
@@ -319,46 +319,46 @@ impl PacketPool {
 }
 ```
 
-#### 零拷贝数据包传递
+#### Zero-Copy Packet Passing
 
 ```rust
 use bytes::{Bytes, BytesMut};
 
-/// 零拷贝数据包引用
+/// Zero-copy packet reference
 pub struct ZeroCopyPacket {
-    /// 使用 Bytes 引用计数，避免拷贝
+    /// Use Bytes reference counting to avoid copies
     data: Bytes,
     timestamp: std::time::Instant,
 }
 
 impl ZeroCopyPacket {
-    /// 从 PACKET_MMAP 区域创建 (无拷贝)
+    /// Create from PACKET_MMAP region (no copy)
     pub unsafe fn from_mmap_ptr(
         ptr: *const u8,
         len: usize,
         timestamp: std::time::Instant,
     ) -> Self {
-        // Bytes::from_raw_parts 不拷贝数据
+        // Bytes::from_raw_parts does not copy data
         Self {
             data: Bytes::from_raw_parts(ptr as *const u8, len),
             timestamp,
         }
     }
 
-    /// 克隆只增加引用计数
+    /// Clone only increments reference count
     pub fn clone(&self) -> Self {
         Self {
-            data: self.data.clone(),  // 引用计数 +1，无数据拷贝
+            data: self.data.clone(),  // Reference count +1, no data copy
             timestamp: self.timestamp,
         }
     }
 }
 ```
 
-### 3.11.6 时序模板并发控制
+### 3.11.6 Timing Template Concurrency Control
 
 ```rust
-/// Nmap T0-T5 时序模板并发参数
+/// Nmap T0-T5 timing template concurrency parameters
 #[derive(Debug, Clone)]
 pub struct TimingTemplate {
     pub min_parallelism: usize,
@@ -370,7 +370,7 @@ pub struct TimingTemplate {
     pub max_retries: u8,
 }
 
-/// 时序模板定义 (与 Nmap 一致)
+/// Timing template definitions (consistent with Nmap)
 pub const TEMPLATES: &[TimingTemplate] = &[
     TimingTemplate {  // T0: Paranoid
         min_parallelism: 1,
@@ -393,7 +393,7 @@ pub const TEMPLATES: &[TimingTemplate] = &[
     // ... T2-T5
 ];
 
-/// 令牌桶速率限制器
+/// Token bucket rate limiter
 pub struct TokenBucket {
     tokens: AtomicU64,
     capacity: u64,
@@ -408,7 +408,7 @@ impl TokenBucket {
             .unwrap()
             .as_secs();
 
-        // 恢复令牌
+        // Replenish tokens
         let last = self.last_update.load(Ordering::Relaxed);
         let elapsed = now.saturating_sub(last);
         if elapsed > 0 {
@@ -419,7 +419,7 @@ impl TokenBucket {
             self.last_update.store(now, Ordering::Relaxed);
         }
 
-        // 消耗令牌
+        // Consume tokens
         loop {
             let current = self.tokens.load(Ordering::Acquire);
             if current < tokens {

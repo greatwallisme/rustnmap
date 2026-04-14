@@ -1,94 +1,92 @@
-# RustNmap NSE Scripting Engine / NSE 脚本引擎
+# RustNmap NSE Scripting Engine
 
-> **版本**: 1.0.0
-> **状态**: 此文档描述 RustNmap 1.0.0 的 NSE 脚本引擎。2.0 版本开发中，详见 [CHANGELOG.md](../CHANGELOG.md)。
+> **Version**: 1.0.0
+> **Status**: This document describes the NSE scripting engine in RustNmap 1.0.0. Version 2.0 is under development; see [CHANGELOG.md](../CHANGELOG.md).
 
-> **Complete guide to NSE scripting in RustNmap** / RustNmap 中 NSE 脚本的完整指南
+> **Complete guide to NSE scripting in RustNmap**
 
 ---
 
-## Overview / 概述
+## Overview
 
 The Nmap Scripting Engine (NSE) is one of RustNmap's most powerful features. It allows you to write (and execute) scripts that automate a wide variety of networking tasks.
 
-Nmap 脚本引擎（NSE）是 RustNmap 最强大的功能之一。它允许您编写（和执行）脚本来自动化各种网络任务。
+### Key Features
 
-### Key Features / 主要特性
-
-- **6000+ scripts** available in Nmap's script database / Nmap 脚本数据库中有 **6000+ 脚本**
-- **14 categories** of scripts organized by purpose / 按用途组织的 **14 个类别**脚本
-- **Lua 5.4** scripting language / **Lua 5.4** 脚本语言
-- **Custom libraries** for network operations / 用于网络操作的**自定义库**
+- **6000+ scripts** available in Nmap's script database
+- **14 categories** of scripts organized by purpose
+- **Lua 5.4** scripting language
+- **Custom libraries** for network operations
 
 ---
 
-## Running Scripts / 运行脚本
+## Running Scripts
 
-### Default Scripts / 默认脚本
+### Default Scripts
 
 ```bash
-# Run default scripts / 运行默认脚本
+# Run default scripts
 sudo rustnmap -sC 192.168.1.1
 
-# Equivalent to / 等同于：
+# Equivalent to:
 sudo rustnmap --script=default 192.168.1.1
 ```
 
-### Specific Scripts / 特定脚本
+### Specific Scripts
 
 ```bash
-# Single script / 单个脚本
+# Single script
 sudo rustnmap --script http-title 192.168.1.1
 
-# Multiple scripts / 多个脚本
+# Multiple scripts
 sudo rustnmap --script http-title,http-headers,http-methods 192.168.1.1
 ```
 
-### Script Categories / 脚本类别
+### Script Categories
 
 ```bash
-# Safe scripts only / 仅安全脚本
+# Safe scripts only
 sudo rustnmap --script "safe" 192.168.1.1
 
-# Discovery scripts / 发现脚本
+# Discovery scripts
 sudo rustnmap --script "discovery" 192.168.1.1
 
-# Vulnerability scripts / 漏洞脚本
+# Vulnerability scripts
 sudo rustnmap --script "vuln" 192.168.1.1
 
-# Multiple categories / 多个类别
+# Multiple categories
 sudo rustnmap --script "safe,discovery" 192.168.1.1
 ```
 
-### Pattern Matching / 模式匹配
+### Pattern Matching
 
 ```bash
-# All HTTP scripts / 所有 HTTP 脚本
+# All HTTP scripts
 sudo rustnmap --script "http-*" 192.168.1.1
 
-# All SMB scripts / 所有 SMB 脚本
+# All SMB scripts
 sudo rustnmap --script "smb-*" 192.168.1.1
 
-# All scripts with 'enum' in name / 名称中包含 'enum' 的所有脚本
+# All scripts with 'enum' in name
 sudo rustnmap --script "*enum*" 192.168.1.1
 ```
 
-### Boolean Expressions / 布尔表达式
+### Boolean Expressions
 
 ```bash
-# Scripts in category A AND B / A 和 B 类别的脚本
+# Scripts in category A AND B
 sudo rustnmap --script "safe and intrusive" 192.168.1.1
 
-# Scripts in category A OR B / A 或 B 类别的脚本
+# Scripts in category A OR B
 sudo rustnmap --script "discovery or version" 192.168.1.1
 
-# Exclude category / 排除类别
+# Exclude category
 sudo rustnmap --script "default and not intrusive" 192.168.1.1
 ```
 
 ---
 
-## Script Categories / 脚本类别
+## Script Categories
 
 | Category | Description | Use Case |
 |----------|-------------|----------|
@@ -109,111 +107,109 @@ sudo rustnmap --script "default and not intrusive" 192.168.1.1
 
 ---
 
-## Script Arguments / 脚本参数
+## Script Arguments
 
-### Passing Arguments / 传递参数
+### Passing Arguments
 
 ```bash
-# Single argument / 单个参数
+# Single argument
 sudo rustnmap --script http-title \
   --script-args "http.useragent=Mozilla/5.0" 192.168.1.1
 
-# Multiple arguments / 多个参数
+# Multiple arguments
 sudo rustnmap --script smb-enum-shares \
   --script-args "smbuser=admin,smbpass=secret" 192.168.1.1
 
-# Arguments for different scripts / 不同脚本的参数
+# Arguments for different scripts
 sudo rustnmap --script http-title,dns-brute \
   --script-args "http.useragent=Mozilla,dns-brute.domain=example.com" 192.168.1.1
 ```
 
-### Common Arguments / 常见参数
+### Common Arguments
 
-#### HTTP Scripts / HTTP 脚本
+#### HTTP Scripts
 
 ```bash
-# Set User-Agent / 设置 User-Agent
+# Set User-Agent
 --script-args "http.useragent=Mozilla/5.0"
 
-# Set timeout / 设置超时
+# Set timeout
 --script-args "http.timeout=30"
 
-# Set pipeline / 设置管道
+# Set pipeline
 --script-args "http.pipeline=10"
 
-# Follow redirects / 跟随重定向
+# Follow redirects
 --script-args "http.max-redirects=3"
 ```
 
-#### SMB Scripts / SMB 脚本
+#### SMB Scripts
 
 ```bash
-# Set credentials / 设置凭证
+# Set credentials
 --script-args "smbuser=administrator,smbpass=password"
 
-# Use hash / 使用哈希
+# Use hash
 --script-args "smbhash=aad3b435b51404eeaad3b435b51404ee"
 
-# Set domain / 设置域
+# Set domain
 --script-args "smbdomain=WORKGROUP"
 ```
 
-#### DNS Scripts / DNS 脚本
+#### DNS Scripts
 
 ```bash
-# Set DNS server / 设置 DNS 服务器
+# Set DNS server
 --script-args "dns-brute.srvlist=dns.txt"
 
-# Set threads / 设置线程
+# Set threads
 --script-args "dns-brute.threads=20"
 ```
 
 ---
 
-## Script Files / 脚本文件
+## Script Files
 
-### Script Locations / 脚本位置
+### Script Locations
 
 ```
-/etc/rustnmap/scripts/           # System scripts / 系统脚本
-/usr/share/rustnmap/scripts/     # Shared scripts / 共享脚本
-~/.rustnmap/scripts/             # User scripts / 用户脚本
-./scripts/                       # Local scripts / 本地脚本
+/etc/rustnmap/scripts/           # System scripts
+/usr/share/rustnmap/scripts/     # Shared scripts
+~/.rustnmap/scripts/             # User scripts
+./scripts/                       # Local scripts
 ```
 
-### Script Database / 脚本数据库
+### Script Database
 
 ```bash
-# Update script database / 更新脚本数据库
+# Update script database
 rustnmap --script-updatedb
 
-# Help for specific script / 特定脚本帮助
+# Help for specific script
 rustnmap --script-help http-title
 ```
 
 ---
 
-## NSE Libraries / NSE 库
+## NSE Libraries
 
-### Standard Libraries / 标准库
+### Standard Libraries
 
 #### `nmap` Library
 
 Core functions for scanning operations.
 
-扫描操作的核心函数。
-
 ```lua
--- Get current time / 获取当前时间
+-- Get current time
 local clock = nmap.clock()
 
--- Get address family / 获取地址族
+-- Get address family
 local family = nmap.address_family()
 
--- Log message / 记录消息
+-- Log message
 nmap.log_write("stdout", "Scanning target...")
 
--- Create socket / 创建套接字
+-- Create socket
 local socket = nmap.new_socket()
 ```
 
@@ -221,21 +217,19 @@ local socket = nmap.new_socket()
 
 Standard NSE utilities.
 
-标准 NSE 工具。
-
 ```lua
--- Debug output / 调试输出
+-- Debug output
 stdnse.debug1("Debug message: %s", variable)
 
--- Check if verbose / 检查是否详细
+-- Check if verbose
 if stdnse.get_verbose_level() > 0 then
     print("Verbose output")
 end
 
--- Format output table / 格式化输出表
+-- Format output table
 local output = stdnse.format_output(true, results)
 
--- Get script arguments / 获取脚本参数
+-- Get script arguments
 local arg = stdnse.get_script_args(SCRIPT_NAME .. ".timeout")
 ```
 
@@ -243,16 +237,14 @@ local arg = stdnse.get_script_args(SCRIPT_NAME .. ".timeout")
 
 Communication utilities.
 
-通信工具。
-
 ```lua
--- Open connection / 打开连接
+-- Open connection
 local socket, err = comm.opencon(host, port, "data")
 
--- Get banner / 获取 banner
+-- Get banner
 local banner = comm.get_banner(host, port)
 
--- Exchange data / 交换数据
+-- Exchange data
 local response = comm.exchange(host, port, "request\r\n")
 ```
 
@@ -260,179 +252,174 @@ local response = comm.exchange(host, port, "request\r\n")
 
 Port matching utilities.
 
-端口匹配工具。
-
 ```lua
--- Match HTTP ports / 匹配 HTTP 端口
+-- Match HTTP ports
 portrule = shortport.http
 
--- Match specific service / 匹配特定服务
+-- Match specific service
 portrule = shortport.port_or_service({80, 443}, "http")
 
--- Match version / 匹配版本
+-- Match version
 portrule = shortport.version_port_or_service(3306, "mysql")
 ```
 
 ---
 
-## Common Scripts Reference / 常用脚本参考
+## Common Scripts Reference
 
-### Web Scripts / Web 脚本
+### Web Scripts
 
 ```bash
-# Get page title / 获取页面标题
+# Get page title
 --script http-title
 
-# Get HTTP headers / 获取 HTTP 头
+# Get HTTP headers
 --script http-headers
 
-# Enumerate HTTP methods / 枚举 HTTP 方法
+# Enumerate HTTP methods
 --script http-methods
 
-# Find directories / 查找目录
+# Find directories
 --script http-enum
 
-# Check for SQL injection / 检查 SQL 注入
+# Check for SQL injection
 --script http-sql-injection
 
-# Check for XSS / 检查 XSS
+# Check for XSS
 --script http-stored-xss
 
-# Check SSL/TLS / 检查 SSL/TLS
+# Check SSL/TLS
 --script ssl-cert,ssl-enum-ciphers
 
-# Check for Heartbleed / 检查 Heartbleed
+# Check for Heartbleed
 --script ssl-heartbleed
 ```
 
-### SMB Scripts / SMB 脚本
+### SMB Scripts
 
 ```bash
-# Enumerate shares / 枚举共享
+# Enumerate shares
 --script smb-enum-shares
 
-# Enumerate users / 枚举用户
+# Enumerate users
 --script smb-enum-users
 
-# Check for MS17-010 (EternalBlue) / 检查 MS17-010
+# Check for MS17-010 (EternalBlue)
 --script smb-vuln-ms17-010
 
-# Enumerate domains / 枚举域
+# Enumerate domains
 --script smb-enum-domains
 
-# OS discovery / 操作系统发现
+# OS discovery
 --script smb-os-discovery
 ```
 
-### SSH Scripts / SSH 脚本
+### SSH Scripts
 
 ```bash
-# Get SSH host key / 获取 SSH 主机密钥
+# Get SSH host key
 --script ssh-hostkey
 
-# Enumerate algorithms / 枚举算法
+# Enumerate algorithms
 --script ssh2-enum-algos
 
-# Brute force / 暴力破解
+# Brute force
 --script ssh-brute
 
-# Check version / 检查版本
+# Check version
 --script sshv1
 ```
 
-### Database Scripts / 数据库脚本
+### Database Scripts
 
 ```bash
-# MySQL enumeration / MySQL 枚举
+# MySQL enumeration
 --script mysql-info,mysql-empty-password
 
-# MongoDB enumeration / MongoDB 枚举
+# MongoDB enumeration
 --script mongodb-info
 
-# Redis enumeration / Redis 枚举
+# Redis enumeration
 --script redis-info
 
-# MS SQL enumeration / MS SQL 枚举
+# MS SQL enumeration
 --script ms-sql-info,ms-sql-empty-password
 ```
 
-### Network Scripts / 网络脚本
+### Network Scripts
 
 ```bash
-# DNS enumeration / DNS 枚举
+# DNS enumeration
 --script dns-brute
 
-# Traceroute / 路由跟踪
+# Traceroute
 --script traceroute-geolocation
 
-# Whois lookup / Whois 查询
+# Whois lookup
 --script whois-domain,whois-ip
 
-# Check for broadcast listeners / 检查广播监听器
+# Check for broadcast listeners
 --script broadcast-ping
 ```
 
-### Vulnerability Scripts / 漏洞脚本
+### Vulnerability Scripts
 
 ```bash
-# Comprehensive vulnerability scan / 综合漏洞扫描
+# Comprehensive vulnerability scan
 --script vuln
 
-# Check for specific CVE / 检查特定 CVE
+# Check for specific CVE
 --script vulners
 
-# Check for common vulnerabilities / 检查常见漏洞
+# Check for common vulnerabilities
 --script http-vuln-cve2017-5638  # Apache Struts
 --script http-vuln-cve2017-1001000  # WordPress REST API
 ```
 
 ---
 
-## Writing NSE Scripts / 编写 NSE 脚本
+## Writing NSE Scripts
 
-### Script Structure / 脚本结构
+### Script Structure
 
 ```lua
--- description / 描述
+-- description
 description = [[
 Short description of what the script does.
-Script 功能的简短描述。
 ]]
 
--- categories / 类别
+-- categories
 categories = {"discovery", "safe"}
 
--- author / 作者
+-- author
 author = "Your Name"
 
--- license / 许可证
+-- license
 license = "Same as RustNmap"
 
--- dependencies / 依赖
+-- dependencies
 dependencies = {"other-script"}
 
--- rule function / 规则函数
+-- rule function
 hostrule = function(host)
     -- Return true if script should run against this host
-    -- 如果脚本应针对此主机运行，返回 true
     return true
 end
 
 portrule = function(host, port)
     -- Return true if script should run against this port
-    -- 如果脚本应针对此端口运行，返回 true
     return port.protocol == "tcp"
         and port.state == "open"
 end
 
--- action function / 操作函数
+-- action function
 action = function(host, port)
-    -- Main script logic / 主脚本逻辑
+    -- Main script logic
     return "Script output"
 end
 ```
 
-### Complete Example / 完整示例
+### Complete Example
 
 ```lua
 -- http-custom-check.nse
@@ -444,14 +431,13 @@ local stdnse = require "stdnse"
 
 description = [[
 Checks for a custom HTTP header in responses.
-检查响应中的自定义 HTTP 头。
 ]]
 
 categories = {"discovery", "safe"}
 author = "Your Name"
 license = "Same as RustNmap"
 
--- Command line arguments / 命令行参数
+-- Command line arguments
 local arg_header = stdnse.get_script_args(SCRIPT_NAME .. ".header") or "X-Custom-Header"
 
 portrule = function(host, port)
@@ -479,39 +465,39 @@ action = function(host, port)
 end
 ```
 
-### Host Rule Examples / 主机规则示例
+### Host Rule Examples
 
 ```lua
--- Run against all hosts / 针对所有主机运行
+-- Run against all hosts
 hostrule = function(host)
     return true
 end
 
--- Run only against local network / 仅针对本地网络运行
+-- Run only against local network
 hostrule = function(host)
     return host.ip:match("^192%.168%.")
 end
 
--- Run only if hostname resolved / 仅在主机名解析时运行
+-- Run only if hostname resolved
 hostrule = function(host)
     return host.targetname ~= nil
 end
 ```
 
-### Port Rule Examples / 端口规则示例
+### Port Rule Examples
 
 ```lua
--- Run against HTTP ports / 针对 HTTP 端口运行
+-- Run against HTTP ports
 portrule = function(host, port)
     return port.protocol == "tcp"
         and (port.number == 80 or port.number == 443)
 end
 
--- Use shortport library / 使用 shortport 库
+-- Use shortport library
 local shortport = require "shortport"
 portrule = shortport.http
 
--- Run against specific services / 针对特定服务运行
+-- Run against specific services
 portrule = function(host, port)
     return port.service == "ssh"
         or port.service == "telnet"
@@ -520,9 +506,9 @@ end
 
 ---
 
-## Script Examples / 脚本示例
+## Script Examples
 
-### Banner Grabbing Script / Banner 抓取脚本
+### Banner Grabbing Script
 
 ```lua
 local comm = require "comm"
@@ -530,7 +516,6 @@ local shortport = require "shortport"
 
 description = [[
 Grabs the banner from a TCP service.
-从 TCP 服务抓取 banner。
 ]]
 
 categories = {"discovery", "safe"}
@@ -552,7 +537,7 @@ action = function(host, port)
 end
 ```
 
-### HTTP Authentication Check / HTTP 认证检查
+### HTTP Authentication Check
 
 ```lua
 local http = require "http"
@@ -560,7 +545,6 @@ local shortport = require "shortport"
 
 description = [[
 Checks if HTTP basic authentication is enabled.
-检查是否启用了 HTTP 基本认证。
 ]]
 
 categories = {"auth", "safe"}
@@ -580,92 +564,92 @@ end
 
 ---
 
-## Best Practices / 最佳实践
+## Best Practices
 
-### Script Selection / 脚本选择
+### Script Selection
 
 ```bash
-# Start with safe scripts / 从安全脚本开始
+# Start with safe scripts
 sudo rustnmap -sC 192.168.1.1
 
-# Add discovery scripts / 添加发现脚本
+# Add discovery scripts
 sudo rustnmap --script "default,discovery" 192.168.1.1
 
-# Use vulnerability scripts carefully / 谨慎使用漏洞脚本
+# Use vulnerability scripts carefully
 sudo rustnmap --script "vuln" 192.168.1.1
 
-# Avoid intrusive scripts in production / 避免在生产环境使用侵入性脚本
+# Avoid intrusive scripts in production
 ```
 
-### Performance Optimization / 性能优化
+### Performance Optimization
 
 ```bash
-# Limit concurrent scripts / 限制并发脚本
+# Limit concurrent scripts
 --script-args "max-concurrency=10"
 
-# Set script timeout / 设置脚本超时
+# Set script timeout
 --script-args "script-timeout=60"
 
-# Disable DNS resolution for scripts / 禁用脚本 DNS 解析
+# Disable DNS resolution for scripts
 -n
 ```
 
-### Output Handling / 输出处理
+### Output Handling
 
 ```bash
-# Save with normal output / 与普通输出一起保存
+# Save with normal output
 sudo rustnmap -sC -oN results.nmap 192.168.1.1
 
-# Save as XML for parsing / 保存为 XML 以便解析
+# Save as XML for parsing
 sudo rustnmap -sC -oX results.xml 192.168.1.1
 
-# Quiet mode with script output / 安静模式带脚本输出
+# Quiet mode with script output
 sudo rustnmap -sC -oN results.nmap --script-trace 192.168.1.1
 ```
 
 ---
 
-## Troubleshooting / 故障排除
+## Troubleshooting
 
-### Script Not Running / 脚本未运行
+### Script Not Running
 
 ```bash
-# Check script details / 检查脚本详情
+# Check script details
 rustnmap --script-help script-name
 
-# Run with debug output / 使用调试输出运行
+# Run with debug output
 sudo rustnmap --script script-name -d 192.168.1.1
 
-# Check script details / 检查脚本详情
+# Check script details
 rustnmap --script-help script-name
 ```
 
-### Script Errors / 脚本错误
+### Script Errors
 
 ```bash
-# Run with verbose output / 使用详细输出运行
+# Run with verbose output
 sudo rustnmap --script script-name -vv 192.168.1.1
 
-# Check script arguments / 检查脚本参数
+# Check script arguments
 sudo rustnmap --script script-name --script-args "debug=true" 192.168.1.1
 ```
 
-### Performance Issues / 性能问题
+### Performance Issues
 
 ```bash
-# Reduce script concurrency / 减少脚本并发
+# Reduce script concurrency
 --script-args "max-concurrency=5"
 
-# Set individual script timeout / 设置单个脚本超时
+# Set individual script timeout
 --script-args "script-timeout=30"
 
-# Skip slow scripts / 跳过慢速脚本
+# Skip slow scripts
 --script "default and not brute"
 ```
 
 ---
 
-## References / 参考
+## References
 
 - [Nmap NSE Documentation](https://nmap.org/book/nse.html)
 - [Lua 5.4 Reference Manual](https://www.lua.org/manual/5.4/)

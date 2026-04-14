@@ -1,53 +1,53 @@
-# 扫描管理模块 (rustnmap-scan-management)
+# Scan Management Module (rustnmap-scan-management)
 
-> **版本**: 2.0.0 (开发中)
-> **对应 Phase**: Phase 3 (Week 8-9)
-> **优先级**: P1
-
----
-
-## 概述
-
-扫描管理模块提供扫描结果的持久化存储、历史查询、结果对比（Diff）和配置文件管理功能。这是 RustNmap 2.0 从一次性扫描工具升级为持续性安全监控平台的关键组件。
+> **Version**: 2.0.0 (In Development)
+> **Phase**: Phase 3 (Week 8-9)
+> **Priority**: P1
 
 ---
 
-## 功能特性
+## Overview
 
-### 1. 扫描结果持久化
-
-- 使用 SQLite 存储历史扫描结果
-- 支持按时间、目标、扫描类型查询
-- 自动清理过期数据（可选）
-
-### 2. 扫描结果 Diff
-
-- 对比两次扫描结果的差异
-- 识别新增主机、消失主机
-- 识别端口变化、服务版本变化
-- 识别新增漏洞
-
-### 3. 扫描历史查询
-
-- 按时间范围查询
-- 按目标查询
-- 按扫描类型查询
-- 导出历史记录
-
-### 4. 配置即代码 (YAML Profiles)
-
-- YAML 格式配置文件
-- 支持继承和覆盖
-- 版本控制和复用
+The scan management module provides persistent storage of scan results, historical queries, result diffing, and configuration profile management. This is a key component in upgrading RustNmap 2.0 from a one-shot scanning tool to a continuous security monitoring platform.
 
 ---
 
-## 数据库设计
+## Features
+
+### 1. Scan Result Persistence
+
+- Store historical scan results using SQLite
+- Query by time, target, or scan type
+- Optional automatic cleanup of expired data
+
+### 2. Scan Result Diff
+
+- Compare differences between two scan results
+- Identify newly discovered and disappeared hosts
+- Detect port changes and service version changes
+- Identify newly discovered vulnerabilities
+
+### 3. Scan History Queries
+
+- Query by time range
+- Query by target
+- Query by scan type
+- Export history records
+
+### 4. Configuration as Code (YAML Profiles)
+
+- YAML-format configuration files
+- Support inheritance and overrides
+- Version control and reuse
+
+---
+
+## Database Design
 
 ### Schema
 
 ```sql
--- 扫描任务表
+-- Scan task table
 CREATE TABLE IF NOT EXISTS scans (
     id TEXT PRIMARY KEY,
     started_at TIMESTAMP NOT NULL,
@@ -61,7 +61,7 @@ CREATE TABLE IF NOT EXISTS scans (
     profile_name TEXT
 );
 
--- 主机结果表
+-- Host results table
 CREATE TABLE IF NOT EXISTS host_results (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     scan_id TEXT NOT NULL,
@@ -76,7 +76,7 @@ CREATE TABLE IF NOT EXISTS host_results (
     UNIQUE(scan_id, ip_addr)
 );
 
--- 端口结果表
+-- Port results table
 CREATE TABLE IF NOT EXISTS port_results (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     host_id INTEGER NOT NULL,
@@ -91,7 +91,7 @@ CREATE TABLE IF NOT EXISTS port_results (
     UNIQUE(host_id, port, protocol)
 );
 
--- 漏洞结果表
+-- Vulnerability results table
 CREATE TABLE IF NOT EXISTS vulnerability_results (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     host_id INTEGER NOT NULL,
@@ -103,7 +103,7 @@ CREATE TABLE IF NOT EXISTS vulnerability_results (
     FOREIGN KEY (host_id) REFERENCES host_results(id)
 );
 
--- 索引
+-- Indexes
 CREATE INDEX idx_scans_started_at ON scans(started_at);
 CREATE INDEX idx_scans_target ON scans(target_spec);
 CREATE INDEX idx_host_results_ip ON host_results(ip_addr);
@@ -114,278 +114,278 @@ CREATE INDEX idx_vulnerability_kev ON vulnerability_results(is_kev);
 
 ---
 
-## 核心 API
+## Core API
 
-### ScanHistory (历史查询)
+### ScanHistory (Historical Queries)
 
 ```rust
-/// 扫描历史管理器
+/// Scan history manager
 pub struct ScanHistory {
     db: Arc<SqliteConnection>,
 }
 
 impl ScanHistory {
-    /// 打开或创建数据库
+    /// Open or create database
     pub async fn open(db_path: &Path) -> Result<Self>;
 
-    /// 保存扫描结果
+    /// Save scan result
     pub async fn save_scan(&self, result: &ScanResult) -> Result<String>;
 
-    /// 查询扫描列表
+    /// List scans with filter
     pub async fn list_scans(&self, filter: ScanFilter) -> Result<Vec<ScanSummary>>;
 
-    /// 获取扫描详情
+    /// Get scan details
     pub async fn get_scan(&self, id: &str) -> Result<ScanResult>;
 
-    /// 获取目标的历史扫描
+    /// Get historical scans for a target
     pub async fn get_target_history(&self, target: &str) -> Result<Vec<ScanSummary>>;
 
-    /// 删除过期扫描
+    /// Delete expired scans
     pub async fn prune_old_scans(&self, retention_days: u32) -> Result<usize>;
 }
 
-/// 扫描过滤器
+/// Scan filter
 pub struct ScanFilter {
-    /// 时间范围开始
+    /// Time range start
     pub since: Option<DateTime<Utc>>,
 
-    /// 时间范围结束
+    /// Time range end
     pub until: Option<DateTime<Utc>>,
 
-    /// 目标过滤
+    /// Target filter
     pub target: Option<String>,
 
-    /// 扫描类型过滤
+    /// Scan type filter
     pub scan_type: Option<ScanType>,
 
-    /// 状态过滤
+    /// Status filter
     pub status: Option<ScanStatus>,
 
-    /// 每页数量
+    /// Results per page
     pub limit: Option<usize>,
 
-    /// 偏移量
+    /// Offset
     pub offset: Option<usize>,
 }
 ```
 
-### ScanDiff (结果对比)
+### ScanDiff (Result Comparison)
 
 ```rust
-/// 扫描对比工具
+/// Scan comparison tool
 pub struct ScanDiff {
     before: ScanResult,
     after: ScanResult,
 }
 
 impl ScanDiff {
-    /// 创建对比
+    /// Create comparison
     pub fn new(before: ScanResult, after: ScanResult) -> Self;
 
-    /// 从数据库加载并对比
+    /// Load from database and compare
     pub async fn from_history(
         history: &ScanHistory,
         before_id: &str,
         after_id: &str
     ) -> Result<Self>;
 
-    /// 获取主机变化
+    /// Get host changes
     pub fn host_changes(&self) -> HostChanges;
 
-    /// 获取端口变化
+    /// Get port changes
     pub fn port_changes(&self) -> PortChanges;
 
-    /// 获取漏洞变化
+    /// Get vulnerability changes
     pub fn vulnerability_changes(&self) -> VulnerabilityChanges;
 
-    /// 生成对比报告
+    /// Generate comparison report
     pub fn generate_report(&self, format: DiffFormat) -> String;
 }
 
-/// 主机变化
+/// Host changes
 pub struct HostChanges {
-    /// 新增主机
+    /// Newly discovered hosts
     pub added: Vec<IpAddr>,
 
-    /// 消失主机
+    /// Disappeared hosts
     pub removed: Vec<IpAddr>,
 
-    /// 状态变化的主机
+    /// Hosts with status changes
     pub status_changed: Vec<HostStatusChange>,
 }
 
-/// 端口变化
+/// Port changes
 pub struct PortChanges {
-    /// 每个主机的端口变化
+    /// Port changes per host
     pub by_host: HashMap<IpAddr, HostPortChanges>,
 }
 
 pub struct HostPortChanges {
-    /// 新增端口
+    /// Newly opened ports
     pub added: Vec<PortChange>,
 
-    /// 关闭端口
+    /// Closed ports
     pub removed: Vec<PortChange>,
 
-    /// 状态变化的端口
+    /// Ports with state changes
     pub state_changed: Vec<PortChange>,
 
-    /// 服务版本变化的端口
+    /// Ports with service version changes
     pub service_changed: Vec<PortChange>,
 }
 
-/// 漏洞变化
+/// Vulnerability changes
 pub struct VulnerabilityChanges {
-    /// 新增漏洞
+    /// Newly discovered vulnerabilities
     pub added: Vec<VulnChange>,
 
-    /// 修复漏洞
+    /// Fixed vulnerabilities
     pub fixed: Vec<VulnChange>,
 
-    /// 风险变化的漏洞
+    /// Vulnerabilities with risk level changes
     pub risk_changed: Vec<VulnChange>,
 }
 ```
 
-### ScanProfile (配置管理)
+### ScanProfile (Configuration Management)
 
 ```rust
-/// 扫描配置模板
+/// Scan configuration profile
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ScanProfile {
-    /// 配置名称
+    /// Profile name
     pub name: String,
 
-    /// 配置描述
+    /// Profile description
     pub description: Option<String>,
 
-    /// 目标列表
+    /// Target list
     pub targets: Vec<String>,
 
-    /// 排除目标
+    /// Excluded targets
     #[serde(default)]
     pub exclude: Vec<String>,
 
-    /// 扫描配置
+    /// Scan configuration
     pub scan: ScanConfig,
 
-    /// 输出配置
+    /// Output configuration
     pub output: OutputConfig,
 
-    /// 继承的配置文件
+    /// Inherited profile
     #[serde(rename = "extends")]
     pub extends_from: Option<String>,
 }
 
-/// 扫描配置
+/// Scan configuration
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ScanConfig {
-    /// 扫描类型
+    /// Scan type
     #[serde(rename = "type")]
     pub scan_type: String,
 
-    /// 端口范围
+    /// Port range
     pub ports: Option<String>,
 
-    /// 服务检测
+    /// Service detection
     #[serde(default)]
     pub service_detection: bool,
 
-    /// OS 检测
+    /// OS detection
     #[serde(default)]
     pub os_detection: bool,
 
-    /// NSE 脚本
+    /// NSE scripts
     #[serde(default)]
     pub scripts: Vec<String>,
 
-    /// 漏洞扫描
+    /// Vulnerability scanning
     #[serde(default)]
     pub vulnerability_scan: bool,
 
-    /// 时序模板
+    /// Timing template
     #[serde(default = "default_timing")]
     pub timing: String,
 }
 
 impl ScanProfile {
-    /// 从文件加载
+    /// Load from file
     pub fn from_file(path: &Path) -> Result<Self>;
 
-    /// 保存到文件
+    /// Save to file
     pub fn save(&self, path: &Path) -> Result<()>;
 
-    /// 从字符串解析
+    /// Parse from string
     pub fn from_yaml(yaml: &str) -> Result<Self>;
 
-    /// 验证配置
+    /// Validate configuration
     pub fn validate(&self) -> Result<()>;
 
-    /// 应用默认值
+    /// Apply default values
     pub fn with_defaults(mut self) -> Self;
 }
 ```
 
 ---
 
-## CLI 选项
+## CLI Options
 
-### 历史查询
+### History Queries
 
 ```bash
-# 列出所有扫描
+# List all scans
 rustnmap --history
 
-# 列出最近的扫描
+# List recent scans
 rustnmap --history --limit 10
 
-# 按时间范围查询
+# Query by time range
 rustnmap --history --since 2026-01-01 --until 2026-02-01
 
-# 按目标查询
+# Query by target
 rustnmap --history --target 192.168.1.10
 
-# 查看扫描详情
+# View scan details
 rustnmap --history --scan-id scan_001
 ```
 
-### 扫描对比
+### Scan Comparison
 
 ```bash
-# 对比两次扫描
+# Compare two scans
 rustnmap --diff scan_20240101.xml scan_20240201.xml
 
-# 从数据库对比
+# Compare from database
 rustnmap --diff --from-history scan_001 scan_002
 
-# 生成详细报告
+# Generate detailed report
 rustnmap --diff scan_001 scan_002 --format markdown --output diff.md
 
-# 仅显示漏洞变化
+# Show only vulnerability changes
 rustnmap --diff scan_001 scan_002 --vulns-only
 ```
 
-### 配置文件
+### Configuration Profiles
 
 ```bash
-# 使用配置文件扫描
+# Scan using a profile
 rustnmap --profile scan-profiles/weekly-internal.yaml
 
-# 列出可用配置
+# List available profiles
 rustnmap --list-profiles
 
-# 验证配置文件
+# Validate a profile
 rustnmap --validate-profile scan-profiles/weekly-internal.yaml
 
-# 创建配置模板
+# Generate a profile template
 rustnmap --generate-profile > my-scan.yaml
 ```
 
 ---
 
-## 使用示例
+## Usage Examples
 
-### 保存扫描结果
+### Saving Scan Results
 
 ```rust
 use rustnmap_sdk::{Scanner, ScanHistory};
@@ -394,7 +394,7 @@ use rustnmap_sdk::{Scanner, ScanHistory};
 async fn main() -> Result<()> {
     let scanner = Scanner::new()?;
 
-    // 执行扫描
+    // Execute scan
     let result = scanner
         .targets(["192.168.1.0/24"])
         .syn_scan()
@@ -402,7 +402,7 @@ async fn main() -> Result<()> {
         .run()
         .await?;
 
-    // 保存到数据库
+    // Save to database
     let history = ScanHistory::open("~/.rustnmap/scans.db").await?;
     let scan_id = history.save_scan(&result).await?;
 
@@ -412,7 +412,7 @@ async fn main() -> Result<()> {
 }
 ```
 
-### 对比扫描结果
+### Comparing Scan Results
 
 ```rust
 use rustnmap_sdk::{ScanHistory, ScanDiff, DiffFormat};
@@ -421,7 +421,7 @@ use rustnmap_sdk::{ScanHistory, ScanDiff, DiffFormat};
 async fn main() -> Result<()> {
     let history = ScanHistory::open("~/.rustnmap/scans.db").await?;
 
-    // 获取最近两次扫描
+    // Get the two most recent scans
     let scans = history.list_scans(ScanFilter {
         target: Some("192.168.1.0/24".to_string()),
         limit: Some(2),
@@ -433,13 +433,13 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
-    // 加载并对比
+    // Load and compare
     let before = history.get_scan(&scans[1].id).await?;
     let after = history.get_scan(&scans[0].id).await?;
 
     let diff = ScanDiff::new(before, after);
 
-    // 输出对比报告
+    // Output comparison report
     let host_changes = diff.host_changes();
     println!("=== Host Changes ===");
     println!("Added: {:?}", host_changes.added);
@@ -456,20 +456,20 @@ async fn main() -> Result<()> {
 }
 ```
 
-### 使用配置文件
+### Using Configuration Profiles
 
 ```rust
 use rustnmap_sdk::{Scanner, ScanProfile};
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // 加载配置文件
+    // Load profile
     let profile = ScanProfile::from_file("scan-profiles/weekly-internal.yaml")?;
 
-    // 验证配置
+    // Validate configuration
     profile.validate()?;
 
-    // 执行扫描
+    // Execute scan
     let scanner = Scanner::new()?;
     let result = scanner
         .from_profile(profile)
@@ -484,19 +484,19 @@ async fn main() -> Result<()> {
 
 ---
 
-## 配置文件示例
+## Configuration File Examples
 
-### 内网周扫描
+### Weekly Internal Network Scan
 
 ```yaml
 # scan-profiles/weekly-internal.yaml
-name: 内网周扫描
-description: 每周内网安全基线检查
+name: Weekly Internal Network Scan
+description: Weekly internal network security baseline check
 targets:
   - 192.168.0.0/16
   - 10.0.0.0/8
 exclude:
-  - 10.0.0.1  # 网关，跳过
+  - 10.0.0.1  # Gateway, skip
 scan:
   type: syn
   ports: "1-10000"
@@ -510,13 +510,13 @@ output:
   save_to_history: true
 ```
 
-### 快速端口扫描
+### Quick Port Scan
 
 ```yaml
 # scan-profiles/quick-scan.yaml
-name: 快速扫描
-description: 快速检查常见端口
-targets: []  # 从命令行指定
+name: Quick Scan
+description: Fast check of common ports
+targets: []  # Specify from command line
 scan:
   type: syn
   ports: "21,22,23,25,80,443,3306,3389,5432,8080"
@@ -527,13 +527,13 @@ output:
   formats: [normal]
 ```
 
-### 全面漏洞扫描
+### Full Vulnerability Scan
 
 ```yaml
 # scan-profiles/full-vuln-scan.yaml
-name: 全面漏洞扫描
-description: 完整的漏洞检测扫描
-targets: []  # 从命令行指定
+name: Full Vulnerability Scan
+description: Comprehensive vulnerability detection scan
+targets: []  # Specify from command line
 scan:
   type: syn
   ports: "1-65535"
@@ -554,70 +554,70 @@ output:
 
 ---
 
-## 对比报告格式
+## Comparison Report Format
 
-### Markdown 格式示例
+### Markdown Format Example
 
 ```markdown
-# 扫描结果对比报告
+# Scan Result Comparison Report
 
-**对比**: scan_20240101 -> scan_20240201
-**生成时间**: 2026-02-17
+**Comparison**: scan_20240101 -> scan_20240201
+**Generated**: 2026-02-17
 
-## 主机变化
+## Host Changes
 
-### 新增主机 (2)
-- 192.168.1.50 (首次发现)
-- 192.168.1.51 (首次发现)
+### New Hosts (2)
+- 192.168.1.50 (first discovered)
+- 192.168.1.51 (first discovered)
 
-### 消失主机 (1)
-- 192.168.1.30 (上次在线，本次未响应)
+### Disappeared Hosts (1)
+- 192.168.1.30 (was online previously, no response this time)
 
-## 端口变化
+## Port Changes
 
 ### 192.168.1.10
-- 新增端口: 8443/tcp (open)
-- 服务变更: 80/tcp (nginx 1.18.0 -> nginx 1.24.0)
+- New port: 8443/tcp (open)
+- Service change: 80/tcp (nginx 1.18.0 -> nginx 1.24.0)
 
 ### 192.168.1.15
-- 关闭端口: 21/tcp (closed)
+- Closed port: 21/tcp (closed)
 
-## 漏洞变化
+## Vulnerability Changes
 
-### 新增漏洞 (1)
+### New Vulnerabilities (1)
 - CVE-2024-XXXXX (CVSS 8.1) - 192.168.1.10
 
-## 统计
+## Statistics
 
-| 指标 | 上次 | 本次 | 变化 |
-|------|------|------|------|
-| 在线主机 | 45 | 46 | +1 |
-| 开放端口 | 123 | 124 | +1 |
-| 高危漏洞 | 5 | 6 | +1 |
+| Metric | Previous | Current | Change |
+|--------|----------|---------|--------|
+| Online hosts | 45 | 46 | +1 |
+| Open ports | 123 | 124 | +1 |
+| Critical vulnerabilities | 5 | 6 | +1 |
 ```
 
 ---
 
-## 性能优化
+## Performance Optimization
 
-### 批量插入
+### Batch Insert
 
 ```rust
-/// 批量保存扫描结果（事务处理）
+/// Batch save scan results (with transaction)
 pub async fn save_scan_batch(&self, result: &ScanResult) -> Result<String> {
     let mut tx = self.db.begin().await?;
 
-    // 保存扫描元数据
+    // Save scan metadata
     let scan_id = save_scan_metadata(&mut tx, result).await?;
 
-    // 批量保存主机
+    // Batch save hosts
     for host in &result.hosts {
         let host_id = save_host(&mut tx, scan_id, host).await?;
 
-        // 批量保存端口
+        // Batch save ports
         save_ports_batch(&mut tx, host_id, &host.ports).await?;
 
-        // 批量保存漏洞
+        // Batch save vulnerabilities
         save_vulnerabilities_batch(&mut tx, host_id, &host.vulnerabilities).await?;
     }
 
@@ -626,14 +626,14 @@ pub async fn save_scan_batch(&self, result: &ScanResult) -> Result<String> {
 }
 ```
 
-### 查询优化
+### Query Optimization
 
 ```sql
--- 使用覆盖索引
+-- Use covering index
 CREATE INDEX idx_port_results_covering
 ON port_results(host_id, state, port, protocol);
 
--- 使用物化视图（SQLite 用表模拟）
+-- Use materialized view (simulated with table in SQLite)
 CREATE TABLE IF NOT EXISTS mv_host_summary AS
 SELECT
     scan_id,
@@ -647,29 +647,29 @@ GROUP BY scan_id, ip_addr;
 
 ---
 
-## 与 RETHINK.md 对齐
+## Alignment with RETHINK.md
 
-| 章节 | 对应内容 |
-|------|---------|
-| 9.2.1 扫描 Diff | 结果对比功能 |
-| 9.2.2 结果持久化 | SQLite 存储 |
-| 9.2.4 配置即代码 | YAML Profiles |
-| 12.3 Phase 3 | 扫描管理能力（Week 8-9） |
-| 14.2 Phase 1-3 | OutputSink 与持久化集成 |
-
----
-
-## 下一步
-
-1. **Week 8**: 实现 SQLite 数据库 Schema 和保存逻辑
-2. **Week 8**: 实现历史查询 API
-3. **Week 9**: 实现 Diff 引擎和报告生成
-4. **Week 9**: 实现 YAML Profile 解析和验证
+| Section | Corresponding Content |
+|---------|----------------------|
+| 9.2.1 Scan Diff | Result comparison feature |
+| 9.2.2 Result Persistence | SQLite storage |
+| 9.2.4 Configuration as Code | YAML Profiles |
+| 12.3 Phase 3 | Scan management capabilities (Week 8-9) |
+| 14.2 Phase 1-3 | OutputSink and persistence integration |
 
 ---
 
-## 参考链接
+## Next Steps
 
-- [SQLite 文档](https://www.sqlite.org/docs.html)
+1. **Week 8**: Implement SQLite database schema and save logic
+2. **Week 8**: Implement history query API
+3. **Week 9**: Implement diff engine and report generation
+4. **Week 9**: Implement YAML profile parsing and validation
+
+---
+
+## References
+
+- [SQLite Documentation](https://www.sqlite.org/docs.html)
 - [Serde YAML](https://docs.rs/serde_yaml)
-- [SQLx (可选替代)](https://docs.rs/sqlx)
+- [SQLx (Alternative)](https://docs.rs/sqlx)

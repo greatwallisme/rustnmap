@@ -1,41 +1,41 @@
-# Nmap 常量参考
+# Nmap Constants Reference
 
-本文档列出 Nmap 源码中的核心常量定义，为 Rust 实现提供精确参考。
+This document lists the core constant definitions in the Nmap source code, providing precise references for the Rust implementation.
 
-## 目录
+## Table of Contents
 
-1. [扫描引擎常量](#1-扫描引擎常量)
-2. [端口状态常量](#2-端口状态常量)
-3. [OS 检测常量](#3-os-检测常量)
-4. [NSE 引擎常量](#4-nse-引擎常量)
-5. [输出常量](#5-输出常量)
-6. [时间常量](#6-时间常量)
-7. [协议常量](#7-协议常量)
+1. [Scan Engine Constants](#1-scan-engine-constants)
+2. [Port State Constants](#2-port-state-constants)
+3. [OS Detection Constants](#3-os-detection-constants)
+4. [NSE Engine Constants](#4-nse-engine-constants)
+5. [Output Constants](#5-output-constants)
+6. [Timing Constants](#6-timing-constants)
+7. [Protocol Constants](#7-protocol-constants)
 
 ---
 
-## 1. 扫描引擎常量
+## 1. Scan Engine Constants
 
 ### scan_engine.cc
 
 ```cpp
-// 速率限制检测额外等待时间
+// Rate limit detection extra wait time
 #define RLD_TIME_MS 1000
 
-// 保留已完成主机的时长 (TCP MSL - 2 分钟)
+// Duration to retain completed hosts (TCP MSL - 2 minutes)
 #define COMPL_HOST_LIFETIME_MS 120000
 ```
 
 ```rust
-// RustNmap 对应常量
+// RustNmap corresponding constants
 pub const RLD_TIME_MS: u64 = 1000;
-pub const COMPL_HOST_LIFETIME_MS: u64 = 120_000; // 2 分钟
+pub const COMPL_HOST_LIFETIME_MS: u64 = 120_000; // 2 minutes
 ```
 
 ### probespec.h
 
 ```cpp
-// TCP AND UDP AND SCTP 协议最大值 (用于特殊协议选择)
+// TCP AND UDP AND SCTP protocol maximum (used for special protocol selection)
 #define TCPANDUDPANDSCTP IPPROTO_MAX
 
 // UDP AND SCTP
@@ -43,7 +43,7 @@ pub const COMPL_HOST_LIFETIME_MS: u64 = 120_000; // 2 分钟
 ```
 
 ```rust
-// RustNmap 对应常量
+// RustNmap corresponding constants
 pub const TCP_AND_UDP_AND_SCTP: u8 = IPPROTO_MAX;
 pub const UDP_AND_SCTP: u8 = IPPROTO_MAX + 1;
 ```
@@ -51,23 +51,23 @@ pub const UDP_AND_SCTP: u8 = IPPROTO_MAX + 1;
 ### timing.h
 
 ```cpp
-// 默认当前速率历史 (秒)
+// Default current rate history (seconds)
 #define DEFAULT_CURRENT_RATE_HISTORY 5.0
 ```
 
 ```rust
-// RustNmap 对应常量
+// RustNmap corresponding constants
 pub const DEFAULT_CURRENT_RATE_HISTORY: f64 = 5.0;
 ```
 
 ---
 
-## 2. 端口状态常量
+## 2. Port State Constants
 
 ### portlist.h
 
 ```cpp
-// 端口状态常量
+// Port state constants
 #define PORT_UNKNOWN 0
 #define PORT_CLOSED 1
 #define PORT_OPEN 2
@@ -77,11 +77,11 @@ pub const DEFAULT_CURRENT_RATE_HISTORY: f64 = 5.0;
 #define PORT_UNFILTERED 6
 #define PORT_OPENFILTERED 7
 #define PORT_CLOSEDFILTERED 8
-#define PORT_HIGHEST_STATE 9  // ***重要 - 添加状态时需要增加此值***
+#define PORT_HIGHEST_STATE 9  // ***IMPORTANT - increment this value when adding states***
 ```
 
 ```rust
-// RustNmap 对应常量
+// RustNmap corresponding constants
 #[repr(u8)]
 pub enum PortState {
     Unknown = 0,
@@ -103,24 +103,24 @@ impl PortState {
 ### service_scan.h
 
 ```cpp
-// 默认服务等待时间 (毫秒)
+// Default service wait time (milliseconds)
 #define DEFAULT_SERVICEWAITMS 5000
 
-// 默认 TCP 包装超时 (毫秒)
+// Default TCP wrapped timeout (milliseconds)
 #define DEFAULT_TCPWRAPPEDMS 2000
 
-// 默认连接超时 (毫秒)
+// Default connection timeout (milliseconds)
 #define DEFAULT_CONNECT_TIMEOUT 5000
 
-// 默认 SSL 连接超时 (毫秒)
+// Default SSL connection timeout (milliseconds)
 #define DEFAULT_CONNECT_SSL_TIMEOUT 8000
 
-// 服务探测文件中允许的最大回退数
+// Maximum number of fallbacks allowed in the service probe file
 #define MAXFALLBACKS 20
 ```
 
 ```rust
-// RustNmap 对应常量
+// RustNmap corresponding constants
 pub const DEFAULT_SERVICE_WAIT_MS: u64 = 5000;
 pub const DEFAULT_TCP_WRAPPED_MS: u64 = 2000;
 pub const DEFAULT_CONNECT_TIMEOUT: u64 = 5000;
@@ -131,22 +131,22 @@ pub const MAX_FALLBACKS: usize = 20;
 ### service_scan.h (ServiceProbeState)
 
 ```cpp
-// 服务探测状态枚举
+// Service probe state enum
 enum serviceprobestate {
-  PROBESTATE_INITIAL=1,      // 尚未开始探测
-  PROBESTATE_NULLPROBE,       // 正在进行 NULL 探测
-  PROBESTATE_MATCHINGPROBES,  // 正在进行匹配探测
-  PROBESTATE_FINISHED_HARDMATCHED,  // 完成 - 确匹配
-  PROBESTATE_FINISHED_SOFTMATCHED, // 完成 - 软匹配
-  PROBESTATE_FINISHED_NOMATCH,   // 完成 - 无匹配
-  PROBESTATE_FINISHED_TCPWRAPPED, // 完成 - TCP 包装
-  PROBESTATE_EXCLUDED,          // 端口被排除
-  PROBESTATE_INCOMPLETE          // 未能完成 (错误/超时)
+  PROBESTATE_INITIAL=1,      // Probing not yet started
+  PROBESTATE_NULLPROBE,       // NULL probe in progress
+  PROBESTATE_MATCHINGPROBES,  // Matching probes in progress
+  PROBESTATE_FINISHED_HARDMATCHED,  // Finished - hard match
+  PROBESTATE_FINISHED_SOFTMATCHED, // Finished - soft match
+  PROBESTATE_FINISHED_NOMATCH,   // Finished - no match
+  PROBESTATE_FINISHED_TCPWRAPPED, // Finished - TCP wrapped
+  PROBESTATE_EXCLUDED,          // Port excluded
+  PROBESTATE_INCOMPLETE          // Failed to complete (error/timeout)
 };
 ```
 
 ```rust
-// RustNmap 对应常量
+// RustNmap corresponding constants
 #[repr(u8)]
 pub enum ServiceProbeState {
     Initial = 1,
@@ -163,45 +163,45 @@ pub enum ServiceProbeState {
 
 ---
 
-## 3. OS 检测常量
+## 3. OS Detection Constants
 
 ### FPEngine.h
 
 ```cpp
-// IPv6 OS 检测探测数量
+// IPv6 OS detection probe counts
 #define NUM_FP_PROBES_IPv6_TCP    13
 #define NUM_FP_PROBES_IPv6_ICMPv6 4
 #define NUM_FP_PROBES_IPv6_UDP    1
 
-// IPv6 OS 检测总探测数
+// Total IPv6 OS detection probes
 #define NUM_FP_PROBES_IPv6 (NUM_FP_PROBES_IPv6_TCP + \
                               NUM_FP_PROBES_IPv6_ICMPv6 + \
                               NUM_FP_PROBES_IPv6_UDP)
 
-// 定时探测数 (需要特定时序发送的探测数)
+// Timed probe count (probes that require specific timing)
 #define NUM_FP_TIMEDPROBES_IPv6 6
 
-// OS 扫描初始拥塞窗口
+// OS scan initial congestion window
 #define OSSCAN_INITIAL_CWND (NUM_FP_TIMEDPROBES_IPv6)
 
-// OS 扫描初始慢启动阈值
+// OS scan initial slow start threshold
 #define OSSCAN_INITIAL_SSTHRESH (4 * OSSCAN_INITIAL_CWND)
 
-// OS 扫描主机组大小
+// OS scan host group size
 #define OSSCAN_GROUP_SIZE 10
 
-// OS 扫描初始重传超时 (3 秒，单位微秒)
+// OS scan initial retransmission timeout (3 seconds, in microseconds)
 #define OSSCAN_INITIAL_RTO (3*1000000)
 
-// 新度阈值 (匹配分数差异阈值)
+// Novelty threshold (match score difference threshold)
 #define FP_NOVELTY_THRESHOLD 15.0
 
-// IPv6 OS 检测流标签
+// IPv6 OS detection flow label
 #define OSDETECT_FLOW_LABEL 0x12345
 ```
 
 ```rust
-// RustNmap 对应常量
+// RustNmap corresponding constants
 pub const NUM_FP_PROBES_IPV6_TCP: usize = 13;
 pub const NUM_FP_PROBES_IPV6_ICMPV6: usize = 4;
 pub const NUM_FP_PROBES_IPV6_UDP: usize = 1;
@@ -214,19 +214,19 @@ pub const NUM_FP_TIMED_PROBES_IPV6: usize = 6;
 pub const OSSCAN_INITIAL_CWND: usize = NUM_FP_TIMED_PROBES_IPV6;
 pub const OSSCAN_INITIAL_SSTHRESH: usize = 4 * OSSCAN_INITIAL_CWND;
 pub const OSSCAN_GROUP_SIZE: usize = 10;
-pub const OSSCAN_INITIAL_RTO: u64 = 3_000_000; // 3 秒 (微秒)
+pub const OSSCAN_INITIAL_RTO: u64 = 3_000_000; // 3 seconds (microseconds)
 pub const FP_NOVELTY_THRESHOLD: f64 = 15.0;
 pub const OS_DETECT_FLOW_LABEL: u32 = 0x12345;
 ```
 
 ---
 
-## 4. NSE 引擎常量
+## 4. NSE Engine Constants
 
 ### nse_main.h
 
 ```cpp
-// 脚本引擎名称
+// Script engine name
 #define SCRIPT_ENGINE "NSE"
 
 #ifdef WIN32
@@ -237,15 +237,15 @@ pub const OS_DETECT_FLOW_LABEL: u32 = 0x12345;
 #  define SCRIPT_ENGINE_LIB_DIR "nselib/"
 #endif
 
-// 脚本数据库路径
+// Script database path
 #define SCRIPT_ENGINE_DATABASE SCRIPT_ENGINE_LUA_DIR "script.db"
 
-// 脚本文件扩展名
+// Script file extension
 #define SCRIPT_ENGINE_EXTENSION ".nse"
 ```
 
 ```rust
-// RustNmap 对应常量
+// RustNmap corresponding constants
 pub const SCRIPT_ENGINE: &str = "NSE";
 
 #[cfg(windows)]
@@ -266,16 +266,16 @@ pub const SCRIPT_ENGINE_EXTENSION: &str = ".nse";
 ### nse_nmaplib.cc
 
 ```cpp
-// version 表中的字段数量
+// Number of fields in the version table
 #define NSE_NUM_VERSION_FIELDS 12
 
-// NSE 协议选项
+// NSE protocol options
 static const char *NSE_PROTOCOL_OP[] = {"tcp", "udp", "sctp"};
 static const int NSE_PROTOCOL[] = {IPPROTO_TCP, IPPROTO_UDP, IPPROTO_SCTP};
 ```
 
 ```rust
-// RustNmap 对应常量
+// RustNmap corresponding constants
 pub const NSE_NUM_VERSION_FIELDS: usize = 12;
 
 pub const NSE_PROTOCOL_OP: [&str] = &["tcp", "udp", "sctp"];
@@ -285,13 +285,13 @@ pub const NSE_PROTOCOL: [i32] = &[IPPROTO_TCP, IPPROTO_UDP, IPPROTO_SCTP];
 ### nse_lua.h
 
 ```cpp
-// Lua 注册表索引
+// Lua registry index
 #define LUA_REGISTRYINDEX -10000
 
-// Lua 无效引用
+// Lua invalid reference
 #define LUA_NOREF -10001
 
-// Lua 状态码
+// Lua status codes
 #define LUA_OK 0
 #define LUA_YIELD 1
 #define LUA_ERRRUN 2
@@ -302,7 +302,7 @@ pub const NSE_PROTOCOL: [i32] = &[IPPROTO_TCP, IPPROTO_UDP, IPPROTO_SCTP];
 ```
 
 ```rust
-// RustNmap 对应常量
+// RustNmap corresponding constants
 pub const LUA_REGISTRY_INDEX: i32 = -10000;
 pub const LUA_NOREF: i32 = -10001;
 
@@ -319,18 +319,18 @@ pub enum LuaStatusCode {
 
 ---
 
-## 5. 输出常量
+## 5. Output Constants
 
 ### output.h
 
 ```cpp
-// 日志文件数量 (必须是开头的值)
+// Number of log files (must be the leading value)
 #define LOG_NUM_FILES 4
 
-// 日志文件掩码 (用于文件数组的掩码)
+// Log file mask (mask used for file arrays)
 #define LOG_FILE_MASK 15
 
-// 日志类型
+// Log types
 #define LOG_NORMAL 1
 #define LOG_MACHINE 2
 #define LOG_SKID 4
@@ -339,18 +339,18 @@ pub enum LuaStatusCode {
 #define LOG_STDERR 2048
 #define LOG_SKID_NOXLT 4096
 
-// 日志最大值
+// Maximum log value
 #define LOG_MAX LOG_SKID_NOXLT
 
-// 普通日志掩码
+// Plain log mask
 #define LOG_PLAIN (LOG_NORMAL | LOG_SKID | LOG_STDOUT)
 
-// 日志名称数组
+// Log names array
 #define LOG_NAMES {"normal", "machine", "$Cr!pT |<!dd!3", "XML"}
 ```
 
 ```rust
-// RustNmap 对应常量
+// RustNmap corresponding constants
 pub const LOG_NUM_FILES: u32 = 4;
 pub const LOG_FILE_MASK: u32 = 15;
 
@@ -378,49 +378,49 @@ pub const LOG_NAMES: &[&str] = &["normal", "machine", "$Cr!pT |<!dd!3", "XML"];
 
 ---
 
-## 6. 时间常量
+## 6. Timing Constants
 
 ### timing.h
 
 ```cpp
-// 初始重传超时 (3 秒，单位微秒)
-// 基于 RFC 2988
+// Initial retransmission timeout (3 seconds, in microseconds)
+// Based on RFC 2988
 #define INITIAL_RTT_TIMEOUT 3000000
 
-// 最小重传超时 (100 毫秒)
+// Minimum retransmission timeout (100 milliseconds)
 #define MIN_RTT_TIMEOUT 100000
 
-// 最大重传超时 (60 秒)
+// Maximum retransmission timeout (60 seconds)
 #define MAX_RTT_TIMEOUT 60000000
 
-// RTT 初始值 (未校准)
+// RTT initial value (uncalibrated)
 #define RTT_INITIAL_TIMEOUT 6000000
 
-// RTT 变化 (限制快速变化)
+// RTT variance (limits rapid changes)
 #define RTT_VAR_MAX 3000000000
 
-// 最大超时倍数
+// Maximum timeout multiplier
 #define MAX_TIMEOUT_MULT 10
 ```
 
 ```rust
-// RustNmap 对应常量
-pub const INITIAL_RTT_TIMEOUT: u64 = 3_000_000; // 3 秒 (微秒)
-pub const MIN_RTT_TIMEOUT: u64 = 100_000;     // 100 毫秒
-pub const MAX_RTT_TIMEOUT: u64 = 60_000_000;   // 60 秒 (微秒)
-pub const RTT_INITIAL_TIMEOUT: u64 = 6_000_000;  // 6 秒 (微秒)
-pub const RTT_VAR_MAX: u64 = 3_000_000_000;   // 限制快速变化
+// RustNmap corresponding constants
+pub const INITIAL_RTT_TIMEOUT: u64 = 3_000_000; // 3 seconds (microseconds)
+pub const MIN_RTT_TIMEOUT: u64 = 100_000;     // 100 milliseconds
+pub const MAX_RTT_TIMEOUT: u64 = 60_000_000;   // 60 seconds (microseconds)
+pub const RTT_INITIAL_TIMEOUT: u64 = 6_000_000;  // 6 seconds (microseconds)
+pub const RTT_VAR_MAX: u64 = 3_000_000_000;   // Limits rapid changes
 pub const MAX_TIMEOUT_MULT: u32 = 10;
 ```
 
 ---
 
-## 7. 协议常量
+## 7. Protocol Constants
 
 ### protocols.h / nbase.h
 
 ```cpp
-// 常用 IP 协议
+// Common IP protocols
 #define IPPROTO_TCP 6
 #define IPPROTO_UDP 17
 #define IPPROTO_SCTP 132
@@ -428,12 +428,12 @@ pub const MAX_TIMEOUT_MULT: u32 = 10;
 #define IPPROTO_ICMPV6 58
 #define IPPROTO_IP 0
 
-// 以太网类型
+// Ethernet types
 #define ETHERTYPE_IP 0x0800
 #define ETHERTYPE_ARP 0x0806
 #define ETHERTYPE_IPV6 0x86DD
 
-// TCP 标志位
+// TCP flag bits
 #define TH_SYN 0x02
 #define TH_ACK 0x10
 #define TH_FIN 0x01
@@ -445,7 +445,7 @@ pub const MAX_TIMEOUT_MULT: u32 = 10;
 ```
 
 ```rust
-// RustNmap 对应常量
+// RustNmap corresponding constants
 pub const IP_PROTO_TCP: u8 = 6;
 pub const IP_PROTO_UDP: u8 = 17;
 pub const IP_PROTO_SCTP: u8 = 132;
@@ -469,9 +469,9 @@ pub const TCP_FLAG_CWR: u8 = 0x80;
 
 ---
 
-## 常量使用示例
+## Constant Usage Examples
 
-### 端口状态判断
+### Port State Checking
 
 ```rust
 use port::PortState;
@@ -496,29 +496,29 @@ fn needs_retry(state: PortState) -> bool {
 }
 ```
 
-### 日志类型组合
+### Log Type Combinations
 
 ```rust
 use output::LogType;
 
-// 创建普通日志掩码
+// Create normal log mask
 fn normal_log_mask() -> u32 {
     LogType::Normal as u32
 }
 
-// 创建完整日志掩码 (普通 + 脚本 kiddie + XML)
+// Create full log mask (normal + script kiddie + XML)
 fn full_log_mask() -> u32 {
     LogType::Normal as u32 |
     LogType::Skid as u32 |
     LogType::Xml as u32
 }
 
-// 仅输出到终端 (不写入文件)
+// Output to terminal only (do not write to file)
 fn stdout_only() -> u32 {
     LogType::Stdout as u32
 }
 
-// 所有输出类型
+// All output types
 fn all_outputs() -> u32 {
     LogType::Normal as u32 |
     LogType::Machine as u32 |
@@ -529,27 +529,27 @@ fn all_outputs() -> u32 {
 }
 ```
 
-### 超时计算
+### Timeout Calculation
 
 ```rust
 use timing::*;
 
-// 计算默认超时
+// Calculate default timeout
 fn default_timeout() -> Duration {
     Duration::from_micros(INITIAL_RTT_TIMEOUT)
 }
 
-// 计算最小超时
+// Calculate minimum timeout
 fn min_timeout() -> Duration {
     Duration::from_micros(MIN_RTT_TIMEOUT)
 }
 
-// 计算最大超时
+// Calculate maximum timeout
 fn max_timeout() -> Duration {
     Duration::from_micros(MAX_RTT_TIMEOUT)
 }
 
-// 计算自适应超时 (基于 RTT)
+// Calculate adaptive timeout (based on RTT)
 fn adaptive_timeout(srtt: i32, rttvar: i32) -> Duration {
     let timeout = srtt + 4 * rttvar;
     let timeout = timeout.clamp(MIN_RTT_TIMEOUT as i32,
@@ -558,32 +558,32 @@ fn adaptive_timeout(srtt: i32, rttvar: i32) -> Duration {
 }
 ```
 
-### NSE 相关
+### NSE Related
 
 ```rust
 use nse::*;
 
-// 获取脚本目录
+// Get script directory
 fn script_dir() -> &'static str {
     SCRIPT_ENGINE_LUA_DIR
 }
 
-// 获取脚本数据库路径
+// Get script database path
 fn script_db_path() -> String {
     format!("{}{}", SCRIPT_ENGINE_LUA_DIR, SCRIPT_ENGINE_DATABASE)
 }
 
-// 获取脚本文件扩展名
+// Get script file extension
 fn script_extension() -> &'static str {
     SCRIPT_ENGINE_EXTENSION
 }
 
-// 获取 Lua 注册表索引
+// Get Lua registry index
 fn lua_registry_index() -> i32 {
     LUA_REGISTRY_INDEX
 }
 
-// Lua 无效引用常量
+// Lua invalid reference constant
 fn lua_noref() -> i32 {
     LUA_NOREF
 }

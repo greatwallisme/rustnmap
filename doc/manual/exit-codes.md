@@ -1,54 +1,48 @@
-# RustNmap Exit Codes / 退出代码
+# RustNmap Exit Codes
 
-> **版本**: 1.0.0
-> **状态**: 此文档描述 RustNmap 1.0.0 的退出代码。2.0 版本开发中，详见 [CHANGELOG.md](../CHANGELOG.md)。
+> **Version**: 1.0.0
+> **Status**: This document describes RustNmap 1.0.0 exit codes. Version 2.0 is in development, see [CHANGELOG.md](../CHANGELOG.md).
 
-> **Exit codes and error handling reference** / 退出代码和错误处理参考
+> **Exit codes and error handling reference**
 
 ---
 
-## Overview / 概述
+## Overview
 
 RustNmap uses exit codes to indicate the result of a scan. These codes can be used in scripts and automation to determine scan success or failure.
 
-RustNmap 使用退出代码指示扫描结果。这些代码可用于脚本和自动化中，以确定扫描成功或失败。
+---
+
+## Exit Code Reference
+
+| Code | Name | Description |
+|------|------|-------------|
+| `0` | `EXIT_SUCCESS` | Scan completed successfully |
+| `1` | `EXIT_FAILURE` | General error occurred |
+| `2` | `EXIT_INVALID_ARGS` | Invalid command-line arguments |
+| `3` | `EXIT_NO_TARGETS` | No valid targets specified |
+| `4` | `EXIT_NETWORK_ERROR` | Network error occurred |
+| `5` | `EXIT_PERMISSION_DENIED` | Permission denied (need root) |
+| `6` | `EXIT_SCAN_INTERRUPTED` | Scan was interrupted |
+| `7` | `EXIT_RESOURCE_ERROR` | Resource error (memory, etc.) |
+| `8` | `EXIT_OUTPUT_ERROR` | Output file error |
 
 ---
 
-## Exit Code Reference / 退出代码参考
+## Exit Code Details
 
-| Code | Name | Description | Chinese |
-|------|------|-------------|---------|
-| `0` | `EXIT_SUCCESS` | Scan completed successfully | 扫描成功完成 |
-| `1` | `EXIT_FAILURE` | General error occurred | 发生一般错误 |
-| `2` | `EXIT_INVALID_ARGS` | Invalid command-line arguments | 无效的命令行参数 |
-| `3` | `EXIT_NO_TARGETS` | No valid targets specified | 未指定有效目标 |
-| `4` | `EXIT_NETWORK_ERROR` | Network error occurred | 发生网络错误 |
-| `5` | `EXIT_PERMISSION_DENIED` | Permission denied (need root) | 权限被拒绝（需要 root） |
-| `6` | `EXIT_SCAN_INTERRUPTED` | Scan was interrupted | 扫描被中断 |
-| `7` | `EXIT_RESOURCE_ERROR` | Resource error (memory, etc.) | 资源错误（内存等） |
-| `8` | `EXIT_OUTPUT_ERROR` | Output file error | 输出文件错误 |
-
----
-
-## Exit Code Details / 退出代码详情
-
-### 0 - Success / 成功
+### 0 - Success
 
 The scan completed without errors. At least one host was scanned.
-
-扫描成功完成无错误。至少扫描了一个主机。
 
 ```bash
 rustnmap 192.168.1.1
 echo $?  # Output: 0
 ```
 
-### 1 - General Error / 一般错误
+### 1 - General Error
 
 An unspecified error occurred during the scan.
-
-扫描期间发生了未指定的错误。
 
 ```bash
 # Examples that might return 1:
@@ -57,11 +51,9 @@ rustnmap -p 999999 192.168.1.1  # Invalid port
 echo $?  # Output: 1
 ```
 
-### 2 - Invalid Arguments / 无效参数
+### 2 - Invalid Arguments
 
 Command-line arguments were invalid or mutually exclusive.
-
-命令行参数无效或相互排斥。
 
 ```bash
 # Mutually exclusive options
@@ -73,11 +65,9 @@ rustnmap -T10 192.168.1.1
 echo $?  # Output: 2
 ```
 
-### 3 - No Valid Targets / 无有效目标
+### 3 - No Valid Targets
 
 No valid target hosts were specified or resolved.
-
-未指定或解析到有效目标主机。
 
 ```bash
 # Empty target list
@@ -89,11 +79,9 @@ rustnmap invalid-target
 echo $?  # Output: 3
 ```
 
-### 4 - Network Error / 网络错误
+### 4 - Network Error
 
 A network error occurred during scanning.
-
-扫描期间发生网络错误。
 
 ```bash
 # Interface down
@@ -105,11 +93,9 @@ rustnmap 10.999.999.999  # Unreachable
 echo $?  # Output: 4
 ```
 
-### 5 - Permission Denied / 权限被拒绝
+### 5 - Permission Denied
 
 The scan requires root privileges but was run as a regular user.
-
-扫描需要 root 权限，但作为普通用户运行。
 
 ```bash
 # SYN scan without root
@@ -121,11 +107,9 @@ rustnmap -sU 192.168.1.1  # As regular user
 echo $?  # Output: 5
 ```
 
-### 6 - Scan Interrupted / 扫描被中断
+### 6 - Scan Interrupted
 
 The scan was interrupted by the user (Ctrl+C) or a signal.
-
-扫描被用户（Ctrl+C）或信号中断。
 
 ```bash
 # Press Ctrl+C during scan
@@ -134,11 +118,9 @@ sudo rustnmap -p- 192.168.1.1
 echo $?  # Output: 6
 ```
 
-### 7 - Resource Error / 资源错误
+### 7 - Resource Error
 
 The system ran out of resources (memory, file descriptors, etc.).
-
-系统资源耗尽（内存、文件描述符等）。
 
 ```bash
 # Very large scan on limited system
@@ -146,11 +128,9 @@ sudo rustnmap -p- 10.0.0.0/8  # May exhaust memory
 echo $?  # Output: 7
 ```
 
-### 8 - Output Error / 输出错误
+### 8 - Output Error
 
 An error occurred writing to output files.
-
-写入输出文件时发生错误。
 
 ```bash
 # Permission denied on output file
@@ -164,14 +144,14 @@ echo $?  # Output: 8
 
 ---
 
-## Using Exit Codes in Scripts / 在脚本中使用退出代码
+## Using Exit Codes in Scripts
 
-### Bash Examples / Bash 示例
+### Bash Examples
 
 ```bash
 #!/bin/bash
 
-# Run scan and check exit code / 运行扫描并检查退出代码
+# Run scan and check exit code
 rustnmap -sS 192.168.1.1
 EXIT_CODE=$?
 
@@ -209,7 +189,7 @@ case $EXIT_CODE in
 esac
 ```
 
-### Conditional Execution / 条件执行
+### Conditional Execution
 
 ```bash
 #!/bin/bash
@@ -224,7 +204,7 @@ else
 fi
 ```
 
-### Retry Logic / 重试逻辑
+### Retry Logic
 
 ```bash
 #!/bin/bash
@@ -251,7 +231,7 @@ while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
 done
 ```
 
-### CI/CD Integration / CI/CD 集成
+### CI/CD Integration
 
 ```yaml
 # GitHub Actions example
@@ -270,9 +250,9 @@ done
 
 ---
 
-## Error Messages / 错误消息
+## Error Messages
 
-### Common Error Messages / 常见错误消息
+### Common Error Messages
 
 | Message | Exit Code | Solution |
 |---------|-----------|----------|
@@ -283,7 +263,7 @@ done
 | "Failed to open output file" | 8 | Check file permissions |
 | "Scan interrupted by user" | 6 | Scan was cancelled |
 
-### Error Message Examples / 错误消息示例
+### Error Message Examples
 
 ```bash
 # Permission error
@@ -302,32 +282,26 @@ Error: Invalid port number: 999999 (must be 1-65535)
 
 ---
 
-## Exit Code Behavior / 退出代码行为
+## Exit Code Behavior
 
-### Multiple Targets / 多个目标
+### Multiple Targets
 
 When scanning multiple targets, the exit code reflects the overall scan status:
 
-扫描多个目标时，退出代码反映整体扫描状态：
+- `0` - All targets scanned successfully
+- `1` - At least one target had an error
+- `3` - No valid targets (all failed to resolve)
 
-- `0` - All targets scanned successfully / 所有目标扫描成功
-- `1` - At least one target had an error / 至少一个目标出错
-- `3` - No valid targets (all failed to resolve) / 无有效目标（全部解析失败）
-
-### Partial Scans / 部分扫描
+### Partial Scans
 
 If a scan is interrupted but some results were obtained:
 
-如果扫描被中断但获得了一些结果：
+- Output files will contain partial results
+- Exit code will be `6` (interrupted)
 
-- Output files will contain partial results / 输出文件将包含部分结果
-- Exit code will be `6` (interrupted) / 退出代码将是 `6`（中断）
-
-### Privilege Escalation / 权限提升
+### Privilege Escalation
 
 Some scans may work partially without full privileges:
-
-某些扫描在没有完全权限时可能部分工作：
 
 ```bash
 # Connect scan works without root
@@ -339,9 +313,9 @@ rustnmap -sS 192.168.1.1  # Exit: 5
 
 ---
 
-## Exit Codes in Automation / 自动化中的退出代码
+## Exit Codes in Automation
 
-### Ansible Playbook / Ansible Playbook
+### Ansible Playbook
 
 ```yaml
 - name: Run RustNmap scan
@@ -366,7 +340,7 @@ rustnmap -sS 192.168.1.1  # Exit: 5
   when: scan_result.rc not in [0, 5]
 ```
 
-### Python Script / Python 脚本
+### Python Script
 
 ```python
 import subprocess
@@ -406,24 +380,24 @@ if __name__ == '__main__':
 
 ---
 
-## Exit Code Quick Reference / 退出代码快速参考
+## Exit Code Quick Reference
 
 ```
-0  ✓ Success / 成功
-1  ✗ General error / 一般错误
-2  ⚠ Invalid arguments / 无效参数
-3  ⚠ No targets / 无目标
-4  ✗ Network error / 网络错误
-5  ⚠ Permission denied / 权限被拒绝
-6  ⚠ Interrupted / 中断
-7  ✗ Resource error / 资源错误
-8  ✗ Output error / 输出错误
+0  SUCCESS - Success
+1  FAILURE - General error
+2  ARGS    - Invalid arguments
+3  TARGETS - No targets
+4  NETWORK - Network error
+5  PERM    - Permission denied
+6  INTR    - Interrupted
+7  RESOURCE - Resource error
+8  OUTPUT  - Output error
 ```
 
 ---
 
-## Related Documentation / 相关文档
+## Related Documentation
 
-- [Options Reference](options.md) - Command-line options / 命令行选项
-- [Manual README](README.md) - Manual overview / 手册概览
-- [Architecture](../architecture.md) - System architecture / 系统架构
+- [Options Reference](options.md) - Command-line options
+- [Manual README](README.md) - Manual overview
+- [Architecture](../architecture.md) - System architecture

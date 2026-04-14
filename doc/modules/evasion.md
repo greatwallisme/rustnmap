@@ -1,60 +1,61 @@
-## 3.7 防火墙/IDS 规避模块
+## 3.7 Firewall/IDS Evasion Module
 
-对应 Nmap 命令: `-f`, `-D`, `-S`, `--source-port`, `-e`, `--badsum`, `--data-length`
+Corresponding Nmap commands: `-f`, `-D`, `-S`, `--source-port`, `-e`, `--badsum`, `--data-length`
 
-### 3.7.1 规避技术矩阵
+### 3.7.1 Evasion Technique Matrix
 
-|技术|Nmap 参数|描述|实现复杂度|
+|Technique|Nmap Parameter|Description|Implementation Complexity|
 |---|---|---|---|
-|分片|`-f`, `--mtu`|IP 分片绕过|★★★☆☆|
-|诱饵|`-D <decoy1,decoy2,...>`|诱饵 IP 扫描|★★★★☆|
-|源 IP 欺骗|`-S <IP>`|伪造源 IP|★★☆☆☆|
-|源端口伪装|`--source-port <port>`|指定源端口|★☆☆☆☆|
-|接口指定|`-e <iface>`|指定网络接口|★★☆☆☆|
-|MAC 欺骗|`--spoof-mac <addr>`|伪造 MAC 地址|★★☆☆☆|
-|错误校验和|`--badsum`|发送错误校验和|★☆☆☆☆|
-|数据填充|`--data-length <num>`|填充随机数据|★☆☆☆☆|
-|IP 选项|`--ip-options <opts>`|自定义 IP 选项|★★★☆☆|
-|TTL 设置|`--ttl <value>`|设置 TTL 值|★☆☆☆☆|
-|随机目标|`--randomize-hosts`|随机化扫描顺序|★★☆☆☆|
-|时序模板|`-T0` 到 `-T5`|时序控制|★★★☆☆|
-### 3.7.2 分片规避实现
+|Fragmentation|`-f`, `--mtu`|IP fragmentation bypass|★★★☆☆|
+|Decoy|`-D <decoy1,decoy2,...>`|Decoy IP scanning|★★★★☆|
+|Source IP Spoofing|`-S <IP>`|Spoofed source IP|★★☆☆☆|
+|Source Port Masquerading|`--source-port <port>`|Specify source port|★☆☆☆☆|
+|Interface Selection|`-e <iface>`|Specify network interface|★★☆☆☆|
+|MAC Spoofing|`--spoof-mac <addr>`|Spoof MAC address|★★☆☆☆|
+|Bad Checksum|`--badsum`|Send incorrect checksums|★☆☆☆☆|
+|Data Padding|`--data-length <num>`|Pad with random data|★☆☆☆☆|
+|IP Options|`--ip-options <opts>`|Custom IP options|★★★☆☆|
+|TTL Setting|`--ttl <value>`|Set TTL value|★☆☆☆☆|
+|Random Targets|`--randomize-hosts`|Randomize scan order|★★☆☆☆|
+|Timing Templates|`-T0` to `-T5`|Timing control|★★★☆☆|
+### 3.7.2 Fragmentation Evasion Implementation
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                     IP Fragmentation Evasion                            │
 ├─────────────────────────────────────────────────────────────────────────┤
 │                                                                         │
-│  分片模式:                                                              │
+│  Fragmentation Modes:                                                   │
 │  ┌───────────────────────────────────────────────────────────────────┐  │
 │  │                                                                   │  │
-│  │  原始 TCP SYN 包 (无分片):                                        │  │
+│  │  Original TCP SYN Packet (no fragmentation):                      │  │
 │  │  ┌─────────────────────────────────────────────────────────────┐ │  │
 │  │  │  IP Header (20B) │ TCP Header (20B) │ Payload               │ │  │
 │  │  └─────────────────────────────────────────────────────────────┘ │  │
 │  │                                                                   │  │
-│  │  小分片模式 (-f, 8 bytes):                                        │  │
+│  │  Small Fragment Mode (-f, 8 bytes):                               │  │
 │  │  ┌────────────────────────────────────────────────────────────┐  │  │
 │  │  │  Fragment 1: IP Header + TCP Flags (8B TCP data)           │  │  │
 │  │  │  ┌─────────────────────────────────────────┐               │  │  │
 │  │  │  │  IP (20B) │ TCP [first 8B] │ MORE_FRAG │               │  │  │
 │  │  │  └─────────────────────────────────────────┘               │  │  │
 │  │  │                                                             │  │  │
-│  │  │  Fragment 2: 剩余 TCP 数据                                   │  │  │
+│  │  │  Fragment 2: Remaining TCP Data                             │  │  │
 │  │  │  ┌─────────────────────────────────────────┐               │  │  │
 │  │  │  │  IP (20B) │ TCP [remaining 12B+]       │               │  │  │
 │  │  │  └─────────────────────────────────────────┘               │  │  │
 │  │  └────────────────────────────────────────────────────────────┘  │  │
 │  │                                                                   │  │
-│  │  自定义 MTU (--mtu <value>):                                      │  │
+│  │  Custom MTU (--mtu <value>):                                      │  │
 │  │  ┌────────────────────────────────────────────────────────────┐  │  │
-│  │  │  根据 MTU 值计算分片偏移，确保每个分片不超过 MTU            │  │  │
-│  │  │  每个分片包含: IP Header + 部分数据                         │  │  │
+│  │  │  Calculate fragment offset based on MTU value,              │  │  │
+│  │  │  ensuring each fragment does not exceed MTU.                │  │  │
+│  │  │  Each fragment contains: IP Header + partial data           │  │  │
 │  │  └────────────────────────────────────────────────────────────┘  │  │
 │  │                                                                   │  │
 │  └───────────────────────────────────────────────────────────────────┘  │
 │                                                                         │
-│  分片配置结构:                                                          │
+│  Fragment Configuration Structure:                                      │
 │  ┌───────────────────────────────────────────────────────────────────┐  │
 │  │                                                                   │  │
 │  │  FragmentConfig {                                                 │  │
@@ -63,8 +64,8 @@
 │  │    │   ├── Default (8 bytes)                                     │  │
 │  │    │   ├── CustomMTU(u16)                                        │  │
 │  │    │   └── Random(usize, usize)  // min, max                     │  │
-│  │    overlap: bool,           // 允许分片重叠                       │  │
-│  │    timeout: Duration,       // 分片重组超时                       │  │
+│  │    overlap: bool,           // Allow fragment overlap             │  │
+│  │    timeout: Duration,       // Fragment reassembly timeout        │  │
 │  │  }                                                               │  │
 │  │                                                                   │  │
 │  └───────────────────────────────────────────────────────────────────┘  │
@@ -72,36 +73,37 @@
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
-### 3.7.3 诱饵扫描实现
+### 3.7.3 Decoy Scanning Implementation
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                       Decoy Scanning Design                             │
 ├─────────────────────────────────────────────────────────────────────────┤
 │                                                                         │
-│  诱饵扫描原理:                                                          │
+│  Decoy Scanning Principle:                                              │
 │  ┌───────────────────────────────────────────────────────────────────┐  │
 │  │                                                                   │  │
 │  │   -D <decoy1,decoy2,...,ME,decoyN>                                │  │
 │  │                                                                   │  │
-│  │   发送的探测包:                                                    │  │
+│  │   Probe Packets Sent:                                             │  │
 │  │   ┌─────────────────────────────────────────────────────────────┐│  │
 │  │   │  Packet 1: Source=decoy1  → Target:Port                    ││  │
 │  │   │  Packet 2: Source=decoy2  → Target:Port                    ││  │
-│  │   │  Packet 3: Source=ME      → Target:Port  (真实扫描)         ││  │
+│  │   │  Packet 3: Source=ME      → Target:Port  (real scan)       ││  │
 │  │   │  Packet 4: Source=decoy3  → Target:Port                    ││  │
 │  │   │  Packet 5: Source=decoy4  → Target:Port                    ││  │
 │  │   └─────────────────────────────────────────────────────────────┘│  │
 │  │                                                                   │  │
-│  │   目标看到的来源: 真实IP 淹没在诱饵中，难以识别真实攻击者          │  │
+│  │   Target's view: Real IP is hidden among decoys, making it       │  │
+│  │   difficult to identify the actual attacker.                      │  │
 │  │                                                                   │  │
 │  └───────────────────────────────────────────────────────────────────┘  │
 │                                                                         │
-│  诱饵扫描流程:                                                          │
+│  Decoy Scanning Flow:                                                   │
 │  ┌───────────────────────────────────────────────────────────────────┐  │
 │  │                                                                   │  │
 │  │   ┌─────────────┐    ┌─────────────┐    ┌─────────────────────┐  │  │
-│  │   │  Decoy      │───▶│  Round      │───▶│  Packet            │  │  │
+│  │   │  Decoy      │───>│  Round      │───>│  Packet            │  │  │
 │  │   │  Parser     │    │  Robin      │    │  Injector          │  │  │
 │  │   └─────────────┘    │  Scheduler  │    └─────────────────────┘  │  │
 │  │                      └─────────────┘                              │  │
@@ -110,49 +112,49 @@
 │  │   ┌─────────────────────────────────────────────────────────┐    │  │
 │  │   │                   DecoyPacket                            │    │  │
 │  │   │                                                         │    │  │
-│  │   │   ├── real_source: IpAddr        (真实IP)               │    │  │
-│  │   │   ├── decoys: Vec<IpAddr>        (诱饵列表)             │    │  │
-│  │   │   ├── position: usize            (ME在列表中的位置)     │    │  │
-│  │   │   └── random_order: bool         (随机发送顺序)         │    │  │
+│  │   │   ├── real_source: IpAddr        (real IP)              │    │  │
+│  │   │   ├── decoys: Vec<IpAddr>        (decoy list)           │    │  │
+│  │   │   ├── position: usize            (ME position in list)  │    │  │
+│  │   │   └── random_order: bool         (random send order)    │    │  │
 │  │   │                                                         │    │  │
 │  │   └─────────────────────────────────────────────────────────┘    │  │
 │  │                                                                   │  │
-│  │   特殊值:                                                         │  │
-│  │   ├── ME      - 真实IP                                          │  │
-│  │   ├── ME:<n>  - 在位置n放置真实IP                               │  │
-│  │   └── RND:n   - 生成n个随机诱饵                                 │  │
+│  │   Special Values:                                                 │  │
+│  │   ├── ME      - Real IP                                          │  │
+│  │   ├── ME:<n>  - Place real IP at position n                      │  │
+│  │   └── RND:n   - Generate n random decoys                         │  │
 │  │                                                                   │  │
 │  └───────────────────────────────────────────────────────────────────┘  │
 │                                                                         │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
-### 3.7.4 规避配置总览
+### 3.7.4 Evasion Configuration Overview
 
 ```
 // ============================================
 // Evasion Configuration Types
 // ============================================
 
-/// 规避配置总结构
+/// Evasion configuration root structure
 pub struct EvasionConfig {
-    /// 分片配置
+    /// Fragmentation configuration
     pub fragmentation: Option<FragmentConfig>,
     
-    /// 诱饵配置
+    /// Decoy configuration
     pub decoys: Option<DecoyConfig>,
     
-    /// 源地址配置
+    /// Source address configuration
     pub source: SourceConfig,
     
-    /// 数据包修改配置
+    /// Packet modification configuration
     pub packet_modification: PacketModConfig,
     
-    /// 时序配置
+    /// Timing configuration
     pub timing: TimingConfig,
 }
 
-/// 分片配置
+/// Fragmentation configuration
 pub struct FragmentConfig {
     pub enabled: bool,
     pub mode: FragmentMode,
@@ -161,19 +163,19 @@ pub struct FragmentConfig {
 }
 
 pub enum FragmentMode {
-    Default,                        // 8 字节分片
-    CustomMTU(u16),                 // 自定义 MTU
-    Random { min: usize, max: usize }, // 随机分片大小
+    Default,                        // 8-byte fragmentation
+    CustomMTU(u16),                 // Custom MTU
+    Random { min: usize, max: usize }, // Random fragment size
 }
 
-/// 诱饵配置
+/// Decoy configuration
 pub struct DecoyConfig {
     pub decoys: Vec<IpAddr>,
-    pub real_ip_position: usize,    // ME 的位置
-    pub random_order: bool,         // 是否随机顺序发送
+    pub real_ip_position: usize,    // Position of ME
+    pub random_order: bool,         // Whether to send in random order
 }
 
-/// 源地址配置
+/// Source address configuration
 pub struct SourceConfig {
     pub source_ip: Option<IpAddr>,
     pub source_port: Option<u16>,
@@ -181,28 +183,28 @@ pub struct SourceConfig {
     pub interface: Option<String>,
 }
 
-/// 数据包修改配置
+/// Packet modification configuration
 pub struct PacketModConfig {
-    /// 发送错误校验和
+    /// Send incorrect checksums
     pub bad_checksum: bool,
     
-    /// 附加随机数据长度
+    /// Additional random data length
     pub data_length: Option<usize>,
     
-    /// 自定义 IP 选项
+    /// Custom IP options
     pub ip_options: Option<Vec<IpOption>>,
     
-    /// TTL 值
+    /// TTL value
     pub ttl: Option<u8>,
     
-    /// TOS 值
+    /// TOS value
     pub tos: Option<u8>,
     
-    /// 不设置任何标志位 (用于某些防火墙绕过)
+    /// Do not set any flag bits (used for certain firewall bypasses)
     pub no_flags: bool,
 }
 
-/// IP 选项
+/// IP option
 pub enum IpOption {
     RecordRoute { max_addresses: u8 },
     Timestamp { flags: u8, max_entries: u8 },
@@ -211,15 +213,15 @@ pub enum IpOption {
     Custom { type_code: u8, data: Vec<u8> },
 }
 
-/// 时序模板
+/// Timing templates
 #[derive(Debug, Clone, Copy)]
 pub enum TimingTemplate {
-    Paranoid,    // T0: 最慢，IDS规避
-    Sneaky,      // T1: 慢速，隐蔽
-    Polite,      // T2: 礼貌，低带宽
-    Normal,      // T3: 默认
-    Aggressive,  // T4: 快速
-    Insane,      // T5: 极快
+    Paranoid,    // T0: Slowest, IDS evasion
+    Sneaky,      // T1: Slow, stealthy
+    Polite,      // T2: Polite, low bandwidth
+    Normal,      // T3: Default
+    Aggressive,  // T4: Fast
+    Insane,      // T5: Extremely fast
 }
 
 impl TimingTemplate {

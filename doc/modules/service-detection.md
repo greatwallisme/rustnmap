@@ -1,8 +1,8 @@
-## 3.3 服务版本探测模块
+## 3.3 Service Version Detection Module
 
-对应 Nmap 命令: `-sV`, `--version-intensity`, `--version-light`, `--version-all`
+Corresponding Nmap commands: `-sV`, `--version-intensity`, `--version-light`, `--version-all`
 
-### 3.3.1 服务探测流程
+### 3.3.1 Service Detection Flow
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -62,7 +62,7 @@
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-### 3.3.2 探针数据库结构
+### 3.3.2 Probe Database Structure
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -110,4 +110,3 @@
 ```
 
 ---
-

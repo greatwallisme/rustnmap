@@ -1,4 +1,4 @@
-# TPACKET_V2 Structures定义
+# TPACKET_V2 Structure Definitions
 
 > **Reference**: Linux kernel `include/uapi/linux/if_packet.h`
 > **Note**: These must to be added to rustnmap-packet crate!
@@ -6,71 +6,71 @@
 
 ---
 
-## nmap 实现研究 (Critical Implementation Details)
+## nmap Implementation Research (Critical Implementation Details)
 
 > **IMPORTANT**: These details are from actual nmap source code analysis.
 > Do NOT deviate from these patterns without explicit justification.
 
-### Socket 选项设置顺序 (CRITICAL)
+### Socket Option Setup Order (CRITICAL)
 
-**必须严格按照以下顺序设置 socket 选项，否则会导致失败:**
+**Socket options MUST be set in the following exact order, otherwise it will fail:**
 
 ```rust
-// 1. 创建 AF_PACKET socket
+// 1. Create AF_PACKET socket
 let fd = socket(PF_PACKET, SOCK_RAW, htons(ETH_P_ALL))?;
 
-// 2. 设置 TPACKET 版本 (MUST come first)
+// 2. Set TPACKET version (MUST come first)
 let version = TPACKET_V2 as i32;
 setsockopt(fd, SOL_PACKET, PACKET_VERSION, &version, size_of::<i32>())?;
 
-// 3. 设置 PACKET_RESERVE (MUST come BEFORE PACKET_RX_RING)
+// 3. Set PACKET_RESERVE (MUST come BEFORE PACKET_RX_RING)
 let reserve: u32 = 4; // VLAN_TAG_LEN
 setsockopt(fd, SOL_PACKET, PACKET_RESERVE, &reserve, size_of::<u32>())?;
 
-// 4. 设置 PACKET_AUXDATA (可选，用于获取辅助数据)
+// 4. Set PACKET_AUXDATA (optional, for retrieving auxiliary data)
 let auxdata: i32 = 1;
 setsockopt(fd, SOL_PACKET, PACKET_AUXDATA, &auxdata, size_of::<i32>())?;
 
-// 5. 配置环形缓冲区 (PACKET_RX_RING)
+// 5. Configure ring buffer (PACKET_RX_RING)
 setsockopt(fd, SOL_PACKET, PACKET_RX_RING, &req, size_of::<tpacket_req>())?;
 
-// 6. mmap 映射
+// 6. mmap mapping
 let ring_ptr = mmap(null_mut(), ring_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0)?;
 
-// 7. 绑定到接口
+// 7. Bind to interface
 bind(fd, &sockaddr_ll, size_of::<sockaddr_ll>())?;
 ```
 
-**错误顺序会导致的问题:**
-- `PACKET_RESERVE` 在 `PACKET_RX_RING` 之后设置会被忽略
-- `PACKET_VERSION` 必须在所有 TPACKET 相关操作之前设置
+**Problems caused by incorrect ordering:**
+- `PACKET_RESERVE` set after `PACKET_RX_RING` will be ignored
+- `PACKET_VERSION` must be set before all TPACKET-related operations
 
-### tpacket_req 字段计算公式
+### tpacket_req Field Calculation Formula
 
 ```rust
-/// 计算 tpacket_req 字段 (基于 nmap libpcap 实现)
+/// Calculate tpacket_req fields (based on nmap libpcap implementation)
 fn calculate_tpacket_req(snaplen: u32, buffer_size: usize) -> tpacket_req {
-    // 1. 计算帧大小
+    // 1. Calculate frame size
     // netoff = TPACKET2_HDRLEN + ethernet_header (14) + reserve (4)
     let netoff = TPACKET2_HDRLEN as u32 + 14 + RESERVE;
     let maclen = 14u32; // Ethernet header
     let macoff = netoff - maclen;
     let frame_size = TPACKET_ALIGN(macoff + snaplen);
 
-    // 2. 计算块大小 (从页面大小开始，翻倍直到 >= frame_size)
+    // 2. Calculate block size (start from page size, double until >= frame_size)
     let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as u32;
     let mut block_size = page_size;
     while block_size < frame_size {
         block_size *= 2;
     }
 
-    // 3. 计算帧数量
+    // 3. Calculate frame count
     let frame_nr = (buffer_size + frame_size as usize - 1) / frame_size as usize;
 
-    // 4. 计算每个块的帧数
+    // 4. Calculate frames per block
     let frames_per_block = block_size / frame_size;
 
-    // 5. 计算块数量
+    // 5. Calculate block count
     let block_nr = (frame_nr / frames_per_block as usize) as u32;
 
     tpacket_req {
@@ -90,12 +90,12 @@ const TPACKET2_HDRLEN: u32 = 48; // sizeof(tpacket2_hdr)
 const RESERVE: u32 = 4; // VLAN_TAG_LEN
 ```
 
-### ENOMEM 恢复策略 (5% 迭代减少)
+### ENOMEM Recovery Strategy (5% Iterative Reduction)
 
-**nmap 使用 5% 迭代减少策略，而非固定重试:**
+**nmap uses a 5% iterative reduction strategy instead of fixed retries:**
 
 ```rust
-/// 配置环形缓冲区，带 ENOMEM 恢复
+/// Configure ring buffer with ENOMEM recovery
 fn setup_ring_buffer_with_retry(fd: i32, mut req: tpacket_req) -> Result<()> {
     const MAX_RETRIES: u32 = 10;
 
@@ -103,10 +103,10 @@ fn setup_ring_buffer_with_retry(fd: i32, mut req: tpacket_req) -> Result<()> {
         match setsockopt(fd, SOL_PACKET, PACKET_RX_RING, &req, size_of::<tpacket_req>()) {
             Ok(()) => return Ok(()),
             Err(e) if e.raw_os_error() == Some(libc::ENOMEM) => {
-                // 减少 5% 帧数量 (nmap 策略)
+                // Reduce frame count by 5% (nmap strategy)
                 req.tp_frame_nr = req.tp_frame_nr * 95 / 100;
 
-                // 重新计算块数量
+                // Recalculate block count
                 let frames_per_block = req.tp_block_size / req.tp_frame_size;
                 req.tp_block_nr = req.tp_frame_nr / frames_per_block;
 
@@ -128,37 +128,37 @@ fn setup_ring_buffer_with_retry(fd: i32, mut req: tpacket_req) -> Result<()> {
 }
 ```
 
-### 内存序要求 (CRITICAL)
+### Memory Ordering Requirements (CRITICAL)
 
-**nmap 使用 C11 原子操作，对应 Rust:**
+**nmap uses C11 atomics, corresponding Rust equivalents:**
 
 ```c
-// nmap 原始代码 (pcap-linux.c:135-138)
+// nmap original code (pcap-linux.c:135-138)
 #define packet_mmap_acquire(pkt) \
     (__atomic_load_n(&pkt->tp_status, __ATOMIC_ACQUIRE) != TP_STATUS_KERNEL)
 #define packet_mmap_release(pkt) \
     (__atomic_store_n(&pkt->tp_status, TP_STATUS_KERNEL, __ATOMIC_RELEASE))
 ```
 
-**Rust 等效实现:**
+**Rust equivalent implementation:**
 
 ```rust
 use std::sync::atomic::{AtomicU32, Ordering};
 
-/// 检查帧是否可用 (用户空间拥有)
-/// SAFETY: 必须使用 Acquire 语义确保看到完整的数据
+/// Check if frame is available (owned by userspace)
+/// SAFETY: Must use Acquire semantics to ensure complete data is visible
 fn frame_is_available(hdr: &Tpacket2Hdr) -> bool {
-    // 对应 nmap 的 __ATOMIC_ACQUIRE
+    // Corresponds to nmap's __ATOMIC_ACQUIRE
     unsafe {
         AtomicU32::from_ptr(std::ptr::addr_of!((*hdr).tp_status))
             .load(Ordering::Acquire) != TP_STATUS_KERNEL
     }
 }
 
-/// 释放帧回内核
-/// SAFETY: 必须使用 Release 语义确保之前的读取完成
+/// Release frame back to kernel
+/// SAFETY: Must use Release semantics to ensure prior reads complete
 fn release_frame(hdr: &mut Tpacket2Hdr) {
-    // 对应 nmap 的 __ATOMIC_RELEASE
+    // Corresponds to nmap's __ATOMIC_RELEASE
     unsafe {
         AtomicU32::from_ptr(std::ptr::addr_of!((*hdr).tp_status))
             .store(TP_STATUS_KERNEL, Ordering::Release);
@@ -166,22 +166,22 @@ fn release_frame(hdr: &mut Tpacket2Hdr) {
 }
 ```
 
-**性能基准 (来自 rust-concurrency skill):**
-| Ordering | CPU 周期 | 适用场景 |
-|----------|----------|----------|
-| Relaxed | 1 | 仅计数器 |
-| Acquire/Release | 2-3 | 生产者-消费者同步 |
-| SeqCst | 5-10 | 全局顺序 (避免使用) |
+**Performance benchmarks (from rust-concurrency skill):**
+| Ordering | CPU Cycles | Use Case |
+|----------|-----------|----------|
+| Relaxed | 1 | Counters only |
+| Acquire/Release | 2-3 | Producer-consumer synchronization |
+| SeqCst | 5-10 | Global ordering (avoid using) |
 
-**NEVER 使用 SeqCst** - 对于环形缓冲区，Acquire/Release 足够且性能更好。
+**NEVER use SeqCst** - For ring buffers, Acquire/Release is sufficient and performs better.
 
-### 帧指针数组初始化
+### Frame Pointer Array Initialization
 
-**mmap 后必须构建帧指针数组:**
+**After mmap, a frame pointer array must be constructed:**
 
 ```rust
-/// 初始化帧指针数组
-/// 基于 nmap pcap-linux.c:3434-3453
+/// Initialize frame pointer array
+/// Based on nmap pcap-linux.c:3434-3453
 fn init_frame_pointers(
     mmap_ptr: *mut u8,
     req: &tpacket_req,
@@ -202,13 +202,13 @@ fn init_frame_pointers(
 }
 ```
 
-### VLAN 标签重构逻辑
+### VLAN Tag Reconstruction Logic
 
-**nmap 在需要时移动数据以插入 VLAN 标签:**
+**nmap moves data to insert VLAN tags when needed:**
 
 ```rust
-/// 重构带有 VLAN 标签的数据包
-/// 基于 nmap pcap-linux.c:4321-4336
+/// Reconstruct packet with VLAN tag
+/// Based on nmap pcap-linux.c:4321-4336
 fn reconstruct_vlan_packet(
     hdr: &Tpacket2Hdr,
     raw: &[u8],
@@ -216,70 +216,70 @@ fn reconstruct_vlan_packet(
     const VLAN_TAG_LEN: usize = 4;
     const TP_STATUS_VLAN_VALID: u32 = 0x10;
 
-    // 检查是否有有效 VLAN 标签
+    // Check for valid VLAN tag
     if hdr.tp_vlan_tci == 0 && (hdr.tp_status & TP_STATUS_VLAN_VALID) == 0 {
-        return None; // 无 VLAN 标签
+        return None; // No VLAN tag
     }
 
-    // 需要移动数据以插入 VLAN 标签
+    // Need to move data to insert VLAN tag
     let mac_offset = hdr.tp_mac as usize;
     let mac_len = 14; // Ethernet header length
     let payload_len = hdr.tp_len as usize - mac_len;
 
     let mut packet = vec![0u8; hdr.tp_len as usize + VLAN_TAG_LEN];
 
-    // 复制 MAC 头 (目标 + 源 MAC)
+    // Copy MAC header (destination + source MAC)
     packet[..mac_offset].copy_from_slice(&raw[..mac_offset]);
 
-    // 插入 VLAN 标签 (TPID + TCI)
+    // Insert VLAN tag (TPID + TCI)
     let tpid = if hdr.tp_vlan_tpid != 0 { hdr.tp_vlan_tpid } else { 0x8100 };
     packet[mac_offset..mac_offset + 2].copy_from_slice(&tpid.to_be_bytes());
     packet[mac_offset + 2..mac_offset + 4].copy_from_slice(&hdr.tp_vlan_tci.to_be_bytes());
 
-    // 复制剩余载荷
+    // Copy remaining payload
     packet[mac_offset + VLAN_TAG_LEN..].copy_from_slice(&raw[mac_offset..]);
 
     Some(Cow::Owned(packet))
 }
 ```
 
-### breakloop 模式 (可中断阻塞)
+### Breakloop Pattern (Interruptible Blocking)
 
-**nmap 使用 eventfd 实现可中断的 poll:**
+**nmap uses eventfd to implement interruptible poll:**
 
 ```rust
 use tokio::io::{AsyncFd, Interest};
 use std::os::unix::io::AsRawFd;
 
-/// 可中断的数据包接收器
+/// Interruptible packet receiver
 pub struct InterruptibleReceiver {
-    /// 数据包 socket 的 AsyncFd
+    /// AsyncFd for packet socket
     packet_fd: AsyncFd<OwnedFd>,
-    /// 用于中断的 eventfd
+    /// eventfd for interruption
     breakloop_fd: AsyncFd<OwnedFd>,
-    /// 运行标志
+    /// Running flag
     running: Arc<AtomicBool>,
 }
 
 impl InterruptibleReceiver {
-    /// 等待数据包或中断信号
+    /// Wait for packet or interrupt signal
     pub async fn recv(&mut self) -> Result<Option<PacketBuffer>, PacketError> {
         loop {
-            // 同时等待 socket 可读或 breakloop 信号
+            // Wait simultaneously for socket readability or breakloop signal
             tokio::select! {
-                // 数据包到达
+                // Packet arrived
                 result = self.packet_fd.readable() => {
                     result?;
                     let mut guard = self.packet_fd.try_io(Interest::READABLE, |fd| {
-                        // 从环形缓冲区读取数据包
+                        // Read packet from ring buffer
                         self.try_recv_from_ring()
                     })?;
                     return guard.map(|opt| opt);
                 }
 
-                // breakloop 信号
+                // breakloop signal
                 _ = self.breakloop_fd.readable() => {
-                    // 清除 eventfd
+                    // Clear eventfd
                     let mut buf = [0u8; 8];
                     unsafe {
                         libc::read(
@@ -294,7 +294,7 @@ impl InterruptibleReceiver {
         }
     }
 
-    /// 请求中断阻塞操作
+    /// Request interruption of blocking operation
     pub fn break_loop(&self) -> Result<()> {
         let buf: u64 = 1;
         unsafe {
@@ -311,12 +311,12 @@ impl InterruptibleReceiver {
 
 ## TPACKET_V2 Header Structure (32 bytes)
 
-> **CRITICAL**: 结构体总大小是 **32 字节**，不是 48 字节。
-> `tp_padding` 是 `[u8; 4]`，不是 `[u8; 8]`。
+> **CRITICAL**: The total structure size is **32 bytes**, not 48 bytes.
+> `tp_padding` is `[u8; 4]`, not `[u8; 8]`.
 
 ```c
 /// tpacket2_hdr from Linux if_packet.h
-/// 参考: /usr/include/linux/if_packet.h:146-157
+/// Reference: /usr/include/linux/if_packet.h:146-157
 #[repr(C)]
 pub struct __tpacket2_hdr {
     pub tp_status: u32,      // Frame status (4 bytes)
@@ -332,27 +332,27 @@ pub struct __tpacket2_hdr {
 }  // Total: 4+4+4+2+2+4+4+2+2+4 = 32 bytes
 ```
 
-**CRITICAL 修正**:
-1. V2 头使用 `tp_nsec` (纳秒)，不是 `tp_usec` (微秒)
-2. `tp_padding` 是 `[u8; 4]`，不是 `[u8; 8]`
-3. 结构体总大小是 **32 字节**，不是 48 字节
+**CRITICAL corrections**:
+1. V2 header uses `tp_nsec` (nanoseconds), not `tp_usec` (microseconds)
+2. `tp_padding` is `[u8; 4]`, not `[u8; 8]`
+3. Total structure size is **32 bytes**, not 48 bytes
 
-这是 Linux 内核 `/usr/include/linux/if_packet.h:146-157` 的准确定义。
+This is the exact definition from the Linux kernel `/usr/include/linux/if_packet.h:146-157`.
 
 ---
 
-## mmap Flags 说明
+## mmap Flags Description
 
-| Flag | 说明 |
-|------|------|
-| `PROT_READ` | 允许读取包数据 |
-| `PROT_WRITE` | 允许写入数据 |
-| `MAP_SHARED` | 共享内存 (推荐) |
-| `MAP_PRIVATE` | 私有 COW (不推荐) |
-| `MAP_LOCKED` | 锁定内存 (不推荐) |
-| `MAP_POPULATE` | 预填充 (不推荐) |
+| Flag | Description |
+|------|-------------|
+| `PROT_READ` | Allow reading packet data |
+| `PROT_WRITE` | Allow writing data |
+| `MAP_SHARED` | Shared memory (recommended) |
+| `MAP_PRIVATE` | Private COW (not recommended) |
+| `MAP_LOCKED` | Lock memory (not recommended) |
+| `MAP_POPULATE` | Pre-populate (not recommended) |
 
-**推荐配置**:
+**Recommended configuration**:
 ```rust
 let ring_ptr = unsafe {
     mmap(
@@ -367,24 +367,24 @@ let ring_ptr = unsafe {
 
 ---
 
-## 错误处理目录
+## Error Handling Reference
 
-| 错误类型 | 处理方式 |
-|------|------|
-| `EAGAIN` | 重试操作 |
-| `ENOMEM` | 减小缓冲区 |
-| `EPERM` | 权限检查 |
-| `EINTR` | 信号处理 |
+| Error Type | Handling |
+|------|----------|
+| `EAGAIN` | Retry operation |
+| `ENOMEM` | Reduce buffer size |
+| `EPERM` | Permission check |
+| `EINTR` | Signal handling |
 
 ---
 
-## 测试策略
+## Test Strategy
 
-### 单元测试要求
-- 每个公共函数必须有测试
-- 边界条件测试
-- 错误路径测试
-- 并发安全测试
+### Unit Test Requirements
+- Every public function must have tests
+- Boundary condition tests
+- Error path tests
+- Concurrency safety tests
 
 ```
 
@@ -392,15 +392,15 @@ cargo test -p rustnmap-packet --lib
 ```
 
 
-### 测试覆盖率要求
-- 每个公共函数: >=1 测试
-- 每个错误路径: >=1 测试
-- 边界条件: >=2 测试
-- 总体覆盖率: >=80%
+### Test Coverage Requirements
+- Each public function: >=1 test
+- Each error path: >=1 test
+- Boundary conditions: >=2 tests
+- Overall coverage: >=80%
 
 ---
 
-## 依赖版本锁定
+## Dependency Version Locking
 
 ```toml
 [dependencies]
@@ -409,16 +409,16 @@ tokio = { version = "1.42", features = ["net", "io-util", "rt-multi-thread", "sy
 bytes = "1.9"
 socket2 = "0.5"
 thiserror = "2.0"
-async-trait = "0.1"  # REQUIRED: PacketEngine trait 必须使用
+async-trait = "0.1"  # REQUIRED: PacketEngine trait must use this
 
 [dev-dependencies]
 tokio-test = "0.4"  # For async testing
 criterion = "0.5"  # For benchmarking
 ```
 
-**CRITICAL: async-trait 依赖**
+**CRITICAL: async-trait dependency**
 
-`PacketEngine` trait 必须使用 `async-trait` 宏:
+The `PacketEngine` trait must use the `async-trait` macro:
 
 ```rust
 use async_trait::async_trait;
@@ -430,31 +430,31 @@ pub trait PacketEngine: Send + Sync {
 }
 ```
 
-不使用 `async-trait` 会导致 trait 方法无法作为 trait object 使用 (`Box<dyn PacketEngine>`)。
+Not using `async-trait` will prevent trait methods from being used as trait objects (`Box<dyn PacketEngine>`).
 
 ---
 
-## 错误处理目录
+## Error Handling Reference
 
-| 错误类型 | errno | 处理方式 |
+| Error Type | errno | Handling |
 |---------|-------|----------|
-| `EAGAIN` | 11 | 重试操作 |
-| `ENOMEM` | 12 | 减小缓冲区 |
-| `EPERM` | 1 | 权限检查 |
-| `EINTR` | 4 | 信号处理 |
-| `EINVAL` | 22 | 参数检查 |
-| `ENODEV` | 19 | 设备不存在 |
-| `ENETDOWN` | 100 | 网络关闭 |
-| `ENETUNREACH` | 101 | 网络不可达 |
-| `EHOSTUNREACH` | 113 | 主机不可达 |
+| `EAGAIN` | 11 | Retry operation |
+| `ENOMEM` | 12 | Reduce buffer size |
+| `EPERM` | 1 | Permission check |
+| `EINTR` | 4 | Signal handling |
+| `EINVAL` | 22 | Parameter check |
+| `ENODEV` | 19 | Device does not exist |
+| `ENETDOWN` | 100 | Network down |
+| `ENETUNREACH` | 101 | Network unreachable |
+| `EHOSTUNREACH` | 113 | Host unreachable |
 
 ---
 
-## 迁移指南
+## Migration Guide
 
-### 从 recvfrom 迁移到 PACKET_MMAP
+### From recvfrom to PACKET_MMAP
 
-**旧代码:**
+**Old code:**
 ```rust
 // Before: Using recvfrom
 let mut buf = [0u8; 65535];
@@ -462,16 +462,16 @@ let len = socket.recvfrom(&mut buf)?;
 let packet = &buf[..len];
 ```
 
-**新代码:**
+**New code:**
 ```rust
 // After: Using PACKET_MMAP
 let engine = MmapPacketEngine::new("eth0", config)?;
 let packet = engine.recv_async().await?;
 ```
 
-### API 兼容性
+### API Compatibility
 
-`PacketEngine` trait 允许渐进迁移:
+The `PacketEngine` trait allows incremental migration:
 
 ```rust
 // Old scanners can be updated incrementally
@@ -488,109 +488,108 @@ impl AsyncScanner for TcpSynScanner {
 
 ---
 
-## 参考资源
+## Reference Resources
 
-1. **Linux 内核文档**
+1. **Linux Kernel Documentation**
    - https://www.kernel.org/doc/html/latest/networking/packet_mmap.html
    - https://www.kernel.org/doc/html/latest/networking/tpacket.html
 
-2. **nmap 源代码**
+2. **nmap Source Code**
    - `reference/nmap/libpcap/pcap-linux.c`
    - `reference/nmap/nsock/src/`
 
-3. **Rust 资源**
-   - Tokio 文档: https://docs.rs/tokio/latest/tokio/
-   - bytes 文档: https://docs.rs/bytes/latest/bytes/
+3. **Rust Resources**
+   - Tokio documentation: https://docs.rs/tokio/latest/tokio/
+   - bytes documentation: https://docs.rs/bytes/latest/bytes/
 
-4. **社区资源**
-   - https://github.com/libpnet/libpnet (参考实现)
-   - https://github.com/brutal-smooth/jni-rs (FFI 参考)
+4. **Community Resources**
+   - https://github.com/libpnet/libpnet (reference implementation)
+   - https://github.com/brutal-smooth/jni-rs (FFI reference)
 
 ---
 
-## 零拷贝数据包缓冲区设计 (Zero-Copy Packet Buffer)
+## Zero-Copy Packet Buffer Design
 
-> **Bug #2 修复方案**: 当前实现使用 `Bytes::copy_from_slice()` 复制数据，
-> 本节描述真正的零拷贝实现方案，包括帧生命周期管理。
+> **Bug #2 Fix Plan**: The current implementation uses `Bytes::copy_from_slice()` to copy data.
+> This section describes the true zero-copy implementation plan, including frame lifecycle management.
 
-### 问题分析
+### Problem Analysis
 
-**当前实现** (`crates/rustnmap-packet/src/mmap.rs:719`):
+**Current implementation** (`crates/rustnmap-packet/src/mmap.rs:719`):
 ```rust
-// ❌ 复制数据 - 违背零拷贝原则
+// Copies data - violates zero-copy principle
 let slice = unsafe { std::slice::from_raw_parts(data_ptr, data_len) };
 Bytes::copy_from_slice(slice)
 ```
 
-**性能影响**:
-- 每个数据包额外一次 `memcpy` (高达 65535 字节)
-- 1M PPS 时 = 每秒复制 65MB 数据
-- CPU 使用率增加 2-3x
+**Performance impact**:
+- One extra `memcpy` per packet (up to 65535 bytes)
+- At 1M PPS = 65MB of data copied per second
+- CPU usage increases 2-3x
 
-**根本原因**:
-帧的生命周期与数据包缓冲区分离。当前实现立即释放帧回内核（`release_frame()`），
-但数据仍然需要被访问，因此必须复制。
+**Root cause**:
+The frame lifecycle is decoupled from the packet buffer. The current implementation immediately releases the frame back to the kernel (`release_frame()`), but the data still needs to be accessed, so it must be copied.
 
-### 设计目标
+### Design Goals
 
-1. **真正的零拷贝**: 数据包数据直接从内核环形缓冲区访问
-2. **帧生命周期管理**: 确保 `PacketBuffer` 存活期间，内核不会覆盖帧数据
-3. **自动释放**: `PacketBuffer` drop 时自动释放帧回内核
-4. **线程安全**: 多个接收线程可以安全地使用不同的帧
-5. **API 兼容性**: 最小化对现有 `PacketBuffer` API 的改动
+1. **True zero-copy**: Packet data is accessed directly from the kernel ring buffer
+2. **Frame lifecycle management**: Ensure the kernel does not overwrite frame data while `PacketBuffer` is alive
+3. **Automatic release**: `PacketBuffer` automatically releases the frame back to the kernel on drop
+4. **Thread safety**: Multiple receiving threads can safely use different frames
+5. **API compatibility**: Minimize changes to the existing `PacketBuffer` API
 
-### 核心设计
+### Core Design
 
-#### 方案概述
+#### Approach Overview
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                    Zero-Copy Packet Buffer Architecture                      │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                              │
-│  ┌───────────────────────────────────────────────────────────────────────┐  │
-│  │                    MmapPacketEngine (内核共享内存)                      │  │
-│  │  ┌─────────────────────────────────────────────────────────────────┐  │  │
-│  │  │                    Ring Buffer (4MB)                            │  │  │
-│  │  │  ┌─────┐ ┌─────┐ ┌─────┐ ┌─────┐ ┌─────┐ ┌─────┐             │  │  │
-│  │  │  │Frame│ │Frame│ │Frame│ │Frame│ │Frame│ │Frame│ ...          │  │  │
-│  │  │  │  0 │ │  1 │ │  2 │ │  3 │ │  4 │ │  5 │               │  │  │
-│  │  │  └──┬──┘ └──┬──┘ └──┬──┘ └──┬──┘ └──┬──┘ └──┬──┘             │  │  │
-│  │  └─────┼──────┼──────┼──────┼──────┼──────┼─────────────────────┘  │  │
-│  └────────┼──────┴──────┴──────┴──────┴──────┴─────────────────────────┘  │
-│           │                                                               │
-│           │ try_recv() 返回 ZeroCopyPacket (持有 engine 引用)              │
-│           ▼                                                               │
-│  ┌───────────────────────────────────────────────────────────────────────┐  │
-│  │                    ZeroCopyPacket                                     │  │
-│  │  ┌─────────────────────────────────────────────────────────────────┐  │  │
-│  │  │  _engine: Arc<MmapPacketEngine>  ← 保持引擎存活                │  │  │
-│  │  │  frame_idx: u32                   ← 跟踪哪个帧                  │  │  │
-│  │  │  data: Bytes                       ← 指向 mmap 区域 (零拷贝)    │  │  │
-│  │  └─────────────────────────────────────────────────────────────────┘  │  │
-│  │                                                                       │  │
-│  │  impl Drop: 释放帧回内核 (engine.release_frame(frame_idx))            │  │
-│  └───────────────────────────────────────────────────────────────────────┘  │
-│                                                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
++-----------------------------------------------------------------------------+
+|                    Zero-Copy Packet Buffer Architecture                      |
++-----------------------------------------------------------------------------+
+|                                                                              |
+|  +-----------------------------------------------------------------------+  |
+|  |                    MmapPacketEngine (kernel shared memory)             |  |
+|  |  +-----------------------------------------------------------------+  |  |
+|  |  |                    Ring Buffer (4MB)                              |  |  |
+|  |  |  +------+ +------+ +------+ +------+ +------+ +------+          |  |  |
+|  |  |  |Frame | |Frame | |Frame | |Frame | |Frame | |Frame | ...       |  |  |
+|  |  |  |  0   | |  1   | |  2   | |  3   | |  4   | |  5   |          |  |  |
+|  |  |  +--+---+ +--+---+ +--+---+ +--+---+ +--+---+ +--+---+          |  |  |
+|  |  +-----+-------+-------+-------+-------+-------+------------------+  |  |
+|  +-------+-------+-------+-------+-------+-------+----------------------+  |
+|          |                                                                    |
+|          | try_recv() returns ZeroCopyPacket (holds engine reference)         |
+|          v                                                                    |
+|  +-----------------------------------------------------------------------+  |
+|  |                    ZeroCopyPacket                                      |  |
+|  |  +-----------------------------------------------------------------+  |  |
+|  |  |  _engine: Arc<MmapPacketEngine>  <- keeps engine alive           |  |  |
+|  |  |  frame_idx: u32                   <- tracks which frame          |  |  |
+|  |  |  data: Bytes                       <- points to mmap area (ZC)   |  |  |
+|  |  +-----------------------------------------------------------------+  |  |
+|  |                                                                        |  |
+|  |  impl Drop: release frame back to kernel (engine.release_frame(idx))   |  |
+|  +-----------------------------------------------------------------------+  |
+|                                                                              |
++-----------------------------------------------------------------------------+
 ```
 
-#### 关键设计决策
+#### Key Design Decisions
 
-**1. 使用 `Arc<MmapPacketEngine>` 保持引用**
+**1. Use `Arc<MmapPacketEngine>` to Hold Reference**
 
 ```rust
 pub struct ZeroCopyPacket {
-    /// Arc 引用确保引擎在 packet 存活期间不被释放
+    /// Arc reference ensures the engine is not dropped while packet is alive
     _engine: Arc<MmapPacketEngine>,
 
-    /// 帧索引，用于 drop 时释放帧回内核
+    /// Frame index, used to release frame back to kernel on drop
     frame_idx: u32,
 
-    /// 零拷贝数据视图 - 指向 mmap 区域的切片
+    /// Zero-copy data view - slice pointing to mmap region
     data: Bytes,
 
-    /// 元数据
+    /// Metadata
     len: usize,
     timestamp: std::time::Instant,
     protocol: u16,
@@ -598,12 +597,12 @@ pub struct ZeroCopyPacket {
 }
 ```
 
-**为什么使用 `Arc` 而不是裸指针?**
-- **安全性**: Rust 的借用检查器确保 `MmapPacketEngine` 不会被提前释放
-- **线程安全**: `Arc` 提供线程安全的引用计数
-- **自动化**: `Drop` trait 自动处理引用计数递减
+**Why use `Arc` instead of raw pointers?**
+- **Safety**: Rust's borrow checker ensures `MmapPacketEngine` is not dropped prematurely
+- **Thread safety**: `Arc` provides thread-safe reference counting
+- **Automation**: The `Drop` trait automatically handles reference count decrement
 
-**2. 使用 `Bytes::from_raw_parts()` 创建零拷贝视图**
+**2. Use `Bytes::from_raw_parts()` to Create Zero-Copy View**
 
 ```rust
 impl MmapPacketEngine {
@@ -615,23 +614,23 @@ impl MmapPacketEngine {
         let frame_ptr = self.frame_ptrs[self.rx_frame_idx as usize];
         let hdr = unsafe { frame_ptr.as_ref() };
 
-        // 计算数据指针和长度
+        // Calculate data pointer and length
         let data_offset = TPACKET2_HDRLEN + hdr.tp_mac as usize;
         let data_len = hdr.tp_snaplen as usize;
         let data_ptr = unsafe { frame_ptr.as_ptr().cast::<u8>().add(data_offset) };
 
-        // 创建 Arc 引用 (用于 packet 持有)
+        // Create Arc reference (for packet to hold)
         let engine_arc = Arc::new(self.clone_without_rx_state());
 
-        // 创建零拷贝 Bytes - 不复制数据
+        // Create zero-copy Bytes - no data copy
         // SAFETY:
-        // - data_ptr 指向 mmap 区域，在 packet 存活期间有效
-        // - Arc<engine> 确保 mmap 不会被释放
+        // - data_ptr points to mmap region, valid while packet is alive
+        // - Arc<engine> ensures mmap will not be released
         let data = unsafe {
             Bytes::from_raw_parts(
                 data_ptr as *mut u8,
                 data_len,
-                data_len,  // capacity = length (只读视图)
+                data_len,  // capacity = length (read-only view)
             )
         };
 
@@ -641,28 +640,28 @@ impl MmapPacketEngine {
             data,
             len: data_len,
             timestamp: std::time::Instant::now(),
-            protocol: 0,  // 从 packet 解析
+            protocol: 0,  // parsed from packet
             vlan_tci: None,
         };
 
-        // ⚠️ 关键：不立即释放帧！帧将在 packet drop 时释放
-        self.advance_frame();  // 只推进索引，不释放当前帧
+        // CRITICAL: Do not release frame immediately! Frame will be released on packet drop
+        self.advance_frame();  // Only advance index, do not release current frame
 
         Ok(Some(packet))
     }
 }
 ```
 
-**`clone_without_rx_state()` 实现**:
+**`clone_without_rx_state()` implementation**:
 ```rust
 impl MmapPacketEngine {
-    /// 克隆引擎但不包含接收状态 (rx_frame_idx)
+    /// Clone engine without receive state (rx_frame_idx)
     ///
-    /// 这是必需的，因为：
-    /// 1. 接收线程需要推进 rx_frame_idx
-    /// 2. Packet 持有的引擎引用不应该有独立的 rx_frame_idx
+    /// This is necessary because:
+    /// 1. The receiving thread needs to advance rx_frame_idx
+    /// 2. The engine reference held by packets should not have an independent rx_frame_idx
     fn clone_without_rx_state(&self) -> Self {
-        // 复制所有字段除了 rx_frame_idx
+        // Copy all fields except rx_frame_idx
         Self {
             fd: unsafe { libc::dup(self.fd.as_raw_fd()) }
                 .ok()
@@ -671,12 +670,12 @@ impl MmapPacketEngine {
             config: self.config.clone(),
             ring_ptr: self.ring_ptr,
             ring_size: self.ring_size,
-            rx_frame_idx: 0,  // 新的索引，不与原始冲突
+            rx_frame_idx: 0,  // New index, does not conflict with original
             frame_count: self.frame_count,
             if_index: self.if_index,
             if_name: self.if_name.clone(),
             mac_addr: self.mac_addr,
-            stats: EngineStats::default(),  // 独立统计
+            stats: EngineStats::default(),  // Independent statistics
             running: AtomicBool::new(false),
             packets_received: AtomicU64::new(0),
             packets_dropped: AtomicU64::new(0),
@@ -686,27 +685,27 @@ impl MmapPacketEngine {
 }
 ```
 
-**3. Drop trait 实现帧释放**
+**3. Drop Trait Implementation for Frame Release**
 
 ```rust
 impl Drop for ZeroCopyPacket {
     fn drop(&mut self) {
-        // 释放帧回内核
-        // 只有在 packet 被消费后才释放，确保数据访问安全
+        // Release frame back to kernel
+        // Only released after packet is consumed, ensuring safe data access
         self._engine.release_frame_by_idx(self.frame_idx);
     }
 }
 
 impl MmapPacketEngine {
-    /// 通过索引释放特定帧
+    /// Release a specific frame by index
     ///
-    /// 这是必需的，因为 packet 持有的是引擎的克隆，
-    /// 需要释放原始引擎中的帧。
+    /// This is necessary because the packet holds a clone of the engine,
+    /// and needs to release the frame in the original engine.
     pub fn release_frame_by_idx(&self, frame_idx: u32) {
         let frame_ptr = self.frame_ptrs[frame_idx as usize];
         let hdr = unsafe { frame_ptr.as_ref() };
 
-        // 使用 Release 语义确保之前的读取完成
+        // Use Release semantics to ensure prior reads complete
         let status_ptr = std::ptr::addr_of!(hdr.tp_status).cast::<AtomicU32>();
         unsafe {
             (*status_ptr).store(TP_STATUS_KERNEL, Ordering::Release);
@@ -715,43 +714,43 @@ impl MmapPacketEngine {
 }
 ```
 
-### 内存安全保证
+### Memory Safety Guarantees
 
-#### 1. Use-After-Free 防护
+#### 1. Use-After-Free Prevention
 
-**问题**: 如果 `MmapPacketEngine` 被 drop，mmap 区域会被 munmap，悬垂指针导致 UB。
+**Problem**: If `MmapPacketEngine` is dropped, the mmap region is munmapped, and dangling pointers cause UB.
 
-**解决方案**:
+**Solution**:
 ```rust
 pub struct ZeroCopyPacket {
-    _engine: Arc<MmapPacketEngine>,  // Arc 确保 mmap 存活
+    _engine: Arc<MmapPacketEngine>,  // Arc ensures mmap stays alive
     ...
 }
 
 impl Drop for MmapPacketEngine {
     fn drop(&mut self) {
-        // ⚠️ CRITICAL: 必须先 munmap，再 close fd
+        // CRITICAL: Must munmap first, then close fd
         if !self.ring_ptr.is_null() {
             unsafe { libc::munmap(self.ring_ptr.as_ptr() as *mut _, self.ring_size); }
         }
-        // OwnedFd 自动 close
+        // OwnedFd auto-closes
     }
 }
 ```
 
-**为什么 `Arc` 能解决问题?**
-- 当 `ZeroCopyPacket` 存活时，`Arc` 计数 >= 1
-- `MmapPacketEngine` 不会被 drop
-- `munmap` 不会被调用
-- `data_ptr` 保持有效
+**Why does `Arc` solve this?**
+- When `ZeroCopyPacket` is alive, `Arc` count >= 1
+- `MmapPacketEngine` will not be dropped
+- `munmap` will not be called
+- `data_ptr` remains valid
 
-#### 2. 数据竞争防护
+#### 2. Data Race Prevention
 
-**问题**: 内核可能在 packet 读取时写入帧。
+**Problem**: The kernel may write to a frame while a packet is reading it.
 
-**解决方案**:
+**Solution**:
 ```rust
-// 1. Acquire 确保看到完整数据
+// 1. Acquire ensures complete data is visible
 fn frame_is_available(&self) -> bool {
     let status_ptr = std::ptr::addr_of!(hdr.tp_status).cast::<AtomicU32>();
     unsafe {
@@ -759,32 +758,32 @@ fn frame_is_available(&self) -> bool {
     }
 }
 
-// 2. 只在读取后释放帧 (在 packet drop 时)
+// 2. Only release frame after reading (on packet drop)
 impl Drop for ZeroCopyPacket {
     fn drop(&mut self) {
-        // Release 确保之前的读取完成
+        // Release ensures prior reads complete
         self._engine.release_frame_by_idx(self.frame_idx);
     }
 }
 ```
 
-#### 3. 帧重用防护
+#### 3. Frame Reuse Prevention
 
-**问题**: 接收线程可能重用尚未释放的帧。
+**Problem**: The receiving thread may reuse a frame that has not been released yet.
 
-**解决方案**:
+**Solution**:
 ```rust
-// ✅ 当前实现：rx_frame_idx 单向递增
+// Current implementation: rx_frame_idx increments unidirectionally
 fn advance_frame(&mut self) {
     self.rx_frame_idx = (self.rx_frame_idx + 1) % self.frame_count;
 }
 
-// ⚠️ 潜在问题：如果 ring buffer 循环，可能重用帧
+// Potential issue: if ring buffer wraps, frames may be reused
 
-// ✅ 解决方案：添加帧跟踪
+// Solution: add frame tracking
 pub struct MmapPacketEngine {
     ...
-    /// 帧使用位图 (每个 bit 代表一个帧是否在使用中)
+    /// Frame in-use bitmap (each bit represents whether a frame is in use)
     frame_in_use: Vec<AtomicBool>,
 }
 
@@ -803,30 +802,30 @@ impl MmapPacketEngine {
 }
 ```
 
-### API 变更
+### API Changes
 
-#### PacketEngine trait 变更
+#### PacketEngine Trait Changes
 
 ```rust
-// 旧 API (有拷贝)
+// Old API (with copy)
 #[async_trait]
 pub trait PacketEngine: Send + Sync {
     async fn recv(&mut self) -> Result<Option<PacketBuffer>, PacketError>;
-    //                                       ^^^^^^^^^^^^ 拷贝的数据
+    //                                       ^^^^^^^^^^^^ copied data
 }
 
-// 新 API (零拷贝)
+// New API (zero-copy)
 #[async_trait]
 pub trait PacketEngine: Send + Sync {
     async fn recv(&mut self) -> Result<Option<ZeroCopyPacket>, PacketError>;
-    //                                       ^^^^^^^^^^^^^ 零拷贝
+    //                                       ^^^^^^^^^^^^^ zero-copy
 }
 
-// 兼容层：ZeroCopyPacket 可以转换为 PacketBuffer (如果需要)
+// Compatibility layer: ZeroCopyPacket can be converted to PacketBuffer (if needed)
 impl From<ZeroCopyPacket> for PacketBuffer {
     fn from(packet: ZeroCopyPacket) -> Self {
         Self {
-            data: packet.data,  // Bytes 本身就是零拷贝的
+            data: packet.data,  // Bytes is itself zero-copy
             len: packet.len,
             timestamp: packet.timestamp,
             protocol: packet.protocol,
@@ -836,18 +835,18 @@ impl From<ZeroCopyPacket> for PacketBuffer {
 }
 ```
 
-### 性能对比
+### Performance Comparison
 
-| 指标 | 当前 (拷贝) | 零拷贝 | 改进 |
-|------|-----------|--------|------|
-| 每包内存操作 | 2 (mmap + memcpy) | 1 (mmap) | **2x** |
-| 1M PPS 内存带宽 | 65 GB/s | 0 GB/s | **∞** |
-| CPU 周期/包 | ~500 | ~100 | **5x** |
-| 缓存友好性 | 低 (额外拷贝) | 高 | 显著 |
+| Metric | Current (copy) | Zero-copy | Improvement |
+|--------|-----------|--------|------|
+| Memory ops per packet | 2 (mmap + memcpy) | 1 (mmap) | **2x** |
+| 1M PPS memory bandwidth | 65 GB/s | 0 GB/s | **Infinite** |
+| CPU cycles/packet | ~500 | ~100 | **5x** |
+| Cache friendliness | Low (extra copy) | High | Significant |
 
-### 实现步骤
+### Implementation Steps
 
-#### Phase 1: 添加 ZeroCopyPacket 结构体
+#### Phase 1: Add ZeroCopyPacket Structure
 ```rust
 // crates/rustnmap-packet/src/zero_copy.rs
 
@@ -862,21 +861,21 @@ pub struct ZeroCopyPacket {
 }
 ```
 
-#### Phase 2: 修改 MmapPacketEngine::try_recv
+#### Phase 2: Modify MmapPacketEngine::try_recv
 ```rust
-// 添加新方法
+// Add new method
 pub fn try_recv_zero_copy(&mut self) -> Result<Option<ZeroCopyPacket>> {
-    // 实现如上所述
+    // Implementation as described above
 }
 
-// 保留旧方法用于兼容 (标记为 deprecated)
+// Keep old method for compatibility (marked as deprecated)
 #[expect(deprecated, reason = "Use try_recv_zero_copy for zero-copy")]
 pub fn try_recv(&mut self) -> Result<Option<PacketBuffer>> {
-    // 当前实现
+    // Current implementation
 }
 ```
 
-#### Phase 3: 更新 PacketEngine trait
+#### Phase 3: Update PacketEngine Trait
 ```rust
 #[async_trait]
 pub trait PacketEngine: Send + Sync {
@@ -884,12 +883,12 @@ pub trait PacketEngine: Send + Sync {
 }
 ```
 
-#### Phase 4: 更新所有实现
+#### Phase 4: Update All Implementations
 ```rust
-// AsyncPacketEngine, ScannerPacketEngine 等
+// AsyncPacketEngine, ScannerPacketEngine, etc.
 ```
 
-### 测试策略
+### Test Strategy
 
 ```rust
 #[cfg(test)]
@@ -898,15 +897,15 @@ mod tests {
 
     #[test]
     fn test_zero_copy_no_alloc() {
-        // 验证 ZeroCopyPacket 不触发堆分配
+        // Verify ZeroCopyPacket does not trigger heap allocation
         let engine = MmapPacketEngine::new("eth0", RingConfig::default()).unwrap();
 
-        // 发送测试包
+        // Send test packet
         // ...
 
         let packet = engine.try_recv_zero_copy().unwrap().unwrap();
 
-        // 验证 data 指针在 mmap 区域
+        // Verify data pointer is within mmap region
         let mmap_start = engine.ring_ptr.as_ptr() as usize;
         let mmap_end = mmap_start + engine.ring_size;
         let data_ptr = packet.data.as_ptr() as usize;
@@ -917,75 +916,75 @@ mod tests {
 
     #[test]
     fn test_frame_lifecycle() {
-        // 验证 frame 在 packet drop 前不会被重用
+        // Verify frame is not reused before packet drop
         let engine = Arc::new(MmapPacketEngine::new(...).unwrap());
         let mut recv_engine = Arc::clone(&engine).try_recv_zero_copy().unwrap();
 
         let packet1 = recv_engine.unwrap();
         let frame1_idx = packet1.frame_idx;
 
-        // packet1 存活时，frame1 应该被标记为使用中
+        // While packet1 is alive, frame1 should be marked as in use
         assert!(engine.is_frame_in_use(frame1_idx));
 
-        // 读取下一个包
+        // Read next packet
         let packet2 = recv_engine.try_recv_zero_copy().unwrap().unwrap();
 
-        // 应该是不同的帧
+        // Should be a different frame
         assert_ne!(packet1.frame_idx, packet2.frame_idx);
 
-        // drop packet1
+        // Drop packet1
         drop(packet1);
 
-        // frame1 应该被释放
+        // frame1 should be released
         assert!(!engine.is_frame_in_use(frame1_idx));
     }
 
     #[test]
     fn test_no_data_copy() {
-        // 使用 Valgrind 或 custom allocator 验证没有额外分配
+        // Use Valgrind or custom allocator to verify no extra allocations
         let engine = MmapPacketEngine::new(...).unwrap();
         let packet = engine.try_recv_zero_copy().unwrap().unwrap();
 
-        // 验证 Bytes 的 capacity == len (没有额外分配)
+        // Verify Bytes capacity == len (no extra allocation)
         assert_eq!(packet.data.capacity(), packet.data.len());
     }
 }
 ```
 
-### 参考实现
+### Reference Implementations
 
 1. **libpnet**:
-   - `pnet::packet::Packet` trait 使用零拷贝视图
-   - `pnet::datalink::Channel` 实现类似模式
+   - `pnet::packet::Packet` trait uses zero-copy views
+   - `pnet::datalink::Channel` implements a similar pattern
 
 2. **redbpf**:
-   - `PerfMapBuffer` 使用 `Arc` 跟踪缓冲区生命周期
-   - `PerfMessage` 持有缓冲区引用
+   - `PerfMapBuffer` uses `Arc` to track buffer lifecycle
+   - `PerfMessage` holds buffer reference
 
 3. **DPDK (C)**:
-   - `rte_mbuf` 结构体持有 `rte_mempool` 引用
-   - 类似的 reference counting 模式
+   - `rte_mbuf` structure holds `rte_mempool` reference
+   - Similar reference counting pattern
 
-### 风险和缓解
+### Risks and Mitigations
 
-| 风险 | 影响 | 缓解措施 |
-|------|------|----------|
-| Arc 开销 | 每包引用计数操作 | 原子操作成本低 (<10 CPU 周期) |
-| 内存泄漏 | Packet 未 drop 导致帧泄漏 | 单元测试 + 显式 drop 检查 |
-| 帧耗尽 | Ring buffer 循环导致重用 | 帧位图 + 主动背压 |
-| API 兼容性 | 破坏现有代码 | 保留旧 API，添加迁移路径 |
+| Risk | Impact | Mitigation |
+|------|--------|------------|
+| Arc overhead | Per-packet reference count operation | Low atomic operation cost (<10 CPU cycles) |
+| Memory leak | Packet not dropped causes frame leak | Unit tests + explicit drop checks |
+| Frame exhaustion | Ring buffer wrap causes reuse | Frame bitmap + active backpressure |
+| API compatibility | Breaking existing code | Keep old API, add migration path |
 
 ---
 
-## 总结
+## Summary
 
-零拷贝修复的核心是：
-1. **Arc 引用** - 保持引擎存活
-2. **Bytes::from_raw_parts** - 零拷贝视图
-3. **Drop trait** - 自动释放帧
-4. **帧跟踪** - 防止重用
+The core of the zero-copy fix is:
+1. **Arc reference** - Keep the engine alive
+2. **Bytes::from_raw_parts** - Zero-copy view
+3. **Drop trait** - Automatic frame release
+4. **Frame tracking** - Prevent reuse
 
-这个设计在保持内存安全的同时，实现了真正的零拷贝，达到 1M+ PPS 的性能目标。
+This design achieves true zero-copy while maintaining memory safety, reaching the 1M+ PPS performance target.
 
 ---
 

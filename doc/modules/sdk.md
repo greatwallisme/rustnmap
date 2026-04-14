@@ -1,20 +1,20 @@
-# Rust SDK 模块 (rustnmap-sdk)
+# Rust SDK Module (rustnmap-sdk)
 
-> **版本**: 2.0.0 (开发中)
-> **对应 Phase**: Phase 5 (Week 12)
-> **优先级**: P2
-
----
-
-## 概述
-
-Rust SDK 为 Rust 开发者提供稳定、高层次的 API，使其能够在自己的项目中轻松集成 RustNmap 的扫描能力。SDK 采用 Builder 模式，提供流畅的链式调用体验。
+> **Version**: 2.0.0 (in development)
+> **Corresponding Phase**: Phase 5 (Week 12)
+> **Priority**: P2
 
 ---
 
-## 快速开始
+## Overview
 
-### 基本扫描
+The Rust SDK provides Rust developers with a stable, high-level API to easily integrate RustNmap's scanning capabilities into their own projects. The SDK uses the Builder pattern, offering a fluent chained-calling experience.
+
+---
+
+## Quick Start
+
+### Basic Scan
 
 ```rust
 use rustnmap_sdk::{Scanner, ScanResult};
@@ -22,10 +22,10 @@ use anyhow::Result;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // 创建扫描器
+    // Create scanner
     let scanner = Scanner::new()?;
 
-    // 发起扫描
+    // Initiate scan
     let result: ScanResult = scanner
         .targets(["192.168.1.0/24"])
         .ports("1-1000")
@@ -34,7 +34,7 @@ async fn main() -> Result<()> {
         .run()
         .await?;
 
-    // 处理结果
+    // Process results
     for host in &result.hosts {
         println!("{}: {} open ports", host.ip, host.ports.len());
         for port in &host.ports {
@@ -48,7 +48,7 @@ async fn main() -> Result<()> {
 }
 ```
 
-### 漏洞扫描
+### Vulnerability Scan
 
 ```rust
 use rustnmap_sdk::{Scanner, VulnOptions};
@@ -66,7 +66,7 @@ async fn main() -> Result<()> {
         .run()
         .await?;
 
-    // 输出高危漏洞
+    // Output high-risk vulnerabilities
     for host in &result.hosts {
         for vuln in host.high_risk_vulnerabilities() {
             println!("{}: {} (CVSS {}, KEV: {})",
@@ -85,7 +85,7 @@ async fn main() -> Result<()> {
 ### ScannerBuilder
 
 ```rust
-/// 扫描器构建器
+/// Scanner builder
 pub struct ScannerBuilder {
     targets: Vec<String>,
     ports: Option<String>,
@@ -95,40 +95,40 @@ pub struct ScannerBuilder {
 }
 
 impl ScannerBuilder {
-    /// 设置目标
+    /// Set targets
     pub fn targets<T: IntoIterator<Item = S>, S: Into<String>>(mut self, targets: T) -> Self;
 
-    /// 设置端口
+    /// Set ports
     pub fn ports<S: Into<String>>(mut self, ports: S) -> Self;
 
-    /// 设置端口列表
+    /// Set port list
     pub fn port_list(mut self, ports: Vec<u16>) -> Self;
 
-    /// SYN 扫描 (需要 root)
+    /// SYN scan (requires root)
     pub fn syn_scan(mut self) -> Self;
 
-    /// Connect 扫描 (无需 root)
+    /// Connect scan (no root required)
     pub fn connect_scan(mut self) -> Self;
 
-    /// UDP 扫描
+    /// UDP scan
     pub fn udp_scan(mut self) -> Self;
 
-    /// 服务检测
+    /// Service detection
     pub fn service_detection(mut self, enable: bool) -> Self;
 
-    /// OS 检测
+    /// OS detection
     pub fn os_detection(mut self, enable: bool) -> Self;
 
-    /// 漏洞扫描
+    /// Vulnerability scan
     pub fn vulnerability_scan(mut self, options: VulnOptions) -> Self;
 
-    /// 时序模板
+    /// Timing template
     pub fn timing(mut self, template: TimingTemplate) -> Self;
 
-    /// 自定义超时
+    /// Custom timeout
     pub fn timeout(mut self, duration: Duration) -> Self;
 
-    /// 构建并执行扫描
+    /// Build and execute scan
     pub async fn run(self) -> Result<ScanResult>;
 }
 ```
@@ -136,85 +136,85 @@ impl ScannerBuilder {
 ### ScanOptions
 
 ```rust
-/// 扫描选项
+/// Scan options
 pub struct ScanOptions {
-    /// 服务检测
+    /// Service detection
     pub service_detection: bool,
 
-    /// OS 检测
+    /// OS detection
     pub os_detection: bool,
 
-    /// 漏洞扫描选项
+    /// Vulnerability scan options
     pub vuln_options: Option<VulnOptions>,
 
-    /// NSE 脚本
+    /// NSE scripts
     pub scripts: Vec<String>,
 
     /// traceroute
     pub traceroute: bool,
 
-    /// 自定义配置
+    /// Custom configuration
     pub custom: HashMap<String, serde_json::Value>,
 }
 
-/// 漏洞扫描选项
+/// Vulnerability scan options
 pub struct VulnOptions {
-    /// 仅在线模式 (使用 NVD API)
+    /// Online-only mode (uses NVD API)
     pub online_only: bool,
 
-    /// EPSS 阈值
+    /// EPSS threshold
     pub epss_threshold: f32,
 
-    /// 仅 KEV 漏洞
+    /// KEV vulnerabilities only
     pub kev_only: bool,
 }
 ```
 
 ---
 
-## 结果处理
+## Result Processing
 
 ### ScanResult
 
 ```rust
-/// 扫描结果
+/// Scan result
 pub struct ScanResult {
-    /// 扫描 ID
+    /// Scan ID
     pub id: String,
 
-    /// 扫描状态
+    /// Scan status
     pub status: ScanStatus,
 
-    /// 开始时间
+    /// Start time
     pub started_at: DateTime<Utc>,
 
-    /// 结束时间
+    /// Completion time
     pub completed_at: Option<DateTime<Utc>>,
 
-    /// 主机列表
+    /// Host list
     pub hosts: Vec<HostResult>,
 
-    /// 统计信息
+    /// Statistics
     pub statistics: ScanStatistics,
 
-    /// 扫描配置
+    /// Scan configuration
     pub config: ScanConfig,
 }
 
 impl ScanResult {
-    /// 获取所有开放端口
+    /// Get all open ports
     pub fn all_open_ports(&self) -> Vec<(&HostResult, &PortResult)>;
 
-    /// 获取高危主机 (有 KEV 漏洞或 CVSS >= 7.0)
+    /// Get high-risk hosts (with KEV vulnerabilities or CVSS >= 7.0)
     pub fn high_risk_hosts(&self) -> Vec<&HostResult>;
 
-    /// 按服务过滤主机
+    /// Filter hosts by service
     pub fn hosts_with_service(&self, service: &str) -> Vec<&HostResult>;
 
-    /// 导出为 JSON
+    /// Export as JSON
     pub fn to_json(&self) -> Result<String>;
 
-    /// 导出为 XML
+    /// Export as XML
     pub fn to_xml(&self) -> Result<String>;
 }
 ```
@@ -222,41 +222,41 @@ impl ScanResult {
 ### HostResult
 
 ```rust
-/// 主机结果
+/// Host result
 pub struct HostResult {
-    /// IP 地址
+    /// IP address
     pub ip: IpAddr,
 
-    /// 主机名
+    /// Hostname
     pub hostname: Option<String>,
 
-    /// MAC 地址
+    /// MAC address
     pub mac: Option<MacAddr>,
 
-    /// 状态
+    /// Status
     pub status: HostStatus,
 
-    /// 端口列表
+    /// Port list
     pub ports: Vec<PortResult>,
 
-    /// OS 匹配
+    /// OS match
     pub os: Option<OsMatch>,
 
-    /// 漏洞列表
+    /// Vulnerability list
     pub vulnerabilities: Vec<VulnInfo>,
 
-    /// Traceroute 结果
+    /// Traceroute result
     pub traceroute: Option<TracerouteResult>,
 }
 
 impl HostResult {
-    /// 获取开放端口
+    /// Get open ports
     pub fn open_ports(&self) -> Vec<&PortResult>;
 
-    /// 获取高危漏洞
+    /// Get high-risk vulnerabilities
     pub fn high_risk_vulnerabilities(&self) -> Vec<&VulnInfo>;
 
-    /// 判断是否有指定服务
+    /// Check if a specific service is present
     pub fn has_service(&self, service: &str) -> bool;
 }
 ```
@@ -264,48 +264,48 @@ impl HostResult {
 ### PortResult
 
 ```rust
-/// 端口结果
+/// Port result
 pub struct PortResult {
-    /// 端口号
+    /// Port number
     pub port: u16,
 
-    /// 协议
+    /// Protocol
     pub protocol: Protocol,
 
-    /// 状态
+    /// State
     pub state: PortState,
 
-    /// 服务信息
+    /// Service information
     pub service: Option<ServiceInfo>,
 
-    /// 脚本结果
+    /// Script results
     pub scripts: Vec<ScriptResult>,
 }
 
-/// 服务信息
+/// Service information
 pub struct ServiceInfo {
-    /// 服务名称
+    /// Service name
     pub name: String,
 
-    /// 产品名称
+    /// Product name
     pub product: Option<String>,
 
-    /// 版本号
+    /// Version number
     pub version: Option<String>,
 
-    /// 额外信息
+    /// Extra information
     pub extra_info: Option<String>,
 
-    /// CPE 标识符
+    /// CPE identifiers
     pub cpe: Vec<String>,
 }
 ```
 
 ---
 
-## 流式 API
+## Streaming API
 
-### 进度订阅
+### Progress Subscription
 
 ```rust
 use rustnmap_sdk::{Scanner, ScanEvent};
@@ -315,7 +315,7 @@ use futures::stream::StreamExt;
 async fn main() -> Result<()> {
     let scanner = Scanner::new()?;
 
-    // 创建扫描任务
+    // Create scan task
     let mut scan = scanner
         .targets(["192.168.1.0/24"])
         .ports("1-1000")
@@ -323,7 +323,7 @@ async fn main() -> Result<()> {
         .create_task()
         .await?;
 
-    // 订阅事件流
+    // Subscribe to event stream
     let mut events = scan.events();
 
     while let Some(event) = events.next().await {
@@ -357,16 +357,16 @@ async fn main() -> Result<()> {
 
 ---
 
-## 配置管理
+## Configuration Management
 
-### 从文件加载配置
+### Loading Configuration from File
 
 ```rust
 use rustnmap_sdk::{Scanner, ScanProfile};
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // 从 YAML 文件加载配置
+    // Load configuration from YAML file
     let profile = ScanProfile::from_file("scan-profiles/weekly-internal.yaml")?;
 
     let scanner = Scanner::new()?;
@@ -379,17 +379,17 @@ async fn main() -> Result<()> {
 }
 ```
 
-### 配置文件格式
+### Configuration File Format
 
 ```yaml
 # scan-profiles/weekly-internal.yaml
-name: 内网周扫描
-description: 每周内网安全基线检查
+name: Weekly Internal Network Scan
+description: Weekly internal network security baseline check
 targets:
   - 192.168.0.0/16
   - 10.0.0.0/8
 exclude:
-  - 10.0.0.1  # 网关，跳过
+  - 10.0.0.1  # Gateway, skip
 scan:
   type: syn
   ports: "1-10000"
@@ -404,38 +404,38 @@ output:
 
 ---
 
-## 错误处理
+## Error Handling
 
 ### ScanError
 
 ```rust
-/// 扫描错误
+/// Scan error
 #[derive(Debug, thiserror::Error)]
 pub enum ScanError {
-    #[error("无效的目标：{0}")]
+    #[error("Invalid target: {0}")]
     InvalidTarget(String),
 
-    #[error("权限不足：{0}")]
+    #[error("Permission denied: {0}")]
     PermissionDenied(String),
 
-    #[error("网络错误：{0}")]
+    #[error("Network error: {0}")]
     NetworkError(#[from] std::io::Error),
 
-    #[error("扫描超时：{0:?}")]
+    #[error("Scan timeout: {0:?}")]
     Timeout(Duration),
 
-    #[error("扫描被取消：{0}")]
+    #[error("Scan cancelled: {0}")]
     Cancelled(String),
 
-    #[error("API 错误：{0}")]
+    #[error("API error: {0}")]
     ApiError(String),
 }
 
-// 使用示例
+// Usage example
 async fn run_scan() -> Result<(), ScanError> {
     let scanner = Scanner::new()?;
 
-    // 检查权限
+    // Check privileges
     if !scanner.has_required_privileges() {
         return Err(ScanError::PermissionDenied(
             "SYN scan requires root privileges".to_string()
@@ -454,25 +454,25 @@ async fn run_scan() -> Result<(), ScanError> {
 
 ---
 
-## 与 API 集成
+## Integration with API
 
-### 远程扫描 (通过 rustnmap-api)
+### Remote Scan (via rustnmap-api)
 
 ```rust
 use rustnmap_sdk::{RemoteScanner, ApiConfig};
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // 配置远程 API
+    // Configure remote API
     let config = ApiConfig {
         base_url: "http://localhost:8080".to_string(),
         api_key: "your_api_key".to_string(),
     };
 
-    // 创建远程扫描器
+    // Create remote scanner
     let scanner = RemoteScanner::new(config)?;
 
-    // 创建扫描任务
+    // Create scan task
     let task = scanner
         .create_scan()
         .targets(["192.168.1.0/24"])
@@ -482,7 +482,7 @@ async fn main() -> Result<()> {
 
     println!("Scan task created: {}", task.id);
 
-    // 轮询状态
+    // Poll status
     loop {
         let status = scanner.get_status(&task.id).await?;
         println!("Progress: {:.1}%", status.progress.percentage);
@@ -494,7 +494,7 @@ async fn main() -> Result<()> {
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
 
-    // 获取结果
+    // Get results
     let result = scanner.get_results(&task.id).await?;
     println!("Found {} hosts up", result.statistics.hosts_up);
 
@@ -504,9 +504,9 @@ async fn main() -> Result<()> {
 
 ---
 
-## 测试
+## Testing
 
-### 单元测试
+### Unit Tests
 
 ```rust
 #[cfg(test)]
@@ -521,7 +521,7 @@ mod tests {
             .ports("22,80")
             .syn_scan();
 
-        // 验证构建器状态
+        // Verify builder state
         assert_eq!(builder.targets, vec!["127.0.0.1"]);
         assert_eq!(builder.ports, Some("22,80".to_string()));
         assert_eq!(builder.scan_type, ScanType::Syn);
@@ -540,42 +540,42 @@ mod tests {
 
 ---
 
-## 依赖关系
+## Dependencies
 
 ```toml
 [dependencies]
-# 内部依赖
+# Internal dependencies
 rustnmap-core = { path = "../rustnmap-core" }
 rustnmap-output = { path = "../rustnmap-output" }
 
-# 异步
+# Async
 tokio = { version = "1", features = ["full"] }
 futures = "0.3"
 async-stream = "0.3"
 
-# 序列化
+# Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"
 
-# 工具
+# Utilities
 thiserror = "1"
 anyhow = "1"
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4"] }
 
-# HTTP (远程扫描)
+# HTTP (remote scan)
 reqwest = { version = "0.11", features = ["json"] }
 ```
 
 ---
 
-## 最佳实践
+## Best Practices
 
-### 1. 资源管理
+### 1. Resource Management
 
 ```rust
-// 正确：使用 Result 传播错误
+// Correct: use Result to propagate errors
 async fn scan_network(target: &str) -> Result<ScanResult> {
     let scanner = Scanner::new()?;
     let result = scanner
@@ -586,20 +586,20 @@ async fn scan_network(target: &str) -> Result<ScanResult> {
     Ok(result)
 }
 
-// 错误：忽略错误
+// Wrong: ignore errors
 async fn bad_scan(target: &str) {
-    let scanner = Scanner::new().unwrap();  // 可能 panic
-    let _ = scanner.targets([target]).run().await;  // 忽略错误
+    let scanner = Scanner::new().unwrap();  // May panic
+    let _ = scanner.targets([target]).run().await;  // Ignore errors
 }
 ```
 
-### 2. 并发控制
+### 2. Concurrency Control
 
 ```rust
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 
-// 限制并发扫描数
+// Limit concurrent scans
 let semaphore = Arc::new(Semaphore::new(3));
 
 let tasks: Vec<_> = targets
@@ -612,7 +612,7 @@ let tasks: Vec<_> = targets
                 .syn_scan()
                 .run()
                 .await?;
-            drop(permit);  // 释放许可证
+            drop(permit);  // Release permit
             Ok::<_, ScanError>(result)
         }
     })
@@ -621,7 +621,7 @@ let tasks: Vec<_> = targets
 let results = futures::future::join_all(tasks).await;
 ```
 
-### 3. 结果缓存
+### 3. Result Caching
 
 ```rust
 use moka::future::Cache;
@@ -633,19 +633,19 @@ struct CachedScanner {
 
 impl CachedScanner {
     async fn scan(&self, target: &str) -> Result<ScanResult> {
-        // 检查缓存
+        // Check cache
         if let Some(cached) = self.cache.get(target).await {
             return Ok(cached);
         }
 
-        // 执行扫描
+        // Execute scan
         let result = self.scanner
             .targets([target])
             .syn_scan()
             .run()
             .await?;
 
-        // 缓存结果 (TTL: 1 小时)
+        // Cache result (TTL: 1 hour)
         self.cache.insert(target.to_string(), result.clone()).await;
 
         Ok(result)
@@ -655,27 +655,27 @@ impl CachedScanner {
 
 ---
 
-## 与 RETHINK.md 对齐
+## Alignment with RETHINK.md
 
-| 章节 | 对应内容 |
-|------|---------|
+| Section | Corresponding Content |
+|---------|----------------------|
 | 11.2 Library API | Rust SDK Builder API |
-| 12.3 Phase 5 | 平台化最小闭环（Week 12） |
-| 13.1 新增 Crate | rustnmap-sdk |
-| 14.3 Phase 4-5 | core 作为 SDK 的封装基座 |
+| 12.3 Phase 5 | Platform minimal closed loop (Week 12) |
+| 13.1 New Crate | rustnmap-sdk |
+| 14.3 Phase 4-5 | core as the foundation layer for SDK encapsulation |
 
 ---
 
-## 下一步
+## Next Steps
 
-1. **Week 12**: 实现 ScannerBuilder 和核心 API
-2. **Week 12**: 实现 ScanResult 和结果处理
-3. **Week 12**: 实现流式事件订阅
-4. **Week 12**: 编写示例和文档
+1. **Week 12**: Implement ScannerBuilder and core API
+2. **Week 12**: Implement ScanResult and result processing
+3. **Week 12**: Implement streaming event subscription
+4. **Week 12**: Write examples and documentation
 
 ---
 
-## 参考链接
+## Reference Links
 
 - [Builder Pattern in Rust](https://rust-lang.github.io/api-guidelines/type-safety.html#builder-type-constructs-a-many-argument-constructor-c-builder)
 - [Tokio Async Programming](https://tokio.rs/tokio/tutorial)

@@ -1,24 +1,24 @@
-# 3. 核心功能模块设计
+# 3. Core Module Design
 
-## 3.1 主机发现模块
+## 3.1 Host Discovery Module
 
-对应 Nmap 命令: `-sn`, `-PS`, `-PA`, `-PU`, `-PE`, `-PP`, `-PM`, `-PO`
+Corresponding Nmap commands: `-sn`, `-PS`, `-PA`, `-PU`, `-PE`, `-PP`, `-PM`, `-PO`
 
-### 3.1.1 功能矩阵
+### 3.1.1 Feature Matrix
 
-| 扫描类型 | Nmap 参数 | 描述 | RustNmap 实现 |
+| Scan Type | Nmap Parameter | Description | RustNmap Implementation |
 |----------|-----------|------|---------------|
-| ARP Ping | `-PR` | ARP 请求探测 | `ArpDiscovery` |
+| ARP Ping | `-PR` | ARP request probe | `ArpDiscovery` |
 | ICMP Echo | `-PE` | ICMP Echo Request | `IcmpEchoDiscovery` |
-| ICMP Timestamp | `-PP` | ICMP 时间戳请求 | `IcmpTimestampDiscovery` |
-| ICMP Address Mask | `-PM` | ICMP 地址掩码请求 | `IcmpMaskDiscovery` |
-| TCP SYN Ping | `-PS <port>` | TCP SYN 包探测 | `TcpSynPing` |
-| TCP ACK Ping | `-PA <port>` | TCP ACK 包探测 | `TcpAckPing` |
-| UDP Ping | `-PU <port>` | UDP 包探测 | `UdpPing` |
-| IP Protocol Ping | `-PO <proto>` | IP 协议探测 | `IpProtocolPing` |
-| DNS Resolution | `-R/-n` | DNS 正向/反向解析 | `DnsResolver` |
+| ICMP Timestamp | `-PP` | ICMP Timestamp Request | `IcmpTimestampDiscovery` |
+| ICMP Address Mask | `-PM` | ICMP Address Mask Request | `IcmpMaskDiscovery` |
+| TCP SYN Ping | `-PS <port>` | TCP SYN packet probe | `TcpSynPing` |
+| TCP ACK Ping | `-PA <port>` | TCP ACK packet probe | `TcpAckPing` |
+| UDP Ping | `-PU <port>` | UDP packet probe | `UdpPing` |
+| IP Protocol Ping | `-PO <proto>` | IP protocol probe | `IpProtocolPing` |
+| DNS Resolution | `-R/-n` | DNS forward/reverse resolution | `DnsResolver` |
 
-### 3.1.2 主机发现流程
+### 3.1.2 Host Discovery Flow
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -57,7 +57,7 @@
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### 3.1.3 数据结构设计
+### 3.1.3 Data Structure Design
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -103,4 +103,3 @@
 ```
 
 ---
-

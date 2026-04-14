@@ -1,172 +1,172 @@
-# RustNmap 2.0 Changelog / 变更日志
+# RustNmap 2.0 Changelog
 
-> **RustNmap 2.0 文档变更记录**
+> **RustNmap 2.0 Documentation Change Log**
 
-本文档追踪 RustNmap 2.0 开发过程中的所有文档变更。
+This document tracks all documentation changes during the RustNmap 2.0 development process.
 
 ---
 
-## Version 2.0.0 (In Development / 开发中)
+## Version 2.0.0 (In Development)
 
-**目标发布日期**: TBD
+**Target Release Date**: TBD
 
-### 新增功能 / New Features
+### New Features
 
 #### 2026-03-10: CLI Migration to lexopt ✅
 
-| 变更 | 状态 | 文档影响 |
+| Change | Status | Documentation Impact |
 |------|------|---------|
-| 从 clap 迁移到 lexopt | ✅ 完成 | 已更新 `architecture.md`, `structure.md` |
-| 新增 CLI 模块文档 | ✅ 完成 | 新增 `modules/cli.md` |
-| 复合短选项支持 (-sS -sV -sC) | ✅ 完成 | 更新相关选项文档 |
-| 输出格式复合选项 (-oN/-oX/-oG/-oA) | ✅ 完成 | 更新输出格式文档 |
-| 二进制文件大小减少 12% | ✅ 完成 | 更新性能指标 |
+| Migrated from clap to lexopt | ✅ Complete | Updated `architecture.md`, `structure.md` |
+| Added CLI module documentation | ✅ Complete | Added `modules/cli.md` |
+| Compound short options support (-sS -sV -sC) | ✅ Complete | Updated related options documentation |
+| Output format compound options (-oN/-oX/-oG/-oA) | ✅ Complete | Updated output format documentation |
+| Binary size reduced by 12% | ✅ Complete | Updated performance metrics |
 
-**重要变更:**
-- 移除依赖: `clap = { version = "4.5", features = ["derive", "wrap_help", "cargo"] }`
-- 新增依赖: `lexopt = "0.3"`
-- 新增文件: `crates/rustnmap-cli/src/help.rs` (手动帮助系统, 170 行)
-- 重构文件: `crates/rustnmap-cli/src/args.rs` (~1100 行重写)
+**Key Changes:**
+- Removed dependency: `clap = { version = "4.5", features = ["derive", "wrap_help", "cargo"] }`
+- Added dependency: `lexopt = "0.3"`
+- Added file: `crates/rustnmap-cli/src/help.rs` (manual help system, 170 lines)
+- Refactored file: `crates/rustnmap-cli/src/args.rs` (~1100 lines rewritten)
 
-**Nmap 兼容性提升:**
-- ✅ `-sS -sV -sC -T4` 完全兼容
-- ✅ `-oN file`, `-oX file`, `-oG file`, `-oA basename` 完全兼容
-- ✅ `-Pn` 主机发现选项完全兼容
-- ✅ 所有 T0-T5 时序模板完全兼容
+**Nmap Compatibility Improvements:**
+- ✅ `-sS -sV -sC -T4` fully compatible
+- ✅ `-oN file`, `-oX file`, `-oG file`, `-oA basename` fully compatible
+- ✅ `-Pn` host discovery option fully compatible
+- ✅ All T0-T5 timing templates fully compatible
 
-**详细文档:** 见 `LEXOPT_MIGRATION_COMPLETE.md` 和 `doc/modules/cli.md`
+**Detailed Documentation:** See `LEXOPT_MIGRATION_COMPLETE.md` and `doc/modules/cli.md`
 
-#### Phase 0: 基线修复 (Week 1-2)
+#### Phase 0: Baseline Fixes (Week 1-2)
 
-| 功能 | 状态 | 文档影响 |
+| Feature | Status | Documentation Impact |
 |------|------|---------|
-| Host Discovery 真正落地 | 待开始 | 更新 `modules/host-discovery.md` |
-| `scan_types` 执行链路贯通 | 待开始 | 更新 `modules/port-scanning.md` |
-| OutputSink 接入输出系统 | 待开始 | 更新 `modules/output.md`, `manual/output-formats.md` |
-| ResumeStore 最小可用版 | 待开始 | 新增 `--resume` 选项文档 |
+| Host Discovery actual implementation | Not started | Update `modules/host-discovery.md` |
+| `scan_types` execution pipeline integration | Not started | Update `modules/port-scanning.md` |
+| OutputSink connected to output system | Not started | Update `modules/output.md`, `manual/output-formats.md` |
+| ResumeStore minimum viable version | Not started | Add `--resume` option documentation |
 
-#### Phase 1: 用户体验与流水线友好 (Week 3-4)
+#### Phase 1: User Experience and Pipeline Friendliness (Week 3-4)
 
-| 功能 | 状态 | 文档影响 |
+| Feature | Status | Documentation Impact |
 |------|------|---------|
-| 流式输出（Host 级） | 待开始 | 新增 `--stream` 选项文档 |
-| NDJSON Pipeline 输出 | 待开始 | 更新 `manual/output-formats.md` |
-| Shell 补全脚本 | 待开始 | 更新 `manual/options.md` |
-| Markdown 报告 | 待开始 | 新增 `-oM` 选项文档 |
+| Streaming output (host-level) | Not started | Add `--stream` option documentation |
+| NDJSON Pipeline output | Not started | Update `manual/output-formats.md` |
+| Shell completion scripts | Not started | Update `manual/options.md` |
+| Markdown reports | Not started | Add `-oM` option documentation |
 
-#### Phase 2: 漏洞情报主链路 (Week 5-7)
+#### Phase 2: Vulnerability Intelligence Main Pipeline (Week 5-7)
 
-| 功能 | 状态 | 文档影响 |
+| Feature | Status | Documentation Impact |
 |------|------|---------|
-| CVE/CPE 关联引擎 | 待开始 | 新增 `modules/vulnerability.md` |
-| EPSS/KEV 聚合与风险排序 | 待开始 | 更新 `manual/options.md` |
-| HTML 报告 | 待开始 | 新增 `manual/html-report.md` |
-| SARIF 格式 | 待开始 | 更新 `manual/output-formats.md` |
+| CVE/CPE correlation engine | Not started | Add `modules/vulnerability.md` |
+| EPSS/KEV aggregation and risk ranking | Not started | Update `manual/options.md` |
+| HTML reports | Not started | Add `manual/html-report.md` |
+| SARIF format | Not started | Update `manual/output-formats.md` |
 
-#### Phase 3: 扫描管理能力 (Week 8-9)
+#### Phase 3: Scan Management Capabilities (Week 8-9)
 
-| 功能 | 状态 | 文档影响 |
+| Feature | Status | Documentation Impact |
 |------|------|---------|
-| 扫描结果持久化（SQLite） | 待开始 | 新增 `modules/scan-management.md` |
-| 扫描 Diff | 待开始 | 新增 `--diff` 选项文档 |
-| 配置即代码（YAML Profile） | 待开始 | 新增 `manual/profiles.md` |
-| `--history` 查询能力 | 待开始 | 更新 `manual/options.md` |
+| Scan result persistence (SQLite) | Not started | Add `modules/scan-management.md` |
+| Scan Diff | Not started | Add `--diff` option documentation |
+| Configuration as code (YAML Profile) | Not started | Add `manual/profiles.md` |
+| `--history` query capability | Not started | Update `manual/options.md` |
 
-#### Phase 4: 性能主干优化 (Week 10-11)
+#### Phase 4: Performance Backbone Optimization (Week 10-11)
 
-| 功能 | 状态 | 文档影响 |
+| Feature | Status | Documentation Impact |
 |------|------|---------|
-| 两阶段扫描（发现 + 精扫） | 待开始 | 更新 `modules/port-scanning.md` |
-| 自适应批量大小 | 待开始 | 更新 `modules/concurrency.md` |
-| 无状态快速扫描（实验特性） | 待开始 | 新增 `modules/stateless-scan.md` |
+| Two-phase scanning (discovery + detailed scan) | Not started | Update `modules/port-scanning.md` |
+| Adaptive batch size | Not started | Update `modules/concurrency.md` |
+| Stateless fast scanning (experimental feature) | Not started | Add `modules/stateless-scan.md` |
 
-#### Phase 5: 平台化最小闭环 (Week 12)
+#### Phase 5: Platform Minimal Closed Loop (Week 12)
 
-| 功能 | 状态 | 文档影响 |
+| Feature | Status | Documentation Impact |
 |------|------|---------|
-| REST API / Daemon（最小集） | 待开始 | 新增 `modules/rest-api.md` |
-| Rust SDK（稳定 Builder API） | 待开始 | 新增 `modules/sdk.md` |
+| REST API / Daemon (minimal set) | Not started | Add `modules/rest-api.md` |
+| Rust SDK (stable Builder API) | Not started | Add `modules/sdk.md` |
 
 ---
 
-## 文档状态追踪 / Documentation Status
+## Documentation Status
 
-### 核心文档 / Core Documentation
+### Core Documentation
 
-| 文档 | 1.0 状态 | 2.0 更新 | 负责人 |
+| Document | 1.0 Status | 2.0 Update | Owner |
 |------|---------|---------|--------|
-| `README.md` | 已标记 | 待更新 | - |
-| `architecture.md` | 当前 | 待更新 | - |
-| `structure.md` | 当前 | 待更新 | - |
-| `user-guide.md` | 已标记 | 待更新 | - |
+| `README.md` | Marked | Pending update | - |
+| `architecture.md` | Current | Pending update | - |
+| `structure.md` | Current | Pending update | - |
+| `user-guide.md` | Marked | Pending update | - |
 
-### 用户手册 / User Manual
+### User Manual
 
-| 文档 | 1.0 状态 | 2.0 更新 | 负责人 |
+| Document | 1.0 Status | 2.0 Update | Owner |
 |------|---------|---------|--------|
-| `manual/README.md` | 已标记 | 待更新 | - |
-| `manual/options.md` | 已标记 | 待更新 | - |
-| `manual/quick-reference.md` | 已标记 | 待更新 | - |
-| `manual/scan-types.md` | 已标记 | 待更新 | - |
-| `manual/output-formats.md` | 已标记 | 待更新 | - |
-| `manual/nse-scripts.md` | 已标记 | 待更新 | - |
-| `manual/exit-codes.md` | 已标记 | 待更新 | - |
-| `manual/environment.md` | 已标记 | 待更新 | - |
-| `manual/configuration.md` | 已标记 | 待更新 | - |
+| `manual/README.md` | Marked | Pending update | - |
+| `manual/options.md` | Marked | Pending update | - |
+| `manual/quick-reference.md` | Marked | Pending update | - |
+| `manual/scan-types.md` | Marked | Pending update | - |
+| `manual/output-formats.md` | Marked | Pending update | - |
+| `manual/nse-scripts.md` | Marked | Pending update | - |
+| `manual/exit-codes.md` | Marked | Pending update | - |
+| `manual/environment.md` | Marked | Pending update | - |
+| `manual/configuration.md` | Marked | Pending update | - |
 
-### 模块文档 / Module Documentation
+### Module Documentation
 
-| 文档 | 1.0 状态 | 2.0 更新 | 负责人 |
+| Document | 1.0 Status | 2.0 Update | Owner |
 |------|---------|---------|--------|
-| `modules/host-discovery.md` | 当前 | 待更新 | - |
-| `modules/port-scanning.md` | 当前 | 待更新 | - |
-| `modules/service-detection.md` | 当前 | 待更新 | - |
-| `modules/os-detection.md` | 当前 | 待更新 | - |
-| `modules/nse-engine.md` | 当前 | 待更新 | - |
-| `modules/traceroute.md` | 当前 | 待更新 | - |
-| `modules/evasion.md` | 当前 | 待更新 | - |
-| `modules/output.md` | 当前 | 待更新 | - |
-| `modules/target-parsing.md` | 当前 | 待更新 | - |
-| `modules/raw-packet.md` | 当前 | 待更新 | - |
-| `modules/concurrency.md` | 当前 | 待更新 | - |
+| `modules/host-discovery.md` | Current | Pending update | - |
+| `modules/port-scanning.md` | Current | Pending update | - |
+| `modules/service-detection.md` | Current | Pending update | - |
+| `modules/os-detection.md` | Current | Pending update | - |
+| `modules/nse-engine.md` | Current | Pending update | - |
+| `modules/traceroute.md` | Current | Pending update | - |
+| `modules/evasion.md` | Current | Pending update | - |
+| `modules/output.md` | Current | Pending update | - |
+| `modules/target-parsing.md` | Current | Pending update | - |
+| `modules/raw-packet.md` | Current | Pending update | - |
+| `modules/concurrency.md` | Current | Pending update | - |
 
-### 新增文档（2.0）/ New Documentation (2.0)
+### New Documentation (2.0)
 
-| 文档 | 主题 | 状态 | 负责人 |
+| Document | Topic | Status | Owner |
 |------|------|------|--------|
-| `modules/vulnerability.md` | 漏洞情报模块 | 待创建 | - |
-| `modules/rest-api.md` | REST API 模块 | 待创建 | - |
-| `modules/sdk.md` | Rust SDK 模块 | 待创建 | - |
-| `modules/scan-management.md` | 扫描管理模块 | 待创建 | - |
-| `modules/stateless-scan.md` | 无状态扫描模块 | 待创建 | - |
-| `manual/profiles.md` | 配置即代码指南 | 待创建 | - |
-| `manual/html-report.md` | HTML 报告指南 | 待创建 | - |
+| `modules/vulnerability.md` | Vulnerability intelligence module | To be created | - |
+| `modules/rest-api.md` | REST API module | To be created | - |
+| `modules/sdk.md` | Rust SDK module | To be created | - |
+| `modules/scan-management.md` | Scan management module | To be created | - |
+| `modules/stateless-scan.md` | Stateless scanning module | To be created | - |
+| `manual/profiles.md` | Configuration as code guide | To be created | - |
+| `manual/html-report.md` | HTML report guide | To be created | - |
 
 ---
 
-## 版本标记说明 / Version Marking
+## Version Marking
 
-在 RustNmap 2.0 开发期间，所有 1.0 文档已添加版本标记横幅：
+During RustNmap 2.0 development, all 1.0 documents have been tagged with a version banner:
 
 ```markdown
-> **版本**: 1.0.0
-> **状态**: 此文档描述 RustNmap 1.0.0 的功能。2.0 版本开发中，详见 [CHANGELOG.md](CHANGELOG.md)。
+> **Version**: 1.0.0
+> **Status**: This document describes RustNmap 1.0.0 features. Version 2.0 is under development, see [CHANGELOG.md](CHANGELOG.md).
 ```
 
-当 2.0 功能完成后，相应文档的版本标记将更新为：
+When 2.0 features are complete, the corresponding document version tag will be updated to:
 
 ```markdown
-> **版本**: 2.0.0
-> **状态**: 此文档描述 RustNmap 2.0.0 的功能。
+> **Version**: 2.0.0
+> **Status**: This document describes RustNmap 2.0.0 features.
 ```
 
 ---
 
-## 相关链接 / Related Links
+## Related Links
 
-- [RETHINK.md](../RETHINK.md) - RustNmap 2.0 进化路线图
-- [Project README](../README.md) - 项目概览
-- [GitHub Repository](https://github.com/greatwallisme/rust-nmap) - 代码仓库
+- [RETHINK.md](../RETHINK.md) - RustNmap 2.0 Evolution Roadmap
+- [Project README](../README.md) - Project Overview
+- [GitHub Repository](https://github.com/greatwallisme/rust-nmap) - Code Repository
 
 ---
 

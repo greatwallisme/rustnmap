@@ -1,239 +1,239 @@
-# RustNmap Quick Reference / 快速参考
+# RustNmap Quick Reference
 
-> **版本**: 1.0.0
-> **状态**: 此文档描述 RustNmap 1.0.0 的快速参考。2.0 版本开发中，详见 [CHANGELOG.md](../CHANGELOG.md)。
+> **Version**: 1.0.0
+> **Status**: This document describes RustNmap 1.0.0 quick reference. Version 2.0 is in development, see [CHANGELOG.md](../CHANGELOG.md).
 
-> **One-page reference for common RustNmap tasks** / 常见 RustNmap 任务单页参考
+> **One-page reference for common RustNmap tasks**
 
 ---
 
-## Target Specification / 目标指定
+## Target Specification
 
 ```bash
-# Single IP / 单个 IP
+# Single IP
 rustnmap 192.168.1.1
 
-# Multiple IPs / 多个 IP
+# Multiple IPs
 rustnmap 192.168.1.1 192.168.1.2
 
-# CIDR notation / CIDR 表示法
+# CIDR notation
 rustnmap 192.168.1.0/24
 
-# IP range / IP 范围
+# IP range
 rustnmap 192.168.1.1-100
 
-# Hostname / 主机名
+# Hostname
 rustnmap example.com
 
-# From file / 从文件
+# From file
 rustnmap -iL targets.txt
 
-# Exclude hosts / 排除主机
+# Exclude hosts
 rustnmap 192.168.1.0/24 --exclude 192.168.1.1,192.168.1.254
 ```
 
 ---
 
-## Port Specification / 端口指定
+## Port Specification
 
 ```bash
-# Single port / 单个端口
+# Single port
 rustnmap -p 22 192.168.1.1
 
-# Multiple ports / 多个端口
+# Multiple ports
 rustnmap -p 22,80,443 192.168.1.1
 
-# Port range / 端口范围
+# Port range
 rustnmap -p 1-1000 192.168.1.1
 
-# All ports / 所有端口
+# All ports
 rustnmap -p- 192.168.1.1
 
-# Fast scan (top 100) / 快速扫描 (前 100)
+# Fast scan (top 100)
 rustnmap -F 192.168.1.1
 
-# Top N ports / 前 N 个端口
+# Top N ports
 rustnmap --top-ports 100 192.168.1.1
 
-# Protocol specific / 特定协议
+# Protocol specific
 rustnmap -p T:80,U:53 192.168.1.1
 ```
 
 ---
 
-## Scan Types / 扫描类型
+## Scan Types
 
 | Flag | Scan Type | Requires Root | Use Case |
 |------|-----------|---------------|----------|
-| `-sS` | TCP SYN | Yes | Stealth scan / 隐秘扫描 |
-| `-sT` | TCP Connect | No | Standard scan / 标准扫描 |
-| `-sU` | UDP | Yes | UDP ports / UDP 端口 |
-| `-sF` | TCP FIN | Yes | Stealth (UNIX) / 隐秘 (UNIX) |
-| `-sN` | TCP NULL | Yes | Stealth (UNIX) / 隐秘 (UNIX) |
-| `-sX` | TCP XMAS | Yes | Stealth (UNIX) / 隐秘 (UNIX) |
-| `-sA` | TCP ACK | Yes | Firewall check / 防火墙检测 |
-| `-sM` | TCP Maimon | Yes | Stealth variant / 隐秘变体 |
-| `-sW` | TCP Window | Yes | Advanced scan / 高级扫描 |
-| `-b` | FTP Bounce | No | FTP proxy scan / FTP 代理扫描 |
+| `-sS` | TCP SYN | Yes | Stealth scan |
+| `-sT` | TCP Connect | No | Standard scan |
+| `-sU` | UDP | Yes | UDP ports |
+| `-sF` | TCP FIN | Yes | Stealth (UNIX) |
+| `-sN` | TCP NULL | Yes | Stealth (UNIX) |
+| `-sX` | TCP XMAS | Yes | Stealth (UNIX) |
+| `-sA` | TCP ACK | Yes | Firewall check |
+| `-sM` | TCP Maimon | Yes | Stealth variant |
+| `-sW` | TCP Window | Yes | Advanced scan |
+| `-b` | FTP Bounce | No | FTP proxy scan |
 
 ---
 
-## Host Discovery / 主机发现
+## Host Discovery
 
 ```bash
-# Ping scan only / 仅 Ping 扫描
+# Ping scan only
 sudo rustnmap -sn 192.168.1.0/24
 
-# ICMP echo / ICMP 回显
+# ICMP echo
 sudo rustnmap -PE 192.168.1.0/24
 
-# TCP SYN ping / TCP SYN Ping
+# TCP SYN ping
 sudo rustnmap -PS22,80,443 192.168.1.0/24
 
-# TCP ACK ping / TCP ACK Ping
+# TCP ACK ping
 sudo rustnmap -PA80 192.168.1.0/24
 
-# UDP ping / UDP Ping
+# UDP ping
 sudo rustnmap -PU53 192.168.1.0/24
 
-# Skip discovery / 跳过发现
+# Skip discovery
 sudo rustnmap -Pn 192.168.1.0/24
 ```
 
 ---
 
-## Service Detection / 服务检测
+## Service Detection
 
 ```bash
-# Basic service detection / 基本服务检测
+# Basic service detection
 sudo rustnmap -sV 192.168.1.1
 
-# Version intensity 0-9 / 版本强度 0-9
+# Version intensity 0-9
 sudo rustnmap -sV --version-intensity 5 192.168.1.1
 
-# Light version scan / 轻量版本扫描
+# Light version scan
 sudo rustnmap -sV --version-intensity 2 192.168.1.1
 
-# All probes / 所有探针
+# All probes
 sudo rustnmap -sV --version-intensity 9 192.168.1.1
 ```
 
 ---
 
-## OS Detection / 操作系统检测
+## OS Detection
 
 ```bash
-# OS detection / 操作系统检测
+# OS detection
 sudo rustnmap -O 192.168.1.1
 
-# Limit matches / 限制匹配数
+# Limit matches
 sudo rustnmap -O --osscan-limit 192.168.1.1
 
-# Aggressive guess / 激进猜测
+# Aggressive guess
 sudo rustnmap -O --osscan-guess 192.168.1.1
 
-# Combined scan / 组合扫描
+# Combined scan
 sudo rustnmap -A 192.168.1.1  # -sV -sC -O --traceroute
 ```
 
 ---
 
-## Timing Templates / 时间模板
+## Timing Templates
 
 | Template | Flag | Delay | Use Case |
 |----------|------|-------|----------|
-| Paranoid | `-T0` | 5 min | IDS evasion / IDS 规避 |
-| Sneaky | `-T1` | 15 sec | IDS evasion / IDS 规避 |
-| Polite | `-T2` | 0.4 sec | Slow network / 慢速网络 |
-| Normal | `-T3` | Default | General use / 一般用途 |
-| Aggressive | `-T4` | Faster | Fast network / 快速网络 |
-| Insane | `-T5` | Very fast | Local network / 本地网络 |
+| Paranoid | `-T0` | 5 min | IDS evasion |
+| Sneaky | `-T1` | 15 sec | IDS evasion |
+| Polite | `-T2` | 0.4 sec | Slow network |
+| Normal | `-T3` | Default | General use |
+| Aggressive | `-T4` | Faster | Fast network |
+| Insane | `-T5` | Very fast | Local network |
 
 ```bash
-# Examples / 示例
-sudo rustnmap -T0 192.168.1.1   # Paranoid / 偏执
-sudo rustnmap -T4 192.168.1.1   # Aggressive / 激进
+# Examples
+sudo rustnmap -T0 192.168.1.1   # Paranoid
+sudo rustnmap -T4 192.168.1.1   # Aggressive
 ```
 
 ---
 
-## Output Formats / 输出格式
+## Output Formats
 
 ```bash
-# Normal output / 普通输出
+# Normal output
 sudo rustnmap -oN results.nmap 192.168.1.1
 
-# XML output / XML 输出
+# XML output
 sudo rustnmap -oX results.xml 192.168.1.1
 
-# JSON output / JSON 输出
+# JSON output
 sudo rustnmap -oJ results.json 192.168.1.1
 
-# NDJSON output / NDJSON 输出
+# NDJSON output
 sudo rustnmap --output-ndjson results.ndjson 192.168.1.1
 
-# Markdown output / Markdown 输出
+# Markdown output
 sudo rustnmap --output-markdown results.md 192.168.1.1
 
-# Grepable output / Grepable 输出
+# Grepable output
 sudo rustnmap -oG results.gnmap 192.168.1.1
 
-# Script kiddie (console) / Script kiddie 格式（控制台）
+# Script kiddie (console)
 sudo rustnmap --output-script-kiddie 192.168.1.1
 
-# All formats / 所有格式
+# All formats
 sudo rustnmap -oA results 192.168.1.1
 
-# Append output / 追加输出
+# Append output
 sudo rustnmap -oN results.nmap --append-output 192.168.1.2
 ```
 
 ---
 
-## NSE Scripts / NSE 脚本
+## NSE Scripts
 
 ```bash
-# Default scripts / 默认脚本
+# Default scripts
 sudo rustnmap -sC 192.168.1.1
 
-# Specific script / 特定脚本
+# Specific script
 sudo rustnmap --script http-title 192.168.1.1
 
-# Multiple scripts / 多个脚本
+# Multiple scripts
 sudo rustnmap --script http-title,http-headers 192.168.1.1
 
-# Script category / 脚本类别
+# Script category
 sudo rustnmap --script "safe" 192.168.1.1
 sudo rustnmap --script "vuln" 192.168.1.1
 sudo rustnmap --script "discovery" 192.168.1.1
 
-# Script with arguments / 带参数的脚本
+# Script with arguments
 sudo rustnmap --script http-title --script-args "http.useragent=Mozilla" 192.168.1.1
 
-# List scripts / 列出脚本
+# List scripts
 rustnmap --script-help default
 ```
 
 ---
 
-## Evasion Techniques / 规避技术
+## Evasion Techniques
 
 ```bash
-# Fragment packets / 分片数据包
+# Fragment packets
 sudo rustnmap -f 192.168.1.1
 sudo rustnmap -f8 192.168.1.1
 
-# Decoy scan / 诱饵扫描
+# Decoy scan
 sudo rustnmap -D 192.168.1.2,192.168.1.3,ME 192.168.1.1
 sudo rustnmap -D RND:10 192.168.1.1
 
-# Source IP spoofing / 源 IP 欺骗
+# Source IP spoofing
 sudo rustnmap -S 192.168.1.100 192.168.1.1
 
-# Source port / 源端口
+# Source port
 sudo rustnmap -g 53 192.168.1.1
 
-# Custom data / 自定义数据
+# Custom data
 sudo rustnmap --data-hex 48656c6c6f 192.168.1.1
 sudo rustnmap --data-string "Hello" 192.168.1.1
 sudo rustnmap --data-length 100 192.168.1.1
@@ -241,57 +241,57 @@ sudo rustnmap --data-length 100 192.168.1.1
 
 ---
 
-## Verbosity / 详细程度
+## Verbosity
 
 ```bash
-# Verbose / 详细
+# Verbose
 sudo rustnmap -v 192.168.1.1
 sudo rustnmap -vv 192.168.1.1
 
-# Debug / 调试
+# Debug
 sudo rustnmap -d 192.168.1.1
 sudo rustnmap -dd 192.168.1.1
 
-# Quiet / 安静
+# Quiet
 sudo rustnmap -q 192.168.1.1
 
-# Show reasons / 显示原因
+# Show reasons
 sudo rustnmap --reason 192.168.1.1
 
-# Packet trace / 数据包跟踪
+# Packet trace
 sudo rustnmap --packet-trace 192.168.1.1
 ```
 
 ---
 
-## Common Scenarios / 常见场景
+## Common Scenarios
 
-### Network Audit / 网络审计
+### Network Audit
 
 ```bash
-# Full network scan / 完整网络扫描
+# Full network scan
 sudo rustnmap -A -T4 -oA network-audit 192.168.1.0/24
 ```
 
-### Web Server Scan / Web 服务器扫描
+### Web Server Scan
 
 ```bash
 sudo rustnmap -sV -p 80,443,8080,8443 --script http-* 192.168.1.1
 ```
 
-### Database Discovery / 数据库发现
+### Database Discovery
 
 ```bash
 sudo rustnmap -sV -p 3306,5432,1433,27017,6379,9200 192.168.1.0/24
 ```
 
-### Vulnerability Scan / 漏洞扫描
+### Vulnerability Scan
 
 ```bash
 sudo rustnmap -sV --script vuln 192.168.1.1
 ```
 
-### Stealth Scan / 隐秘扫描
+### Stealth Scan
 
 ```bash
 sudo rustnmap -sS -T0 -f -D RND:10 --data-length 20 192.168.1.1
@@ -299,22 +299,22 @@ sudo rustnmap -sS -T0 -f -D RND:10 --data-length 20 192.168.1.1
 
 ---
 
-## Exit Codes / 退出代码
+## Exit Codes
 
 | Code | Meaning |
 |------|---------|
-| `0` | Success / 成功 |
-| `1` | General error / 一般错误 |
-| `2` | Invalid arguments / 无效参数 |
-| `3` | No targets specified / 未指定目标 |
-| `4` | Network error / 网络错误 |
-| `5` | Permission denied / 权限被拒绝 |
+| `0` | Success |
+| `1` | General error |
+| `2` | Invalid arguments |
+| `3` | No targets specified |
+| `4` | Network error |
+| `5` | Permission denied |
 
 ---
 
-## Help / 帮助
+## Help
 
 ```bash
-# General help / 一般帮助
+# General help
 rustnmap --help
 ```

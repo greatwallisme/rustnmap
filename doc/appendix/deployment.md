@@ -1,43 +1,43 @@
-# 附录 C: Linux x86_64 部署指南
+# Appendix C: Linux x86_64 Deployment Guide
 
-## C.1 系统要求
+## C.1 System Requirements
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                    Linux 系统要求 (x86_64)                             │
+│                    Linux System Requirements (x86_64)                   │
 ├─────────────────────────────────────────────────────────────────────────┤
 │                                                                         │
-│  操作系统:                                                              │
+│  Operating System:                                                      │
 │  ├── Ubuntu 20.04 LTS / 22.04 LTS / 24.04 LTS                          │
 │  ├── Debian 11 (Bullseye) / 12 (Bookworm)                              │
 │  ├── CentOS 7 / Rocky Linux 8+ / AlmaLinux 8+                           │
 │  ├── Fedora 38+                                                         │
 │  ├── Arch Linux                                                         │
-│  └── 其他主流 Linux 发行版 (glibc 2.17+)                                │
+│  └── Other mainstream Linux distributions (glibc 2.17+)                 │
 │                                                                         │
-│  架构:                                                                  │
+│  Architecture:                                                          │
 │  └── x86_64 (AMD64)                                                    │
 │                                                                         │
-│  内核版本:                                                              │
-│  ├── 基础功能: Linux 3.10+                                             │
+│  Kernel Version:                                                        │
+│  ├── Basic functionality: Linux 3.10+                                  │
 │  ├── PACKET_MMAP: Linux 2.6.22+                                        │
-│  ├── eBPF 过滤: Linux 3.18+                                             │
-│  ├── AF_XDP: Linux 4.18+ (可选，高性能模式)                            │
-│  └── MSG_ZEROCOPY: Linux 4.14+ (可选)                                  │
+│  ├── eBPF filtering: Linux 3.18+                                        │
+│  ├── AF_XDP: Linux 4.18+ (optional, high-performance mode)             │
+│  └── MSG_ZEROCOPY: Linux 4.14+ (optional)                              │
 │                                                                         │
-│  依赖库:                                                                │
-│  ├── libpcap 0.8+ (可选，用于兼容性)                                   │
+│  Dependencies:                                                          │
+│  ├── libpcap 0.8+ (optional, for compatibility)                        │
 │  ├── Lua 5.4 / LuaJIT 2.1+                                             │
 │  ├── glibc 2.17+                                                        │
-│  └── libcap 2.22+ (用于 capabilities 支持)                             │
+│  └── libcap 2.22+ (for capabilities support)                           │
 │                                                                         │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
-## C.2 编译安装
+## C.2 Build and Install
 
 ```bash
-# 1. 安装编译依赖
+# 1. Install build dependencies
 # Ubuntu/Debian:
 sudo apt-get update
 sudo apt-get install -y \
@@ -58,39 +58,39 @@ sudo dnf install -y \
     libcap-devel \
     openssl-devel
 
-# 2. 克隆源码
+# 2. Clone source
 git clone https://github.com/example/rustnmap.git
 cd rustnmap
 
-# 3. 编译发布版本
+# 3. Build release version
 cargo build --release
 
-# 4. 安装到系统
+# 4. Install to system
 sudo install -m 755 target/release/rustnmap /usr/local/bin/
 sudo install -m 644 doc/rustnmap.1 /usr/local/share/man/man1/
 
-# 5. 安装数据文件
+# 5. Install data files
 sudo mkdir -p /usr/local/share/rustnmap
 sudo cp -r data/* /usr/local/share/rustnmap/
 sudo cp -r scripts/* /usr/local/share/rustnmap/scripts/
 ```
 
-## C.3 权限配置
+## C.3 Permission Configuration
 
 ```bash
-# 方案 A: 使用 Linux Capabilities (推荐)
+# Option A: Use Linux Capabilities (recommended)
 sudo setcap cap_net_raw,cap_net_admin+ep /usr/local/bin/rustnmap
 
-# 验证权限
+# Verify permissions
 getcap /usr/local/bin/rustnmap
-# 输出: /usr/local/bin/rustnmap = cap_net_admin,cap_net_raw+ep
+# Output: /usr/local/bin/rustnmap = cap_net_admin,cap_net_raw+ep
 
-# 方案 B: 配置 sudo (多用户环境)
+# Option B: Configure sudo (multi-user environment)
 sudo visudo
-# 添加以下行:
+# Add the following line:
 # username ALL=(ALL) NOPASSWD: /usr/local/bin/rustnmap
 
-# 方案 C: Docker 容器运行
+# Option C: Run in Docker container
 docker run --rm \
     --cap-add=NET_RAW \
     --cap-add=NET_ADMIN \
@@ -99,7 +99,7 @@ docker run --rm \
     rustnmap -sS target.example.com
 ```
 
-## C.4 systemd 服务配置
+## C.4 systemd Service Configuration
 
 ```ini
 # /etc/systemd/system/rustnmapd.service
@@ -115,16 +115,16 @@ ExecStart=/usr/local/bin/rustnmapd --daemon
 Restart=on-failure
 RestartSec=5s
 
-# 安全设置
+# Security settings
 # PrivateTmp=true
 # NoNewPrivileges=true
-# 注意: 需要保留网络能力，所以不能使用 NoNewPrivileges
+# Note: Network capabilities must be preserved, so NoNewPrivileges cannot be used
 
-# 赋予必要的 capabilities
+# Grant necessary capabilities
 AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
 CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN
 
-# 资源限制
+# Resource limits
 LimitNOFILE=65536
 LimitMEMLOCK=infinity
 
@@ -132,10 +132,10 @@ LimitMEMLOCK=infinity
 WantedBy=multi-user.target
 ```
 
-## C.5 SELinux 配置
+## C.5 SELinux Configuration
 
 ```bash
-# 创建 SELinux 策略模块 (如果 SELinux 启用)
+# Create SELinux policy module (if SELinux is enabled)
 cat > rustnmap.te << 'EOF'
 module rustnmap 1.0;
 
@@ -150,36 +150,36 @@ require {
     class dir { read search };
 }
 
-# 允许使用 raw socket
+# Allow raw socket usage
 allow usr_t self:capability net_raw;
 
-# 允许网络管理
+# Allow network administration
 allow usr_t self:capability net_admin;
 
-# 允许读取网络配置
+# Allow reading network configuration
 allow usr_t proc_net_type:file { ioctl read open };
 allow usr_t proc_net_type:dir { read search };
 EOF
 
-# 编译并加载策略
+# Compile and load policy
 checkmodule -M -m -o rustnmap.mod rustnmap.te
 semodule_package -o rustnmap.pp -m rustnmap.mod
 sudo semodule -i rustnmap.pp
 ```
 
-## C.6 性能调优
+## C.6 Performance Tuning
 
 ```bash
-# 1. CPU 亲和性绑定
-taskset -c 0-7 rustnmap -sS target  # 绑定到 CPU 0-7
+# 1. CPU affinity binding
+taskset -c 0-7 rustnmap -sS target  # Bind to CPU 0-7
 
-# 2. 大页内存配置 (用于 PACKET_MMAP)
+# 2. Huge pages configuration (for PACKET_MMAP)
 echo 100 > /proc/sys/vm/nr_hugepages
-# 或在 /etc/sysctl.conf 中添加:
+# Or add to /etc/sysctl.conf:
 # vm.nr_hugepages = 100
 
-# 3. 网络缓冲区调优
-# 在 /etc/sysctl.conf 中添加:
+# 3. Network buffer tuning
+# Add to /etc/sysctl.conf:
 net.core.rmem_max = 134217728
 net.core.wmem_max = 134217728
 net.core.rmem_default = 262144
@@ -187,65 +187,66 @@ net.core.wmem_default = 262144
 net.core.netdev_max_backlog = 5000
 net.ipv4.tcp_max_syn_backlog = 8192
 
-# 应用配置
+# Apply configuration
 sudo sysctl -p
 
-# 4. 中断负载均衡
-# 将网卡中断分散到多个 CPU
+# 4. Interrupt load balancing
+# Distribute NIC interrupts across multiple CPUs
 for i in /sys/class/net/eth0/queues/rx-*/rps_cpus; do
-    echo f > $i  # 使用 CPU 0-7
+    echo f > $i  # Use CPU 0-7
 done
 ```
 
-## C.7 故障排除
+## C.7 Troubleshooting
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                    常见问题排查                                        │
+│                    Common Issues Troubleshooting                        │
 ├─────────────────────────────────────────────────────────────────────────┤
 │                                                                         │
-│  问题 1: "Permission denied" 或 "Operation not permitted"                │
+│  Issue 1: "Permission denied" or "Operation not permitted"              │
 │  ┌───────────────────────────────────────────────────────────────────┐  │
-│  │ 原因: 缺少 CAP_NET_RAW 权限                                       │  │
-│  │ 解决:                                                           │  │
-│  │   $ sudo setcap cap_net_raw+ep /usr/local/bin/rustnmap           │  │
-│  │   $ getcap /usr/local/bin/rustnmap                               │  │
+│  │ Cause: Missing CAP_NET_RAW capability                             │  │
+│  │ Solution:                                                         │  │
+│  │   $ sudo setcap cap_net_raw+ep /usr/local/bin/rustnmap            │  │
+│  │   $ getcap /usr/local/bin/rustnmap                                │  │
 │  └───────────────────────────────────────────────────────────────────┘  │
 │                                                                         │
-│  问题 2: "Failed to create socket: AF_PACKET"                           │
+│  Issue 2: "Failed to create socket: AF_PACKET"                         │
 │  ┌───────────────────────────────────────────────────────────────────┐  │
-│  │ 原因: 内核太旧或 CONFIG_PACKET 未编译                             │  │
-│  │ 解决:                                                           │  │
-│  │   $ uname -r  # 检查内核版本                                      │  │
-│  │   $ zcat /proc/config.gz | grep CONFIG_PACKET  # 检查配置        │  │
-│  │   如果未启用，需要重新编译内核或升级                              │  │
+│  │ Cause: Kernel too old or CONFIG_PACKET not compiled               │  │
+│  │ Solution:                                                         │  │
+│  │   $ uname -r  # Check kernel version                              │  │
+│  │   $ zcat /proc/config.gz | grep CONFIG_PACKET  # Check config     │  │
+│  │   If not enabled, recompile kernel or upgrade                     │  │
 │  └───────────────────────────────────────────────────────────────────┘  │
 │                                                                         │
-│  问题 3: "setcap: failed to set capabilities"                           │
+│  Issue 3: "setcap: failed to set capabilities"                         │
 │  ┌───────────────────────────────────────────────────────────────────┐  │
-│  │ 原因: 文件系统不支持 extended attributes 或没有权限              │  │
-│  │ 解决:                                                           │  │
-│  │   $ mount | grep /usr/local  # 检查文件系统挂载选项              │  │
-│  │   确保没有 nosuid 选项                                           │  │
+│  │ Cause: Filesystem does not support extended attributes or no      │  │
+│  │        permission                                                 │  │
+│  │ Solution:                                                         │  │
+│  │   $ mount | grep /usr/local  # Check filesystem mount options    │  │
+│  │   Ensure no nosuid option                                         │  │
 │  └───────────────────────────────────────────────────────────────────┘  │
 │                                                                         │
-│  问题 4: SELinux 阻止网络操作                                           │
+│  Issue 4: SELinux blocking network operations                          │
 │  ┌───────────────────────────────────────────────────────────────────┐  │
-│  │ 原因: SELinux 策略不允许                                           │  │
-│  │ 解决:                                                           │  │
-│  │   $ sudo ausearch -m avc -ts recent  # 查看 SELinux 审计日志     │  │
-│  │   $ sudo setenforce 0  # 临时禁用 (仅用于测试)                   │  │
-│  │   参考 C.5 节配置 SELinux 策略                                    │  │
+│  │ Cause: SELinux policy does not allow                              │  │
+│  │ Solution:                                                         │  │
+│  │   $ sudo ausearch -m avc -ts recent  # View SELinux audit logs   │  │
+│  │   $ sudo setenforce 0  # Temporarily disable (testing only)      │  │
+│  │   See Section C.5 to configure SELinux policy                     │  │
 │  └───────────────────────────────────────────────────────────────────┘  │
 │                                                                         │
-│  问题 5: 扫描速度慢                                                      │
+│  Issue 5: Slow scan speed                                               │
 │  ┌───────────────────────────────────────────────────────────────────┐  │
-│  │ 可能原因和解决方案:                                               │  │
-│  │   1. 检查时序模板: 使用 -T4 或 -T5                                │  │
-│  │   2. 检查并发数: --max-parallelism                                │  │
-│  │   3. 启用 PACKET_MMAP: 检查内核版本 >= 2.6.22                    │  │
-│  │   4. CPU 亲和性: 使用 taskset 绑定 CPU                            │  │
-│  │   5. 网络缓冲区: 调整 net.core.* 参数                             │  │
+│  │ Possible causes and solutions:                                    │  │
+│  │   1. Check timing template: use -T4 or -T5                        │  │
+│  │   2. Check concurrency: --max-parallelism                         │  │
+│  │   3. Enable PACKET_MMAP: check kernel version >= 2.6.22          │  │
+│  │   4. CPU affinity: use taskset to bind CPU                        │  │
+│  │   5. Network buffers: adjust net.core.* parameters                │  │
 │  └───────────────────────────────────────────────────────────────────┘  │
 │                                                                         │
 └─────────────────────────────────────────────────────────────────────────┘

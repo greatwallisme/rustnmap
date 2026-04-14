@@ -1,8 +1,8 @@
-## 3.6 Traceroute 模块
+## 3.6 Traceroute Module
 
-对应 Nmap 命令: `--traceroute`, `--traceroute-probe`, `--traceroute-port`
+Corresponding Nmap commands: `--traceroute`, `--traceroute-probe`, `--traceroute-port`
 
-Traceroute 实现架构
+Traceroute Implementation Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -68,4 +68,3 @@ Traceroute 实现架构
 ```
 
 ---
-

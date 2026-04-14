@@ -1,51 +1,51 @@
-# REST API 模块 (rustnmap-api)
+# REST API Module (rustnmap-api)
 
-> **版本**: 2.0.0 (开发中)
-> **对应 Phase**: Phase 5 (Week 12)
-> **优先级**: P1
-
----
-
-## 概述
-
-REST API 模块将 RustNmap 从命令行工具升级为平台化服务，支持通过 HTTP API 发起扫描、查询状态和获取结果。这是 RustNmap 2.0 平台化的核心组件。
+> **Version**: 2.0.0 (in development)
+> **Corresponding Phase**: Phase 5 (Week 12)
+> **Priority**: P1
 
 ---
 
-## 功能特性
+## Overview
 
-### 1. Daemon 模式
+The REST API module upgrades RustNmap from a command-line tool to a platform service, supporting scan initiation, status querying, and result retrieval via HTTP API. This is the core component of RustNmap 2.0 platformization.
 
-- 后台运行，监听指定端口
-- 支持 API Key 认证
-- 多客户端并发访问
+---
+
+## Features
+
+### 1. Daemon Mode
+
+- Runs in the background, listening on a specified port
+- Supports API Key authentication
+- Concurrent access from multiple clients
 
 ### 2. RESTful API
 
-- 符合 REST 架构风格
-- JSON 请求/响应格式
-- SSE (Server-Sent Events) 流式推送
+- Conforms to REST architectural style
+- JSON request/response format
+- SSE (Server-Sent Events) streaming
 
-### 3. 扫描任务管理
+### 3. Scan Task Management
 
-- 创建扫描任务
-- 查询扫描状态
-- 取消扫描任务
-- 获取扫描结果
+- Create scan tasks
+- Query scan status
+- Cancel scan tasks
+- Retrieve scan results
 
-### 4. 流式结果推送
+### 4. Streaming Result Push
 
-- SSE 实时推送扫描进度
-- 每完成一个主机立即推送结果
-- 支持 NDJSON 流式格式
+- SSE real-time scan progress push
+- Push results immediately as each host completes
+- Supports NDJSON streaming format
 
 ---
 
-## API 端点
+## API Endpoints
 
-### 认证
+### Authentication
 
-所有 API 请求需要在 Header 中携带 API Key：
+All API requests require an API Key in the Header:
 
 ```http
 Authorization: Bearer <api_key>
@@ -53,9 +53,9 @@ Authorization: Bearer <api_key>
 
 ### POST /api/v1/scans
 
-创建扫描任务。
+Create a scan task.
 
-**请求示例**:
+**Request Example**:
 
 ```bash
 curl -X POST http://localhost:8080/api/v1/scans \
@@ -72,7 +72,7 @@ curl -X POST http://localhost:8080/api/v1/scans \
   }'
 ```
 
-**响应示例**:
+**Response Example**:
 
 ```json
 {
@@ -91,9 +91,9 @@ curl -X POST http://localhost:8080/api/v1/scans \
 
 ### GET /api/v1/scans/{id}
 
-查询扫描任务状态。
+Query scan task status.
 
-**响应示例**:
+**Response Example**:
 
 ```json
 {
@@ -113,9 +113,9 @@ curl -X POST http://localhost:8080/api/v1/scans \
 
 ### GET /api/v1/scans/{id}/results
 
-获取扫描结果（完整）。
+Retrieve scan results (complete).
 
-**响应示例**:
+**Response Example**:
 
 ```json
 {
@@ -156,9 +156,9 @@ curl -X POST http://localhost:8080/api/v1/scans \
 
 ### DELETE /api/v1/scans/{id}
 
-取消扫描任务。
+Cancel a scan task.
 
-**响应示例**:
+**Response Example**:
 
 ```json
 {
@@ -170,9 +170,9 @@ curl -X POST http://localhost:8080/api/v1/scans \
 
 ### GET /api/v1/scans/{id}/stream
 
-SSE 流式结果推送。
+SSE streaming result push.
 
-**响应格式** (text/event-stream):
+**Response Format** (text/event-stream):
 
 ```
 event: progress
@@ -193,21 +193,21 @@ data: {"type":"done","scan_id":"scan_001","status":"completed"}
 
 ### GET /api/v1/scans
 
-列出所有扫描任务（支持分页和过滤）。
+List all scan tasks (supports pagination and filtering).
 
-**查询参数**:
+**Query Parameters**:
 
-| 参数 | 类型 | 描述 |
-|------|------|------|
-| `status` | string | 过滤状态 (queued/running/completed/cancelled) |
-| `limit` | number | 每页数量 (默认 20) |
-| `offset` | number | 偏移量 (默认 0) |
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `status` | string | Filter by status (queued/running/completed/cancelled) |
+| `limit` | number | Items per page (default: 20) |
+| `offset` | number | Offset (default: 0) |
 
 ### GET /api/v1/health
 
-健康检查。
+Health check.
 
-**响应示例**:
+**Response Example**:
 
 ```json
 {
@@ -221,19 +221,19 @@ data: {"type":"done","scan_id":"scan_001","status":"completed"}
 
 ---
 
-## 架构设计
+## Architecture Design
 
-### 模块结构
+### Module Structure
 
 ```
 rustnmap-api/
 ├── src/
-│   ├── lib.rs           # 公共 API
-│   ├── server.rs        # HTTP 服务器
+│   ├── lib.rs           # Public API
+│   ├── server.rs        # HTTP server
 │   ├── routes/
 │   │   ├── mod.rs
-│   │   ├── scans.rs     # 扫描相关路由
-│   │   └── health.rs    # 健康检查路由
+│   │   ├── scans.rs     # Scan-related routes
+│   │   └── health.rs    # Health check routes
 │   ├── handlers/
 │   │   ├── mod.rs
 │   │   ├── create_scan.rs
@@ -241,70 +241,70 @@ rustnmap-api/
 │   │   └── cancel_scan.rs
 │   ├── middleware/
 │   │   ├── mod.rs
-│   │   ├── auth.rs      # API Key 认证
-│   │   └── logging.rs   # 请求日志
+│   │   ├── auth.rs      # API Key authentication
+│   │   └── logging.rs   # Request logging
 │   ├── sse/
 │   │   ├── mod.rs
-│   │   └── emitter.rs   # SSE 事件发射器
-│   └── config.rs        # 配置管理
+│   │   └── emitter.rs   # SSE event emitter
+│   └── config.rs        # Configuration management
 └── tests/
-    └── integration.rs   # API 集成测试
+    └── integration.rs   # API integration tests
 ```
 
-### 依赖关系
+### Dependencies
 
 ```
 rustnmap-api
 │
-├── rustnmap-core      # 扫描编排
-├── rustnmap-vuln      # 漏洞情报 (可选)
-├── rustnmap-output    # 输出模型
+├── rustnmap-core      # Scan orchestration
+├── rustnmap-vuln      # Vulnerability intelligence (optional)
+├── rustnmap-output    # Output models
 │
-└── 外部依赖
-    ├── axum           # Web 框架
-    ├── tower          # 中间件
-    ├── tokio          # 异步运行时
-    ├── serde          # 序列化
-    ├── serde_json     # JSON 处理
-    └── uuid           # 任务 ID 生成
+└── External dependencies
+    ├── axum           # Web framework
+    ├── tower          # Middleware
+    ├── tokio          # Async runtime
+    ├── serde          # Serialization
+    ├── serde_json     # JSON processing
+    └── uuid           # Task ID generation
 ```
 
 ---
 
-## 核心 API
+## Core API
 
 ### ApiServer
 
 ```rust
-/// REST API 服务器
+/// REST API server
 pub struct ApiServer {
     config: ApiConfig,
     scan_manager: Arc<ScanManager>,
 }
 
 impl ApiServer {
-    /// 创建服务器实例
+    /// Create server instance
     pub fn new(config: ApiConfig) -> Result<Self>;
 
-    /// 启动服务器
+    /// Start the server
     pub async fn run(self, addr: SocketAddr) -> Result<()>;
 
-    /// 获取监听地址
+    /// Get listening address
     pub fn local_addr(&self) -> SocketAddr;
 }
 
-/// API 配置
+/// API configuration
 pub struct ApiConfig {
-    /// API Key 列表
+    /// API Key list
     pub api_keys: Vec<String>,
 
-    /// 最大并发扫描数
+    /// Maximum concurrent scans
     pub max_concurrent_scans: usize,
 
-    /// 扫描结果保留时间
+    /// Scan result retention period
     pub result_retention: Duration,
 
-    /// 启用 SSE 流式推送
+    /// Enable SSE streaming
     pub enable_sse: bool,
 }
 ```
@@ -312,43 +312,43 @@ pub struct ApiConfig {
 ### ScanManager
 
 ```rust
-/// 扫描任务管理器
+/// Scan task manager
 pub struct ScanManager {
     tasks: DashMap<String, ScanTask>,
     executor: Arc<ScanExecutor>,
 }
 
 impl ScanManager {
-    /// 创建扫描任务
+    /// Create scan task
     pub fn create_scan(&self, request: CreateScanRequest) -> Result<ScanTask>;
 
-    /// 获取扫描状态
+    /// Get scan status
     pub fn get_status(&self, id: &str) -> Option<ScanStatus>;
 
-    /// 取消扫描
+    /// Cancel scan
     pub fn cancel_scan(&self, id: &str) -> Result<()>;
 
-    /// 获取扫描结果
+    /// Get scan results
     pub fn get_results(&self, id: &str) -> Option<ScanResults>;
 
-    /// 列出扫描任务
+    /// List scan tasks
     pub fn list_scans(&self, filter: Option<ScanFilter>) -> Vec<ScanSummary>;
 }
 ```
 
 ---
 
-## 认证与授权
+## Authentication and Authorization
 
-### API Key 生成
+### API Key Generation
 
 ```bash
-# 生成随机 API Key
+# Generate random API Key
 openssl rand -hex 32
-# 输出：e8f3a9b2c1d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0
+# Output: e8f3a9b2c1d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0
 ```
 
-### 配置文件
+### Configuration File
 
 ```yaml
 # /etc/rustnmap/api-config.yaml
@@ -362,29 +362,29 @@ api:
 
 ---
 
-## CLI 选项
+## CLI Options
 
-### 启动 Daemon 模式
+### Starting Daemon Mode
 
 ```bash
-# 基本启动
+# Basic start
 rustnmap --daemon
 
-# 指定监听地址
+# Specify listen address
 rustnmap --daemon --listen 0.0.0.0:8080
 
-# 使用配置文件
+# Use configuration file
 rustnmap --daemon --config /etc/rustnmap/api-config.yaml
 
-# 生成 API Key
+# Generate API Key
 rustnmap --generate-api-key
 ```
 
 ---
 
-## 使用示例
+## Usage Examples
 
-### Python 客户端
+### Python Client
 
 ```python
 import requests
@@ -394,7 +394,7 @@ BASE_URL = "http://localhost:8080/api/v1"
 
 headers = {"Authorization": f"Bearer {API_KEY}"}
 
-# 创建扫描
+# Create scan
 response = requests.post(
     f"{BASE_URL}/scans",
     headers=headers,
@@ -405,14 +405,14 @@ response = requests.post(
 )
 scan_id = response.json()["id"]
 
-# 查询状态
+# Query status
 response = requests.get(
     f"{BASE_URL}/scans/{scan_id}",
     headers=headers
 )
 print(response.json())
 
-# 获取结果
+# Get results
 response = requests.get(
     f"{BASE_URL}/scans/{scan_id}/results",
     headers=headers
@@ -420,7 +420,7 @@ response = requests.get(
 print(response.json())
 ```
 
-### 流式消费 (SSE)
+### Streaming Consumption (SSE)
 
 ```python
 import sseclient
@@ -439,32 +439,32 @@ for event in client.events():
 
 ---
 
-## 性能考虑
+## Performance Considerations
 
-### 并发控制
+### Concurrency Control
 
-- 使用信号量限制并发扫描数
-- 扫描队列管理（FIFO）
-- 优先级队列（可选）
+- Use semaphores to limit concurrent scan count
+- Scan queue management (FIFO)
+- Priority queue (optional)
 
-### 内存管理
+### Memory Management
 
-- 扫描结果分页存储
-- 定期清理过期结果
-- 使用流式响应避免大内存占用
+- Paginated storage of scan results
+- Periodic cleanup of expired results
+- Use streaming responses to avoid high memory usage
 
 ---
 
-## 安全考虑
+## Security Considerations
 
-### 1. API Key 保护
+### 1. API Key Protection
 
-- API Key 仅通过 HTTPS 传输
-- **常量时间比较**: 使用 `subtle::ConstantTimeEq` 防止时序攻击 (Timing Attack)
-- 定期轮换 API Key
+- API Keys transmitted only over HTTPS
+- **Constant-time comparison**: Use `subtle::ConstantTimeEq` to prevent timing attacks
+- Periodic API Key rotation
 
 ```rust
-// 防止时序攻击的安全比较
+// Safe comparison to prevent timing attacks
 pub fn is_valid_key(&self, key: &str) -> bool {
     self.api_keys.iter().any(|k| {
         k.as_bytes().ct_eq(key.as_bytes()).into()
@@ -472,23 +472,23 @@ pub fn is_valid_key(&self, key: &str) -> bool {
 }
 ```
 
-### 2. 输入验证
+### 2. Input Validation
 
-- 目标 IP/CIDR 验证
-- 扫描选项白名单
-- 速率限制（防滥用）
-- **Loopback 地址允许**: 127.0.0.1 和 ::1 允许用于测试（与 nmap 行为一致）
-- **Multicast/Link-local 地址拒绝**: 224.x.x.x, 169.254.x.x 等保留地址被拒绝
+- Target IP/CIDR validation
+- Scan option whitelist
+- Rate limiting (abuse prevention)
+- **Loopback address allowed**: 127.0.0.1 and ::1 allowed for testing (consistent with nmap behavior)
+- **Multicast/Link-local address rejected**: 224.x.x.x, 169.254.x.x and other reserved addresses are rejected
 
-### 3. 并发限制
+### 3. Concurrency Limits
 
-- 最大并发扫描数可配置（默认: 5）
-- 超出限制返回 HTTP 429 (TOO_MANY_REQUESTS)
+- Maximum concurrent scans configurable (default: 5)
+- Returns HTTP 429 (TOO_MANY_REQUESTS) when limit exceeded
 
-### 4. 审计日志
+### 4. Audit Logging
 
 ```rust
-/// 审计日志记录
+/// Audit log record
 pub struct AuditLog {
     pub timestamp: DateTime<Utc>,
     pub api_key_hash: String,
@@ -501,9 +501,9 @@ pub struct AuditLog {
 
 ---
 
-## 测试
+## Testing
 
-### Shell 测试脚本
+### Shell Test Script
 
 ```bash
 # Run shell test script
@@ -513,9 +513,9 @@ pub struct AuditLog {
 ./benchmarks/api_test.sh --server-addr 127.0.0.1:9090 --api-key YOUR-api-key
 ```
 
-**测试结果**:
+**Test Results**:
 - 7 tests executed
-- 100% pass rate expected### API 集成测试
+- 100% pass rate expected### API Integration Tests
 
 ```rust
 #[tokio::test]
@@ -539,55 +539,55 @@ async fn test_create_scan() {
 
 ---
 
-## 与 RETHINK.md 对齐
+## Alignment with RETHINK.md
 
-| 章节 | 对应内容 |
-|------|---------|
-| 7.2.1 REST API | POST/GET/DELETE 端点 |
-| 12.3 Phase 5 | 平台化最小闭环（Week 12） |
-| 13.1 新增 Crate | rustnmap-api |
-| 14.3 Phase 4-5 | phase/progress 查询接口 |
+| Section | Corresponding Content |
+|---------|----------------------|
+| 7.2.1 REST API | POST/GET/DELETE endpoints |
+| 12.3 Phase 5 | Platformization minimum viable loop (Week 12) |
+| 13.1 New Crate | rustnmap-api |
+| 14.3 Phase 4-5 | phase/progress query interface |
 
 ---
 
-## 依赖关系
+## Dependencies
 
 ```toml
 [dependencies]
-# Web 框架
+# Web framework
 axum = "0.7"
 tower = "0.4"
 tower-http = { version = "0.5", features = ["cors", "trace"] }
 
-# 异步
+# Async
 tokio = { version = "1", features = ["full"] }
 
-# 序列化
+# Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
-# 工具
+# Utilities
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 
-# 内部依赖
+# Internal dependencies
 rustnmap-core = { path = "../rustnmap-core" }
 rustnmap-output = { path = "../rustnmap-output" }
 ```
 
 ---
 
-## 下一步
+## Next Steps
 
-1. **Week 12**: 实现基本 HTTP 端点（创建/查询/取消扫描）
-2. **Week 12**: 实现 SSE 流式推送
-3. **Week 12**: 添加认证中间件和审计日志
-4. **Week 12**: 编写集成测试和 API 文档
+1. **Week 12**: Implement basic HTTP endpoints (create/query/cancel scans)
+2. **Week 12**: Implement SSE streaming push
+3. **Week 12**: Add authentication middleware and audit logging
+4. **Week 12**: Write integration tests and API documentation
 
 ---
 
-## 参考链接
+## Reference Links
 
-- [axum 文档](https://docs.rs/axum)
-- [OpenAPI 规范](https://swagger.io/specification/)
-- [SSE 规范](https://html.spec.whatwg.org/multipage/server-sent-events.html)
+- [axum Documentation](https://docs.rs/axum)
+- [OpenAPI Specification](https://swagger.io/specification/)
+- [SSE Specification](https://html.spec.whatwg.org/multipage/server-sent-events.html)

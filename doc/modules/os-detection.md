@@ -1,21 +1,21 @@
-## 3.4 操作系统检测模块
+## 3.4 OS Detection Module
 
-对应 Nmap 命令: `-O`, `--osscan-limit`, `--osscan-guess`
+Corresponding Nmap commands: `-O`, `--osscan-limit`, `--osscan-guess`
 
-### 3.4.1 OS 指纹识别技术
+### 3.4.1 OS Fingerprinting Techniques
 
-| 指纹类型 | 描述 | 检测方法 | Nmap 对应 |
+| Fingerprint Type | Description | Detection Method | Nmap Reference |
 |----------|------|----------|-----------|
-| TCP ISN | 初始序列号模式 | 多次 SYN 收集 ISN | `SEQ` |
-| IP ID | IP 标识符增量模式 | 多次探测 IP ID | `SEQ` |
-| TCP Options | TCP 选项顺序和值 | SYN 包选项分析 | `OPS` |
-| TCP Window | 窗口大小特征 | SYN-ACK 窗口值 | `WIN` |
-| T1-T7 | TCP 响应测试 | 各种 TCP 包响应 | `T1`-`T7` |
-| IE | ICMP 响应特征 | ICMP Echo 响应 | `IE` |
-| U1 | UDP 响应特征 | UDP 探测响应 | `U1` |
-| ECN | ECN 支持 | ECN 标志位 | `ECN` |
+| TCP ISN | Initial Sequence Number pattern | Multiple SYN to collect ISN | `SEQ` |
+| IP ID | IP Identifier increment pattern | Multiple probes for IP ID | `SEQ` |
+| TCP Options | TCP option order and values | SYN packet option analysis | `OPS` |
+| TCP Window | Window size characteristics | SYN-ACK window value | `WIN` |
+| T1-T7 | TCP response tests | Various TCP packet responses | `T1`-`T7` |
+| IE | ICMP response characteristics | ICMP Echo response | `IE` |
+| U1 | UDP response characteristics | UDP probe response | `U1` |
+| ECN | ECN support | ECN flag bits | `ECN` |
 
-### 3.4.2 OS 检测流程
+### 3.4.2 OS Detection Pipeline
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -84,7 +84,7 @@
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-### 3.4.3 OS 指纹数据结构
+### 3.4.3 OS Fingerprint Data Structures
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -147,74 +147,74 @@
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-### 3.4.4 OS 检测实现细节
+### 3.4.4 OS Detection Implementation Details
 
-基于 Nmap `FPEngine.cc/h`, `osscan2.cc` 的实现。
+Based on the Nmap `FPEngine.cc/h` and `osscan2.cc` implementation.
 
-#### 3.4.4.1 核心数据结构
+#### 3.4.4.1 Core Data Structures
 
-**Nmap 源码映射:**
+**Nmap source code mapping:**
 
 ```rust
-// 对应 Nmap FPEngine.h 中的 FPEngine 基类
+// Corresponds to the FPEngine base class in Nmap FPEngine.h
 pub trait FingerprintEngine {
     fn os_scan(&mut self, targets: Vec<Target>) -> Result<()>;
     fn reset(&mut self);
 }
 
-// 对应 FPEngine6 - IPv6 指纹识别
+// Corresponds to FPEngine6 - IPv6 fingerprinting
 pub struct FingerprintEngineV6 {
-    // 目标主机列表
+    // Target host list
     hosts: Vec<FpHostV6>,
 
-    // 分组大小 (对应 OSSCAN_GROUP_SIZE)
+    // Group size (corresponds to OSSCAN_GROUP_SIZE)
     pub group_size: usize,
 
-    // 网络控制器
+    // Network controller
     pub network_control: FpNetworkControl,
 }
 
-// 对应 FPNetworkControl - 网络访问管理器
+// Corresponds to FPNetworkControl - network access manager
 pub struct FpNetworkControl {
-    // Nsock 连接池
+    // Nsock connection pool
     pub nsock_pool: nsock_pool,
 
-    // Pcap 描述符
+    // Pcap descriptor
     pub pcap_nsi: nsock_iod,
 
-    // 上次调度的 pcap 事件 ID
+    // Last scheduled pcap event ID
     pub pcap_ev_id: nsock_event_id,
 
-    // 是否已初始化
+    // Whether initialized
     pub nsock_init: bool,
 
-    // 原始套接字
+    // Raw socket
     pub raw_sd: i32,
 
-    // 注册的调用者 (FPHost 列表)
+    // Registered callers (FPHost list)
     pub callers: Vec<FpHost>,
 
-    // 已发送的探测数
+    // Number of probes sent
     pub probes_sent: i32,
 
-    // 收到的响应数
+    // Number of responses received
     pub responses_recv: i32,
 
-    // 超时的探测数
+    // Number of timed-out probes
     pub probes_timedout: i32,
 
-    // 拥塞控制
+    // Congestion control
     pub cc_cwnd: f32,        // Congestion window
     pub cc_ssthresh: f32,    // Slow start threshold
 
-    // L2 帧支持判断
+    // L2 frame support check
     pub fn l2_frames(&self) -> bool {
         self.raw_sd < 0
     }
 }
 
 impl FpNetworkControl {
-    // 对应 cc_init()
+    // Corresponds to cc_init()
     pub fn new() -> Result<Self> {
         Ok(Self {
             nsock_pool: nsock_pool_new()?,
@@ -226,24 +226,24 @@ impl FpNetworkControl {
             probes_sent: 0,
             responses_recv: 0,
             probes_timedout: 0,
-            // 对应 OSSCAN_INITIAL_CWND
+            // Corresponds to OSSCAN_INITIAL_CWND
             cc_cwnd: NUM_FP_TIMEDPROBES_IPV6 as f32,
-            // 对应 OSSCAN_INITIAL_SSTHRESH = 4 * CWND
+            // Corresponds to OSSCAN_INITIAL_SSTHRESH = 4 * CWND
             cc_ssthresh: (4 * NUM_FP_TIMEDPROBES_IPV6) as f32,
         })
     }
 
-    // 对应 scheduleProbe()
+    // Corresponds to scheduleProbe()
     pub fn schedule_probe(&mut self,
                             probe: &mut FpProbe,
                             delay_ms: i32)
         -> Result<()> {
-        // 检查拥塞窗口
+        // Check congestion window
         if !self.request_slots(1) {
             return Err(Error::CongestionWindowFull);
         }
 
-        // 通过 nsock 调度发送
+        // Schedule send via nsock
         nsock_schedule_timer(
             self.nsock_pool,
             delay_ms,
@@ -255,107 +255,107 @@ impl FpNetworkControl {
         Ok(())
     }
 
-    // 对应 request_slots()
+    // Corresponds to request_slots()
     pub fn request_slots(&mut self, num_packets: usize) -> bool {
-        // 检查是否有足够的拥塞窗口空间
+        // Check if there is enough congestion window space
         (self.callers.len() as f32) < self.cc_cwnd
     }
 
-    // 对应 cc_update_sent()
+    // Corresponds to cc_update_sent()
     pub fn cc_on_sent(&mut self, pkts: i32) {
-        // 更新拥塞控制状态
+        // Update congestion control state
     }
 
-    // 对应 cc_update_received()
+    // Corresponds to cc_update_received()
     pub fn cc_on_received(&mut self) {
         self.responses_recv += 1;
 
-        // 对应 cc_report_final_timeout()
-        // 根据响应调整窗口
+        // Corresponds to cc_report_final_timeout()
+        // Adjust window based on response
     }
 }
 ```
 
-#### 3.4.4.2 FPHost 每主机状态
+#### 3.4.4.2 FPHost Per-Host State
 
 ```rust
-// 对应 FPHost - 指纹识别的每主机状态
+// Corresponds to FPHost - per-host state for fingerprinting
 pub struct FpHost {
-    // 总探测数
+    // Total number of probes
     pub total_probes: u32,
 
-    // 定时探测数 (需要 100ms 间隔)
+    // Number of timed probes (require 100ms interval)
     pub timed_probes: u32,
 
-    // 已发送探测数 (不含重传)
+    // Number of probes sent (excluding retransmissions)
     pub probes_sent: u32,
 
-    // 收到响应的探测数
+    // Number of probes that received responses
     pub probes_answered: u32,
 
-    // 超时未响应的探测数
+    // Number of probes that timed out without response
     pub probes_unanswered: u32,
 
-    // 是否完成
+    // Whether incomplete
     pub incomplete_fp: bool,
 
-    // 检测是否完成
+    // Whether detection is complete
     pub detection_done: bool,
 
-    // 定时探测是否已发送
+    // Whether timed probes have been sent
     pub timedprobes_sent: bool,
 
-    // 目标主机信息
+    // Target host information
     pub target_host: Target,
 
-    // 网络控制器链接
+    // Network controller link
     pub netctl: Option<FpNetworkControl>,
 
-    // 是否已在网络控制器注册
+    // Whether registered with network controller
     pub netctl_registered: bool,
 
-    // TCP 序列号基数
+    // TCP sequence number base
     pub tcp_seq_base: u32,
 
-    // 开放的 TCP 端口 (用于 OS 探测)
+    // Open TCP port (for OS probing)
     pub open_port_tcp: i32,
 
-    // 关闭的 TCP 端口
+    // Closed TCP port
     pub closed_port_tcp: i32,
 
-    // 关闭的 UDP 端口
+    // Closed UDP port
     pub closed_port_udp: i32,
 
-    // TCP 探测起始端口
+    // TCP probe source port
     pub tcp_port_base: i32,
 
-    // UDP 探测端口
+    // UDP probe port
     pub udp_port_base: i32,
 
-    // ICMPv6 序列计数器
+    // ICMPv6 sequence counter
     pub icmp_seq_counter: u16,
 
-    // 重传超时 (RTO)
+    // Retransmission timeout (RTO)
     pub rto: i32,
 
-    // RTT 方差
+    // RTT variance
     pub rttvar: i32,
 
-    // 平滑往返时间
+    // Smoothed round-trip time
     pub srtt: i32,
 }
 
 impl FpHost {
-    // 对应 update_RTO()
+    // Corresponds to update_RTO()
     pub fn update_rto(&mut self, measured_rtt_us: i32,
                        is_retransmission: bool) {
         if !is_retransmission {
-            // 首次测量或正常响应
+            // First measurement or normal response
             if self.srtt == 0 {
                 self.srtt = measured_rtt_us;
                 self.rttvar = measured_rtt_us / 2;
             } else {
-                // RFC 2988 公式
+                // RFC 2988 formula
                 let rtt_diff = measured_rtt_us - self.srtt;
                 self.rttvar = (3 * self.rttvar / 4 +
                                    rtt_diff.abs() / 2)
@@ -365,25 +365,25 @@ impl FpHost {
             }
         }
 
-        // 计算超时 = SRTT + 4 * RTTVAR
+        // Calculate timeout = SRTT + 4 * RTTVAR
         self.rto = self.srtt + 4 * self.rttvar;
 
-        // 对应 OSSCAN_INITIAL_RTO = 3 秒
+        // Corresponds to OSSCAN_INITIAL_RTO = 3 seconds
         self.rto = self.rto.clamp(
             OSSCAN_INITIAL_RTO_MIN,
             OSSCAN_INITIAL_RTO_MAX
         );
     }
 
-    // 对应 choose_osscan_ports()
+    // Corresponds to choose_osscan_ports()
     pub fn choose_osscan_ports(&mut self, ports: &PortList) -> Result<()> {
-        // 选择一个开放端口和一个关闭端口用于 OS 探测
+        // Select one open port and one closed port for OS probing
         self.open_port_tcp = ports.find_open_port()
             .ok_or(Error::NoOpenPort)?;
         self.closed_port_tcp = ports.find_closed_port()
             .ok_or(Error::NoClosedPort)?;
 
-        // 对于 UDP，只需要一个关闭端口
+        // For UDP, only need one closed port
         self.closed_port_udp = ports.find_closed_udp_port()
             .ok_or(Error::NoClosedUdpPort)?;
 
@@ -392,40 +392,40 @@ impl FpHost {
 }
 ```
 
-#### 3.4.4.3 FPProbe 探测结构
+#### 3.4.4.3 FPProbe Probe Structure
 
 ```rust
-// 对应 FPProbe - OS 指纹探测包
+// Corresponds to FPProbe - OS fingerprint probe packet
 pub struct FpProbe {
-    // 探测 ID (如 "SEQ", "OPS", "T1", etc.)
+    // Probe ID (e.g., "SEQ", "OPS", "T1", etc.)
     pub probe_id: Cow<'static, str>,
 
-    // 探测编号
+    // Probe number
     pub probe_no: i32,
 
-    // 重传次数
+    // Number of retransmissions
     pub retransmissions: i32,
 
-    // 收到响应次数
+    // Number of responses received
     pub times_replied: i32,
 
-    // 是否失败
+    // Whether failed
     pub failed: bool,
 
-    // 是否为定时探测
+    // Whether this is a timed probe
     pub timed: bool,
 
-    // 关联的主机
+    // Associated host
     pub host: *mut FpHost,
 
-    // 包数据 (继承自 FPPacket)
+    // Packet data (inherited from FPPacket)
     pub packet: PacketData,
 
-    // 发送时间
+    // Send time
     pub sent_time: TimeVal,
 }
 
-// 对应 FPPacket
+// Corresponds to FPPacket
 pub struct PacketData {
     pub pkt: PacketElement,
     pub link_eth: bool,
@@ -434,78 +434,78 @@ pub struct PacketData {
 }
 
 impl FpProbe {
-    // 对应 isResponse()
+    // Corresponds to isResponse()
     pub fn is_response(&self, received: &PacketElement) -> bool {
-        // 检查收到的包是否是对此探测的响应
+        // Check if the received packet is a response to this probe
         self.matches_probe(received)
     }
 
-    // 对应 incrementRetransmissions()
+    // Corresponds to incrementRetransmissions()
     pub fn increment_retransmissions(&mut self) -> i32 {
         self.retransmissions += 1;
         self.retransmissions
     }
 
-    // 对应 setFailed()
+    // Corresponds to setFailed()
     pub fn set_failed(&mut self) {
         self.failed = true;
     }
 }
 ```
 
-#### 3.4.4.4 IPv6 OS 检测实现
+#### 3.4.4.4 IPv6 OS Detection Implementation
 
 ```rust
-// 对应 FPHost6
+// Corresponds to FPHost6
 pub struct FpHostV6 {
-    // 继承 FPHost
+    // Inherits FPHost
     pub base: FpHost,
 
-    // IPv6 特定探测 (13 TCP + 4 ICMPv6 + 1 UDP)
+    // IPv6-specific probes (13 TCP + 4 ICMPv6 + 1 UDP)
     pub fp_probes: [FpProbe; NUM_FP_PROBES_IPV6],
 
-    // 收到的响应
+    // Received responses
     pub fp_responses: [Option<FpResponse>; NUM_FP_PROBES_IPV6],
 
-    // 定时探测的辅助响应
+    // Auxiliary responses for timed probes
     pub aux_resp: [Option<FpResponse>; NUM_FP_TIMEDPROBES_IPV6],
 }
 
 impl FpHostV6 {
-    // 对应 FPEngine6::os_scan()
+    // Corresponds to FPEngine6::os_scan()
     pub async fn os_scan(targets: Vec<Target>) -> Result<()> {
-        // 1. 创建网络控制器
+        // 1. Create network controller
         let mut netctl = FpNetworkControl::new(&interface)?;
 
-        // 2. 初始化每个目标的 FPHost
+        // 2. Initialize FPHost for each target
         let mut hosts: Vec<FpHostV6> = targets.iter()
             .map(|t| FpHostV6::new(t, &netctl))
             .collect();
 
-        // 3. 选择 OS 扫描端口
+        // 3. Select OS scan ports
         for host in &mut hosts {
             host.choose_osscan_ports(&ports)?;
         }
 
-        // 4. 注册所有主机到网络控制器
+        // 4. Register all hosts with network controller
         for host in &mut hosts {
             netctl.register_caller(host)?;
         }
 
-        // 5. 设置 pcap sniffers
+        // 5. Set up pcap sniffers
         netctl.setup_sniffer(&interface, &bpf_filter)?;
 
-        // 6. 主扫描循环
+        // 6. Main scan loop
         while !hosts.iter().all(|h| h.done()) {
-            // 6.1 调度探测
+            // 6.1 Schedule probes
             for host in hosts.iter().filter(|h| !h.done()) {
                 host.schedule()?;
             }
 
-            // 6.2 处理事件
+            // 6.2 Process events
             netctl.handle_events()?;
 
-            // 6.3 检查超时
+            // 6.3 Check timeouts
             for host in hosts.iter_mut() {
                 if host.has_timed_out() {
                     host.retry_failed_probes()?;
@@ -513,7 +513,7 @@ impl FpHostV6 {
             }
         }
 
-        // 7. 填充结果
+        // 7. Populate results
         for host in hosts {
             host.fill_results()?;
         }
@@ -521,32 +521,32 @@ impl FpHostV6 {
         Ok(())
     }
 
-    // 对应 schedule()
+    // Corresponds to schedule()
     pub fn schedule(&mut self) -> Result<()> {
-        // 如果所有探测已发送，等待响应
+        // If all probes have been sent, wait for responses
         if self.probes_sent >= self.total_probes {
             return Ok(());
         }
 
-        // 获取下一个待发送探测
+        // Get next probe to send
         let probe_idx = self.probes_sent as usize;
         let probe = &mut self.fp_probes[probe_idx];
 
-        // 检查是否为定时探测 (需要 100ms 间隔)
+        // Check if this is a timed probe (requires 100ms interval)
         if probe.timed {
-            // 确保定时探测按序发送
+            // Ensure timed probes are sent in sequence
             if !self.timedprobes_sent {
-                // 第一个定时探测
+                // First timed probe
                 self.timedprobes_sent = true;
             } else {
-                // 检查距上次定时探测是否经过 100ms
+                // Check if 100ms has elapsed since last timed probe
                 if !self.check_timed_probe_delay()? {
-                    return Ok(());  // 等待更长时间
+                    return Ok(());  // Wait longer
                 }
             }
         }
 
-        // 通过网络控制器发送
+        // Send via network controller
         self.host.netctl
             .as_ref()
             .ok_or(Error::NoNetworkControl)?
@@ -556,21 +556,21 @@ impl FpHostV6 {
         Ok(())
     }
 
-    // 对应 callback()
+    // Corresponds to callback()
     pub fn callback(&mut self,
                    pkt: &[u8],
                    pkt_len: usize,
                    tv: &TimeVal) -> Result<()> {
-        // 解析收到的数据包
+        // Parse the received packet
         let response = parse_fingerprint_response(pkt, pkt_len)?;
 
-        // 查找匹配的探测
+        // Find the matching probe
         let probe_id = response.matching_probe_id()?;
 
-        // 存储响应
+        // Store response
         self.fp_responses[probe_id] = Some(response);
 
-        // 更新 RTT 和 RTO
+        // Update RTT and RTO
         let rtt = tv.saturating_sub(&self.fp_probes[probe_id].sent_time);
         self.update_rto(rtt.as_micros() as i32, false)?;
 
@@ -579,10 +579,10 @@ impl FpHostV6 {
 }
 ```
 
-#### 3.4.4.5 探测类型定义
+#### 3.4.4.5 Probe Type Definitions
 
 ```rust
-// 对应 FPEngine.h 中的常量
+// Corresponds to constants in FPEngine.h
 pub const NUM_FP_PROBES_IPV6_TCP: usize = 13;
 pub const NUM_FP_PROBES_IPV6_ICMPV6: usize = 4;
 pub const NUM_FP_PROBES_IPV6_UDP: usize = 1;
@@ -591,24 +591,24 @@ pub const NUM_FP_PROBES_IPV6: usize =
     NUM_FP_PROBES_IPV6_ICMPV6 +
     NUM_FP_PROBES_IPV6_UDP;
 
-// 定时探测数 (需要特定时序)
+// Number of timed probes (require specific timing)
 pub const NUM_FP_TIMEDPROBES_IPV6: usize = 6;
 
-// 拥塞控制常量
+// Congestion control constants
 pub const OSSCAN_GROUP_SIZE: usize = 10;
 pub const OSSCAN_INITIAL_CWND: usize = NUM_FP_TIMEDPROBES_IPV6;
 pub const OSSCAN_INITIAL_SSTHRESH: usize = 4 * OSSCAN_INITIAL_CWND;
-pub const OSSCAN_INITIAL_RTO: i32 = 3_000_000;  // 3 秒 (微秒)
+pub const OSSCAN_INITIAL_RTO: i32 = 3_000_000;  // 3 seconds (microseconds)
 
-// TCP 流标签 (用于 OS 检测)
+// TCP flow label (used for OS detection)
 pub const OSDETECT_FLOW_LABEL: u32 = 0x12345;
 
-// 新度阈值 (匹配分数差异阈值)
+// Novelty threshold (match score difference threshold)
 pub const FP_NOVELTY_THRESHOLD: f64 = 15.0;
 
-// IPv6 OS 探测类型
+// IPv6 OS probe types
 pub enum V6ProbeType {
-    // TCP 探测 (13 个)
+    // TCP probes (13)
     SeqTest,
     IcmpEcho,
     TcpT1,  // Open port response
@@ -618,33 +618,33 @@ pub enum V6ProbeType {
     TcpT5,  // Closed port, SYN
     TcpT6,  // Closed port, ACK
     TcpT7,  // Closed port, FIN/PSH/URG
-    // ICMPv6 探测 (4 个)
+    // ICMPv6 probes (4)
     IcmpV6Echo,
-    // UDP 探测 (1 个)
+    // UDP probes (1)
     UdpClosed,
 }
 ```
 
-#### 3.4.4.6 指纹匹配算法
+#### 3.4.4.6 Fingerprint Matching Algorithm
 
 ```rust
-// 对应 FingerMatch 和 load_fp_matches()
+// Corresponds to FingerMatch and load_fp_matches()
 pub struct FingerprintMatcher {
-    // 数据库中的所有指纹
+    // All fingerprints in the database
     pub fingerprints: Vec<OsFingerprint>,
 }
 
 impl FingerprintMatcher {
-    // 对应 load_fp_matches()
+    // Corresponds to load_fp_matches()
     pub fn load_from_db(db_path: &Path) -> Result<Self> {
-        // 解析 nmap-os-db 文件
+        // Parse nmap-os-db file
         let db_content = fs::read_to_string(db_path)?;
         Ok(Self {
             fingerprints: parse_fingerprints(&db_content)?,
         })
     }
 
-    // 匹配指纹并评分
+    // Match fingerprint and score
     pub fn match(&self,
                fp: &OsFingerprint) -> Vec<OsMatch> {
         let mut scores: Vec<OsMatch> = Vec::new();
@@ -652,45 +652,45 @@ impl FingerprintMatcher {
         for known_fp in &self.fingerprints {
             let score = self.calculate_score(fp, known_fp);
 
-            // 只有分数低于阈值才认为匹配
+            // Only consider it a match if the score is below the threshold
             if score < FP_NOVELTY_THRESHOLD {
                 scores.push(OsMatch {
                     name: known_fp.name.clone(),
                     accuracy: ((100.0 - score.max(0.0)) as u8),
                     vendor: known_fp.vendor.clone(),
                     os_family: known_fp.os_family.clone(),
-                    // ... 其他字段
+                    // ... other fields
                 });
             }
         }
 
-        // 按准确度排序
+        // Sort by accuracy
         scores.sort_by(|a, b| b.accuracy.cmp(&a.accuracy));
         scores
     }
 
-    // 计算两个指纹的差异分数
+    // Calculate the difference score between two fingerprints
     fn calculate_score(&self, fp1: &OsFingerprint, fp2: &OsFingerprint)
         -> f64 {
         let mut total_diff = 0.0;
 
-        // SEQ 指纹比较
+        // SEQ fingerprint comparison
         total_diff += self.compare_seq(&fp1.seq, &fp2.seq);
 
-        // OPS 指纹比较 (每个测试)
+        // OPS fingerprint comparison (per test)
         for (test, ops1) in &fp1.ops {
             if let Some(ops2) = fp2.ops.get(test) {
                 total_diff += self.compare_ops(ops1, ops2);
             }
         }
 
-        // WIN 指纹比较
+        // WIN fingerprint comparison
         total_diff += self.compare_win(&fp1.win, &fp2.win);
 
-        // ECN 指纹比较
+        // ECN fingerprint comparison
         total_diff += self.compare_ecn(&fp1.ecn, &fp2.ecn);
 
-        // T1-T7 测试比较
+        // T1-T7 test comparison
         for test in &["T1", "T2", "T3", "T4", "T5", "T6", "T7"] {
             if let Some(t1) = fp1.tests.get(test) {
                 if let Some(t2) = fp2.tests.get(test) {
