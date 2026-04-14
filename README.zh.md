@@ -60,6 +60,22 @@ sudo rustnmap -O 192.168.1.1
 sudo rustnmap -A 192.168.1.1
 ```
 
+### 数据初始化
+
+RustNmap 将所有必需的 Nmap 数据文件（服务探针、OS 指纹、NSE 脚本等）嵌入到二进制文件中。首次使用前，需将它们提取到 `~/.rustnmap/`：
+
+```bash
+rustnmap init
+```
+
+此命令是幂等的 -- 已存在的文件会被跳过。使用 `--force` 强制覆盖：
+
+```bash
+rustnmap init --force
+```
+
+如果在运行扫描时数据目录不存在，RustNmap 会提示你运行 `rustnmap init`。
+
 ---
 
 ## 文档

@@ -60,6 +60,22 @@ sudo rustnmap -O 192.168.1.1
 sudo rustnmap -A 192.168.1.1
 ```
 
+### Data Initialization
+
+RustNmap embeds all required Nmap data files (service probes, OS fingerprints, NSE scripts, etc.) into the binary. Before first use, extract them to `~/.rustnmap/`:
+
+```bash
+rustnmap init
+```
+
+This is idempotent -- existing files are skipped. Use `--force` to overwrite:
+
+```bash
+rustnmap init --force
+```
+
+If the data directory is missing when a scan is run, RustNmap will prompt you to run `rustnmap init`.
+
 ---
 
 ## Documentation
