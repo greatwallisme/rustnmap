@@ -140,12 +140,45 @@ unused_result_ok = "warn"
 # Allow string formatting for structured logging compatibility
 literal_string_with_formatting_args = "allow"
 
+# Dev profile: full debug info, fast incremental compilation
+[profile.dev]
+opt-level = 0
+debug = true
+debug-assertions = true
+overflow-checks = true
+lto = false
+codegen-units = 256
+incremental = true
+panic = "unwind"
+
+# Dev-fast profile: faster runtime for iteration, inherits dev
+[profile.dev-fast]
+inherits = "dev"
+opt-level = 1
+codegen-units = 256
+
 # Release profile optimized for performance
 # Network scanning requires high throughput and low latency
 [profile.release]
 opt-level = 3
 lto = true
 codegen-units = 1
-debug = 1
+debug = false
 panic = "abort"
 overflow-checks = true
+strip = true
+
+# Release with debug: for profiling and crash diagnosis
+[profile.release-with-debug]
+inherits = "release"
+debug = true
+strip = "none"
+panic = "unwind"
+
+# Test profile: keep debug info for test failures
+[profile.test]
+opt-level = 0
+debug = true
+debug-assertions = true
+overflow-checks = true
+incremental = true

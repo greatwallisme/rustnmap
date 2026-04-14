@@ -11,26 +11,28 @@ RustNmap is a network scanner written in Rust, targeting 100% functional parity 
 ## Build & Test Commands
 
 ```bash
-# Build
-cargo build                    # Debug build
-cargo build --release          # Release build (LTO, opt-level=3)
+# Build profiles
+cargo build                                  # Dev (opt-level=0, incremental, fast compile)
+cargo build --profile dev-fast               # Dev-fast (opt-level=1, for iteration)
+cargo build --release                        # Release (LTO, opt-level=3, strip, panic=abort)
+cargo build --profile release-with-debug     # Release+debug (for profiling/crash diagnosis)
 
 # Test
-cargo test --workspace         # All tests
-cargo test -p <crate>          # Single crate (e.g., rustnmap-scan)
-cargo test -p <crate> test_name  # Single test
-cargo test -- --skip requires_root  # Skip root-required tests
+cargo test --workspace                       # All tests
+cargo test -p <crate>                        # Single crate (e.g., rustnmap-scan)
+cargo test -p <crate> test_name              # Single test
+cargo test -- --skip requires_root           # Skip root-required tests
 
 # Lint & Format
-cargo clippy --workspace -- -D warnings   # Zero warnings required
-cargo fmt --all -- --check                # Format check
+cargo clippy --workspace -- -D warnings      # Zero warnings required
+cargo fmt --all -- --check                   # Format check
 
 # Full CI
 cargo fmt --all -- --check && cargo clippy --workspace -- -D warnings && cargo test --workspace
 
 # Benchmarks
-cargo bench -p rustnmap-benchmarks                          # All benchmarks
-cargo bench -p rustnmap-benchmarks -- <benchmark_name>      # Specific benchmark
+cargo bench -p rustnmap-benchmarks                           # All benchmarks
+cargo bench -p rustnmap-benchmarks -- <benchmark_name>       # Specific benchmark
 
 # Comparison tests (rustnmap vs nmap)
 cargo build --release && ./benchmarks/comparison_test.sh
