@@ -4,16 +4,10 @@ target
 .env
 .env.local
 .env.*.local
-
-# Python
-benchmarks/.venv
-benchmarks/uv.lock
-benchmarks/__pycache__
-benchmarks/reports/*.txt
-benchmarks/reports/*.json
-benchmarks/reports/*.md
+.DS_Store
 
 
 # Benchmarks results
-benchmarks/reports/*.txt
-benchmarks/logs/*.log
+benchmarks/reports
+benchmarks/logs
+benchmarks/test_outputs

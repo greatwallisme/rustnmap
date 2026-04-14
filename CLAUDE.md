@@ -149,4 +149,4 @@ cargo doc --workspace --no-deps --all-features
 
 ## License
 
-GPL-3.0-or-later. Uses Nmap fingerprint databases under NPSL. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
+GPL-3.0-or-later. Uses Nmap fingerprint databases under NPSL. See [LICENSE](LICENSE) and [COPYING](COPYING).

@@ -1,6 +1,6 @@
 # RustNmap - Rust 网络扫描器
 
-> **版本**: 0.1.0
+> **版本**: 1.0.0
 > **状态**: 生产就绪
 > **平台**: Linux x86_64 (AMD64)
 > **语言**: Rust 1.90+
@@ -8,7 +8,7 @@
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen)](https://github.com/greatwallisme/rust-nmap)
 [![Tests](https://img.shields.io/badge/tests-970%2B%20passing-brightgreen)](https://github.com/greatwallisme/rust-nmap)
 [![Coverage](https://img.shields.io/badge/coverage-63.77%25-yellow)](https://github.com/greatwallisme/rust-nmap)
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](LICENSE)
 
 **[English Documentation](README.md)** | [用户手册](doc/manual/) | [用户指南](doc/user-guide.md)
 
@@ -132,17 +132,20 @@ sudo rustnmap --script "http-*" 192.168.1.1             # 模式
 ## 开发
 
 ```bash
+# 构建
+cargo build --release
+
 # 运行测试
-just test
+cargo test --workspace
 
-# 运行 clippy
-just clippy
+# 运行 clippy（零警告要求）
+cargo clippy --workspace -- -D warnings
 
-# 构建发布版本
-just release
+# 格式检查
+cargo fmt --all -- --check
 
 # 生成文档
-just doc
+cargo doc --workspace --no-deps --all-features
 ```
 
 ---
@@ -151,8 +154,17 @@ just doc
 
 - **内存安全**: Rust 所有权防止缓冲区溢出
 - **安全并发**: 编译时数据竞争预防
-- **安全等级**: A-
-- 仅 7 个 unsafe 块 (全部为带 SAFETY 注释的 FFI)
+- 31 个 unsafe 块（全部为带 SAFETY 注释的 FFI/系统调用）
+
+| Crate | 数量 | 用途 |
+|-------|------|------|
+| `rustnmap-core` | 11 | `libc::close`、`freeifaddrs`、ARP/ioctl |
+| `rustnmap-packet` (mmap) | 8 | PACKET_MMAP 环形缓冲区、零拷贝 |
+| `rustnmap-scan` | 3 | 数据包适配器 FFI |
+| `rustnmap-packet` (recvfrom) | 2 | `libc::send` 原始套接字 |
+| `rustnmap-target` | 2 | `libc::close`、`freeifaddrs` |
+| `rustnmap-nse` | 1 | `setrlimit`（进程隔离） |
+| `rustnmap-sdk` | 1 | `libc::geteuid`（root 检测） |
 
 ---
 
@@ -172,7 +184,14 @@ just doc
 
 ## 许可证
 
-MIT 许可证 - 详见 [LICENSE](LICENSE)。
+RustNmap 使用 **GNU General Public License v3.0 或更高版本** (GPL-3.0-or-later)。
+
+| 组件 | 许可证 |
+|------|--------|
+| RustNmap 源代码 | [GPL-3.0-or-later](LICENSE) |
+| Nmap 指纹数据库 | [NPSL](https://nmap.org/npsl/)（使用时适用） |
+
+RustNmap 使用 Nmap 的指纹数据库（`nmap-service-probes`、`nmap-os-db`、`nmap-mac-prefixes`、`nmap-services`、`nmap-protocols`、`nmap-rpc`），这些数据库基于 Nmap Public Source License (NPSL) 授权。详见 [COPYING](COPYING)。
 
 ---
 

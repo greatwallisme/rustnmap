@@ -1,60 +1,32 @@
-# Task Plan: Fix API & SDK Module Issues
+# Task Plan: API Test Script Evaluation & Execution
 
 ## Goal
-
-Fix all 25 issues identified in the rustnmap-api and rustnmap-sdk audit across both crates.
-
-## Current Phase
-
-Phase 1: Quick Fixes (in progress)
+Evaluate `benchmarks/api_test.sh` against recent API fixes (22 issues fixed), determine if modifications are needed, then run the test to verify API functionality.
 
 ## Phases
 
-### Phase 1: Quick SDK/API Fixes (non-breaking, low-risk)
-- [ ] L-02: Add `#[must_use]` on `Scanner::run()` and `ScannerBuilder::run()`
-- [ ] L-03: Fix `Scanner::default()` unwrap panic
-- [ ] L-05: Handle Queued in ScanStatus From conversion
-- [ ] M-06: Fix cancel_scan response to use ApiResponse wrapper
-- **Status:** in_progress
+### Phase 1: Script Assessment [complete]
+- Read and analyze api_test.sh (7 test cases)
+- Cross-reference with recent API changes (C-01 ScanRunner, M-06 ApiResponse wrapper, etc.)
+- Verify response format compatibility
 
-### Phase 2: Port & Validation Fixes
-- [ ] C-03: Fix `port_list()` to use `PortSpec::List` instead of `PortSpec::Top(N)`
-- [ ] M-04: Fix `parse_port_spec` to handle comma-separated ports
-- [ ] M-05: Add port validation in `validate_request`
-- **Status:** pending
+### Phase 2: Assessment Findings [complete]
+Script is compatible. No critical modifications needed.
 
-### Phase 3: Dead Code & Dependency Cleanup
-- [ ] L-01: Clean up dead AuthMiddleware struct
-- [ ] M-01: Remove unused `once_cell` from rustnmap-api
-- [ ] M-02: Remove unused `reqwest` from rustnmap-api
-- [ ] M-03: Remove unused `futures-util` and `async-stream` from rustnmap-sdk
-- **Status:** pending
+Compatibility verified:
+1. API key grep pattern matches server log format
+2. Response paths (`.data.id`, `.data.status`, `.data.scans`) match `ApiResponse<T>` wrapper
+3. cancel_scan test handles both "cancelled" and "completed"
+4. ScanStatus values match test regex
 
-### Phase 4: High-Severity Fixes
-- [ ] H-01: Fix `vulnerability_scan()` silent no-op
-- [ ] H-02: Fix `get_scan_results` 404 for pending scans
-- [ ] H-03: Add `sctp_init` to profile.rs, handle missing core types
-- **Status:** pending
+### Phase 3: Build & Run [in_progress]
+- Build server binary
+- Run api_test.sh
+- Analyze results
 
-### Phase 5: Security & XML Fix
-- [ ] M-07: Fix manual XML injection vulnerability in `to_xml()`
-- **Status:** pending
+### Phase 4: Fix if needed [pending]
 
-### Phase 6: Background Scan Runner (Critical)
-- [ ] C-01: Add background task runner that picks up queued scans
-- [ ] C-02: Fix SSE stream termination with timeout
-- **Status:** pending
-
-### Phase 7: Verification
-- [ ] `cargo clippy -p rustnmap-api -p rustnmap-sdk -- -D warnings` (0 warnings)
-- [ ] `cargo test -p rustnmap-api -p rustnmap-sdk` (all pass)
-- [ ] `cargo fmt --all -- --check` (clean)
-- **Status:** pending
-
-## Decisions
-
-| Decision | Rationale |
-|----------|-----------|
-| H-04 type duplication: document only | Moving shared types to rustnmap-common is a larger refactor, separate task |
-| sctp_cookie/idle: keep in VALID_SCAN_TYPES | Will error at scan time via runner; removing would break API compatibility |
-| C-01 background runner: implement last | Depends on having clean codebase first; most complex change |
+## Errors Encountered
+| Error | Attempt | Resolution |
+|-------|---------|------------|
+| (none yet) | - | - |

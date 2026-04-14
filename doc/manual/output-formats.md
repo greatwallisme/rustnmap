@@ -18,8 +18,10 @@ RustNmap 支持 5 种输出格式，每种都为不同的用例设计：
 | Normal | `.nmap` | `-oN` | Human-readable output / 人类可读输出 |
 | XML | `.xml` | `-oX` | Machine parsing / 机器解析 |
 | JSON | `.json` | `-oJ` | Structured data / 结构化数据 |
+| NDJSON | `.ndjson` | `--output-ndjson` | Streaming JSON / 流式 JSON |
+| Markdown | `.md` | `--output-markdown` | Documentation / 文档 |
 | Grepable | `.gnmap` | `-oG` | Grep/AWK processing / Grep/AWK 处理 |
-| Script Kiddie | `.txt` | `-oS` | Fun format / 趣味格式 |
+| Script Kiddie | (console) | `--output-script-kiddie` | Fun format / 趣味格式 |
 
 ---
 
@@ -462,7 +464,7 @@ awk -F'\t' '
 
 ### Flag / 标志
 
-`-oS <FILE>`, `--output-script-kiddie`
+`--output-script-kiddie`
 
 ### Description / 描述
 
@@ -489,10 +491,7 @@ ScAn CoMpLeTe! 2 HoStS fOuNd
 ### Usage Examples / 用法示例
 
 ```bash
-# Save script kiddie output / 保存 Script Kiddie 输出
-sudo rustnmap -sS -oS results.txt 192.168.1.1
-
-# Console output only / 仅控制台输出
+# Console output / 控制台输出
 sudo rustnmap -sS --output-script-kiddie 192.168.1.1
 ```
 
@@ -599,13 +598,13 @@ PORT    STATE SERVICE REASON
 
 ## Format Comparison / 格式对比
 
-| Feature | Normal | XML | JSON | Grepable | Kiddie |
-|---------|--------|-----|------|----------|--------|
-| Human readable | Excellent | Poor | Good | Poor | Moderate |
-| Machine parsing | Difficult | Excellent | Excellent | Good | Poor |
-| File size | Medium | Large | Medium | Small | Small |
-| Schema defined | No | Yes | Yes | Yes | No |
-| Use case | Review | Import | API | Filter | Fun |
+| Feature | Normal | XML | JSON | NDJSON | Markdown | Grepable | Kiddie |
+|---------|--------|-----|------|--------|----------|----------|--------|
+| Human readable | Excellent | Poor | Good | Good | Excellent | Poor | Moderate |
+| Machine parsing | Difficult | Excellent | Excellent | Excellent | Moderate | Good | Poor |
+| File size | Medium | Large | Medium | Medium | Medium | Small | Small |
+| Schema defined | No | Yes | Yes | Yes | No | Yes | No |
+| Use case | Review | Import | API | Stream | Docs | Filter | Fun |
 
 ---
 

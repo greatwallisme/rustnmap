@@ -443,16 +443,6 @@ RustNmap automatically loads configuration from the locations listed above.
 
 RustNmap 自动从上面列出的位置加载配置。
 
-### Explicit Configuration File / 显式配置文件
-
-```bash
-# Specify custom configuration file / 指定自定义配置文件
-rustnmap --config /path/to/custom.conf 192.168.1.1
-
-# Ignore configuration files / 忽略配置文件
-rustnmap --no-config 192.168.1.1
-```
-
 ---
 
 ## Configuration Precedence / 配置优先级
@@ -467,30 +457,6 @@ Options are applied in the following order (later overrides earlier):
 4. Local configuration (`./rustnmap.conf`) / 本地配置
 5. Environment variables / 环境变量
 6. Command-line options / 命令行选项
-
----
-
-## Validating Configuration / 验证配置
-
-### Syntax Check / 语法检查
-
-```bash
-# Validate configuration file / 验证配置文件
-rustnmap --config-test
-
-# With specific file / 使用特定文件
-rustnmap --config-test --config /path/to/config.conf
-```
-
-### Debug Configuration / 调试配置
-
-```bash
-# Show loaded configuration / 显示加载的配置
-rustnmap --show-config 192.168.1.1
-
-# Verbose config loading / 详细配置加载
-rustnmap -d --show-config 192.168.1.1
-```
 
 ---
 
@@ -516,8 +482,8 @@ cat ~/.rustnmap/rustnmap.conf | grep -v "^#" | grep -v "^$"
 # Check spelling / 检查拼写
 # timingg -> timing
 
-# Check option names / 检查选项名
-rustnmap --help | grep timing
+# Check available options / 检查可用选项
+rustnmap --help
 ```
 
 ---

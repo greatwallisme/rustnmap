@@ -1,6 +1,6 @@
 # RustNmap - Rust Network Mapper
 
-> **Version**: 0.1.0
+> **Version**: 1.0.0
 > **Status**: Production Ready
 > **Platform**: Linux x86_64 (AMD64)
 > **Language**: Rust 1.90+
@@ -154,8 +154,17 @@ cargo doc --workspace --no-deps --all-features
 
 - **Memory Safety**: Rust ownership prevents buffer overflows
 - **Safe Concurrency**: Compile-time data race prevention
-- **Security Grade**: A-
-- Only 7 unsafe blocks (all FFI with SAFETY comments)
+- 31 unsafe blocks (all FFI/system calls with SAFETY comments)
+
+| Crate | Count | Purpose |
+|-------|-------|---------|
+| `rustnmap-core` | 11 | `libc::close`, `freeifaddrs`, ARP/ioctl |
+| `rustnmap-packet` (mmap) | 8 | PACKET_MMAP ring buffer, zero-copy |
+| `rustnmap-scan` | 3 | Packet adapter FFI |
+| `rustnmap-packet` (recvfrom) | 2 | `libc::send` raw socket |
+| `rustnmap-target` | 2 | `libc::close`, `freeifaddrs` |
+| `rustnmap-nse` | 1 | `setrlimit` (process isolation) |
+| `rustnmap-sdk` | 1 | `libc::geteuid` (root detection) |
 
 ---
 
@@ -182,7 +191,7 @@ RustNmap is licensed under the **GNU General Public License v3.0 or later** (GPL
 | RustNmap Source Code | [GPL-3.0-or-later](LICENSE) |
 | Nmap Fingerprint Databases | [NPSL](https://nmap.org/npsl/) (when used) |
 
-RustNmap uses Nmap's fingerprint databases (`nmap-os-db`, `nmap-service-probes`) which are licensed under the Nmap Public Source License (NPSL). See [COPYING](COPYING) and [NOTICE](NOTICE) for details.
+RustNmap uses Nmap's fingerprint databases (`nmap-service-probes`, `nmap-os-db`, `nmap-mac-prefixes`, `nmap-services`, `nmap-protocols`, `nmap-rpc`) which are licensed under the Nmap Public Source License (NPSL). See [COPYING](COPYING) for details.
 
 ---
 

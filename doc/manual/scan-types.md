@@ -517,138 +517,6 @@ sudo rustnmap -sM 192.168.1.1
 
 ---
 
-## IP Protocol Scan (`-sO`)
-
-**IP Protocol 扫描 (`-sO`)**
-
-### Description / 描述
-
-IP protocol scan determines which IP protocols (TCP, ICMP, IGMP, etc.) are supported by the target. It sends raw IP packets with different protocol numbers.
-
-IP 协议扫描确定目标支持哪些 IP 协议（TCP、ICMP、IGMP 等）。它发送带有不同协议号的原始 IP 数据包。
-
-### How It Works / 工作原理
-
-```
-Scanner          Target
-   | IP(proto=1)|  <- ICMP
-   | ----------> |
-   |  Response   |  <- Protocol supported
-   | <---------- |
-
-   | IP(proto=2)|  <- IGMP
-   | ----------> |
-   |   ICMP      |  <- Protocol not supported (protocol unreachable)
-   | <---------- |
-```
-
-### Common Protocols / 常见协议
-
-| Number | Protocol | Description |
-|--------|----------|-------------|
-| 0 | HOPOPT | IPv6 Hop-by-Hop Option |
-| 1 | ICMP | Internet Control Message |
-| 2 | IGMP | Internet Group Management |
-| 6 | TCP | Transmission Control |
-| 17 | UDP | User Datagram |
-| 47 | GRE | Generic Routing Encapsulation |
-| 50 | ESP | Encapsulating Security Payload |
-| 51 | AH | Authentication Header |
-
-### Usage / 用法
-
-```bash
-# Protocol scan / 协议扫描
-sudo rustnmap -sO 192.168.1.1
-```
-
-### Characteristics / 特性
-
-| Feature | Value | 值 |
-|---------|-------|-----|
-| Requires root | Yes | 是 |
-| Layer | Layer 3 (IP) | 第 3 层 (IP) |
-| Best for | Protocol enumeration | 协议枚举 |
-
----
-
-## Idle (Zombie) Scan (`-sI`)
-
-**Idle（僵尸）扫描 (`-sI`)**
-
-### Description / 描述
-
-Idle scan is the stealthiest scan technique. It uses a "zombie" host to bounce scan packets off, making the scan appear to come from the zombie host. Requires a zombie with predictable IP ID sequence.
-
-Idle 扫描是最隐秘的扫描技术。它使用"僵尸"主机反弹扫描数据包，使扫描看起来来自僵尸主机。需要具有可预测 IP ID 序列的僵尸主机。
-
-### How It Works / 工作原理
-
-```
-Attacker      Zombie        Target
-   |   SYN/ACK  |            |
-   | ---------> |            |  <- Probe zombie's IP ID
-   |  RST(ID=X) |            |
-   | <--------- |            |
-   |            |   SYN      |
-   |            | ---------> |  <- Spoofed packet to target
-   |            |            |
-   |            |   SYN/ACK  |  <- If port open
-   |            | <--------- |
-   |            |    RST     |
-   |            | ---------> |  <- Zombie replies, IP ID+1
-   |   SYN/ACK  |            |
-   | ---------> |            |  <- Probe zombie's IP ID again
-   |  RST(ID=Y) |            |
-   | <--------- |            |
-
-   If Y = X + 2: Port is OPEN
-   If Y = X + 1: Port is CLOSED
-```
-
-### Usage / 用法
-
-```bash
-# Idle scan / Idle 扫描
-sudo rustnmap -sI zombie.example.com 192.168.1.1
-
-# With specific zombie port / 指定僵尸端口
-sudo rustnmap -sI zombie.example.com:113 192.168.1.1
-```
-
-### Finding Zombies / 寻找僵尸主机
-
-```bash
-# Scan for potential zombies / 扫描潜在僵尸主机
-sudo rustnmap -O -v 192.168.1.0/24
-# Look for hosts with: / 寻找具有以下特征的主机：
-# - Predictable IP ID sequence / 可预测的 IP ID 序列
-# - Low traffic / 低流量
-# - Idle / 空闲
-```
-
-### Characteristics / 特性
-
-| Feature | Value | 值 |
-|---------|-------|-----|
-| Requires root | Yes | 是 |
-| Stealthy | Extremely | 极高 |
-| Complexity | High | 高 |
-| Requirements | Predictable zombie | 可预测的僵尸主机 |
-
-### Advantages / 优点
-
-1. **Ultimate stealth / 终极隐秘**: Target never sees your IP
-2. **Bypasses logging / 绕过记录**: Logs show zombie's IP
-
-### Disadvantages / 缺点
-
-1. **Complex setup / 复杂设置**: Requires finding suitable zombie
-2. **Slow / 慢**: Sequential probing required
-3. **Unreliable / 不可靠**: Zombie must remain idle
-
----
-
 ## FTP Bounce Scan (`-b`)
 
 **FTP Bounce 扫描 (`-b`)**
@@ -724,8 +592,6 @@ rustnmap -b user:pass@ftp.example.com:21 192.168.1.1
 | `-sA` ACK | Yes | High | Fast | Medium | Firewall mapping |
 | `-sW` Window | Yes | High | Fast | Low | Advanced |
 | `-sM` Maimon | Yes | High | Fast | Low | BSD systems |
-| `-sO` Protocol | Yes | Medium | Medium | Medium | Protocol enum |
-| `-sI` Idle | Yes | Extreme | Slow | Low | Maximum stealth |
 | `-b` FTP Bounce | No | High | Slow | Low | Legacy systems |
 
 ---
@@ -741,7 +607,6 @@ Do you have root/admin? / 你有 root/管理员权限吗？
     ├── General port scanning → -sS (SYN scan) / -sS (SYN 扫描)
     ├── UDP services → -sU (UDP scan) / -sU (UDP 扫描)
     ├── Firewall rule mapping → -sA (ACK scan) / -sA (ACK 扫描)
-    ├── Maximum stealth → -sI (Idle scan) / -sI (Idle 扫描)
     └── IDS evasion on UNIX → -sF/-sN/-sX / -sF/-sN/-sX
 ```
 

@@ -187,9 +187,6 @@ sudo rustnmap --script http-title,dns-brute \
 # Update script database / 更新脚本数据库
 rustnmap --script-updatedb
 
-# List all scripts / 列出所有脚本
-rustnmap --script-help
-
 # Help for specific script / 特定脚本帮助
 rustnmap --script-help http-title
 ```
@@ -633,13 +630,13 @@ sudo rustnmap -sC -oN results.nmap --script-trace 192.168.1.1
 ### Script Not Running / 脚本未运行
 
 ```bash
-# Check if portrule matches / 检查 portrule 是否匹配
+# Check script details / 检查脚本详情
 rustnmap --script-help script-name
 
 # Run with debug output / 使用调试输出运行
 sudo rustnmap --script script-name -d 192.168.1.1
 
-# Check script dependencies / 检查脚本依赖
+# Check script details / 检查脚本详情
 rustnmap --script-help script-name
 ```
 

@@ -49,14 +49,14 @@ rustnmap example.com
 rustnmap 192.168.1.1 example.com 10.0.0.0/8
 ```
 
-### `-iL <FILE>`, `--input-file <FILE>`
+### `-i <FILE>`, `--input-file <FILE>`
 
 Read target specifications from file.
 
 从文件读取目标规格。
 
 ```bash
-rustnmap -iL targets.txt
+rustnmap -i targets.txt
 ```
 
 **File format / 文件格式:**
@@ -72,31 +72,11 @@ example.com
 10.0.0.1-50
 ```
 
-### `--exclude <HOST1>[,<HOST2>[,...]]>`
-
-Exclude specified hosts from scan.
-
-从扫描中排除指定的主机。
-
-```bash
-rustnmap 192.168.1.0/24 --exclude 192.168.1.1,192.168.1.254
-```
-
-### `--excludefile <FILE>`
-
-Exclude targets from file.
-
-从文件排除目标。
-
-```bash
-rustnmap 192.168.1.0/24 --excludefile exclude.txt
-```
-
 ---
 
 ## Scan Types / 扫描类型
 
-### `-sS`, `--scan-syn`
+### `-sS`
 
 **TCP SYN Scan / TCP SYN 扫描** (Default with root / root 默认)
 
@@ -115,7 +95,7 @@ sudo rustnmap -sS 192.168.1.1
 | Speed | Fast |
 | Best for | General scanning |
 
-### `-sT`, `--scan-connect`
+### `-sT`
 
 **TCP Connect Scan / TCP Connect 扫描** (Default without root / 非 root 默认)
 
@@ -134,7 +114,7 @@ rustnmap -sT 192.168.1.1
 | Speed | Slower |
 | Best for | No root access |
 
-### `-sU`, `--scan-udp`
+### `-sU`
 
 **UDP Scan / UDP 扫描**
 
@@ -153,7 +133,7 @@ sudo rustnmap -sU -p 53,161,162 192.168.1.1
 | Speed | Slow (timeouts common) / 慢（常超时） |
 | Best for | DNS, SNMP, DHCP services |
 
-### `-sF`, `--scan-fin`
+### `-sF`
 
 **TCP FIN Scan / TCP FIN 扫描**
 
@@ -171,7 +151,7 @@ sudo rustnmap -sF 192.168.1.1
 | Works against | UNIX systems |
 | Windows response | Usually all closed |
 
-### `-sN`, `--scan-null`
+### `-sN`
 
 **TCP NULL Scan / TCP NULL 扫描**
 
@@ -183,7 +163,7 @@ Send packets with no flags set.
 sudo rustnmap -sN 192.168.1.1
 ```
 
-### `-sX`, `--scan-xmas`
+### `-sX`
 
 **TCP XMAS Scan / TCP XMAS 扫描**
 
@@ -195,7 +175,7 @@ Send packets with FIN, PSH, and URG flags (lights up like a Christmas tree).
 sudo rustnmap -sX 192.168.1.1
 ```
 
-### `-sM`, `--scan-maimon`
+### `-sM`
 
 **TCP Maimon Scan / TCP Maimon 扫描**
 
@@ -211,7 +191,7 @@ sudo rustnmap -sM 192.168.1.1
 
 ## Port Specification / 端口指定
 
-### `-p <PORTS>`, `--ports <PORTS>`
+### `-p <PORTS>`, `--ports <PORTS>` (also `-p-` for all ports)
 
 Specify ports to scan.
 
@@ -232,9 +212,9 @@ rustnmap -p 1-65535 192.168.1.1
 rustnmap -p T:22,80,U:53 192.168.1.1
 ```
 
-### `-p-`, `--port-range-all`
+### `-p-`
 
-Scan all 65535 ports.
+Scan all 65535 ports (equivalent to `-p 1-65535`).
 
 扫描所有 65535 个端口。
 
@@ -366,18 +346,6 @@ sudo rustnmap -PU 192.168.1.0/24          # Default port 40125
 sudo rustnmap -PU53,161 192.168.1.0/24    # Specific ports
 ```
 
-### `-PR`
-
-**ARP Ping / ARP Ping**
-
-Use ARP requests for local network discovery (most reliable).
-
-使用 ARP 请求进行本地网络发现（最可靠）。
-
-```bash
-sudo rustnmap -PR 192.168.1.0/24
-```
-
 ---
 
 ## Service Detection / 服务检测
@@ -407,31 +375,11 @@ sudo rustnmap -sV --version-intensity 5 192.168.1.1   # Default
 sudo rustnmap -sV --version-intensity 9 192.168.1.1   # All probes
 ```
 
-### `--version-light`
-
-Light mode (intensity 2).
-
-轻量模式（强度 2）。
-
-```bash
-sudo rustnmap -sV --version-light 192.168.1.1
-```
-
-### `--version-all`
-
-Try all probes (intensity 9).
-
-尝试所有探针（强度 9）。
-
-```bash
-sudo rustnmap -sV --version-all 192.168.1.1
-```
-
 ---
 
 ## OS Detection / 操作系统检测
 
-### `-O`, `--os-detection`
+### `-O`
 
 **OS Detection / 操作系统检测**
 
@@ -558,13 +506,13 @@ sudo rustnmap --max-rate 100 192.168.1.1
 
 ### `-f`, `--fragment-mtu <MTU>`
 
-Fragment packets (default 8 bytes after IP header).
+Fragment packets (default 16 bytes after IP header). `-f` alone uses default MTU; `-f16` or `--mtu 16` specifies custom.
 
-分片数据包（IP 头后默认 8 字节）。
+分片数据包（IP 头后默认 16 字节）。单独 `-f` 使用默认 MTU；`-f16` 或 `--mtu 16` 指定自定义值。
 
 ```bash
 sudo rustnmap -f 192.168.1.1
-sudo rustnmap --mtu 8 192.168.1.1
+sudo rustnmap -f8 192.168.1.1
 sudo rustnmap --mtu 16 192.168.1.1
 ```
 
@@ -650,23 +598,11 @@ Append custom string to packets.
 sudo rustnmap --data-string "Hello" 192.168.1.1
 ```
 
-### `--spoof-mac <MAC>`
-
-Spoof MAC address.
-
-欺骗 MAC 地址。
-
-```bash
-sudo rustnmap --spoof-mac 00:11:22:33:44:55 192.168.1.1
-sudo rustnmap --spoof-mac 0 192.168.1.1           # Random
-sudo rustnmap --spoof-mac Apple 192.168.1.1       # Vendor prefix
-```
-
 ---
 
 ## Output Options / 输出选项
 
-### `-oN <FILE>`, `--output-normal <FILE>`
+### `-oN <FILE>`
 
 Normal output to file.
 
@@ -676,7 +612,7 @@ Normal output to file.
 sudo rustnmap -oN results.nmap 192.168.1.1
 ```
 
-### `-oX <FILE>`, `--output-xml <FILE>`
+### `-oX <FILE>`
 
 XML output to file.
 
@@ -696,7 +632,27 @@ JSON 输出到文件。
 sudo rustnmap -oJ results.json 192.168.1.1
 ```
 
-### `-oG <FILE>`, `--output-grepable <FILE>`
+### `--output-ndjson <FILE>`
+
+NDJSON (newline-delimited JSON) output to file.
+
+NDJSON（换行分隔 JSON）输出到文件。
+
+```bash
+sudo rustnmap --output-ndjson results.ndjson 192.168.1.1
+```
+
+### `--output-markdown <FILE>`
+
+Markdown output to file.
+
+Markdown 输出到文件。
+
+```bash
+sudo rustnmap --output-markdown results.md 192.168.1.1
+```
+
+### `-oG <FILE>`
 
 Grepable output to file.
 
@@ -706,21 +662,21 @@ Grepable 输出到文件。
 sudo rustnmap -oG results.gnmap 192.168.1.1
 ```
 
-### `-oS <FILE>`, `--output-script-kiddie`
+### `--output-script-kiddie`
 
-Script kiddie output.
+Script kiddie output (console only).
 
-Script kiddie 输出。
+Script kiddie 输出（仅控制台）。
 
 ```bash
-sudo rustnmap -oS results.txt 192.168.1.1
+sudo rustnmap --output-script-kiddie 192.168.1.1
 ```
 
-### `-oA <BASENAME>`, `--output-all <BASENAME>`
+### `-oA <BASENAME>`
 
-Output to all formats.
+Output to all formats (Normal, XML, JSON, Grepable).
 
-输出到所有格式。
+输出到所有格式（普通、XML、JSON、Grepable）。
 
 ```bash
 sudo rustnmap -oA results 192.168.1.1
@@ -801,14 +757,14 @@ Show only open ports.
 sudo rustnmap --open 192.168.1.1
 ```
 
-### `--if-list`
+### `--iflist`
 
 Show interface list and routes.
 
 显示接口列表和路由。
 
 ```bash
-rustnmap --if-list
+rustnmap --iflist
 ```
 
 ### `--no-output`
@@ -893,14 +849,11 @@ sudo rustnmap --script smb-enum-shares \
 
 ### `--script-help <SCRIPT>`
 
-Show help for scripts.
+Show help for a specific script.
 
-显示脚本帮助。
+显示特定脚本的帮助。
 
 ```bash
-# List all scripts / 列出所有脚本
-rustnmap --script-help
-
 # Help for specific script / 特定脚本帮助
 rustnmap --script-help http-title
 ```
@@ -1050,7 +1003,9 @@ The following options conflict with each other:
 | `-sN` | NULL | Yes | No flags |
 | `-sX` | XMAS | Yes | FIN/PSH/URG |
 | `-sA` | ACK | Yes | ACK flag |
+| `-sW` | Window | Yes | Window scan |
 | `-sM` | Maimon | Yes | FIN/ACK |
+| `-b` | FTP Bounce | No | FTP proxy scan |
 
 ### Output Formats Summary / 输出格式汇总
 
@@ -1060,7 +1015,9 @@ The following options conflict with each other:
 | `-oX` | .xml | Machine-parseable |
 | `-oJ` | .json | Structured JSON |
 | `-oG` | .gnmap | Grepable |
-| `-oS` | .txt | Script kiddie |
+| `--output-script-kiddie` | (console) | Script kiddie |
+| `--output-ndjson` | .ndjson | Newline-delimited JSON |
+| `--output-markdown` | .md | Markdown format |
 | `-oA` | Multiple | All formats |
 
 ### Timing Templates Summary / 时间模板汇总

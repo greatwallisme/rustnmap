@@ -74,8 +74,6 @@ rustnmap -p T:80,U:53 192.168.1.1
 | `-sA` | TCP ACK | Yes | Firewall check / 防火墙检测 |
 | `-sM` | TCP Maimon | Yes | Stealth variant / 隐秘变体 |
 | `-sW` | TCP Window | Yes | Advanced scan / 高级扫描 |
-| `-sO` | IP Protocol | Yes | Protocol scan / 协议扫描 |
-| `-sI` | Idle (Zombie) | Yes | Highly stealthy / 高度隐秘 |
 | `-b` | FTP Bounce | No | FTP proxy scan / FTP 代理扫描 |
 
 ---
@@ -98,9 +96,6 @@ sudo rustnmap -PA80 192.168.1.0/24
 # UDP ping / UDP Ping
 sudo rustnmap -PU53 192.168.1.0/24
 
-# ARP ping (local) / ARP Ping (本地)
-sudo rustnmap -PR 192.168.1.0/24
-
 # Skip discovery / 跳过发现
 sudo rustnmap -Pn 192.168.1.0/24
 ```
@@ -117,10 +112,10 @@ sudo rustnmap -sV 192.168.1.1
 sudo rustnmap -sV --version-intensity 5 192.168.1.1
 
 # Light version scan / 轻量版本扫描
-sudo rustnmap -sV --version-light 192.168.1.1
+sudo rustnmap -sV --version-intensity 2 192.168.1.1
 
 # All probes / 所有探针
-sudo rustnmap -sV --version-all 192.168.1.1
+sudo rustnmap -sV --version-intensity 9 192.168.1.1
 ```
 
 ---
@@ -174,11 +169,17 @@ sudo rustnmap -oX results.xml 192.168.1.1
 # JSON output / JSON 输出
 sudo rustnmap -oJ results.json 192.168.1.1
 
+# NDJSON output / NDJSON 输出
+sudo rustnmap --output-ndjson results.ndjson 192.168.1.1
+
+# Markdown output / Markdown 输出
+sudo rustnmap --output-markdown results.md 192.168.1.1
+
 # Grepable output / Grepable 输出
 sudo rustnmap -oG results.gnmap 192.168.1.1
 
-# Script kiddie / Script kiddie 格式
-sudo rustnmap -oS results.txt 192.168.1.1
+# Script kiddie (console) / Script kiddie 格式（控制台）
+sudo rustnmap --output-script-kiddie 192.168.1.1
 
 # All formats / 所有格式
 sudo rustnmap -oA results 192.168.1.1
@@ -210,7 +211,7 @@ sudo rustnmap --script "discovery" 192.168.1.1
 sudo rustnmap --script http-title --script-args "http.useragent=Mozilla" 192.168.1.1
 
 # List scripts / 列出脚本
-rustnmap --script-help
+rustnmap --script-help default
 ```
 
 ---
@@ -220,7 +221,7 @@ rustnmap --script-help
 ```bash
 # Fragment packets / 分片数据包
 sudo rustnmap -f 192.168.1.1
-sudo rustnmap --mtu 8 192.168.1.1
+sudo rustnmap -f8 192.168.1.1
 
 # Decoy scan / 诱饵扫描
 sudo rustnmap -D 192.168.1.2,192.168.1.3,ME 192.168.1.1
@@ -236,9 +237,6 @@ sudo rustnmap -g 53 192.168.1.1
 sudo rustnmap --data-hex 48656c6c6f 192.168.1.1
 sudo rustnmap --data-string "Hello" 192.168.1.1
 sudo rustnmap --data-length 100 192.168.1.1
-
-# MAC spoofing / MAC 欺骗
-sudo rustnmap --spoof-mac 00:11:22:33:44:55 192.168.1.1
 ```
 
 ---
@@ -319,7 +317,4 @@ sudo rustnmap -sS -T0 -f -D RND:10 --data-length 20 192.168.1.1
 ```bash
 # General help / 一般帮助
 rustnmap --help
-
-# Manual pages / 手册页
-man rustnmap
 ```
