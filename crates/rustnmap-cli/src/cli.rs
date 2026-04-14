@@ -94,6 +94,11 @@ pub async fn run_scan(args: Args) -> Result<()> {
         return Ok(());
     }
 
+    // Handle init subcommand
+    if args.init {
+        return handle_init_command(&args);
+    }
+
     if let Some(ref diff_files) = args.diff {
         return handle_diff_command(&args, diff_files).await;
     }
@@ -2703,4 +2708,72 @@ mod tests {
         let result = parse_time_duration("invalid");
         assert!(result.is_err());
     }
+}
+
+/// Handles the `init` subcommand: extracts embedded data files to `~/.rustnmap/`.
+fn handle_init_command(args: &Args) -> Result<()> {
+    use crate::embedded;
+
+    let home = dirs::home_dir().ok_or_else(|| {
+        rustnmap_common::Error::Other("Cannot determine home directory".to_string())
+    })?;
+    let base_dir = home.join(".rustnmap");
+
+    println!(
+        "Initializing RustNmap data directory: {}",
+        base_dir.display()
+    );
+
+    let files = embedded::all_files();
+    let mut extracted = 0usize;
+    let mut skipped = 0usize;
+    let mut errors = 0usize;
+
+    for ef in files {
+        let dest = base_dir.join(ef.path);
+
+        if dest.exists() && !args.force_init {
+            skipped += 1;
+            continue;
+        }
+
+        // Create parent directories
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                rustnmap_common::Error::Other(format!(
+                    "Failed to create directory {}: {e}",
+                    parent.display()
+                ))
+            })?;
+        }
+
+        match std::fs::File::create(&dest) {
+            Ok(mut f) => {
+                if let Err(e) = f.write_all(ef.data) {
+                    eprintln!("Error writing {}: {e}", dest.display());
+                    errors += 1;
+                } else {
+                    extracted += 1;
+                }
+            }
+            Err(e) => {
+                eprintln!("Error creating {}: {e}", dest.display());
+                errors += 1;
+            }
+        }
+    }
+
+    let total_bytes: usize = files.iter().map(|f| f.data.len()).sum();
+    let total_mb = f64::from(u32::try_from(total_bytes / (1024 * 1024)).unwrap_or(u32::MAX));
+    println!(
+        "Done: {extracted} files extracted ({total_mb:.0} MB), {skipped} skipped, {errors} errors."
+    );
+
+    if errors > 0 {
+        return Err(rustnmap_common::Error::Other(format!(
+            "{errors} files failed to extract"
+        )));
+    }
+
+    Ok(())
 }

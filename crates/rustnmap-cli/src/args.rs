@@ -72,6 +72,12 @@ pub struct Args {
     /// Target hosts to scan
     pub targets: Vec<String>,
 
+    // Init subcommand
+    /// Extract embedded data files to ~/.rustnmap/
+    pub init: bool,
+    /// Force overwrite existing files during init
+    pub force_init: bool,
+
     // Scan Types
     /// TCP SYN scan (default with root)
     pub scan_syn: bool,
@@ -959,9 +965,19 @@ impl Args {
                     args.dns_server = parser.value()?.string()?;
                 }
 
-                // Positional arguments (targets)
+                // Force overwrite during init
+                Arg::Long("force") => {
+                    args.force_init = true;
+                }
+
+                // Positional arguments (targets or "init" subcommand)
                 Arg::Value(val) => {
-                    args.targets.push(val.string()?);
+                    let v = val.string()?;
+                    if v == "init" {
+                        args.init = true;
+                    } else {
+                        args.targets.push(v);
+                    }
                 }
 
                 _ => {

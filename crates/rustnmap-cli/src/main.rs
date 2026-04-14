@@ -36,6 +36,29 @@ async fn main() -> Result<()> {
         std::process::exit(1);
     });
 
+    // Suggest running `init` if ~/.rustnmap/ does not exist and user
+    // is not already running init or a management command.
+    if !args.init
+        && !args.history
+        && !args.if_list
+        && !args.list_profiles
+        && args.validate_profile.is_none()
+        && !args.generate_profile
+        && !args.script_updatedb
+        && args.script_help.is_none()
+    {
+        if let Some(home) = dirs::home_dir() {
+            if !home.join(".rustnmap").exists() {
+                let mut stderr = std::io::stderr().lock();
+                let _ = writeln!(
+                    stderr,
+                    "Note: Data directory ~/.rustnmap/ not found. \
+                     Run `rustnmap init` to extract embedded data files."
+                );
+            }
+        }
+    }
+
     // Run the scan using the orchestrator library
     let result = run_scan(args).await;
 

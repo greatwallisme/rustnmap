@@ -3448,6 +3448,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "console",
+ "dirs 5.0.1",
  "hex",
  "indicatif",
  "lexopt",
