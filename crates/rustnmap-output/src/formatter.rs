@@ -412,12 +412,50 @@ impl OutputFormatter for NormalFormatter {
             let _ = writeln!(output, "MAC Address: {} ({})", mac.address, vendor);
         }
 
-        // Ports
+        // Ports - match nmap behavior: suppress closed/filtered ports, show "Not shown" summary
         if !host.ports.is_empty() {
-            output.push_str("PORT     STATE SERVICE\n");
+            let (interesting, suppressed): (Vec<_>, Vec<_>) = host.ports.iter().partition(|p| {
+                matches!(
+                    p.state,
+                    PortState::Open
+                        | PortState::OpenOrFiltered
+                        | PortState::Unfiltered
+                        | PortState::OpenOrClosed
+                )
+            });
 
-            for port in &host.ports {
-                output.push_str(&self.format_port(port)?);
+            if !suppressed.is_empty() {
+                let mut closed_count = 0usize;
+                let mut filtered_count = 0usize;
+                for port in &suppressed {
+                    match port.state {
+                        PortState::Closed | PortState::OpenOrClosed => closed_count += 1,
+                        PortState::Filtered
+                        | PortState::ClosedOrFiltered
+                        | PortState::FilteredOrClosed => filtered_count += 1,
+                        _ => filtered_count += 1,
+                    }
+                }
+                let (state_word, reason) = if closed_count >= filtered_count {
+                    ("closed", "reset")
+                } else {
+                    ("filtered", "no-response")
+                };
+                let _ = writeln!(
+                    output,
+                    "Not shown: {} {} tcp ports ({})",
+                    suppressed.len(),
+                    state_word,
+                    reason
+                );
+            }
+
+            if !interesting.is_empty() {
+                output.push_str("PORT     STATE SERVICE\n");
+
+                for port in &interesting {
+                    output.push_str(&self.format_port(port)?);
+                }
             }
 
             // Scripts for ports (show for any port state that has scripts)

@@ -1791,6 +1791,10 @@ fn print_normal_output(args: &Args, result: &ScanResult, command_line: &str) {
 }
 
 /// Prints a single host in normal format.
+#[allow(
+    clippy::too_many_lines,
+    reason = "Host printing requires detailed per-state formatting"
+)]
 fn print_host_normal<W: Write>(handle: &mut W, _args: &Args, host: &HostResult) {
     let _ = writeln!(handle, "RustNmap scan report for {}", host.ip);
 
@@ -1818,42 +1822,65 @@ fn print_host_normal<W: Write>(handle: &mut W, _args: &Args, host: &HostResult) 
         let mut sorted_ports: Vec<&PortResult> = host.ports.iter().collect();
         sorted_ports.sort_by_key(|p| (p.number, p.protocol));
 
-        // Build all port rows first, then compute dynamic column widths
-        let mut port_rows: Vec<(String, String, String)> = Vec::new();
-        for port in &sorted_ports {
-            let port_col = format_port_col(port);
-            let state_col = format_state_col(port).to_string();
-            let service_col = format_service_col(port);
-            port_rows.push((port_col, state_col, service_col));
-        }
-
-        // Compute max width per column
-        let port_width = port_rows
+        // Nmap behavior: always suppress closed/filtered ports and show
+        // "Not shown: N closed tcp ports (reset)" summary line.
+        // Verbose mode adds reason/timing info, NOT more port states.
+        let (interesting_ports, suppressed_ports): (Vec<_>, Vec<_>) = sorted_ports
             .iter()
-            .map(|r| r.0.len())
-            .max()
-            .unwrap_or(4)
-            .max(4);
-        let state_width = port_rows
-            .iter()
-            .map(|r| r.1.len())
-            .max()
-            .unwrap_or(5)
-            .max(5);
+            .partition::<Vec<_>, _>(|p| is_interesting_port(p.state));
 
-        // Print header
-        let _ = writeln!(
-            handle,
-            "{:<port_width$} {:<state_width$} SERVICE",
-            "PORT", "STATE",
-        );
-
-        // Print each port row with dynamic padding
-        for (port_col, state_col, service_col) in &port_rows {
+        // Print "Not shown" summary line if any ports were suppressed
+        if !suppressed_ports.is_empty() {
+            let (state_word, reason) = determine_suppression_info(&suppressed_ports);
             let _ = writeln!(
                 handle,
-                "{port_col:<port_width$} {state_col:<state_width$} {service_col}",
+                "Not shown: {} {} tcp ports ({})",
+                suppressed_ports.len(),
+                state_word,
+                reason
             );
+        }
+
+        if interesting_ports.is_empty() {
+            // All ports were suppressed (e.g., all closed), nothing more to show
+        } else {
+            // Build port rows for interesting ports only
+            let mut port_rows: Vec<(String, String, String)> = Vec::new();
+            for port in &interesting_ports {
+                let port_col = format_port_col(port);
+                let state_col = format_state_col(port).to_string();
+                let service_col = format_service_col(port);
+                port_rows.push((port_col, state_col, service_col));
+            }
+
+            // Compute max width per column
+            let port_width = port_rows
+                .iter()
+                .map(|r| r.0.len())
+                .max()
+                .unwrap_or(4)
+                .max(4);
+            let state_width = port_rows
+                .iter()
+                .map(|r| r.1.len())
+                .max()
+                .unwrap_or(5)
+                .max(5);
+
+            // Print header
+            let _ = writeln!(
+                handle,
+                "{:<port_width$} {:<state_width$} SERVICE",
+                "PORT", "STATE",
+            );
+
+            // Print each port row with dynamic padding
+            for (port_col, state_col, service_col) in &port_rows {
+                let _ = writeln!(
+                    handle,
+                    "{port_col:<port_width$} {state_col:<state_width$} {service_col}",
+                );
+            }
         }
 
         // Print scripts for all ports (any port state can have scripts)
@@ -1939,6 +1966,46 @@ fn format_state_col(port: &PortResult) -> &'static str {
         PortState::OpenOrClosed => "open|closed",
         PortState::FilteredOrClosed => "filtered|closed",
         PortState::Unknown => "unknown",
+    }
+}
+
+/// Returns true if a port state is "interesting" and should be shown by default.
+///
+/// Matches nmap behavior: only open, open|filtered, and unfiltered ports
+/// are shown without -v. Closed and filtered ports are suppressed.
+fn is_interesting_port(state: PortState) -> bool {
+    matches!(
+        state,
+        PortState::Open
+            | PortState::OpenOrFiltered
+            | PortState::Unfiltered
+            | PortState::OpenOrClosed
+    )
+}
+
+/// Determines the state word and reason for the "Not shown" summary line.
+///
+/// Returns (`state_word`, reason) matching nmap's format:
+/// - "closed" + "reset" for RST responses
+/// - "filtered" + "no-response" for timeouts
+fn determine_suppression_info(suppressed: &[&PortResult]) -> (&'static str, &'static str) {
+    let mut closed_count = 0usize;
+    let mut filtered_count = 0usize;
+
+    for port in suppressed {
+        match port.state {
+            PortState::Closed | PortState::OpenOrClosed => closed_count += 1,
+            PortState::Filtered | PortState::ClosedOrFiltered | PortState::FilteredOrClosed => {
+                filtered_count += 1;
+            }
+            _ => filtered_count += 1,
+        }
+    }
+
+    if closed_count >= filtered_count {
+        ("closed", "reset")
+    } else {
+        ("filtered", "no-response")
     }
 }
 

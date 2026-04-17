@@ -30,9 +30,11 @@
 
 #![warn(missing_docs)]
 
+use std::collections::HashSet;
+use std::ffi::CString;
 use std::io;
 use std::net::SocketAddr;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::Target;
 use rustnmap_common::{Ipv4Addr, Ipv6Addr, MacAddr, Port, ScanConfig, ScanError};
@@ -655,19 +657,72 @@ impl HostDiscoveryMethod for IcmpTimestampPing {
     }
 }
 
+/// Finds the network interface name that has the given IPv4 address.
+///
+/// Uses `getifaddrs` to enumerate all network interfaces and find
+/// the one bound to the specified address.
+fn find_interface_name(local_addr: Ipv4Addr) -> Option<String> {
+    let mut addrs: *mut libc::ifaddrs = std::ptr::null_mut();
+    // SAFETY: getifaddrs writes to a valid pointer; returns 0 on success
+    let result = unsafe { libc::getifaddrs(std::ptr::addr_of_mut!(addrs)) };
+    if result != 0 {
+        return None;
+    }
+
+    let target_bytes = local_addr.octets();
+    let mut current = addrs;
+    let mut found_name: Option<String> = None;
+
+    while !current.is_null() {
+        // SAFETY: current points to a valid linked list node from getifaddrs
+        let ifa = unsafe { &*current };
+        let ifa_addr = ifa.ifa_addr;
+
+        if !ifa_addr.is_null() {
+            // SAFETY: ifa_addr is non-null and points to a valid sockaddr
+            let family = unsafe { (*ifa_addr).sa_family };
+            if i32::from(family) == libc::AF_INET {
+                // SAFETY: family check confirms this is a sockaddr_in
+                #[expect(
+                    clippy::cast_ptr_alignment,
+                    reason = "AF_INET confirms sockaddr_in layout"
+                )]
+                let sockaddr_in = unsafe { &*(ifa_addr as *const libc::sockaddr_in) };
+                let addr_bytes = sockaddr_in.sin_addr.s_addr.to_ne_bytes();
+                if addr_bytes == target_bytes {
+                    // SAFETY: ifa_name is a null-terminated C string from getifaddrs
+                    let name = unsafe { std::ffi::CStr::from_ptr(ifa.ifa_name) };
+                    if let Ok(name_str) = name.to_str() {
+                        found_name = Some(name_str.to_string());
+                        break;
+                    }
+                }
+            }
+        }
+
+        current = ifa.ifa_next;
+    }
+
+    // SAFETY: addrs was allocated by getifaddrs and must be freed by freeifaddrs
+    unsafe { libc::freeifaddrs(addrs) };
+    found_name
+}
+
 /// ARP Ping discovery method.
 ///
-/// Sends ARP request packets for hosts on the local network.
-/// If ARP reply is received, the host is considered up.
-/// Only works for IPv4 on the same LAN.
+/// Sends ARP request packets for hosts on the local network using
+/// `AF_PACKET` sockets (Layer 2). If ARP reply is received, the host
+/// is considered up. Only works for IPv4 on the same LAN.
 #[derive(Debug)]
 pub struct ArpPing {
     /// Source MAC address.
     src_mac: MacAddr,
     /// Source IP address.
     src_ip: Ipv4Addr,
-    /// Raw socket for packet transmission.
-    socket: RawSocket,
+    /// `AF_PACKET` socket file descriptor for ARP send/receive.
+    fd: i32,
+    /// Network interface index for `sockaddr_ll`.
+    if_index: u32,
     /// Timeout for each probe.
     timeout: Duration,
     /// Number of retries.
@@ -675,7 +730,14 @@ pub struct ArpPing {
 }
 
 impl ArpPing {
+    /// ARP `EtherType` protocol number (0x0806).
+    const ETH_P_ARP: u16 = 0x0806;
+
     /// Creates a new ARP ping discovery method.
+    ///
+    /// Uses `AF_PACKET`/`SOCK_RAW` to send/receive ARP packets at the
+    /// Ethernet layer, which is the correct socket type for ARP
+    /// (unlike `AF_INET` raw sockets which operate at the IP layer).
     ///
     /// # Arguments
     ///
@@ -686,68 +748,173 @@ impl ArpPing {
     ///
     /// # Errors
     ///
-    /// Returns an error if the raw socket cannot be created.
+    /// Returns an error if the `AF_PACKET` socket cannot be created or
+    /// the network interface cannot be determined.
     pub fn new(
         src_mac: MacAddr,
         src_ip: Ipv4Addr,
         timeout: Duration,
         retries: u8,
     ) -> Result<Self, ScanError> {
-        // Use IPPROTO_ICMP (1) for receiving ICMP responses
-        let socket = RawSocket::with_protocol(1).map_err(|e| ScanError::PermissionDenied {
-            operation: format!("create raw socket: {e}"),
+        // Find the network interface for the source IP address
+        let if_name = find_interface_name(src_ip).ok_or_else(|| ScanError::PermissionDenied {
+            operation: format!("cannot find network interface for {src_ip}"),
         })?;
+
+        let if_name_c =
+            CString::new(if_name.as_str()).map_err(|_err| ScanError::PermissionDenied {
+                operation: format!("invalid interface name: {if_name}"),
+            })?;
+
+        // Get interface index (needed for `sockaddr_ll`)
+        // SAFETY: if_nametoindex takes a valid null-terminated C string
+        let if_index = unsafe { libc::if_nametoindex(if_name_c.as_ptr()) };
+        if if_index == 0 {
+            return Err(ScanError::PermissionDenied {
+                operation: format!(
+                    "cannot get interface index for {if_name}: {}",
+                    io::Error::last_os_error()
+                ),
+            });
+        }
+
+        // Create `AF_PACKET` socket for ARP (`ETH_P_ARP` = 0x0806)
+        // `SOCK_RAW` gives us complete Ethernet frames including the header
+        // ETH_P_ARP is u16, to_be() is u16, i32::from is lossless u16->i32
+        // SAFETY: socket() returns a valid fd or -1; we check fd < 0 before use
+        let fd = unsafe {
+            libc::socket(
+                libc::AF_PACKET,
+                libc::SOCK_RAW,
+                i32::from(Self::ETH_P_ARP.to_be()),
+            )
+        };
+
+        if fd < 0 {
+            return Err(ScanError::PermissionDenied {
+                operation: format!(
+                    "cannot create AF_PACKET socket: {}",
+                    io::Error::last_os_error()
+                ),
+            });
+        }
 
         Ok(Self {
             src_mac,
             src_ip,
-            socket,
+            fd,
+            if_index,
             timeout,
             retries,
         })
     }
 
-    /// Checks if the target is on the same local network.
+    /// Checks if the target is on the same local network (/24).
     fn is_local_target(&self, target: &Target) -> bool {
         let target_ip = match target.ip {
             rustnmap_common::IpAddr::V4(addr) => addr,
             rustnmap_common::IpAddr::V6(_) => return false,
         };
 
-        // Simple check: if target is in RFC 1918 private range
-        // and source is also in private range, assume local
         let target_octets = target_ip.octets();
         let src_octets = self.src_ip.octets();
 
-        // Check if both are in same /24 subnet
         target_octets[0] == src_octets[0]
             && target_octets[1] == src_octets[1]
             && target_octets[2] == src_octets[2]
     }
 
-    /// Sends an ARP request probe.
+    /// Sends an ARP request probe and waits for a reply.
+    ///
+    /// Uses `sockaddr_ll` (link-layer address) for `AF_PACKET` sendto,
+    /// targeting the broadcast MAC address.
     fn send_arp_probe(&self, target_ip: Ipv4Addr) -> Result<bool, ScanError> {
+        // Build the ARP request Ethernet frame
         let packet = ArpPacketBuilder::new(self.src_mac, self.src_ip, target_ip).build();
 
-        // ARP is broadcast, so destination address doesn't matter for Ethernet
-        // But we need to send to a valid address for the socket
-        let dst_sockaddr = SocketAddr::new(std::net::IpAddr::V4(target_ip), 0);
+        // Construct `sockaddr_ll` for sending to broadcast on the interface
+        #[expect(clippy::cast_possible_truncation, reason = "AF_PACKET fits in u16")]
+        let addr = libc::sockaddr_ll {
+            sll_family: libc::AF_PACKET as u16,
+            sll_protocol: Self::ETH_P_ARP.to_be(),
+            sll_ifindex: i32::try_from(self.if_index).unwrap_or(0),
+            sll_hatype: 1, // ARPHRD_ETHER
+            sll_pkttype: 0,
+            sll_halen: 6,
+            sll_addr: [0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0, 0],
+        };
 
-        self.socket
-            .send_packet(&packet, &dst_sockaddr)
-            .map_err(|e| {
-                ScanError::Network(rustnmap_common::Error::Network(
-                    rustnmap_common::error::NetworkError::SendError { source: e },
-                ))
-            })?;
+        // Send the ARP request Ethernet frame
+        // SAFETY: fd is valid and owned by us; packet is a valid byte slice
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "sockaddr_ll size fits in socklen_t"
+        )]
+        let send_result = unsafe {
+            libc::sendto(
+                self.fd,
+                packet.as_ptr().cast::<libc::c_void>(),
+                packet.len(),
+                0,
+                (&raw const addr).cast::<libc::sockaddr>(),
+                std::mem::size_of::<libc::sockaddr_ll>() as libc::socklen_t,
+            )
+        };
 
+        if send_result < 0 {
+            return Err(ScanError::Network(rustnmap_common::Error::Network(
+                rustnmap_common::error::NetworkError::SendError {
+                    source: io::Error::last_os_error(),
+                },
+            )));
+        }
+
+        // Set receive timeout via SO_RCVTIMEO
+        #[expect(clippy::cast_possible_wrap, reason = "timeout seconds fits in time_t")]
+        let tv = libc::timeval {
+            tv_sec: self.timeout.as_secs() as libc::time_t,
+            tv_usec: libc::suseconds_t::from(self.timeout.subsec_micros()),
+        };
+        // SAFETY: fd is valid and owned; tv is a valid timeval struct
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "timeval size fits in socklen_t"
+        )]
+        let sockopt_ret = unsafe {
+            libc::setsockopt(
+                self.fd,
+                libc::SOL_SOCKET,
+                libc::SO_RCVTIMEO,
+                (&raw const tv).cast::<libc::c_void>(),
+                std::mem::size_of::<libc::timeval>() as libc::socklen_t,
+            )
+        };
+        if sockopt_ret < 0 {
+            return Err(ScanError::Network(rustnmap_common::Error::Network(
+                rustnmap_common::error::NetworkError::ReceiveError {
+                    source: io::Error::last_os_error(),
+                },
+            )));
+        }
+
+        // Receive ARP reply (or timeout)
         let mut recv_buf = vec![0u8; 65535];
+        // SAFETY: fd is valid; recv_buf is a valid mutable slice
+        let recv_result = unsafe {
+            libc::recvfrom(
+                self.fd,
+                recv_buf.as_mut_ptr().cast::<libc::c_void>(),
+                recv_buf.len(),
+                0,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
 
-        match self
-            .socket
-            .recv_packet(recv_buf.as_mut_slice(), Some(self.timeout))
-        {
-            Ok(len) if len > 0 => {
+        match recv_result.cmp(&0) {
+            std::cmp::Ordering::Greater => {
+                #[expect(clippy::cast_sign_loss, reason = "recv_result is positive")]
+                let len = recv_result as usize;
                 if let Some((_, sender_ip)) = parse_arp_reply(&recv_buf[..len]) {
                     if sender_ip == target_ip {
                         return Ok(true);
@@ -755,15 +922,18 @@ impl ArpPing {
                 }
                 Ok(false)
             }
-            Ok(_) => Ok(false),
-            Err(e)
-                if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut =>
-            {
-                Ok(false)
+            std::cmp::Ordering::Equal => Ok(false),
+            std::cmp::Ordering::Less => {
+                let err = io::Error::last_os_error();
+                if err.kind() == io::ErrorKind::WouldBlock || err.kind() == io::ErrorKind::TimedOut
+                {
+                    Ok(false)
+                } else {
+                    Err(ScanError::Network(rustnmap_common::Error::Network(
+                        rustnmap_common::error::NetworkError::ReceiveError { source: err },
+                    )))
+                }
             }
-            Err(e) => Err(ScanError::Network(rustnmap_common::Error::Network(
-                rustnmap_common::error::NetworkError::ReceiveError { source: e },
-            ))),
         }
     }
 }
@@ -792,6 +962,364 @@ impl HostDiscoveryMethod for ArpPing {
 
     fn requires_root(&self) -> bool {
         true
+    }
+}
+
+impl Drop for ArpPing {
+    fn drop(&mut self) {
+        if self.fd >= 0 {
+            // SAFETY: fd is valid and owned by us; being closed in Drop
+            unsafe { libc::close(self.fd) };
+        }
+    }
+}
+
+/// Batch ARP Ping for parallel host discovery on local networks.
+///
+/// Following nmap's `UltraScan` ARP ping pattern: sends all ARP requests in a
+/// burst, then polls for replies until timeout. This is dramatically faster
+/// than sequential per-host ARP ping.
+///
+/// nmap's approach (from `scan_engine.cc`):
+/// - ARP probes are sent through `doAnyNewProbes()` which iterates all hosts
+/// - Each host gets exactly 1 ARP probe (`sent_arp` flag)
+/// - `waitForResponses()` calls `get_arp_result()` with pcap to collect replies
+/// - `processData()` handles timeouts after the overall deadline
+/// - Congestion control (cwnd) limits in-flight probes, but for ARP (1 probe/host),
+///   the effective limit is ~50 sends between waits (`recentsends >= 50`)
+///
+/// Our simplified version: burst all requests, then poll replies for the timeout.
+#[derive(Debug)]
+pub struct ArpPingBatch {
+    /// Source MAC address.
+    src_mac: MacAddr,
+    /// Source IP address.
+    src_ip: Ipv4Addr,
+    /// `AF_PACKET` socket file descriptor.
+    fd: i32,
+    /// Network interface index for `sockaddr_ll`.
+    if_index: u32,
+}
+
+impl ArpPingBatch {
+    /// ARP `EtherType` protocol number (0x0806).
+    const ETH_P_ARP: u16 = 0x0806;
+
+    /// Socket receive buffer size in bytes (2MB).
+    ///
+    /// Each ARP reply is 42 bytes, so 2MB can hold ~50,000 replies.
+    /// The kernel default is often only ~200KB which can overflow with
+    /// 256+ hosts responding simultaneously.
+    const SO_RCVBUF_SIZE: i32 = 2_097_152;
+
+    /// Creates a new batch ARP ping engine.
+    ///
+    /// # Arguments
+    ///
+    /// * `src_mac` - Source MAC address
+    /// * `src_ip` - Source IP address
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the `AF_PACKET` socket cannot be created or
+    /// the network interface cannot be determined.
+    pub fn new(src_mac: MacAddr, src_ip: Ipv4Addr) -> Result<Self, ScanError> {
+        let if_name = find_interface_name(src_ip).ok_or_else(|| ScanError::PermissionDenied {
+            operation: format!("cannot find network interface for {src_ip}"),
+        })?;
+
+        let if_name_c =
+            CString::new(if_name.as_str()).map_err(|_err| ScanError::PermissionDenied {
+                operation: format!("invalid interface name: {if_name}"),
+            })?;
+
+        // SAFETY: if_nametoindex takes a valid null-terminated C string
+        let if_index = unsafe { libc::if_nametoindex(if_name_c.as_ptr()) };
+        if if_index == 0 {
+            return Err(ScanError::PermissionDenied {
+                operation: format!(
+                    "cannot get interface index for {if_name}: {}",
+                    io::Error::last_os_error()
+                ),
+            });
+        }
+
+        // ETH_P_ARP is u16, to_be() is u16, i32::from is lossless u16->i32
+        // SAFETY: socket() returns a valid fd or -1; we check fd < 0 before use
+        let fd = unsafe {
+            libc::socket(
+                libc::AF_PACKET,
+                libc::SOCK_RAW,
+                i32::from(Self::ETH_P_ARP.to_be()),
+            )
+        };
+
+        if fd < 0 {
+            return Err(ScanError::PermissionDenied {
+                operation: format!(
+                    "cannot create AF_PACKET socket: {}",
+                    io::Error::last_os_error()
+                ),
+            });
+        }
+
+        // Increase socket receive buffer to prevent ARP reply drops during burst sends.
+        // Default kernel buffer (~200KB) can overflow with 256+ simultaneous ARP replies.
+        let buf_size = Self::SO_RCVBUF_SIZE;
+        // SAFETY: fd is valid and owned; buf_size is a valid i32 value;
+        // size_of::<i32>() is 4 which fits in socklen_t.
+        #[expect(clippy::cast_possible_truncation, reason = "size_of::<i32>() == 4")]
+        let _ = unsafe {
+            libc::setsockopt(
+                fd,
+                libc::SOL_SOCKET,
+                libc::SO_RCVBUF,
+                (&raw const buf_size).cast::<libc::c_void>(),
+                std::mem::size_of::<i32>() as libc::socklen_t,
+            )
+        };
+        // Ignore setsockopt failure - will work with default buffer size
+
+        Ok(Self {
+            src_mac,
+            src_ip,
+            fd,
+            if_index,
+        })
+    }
+
+    /// Sends an ARP request for a single target IP.
+    fn send_arp_request(&self, target_ip: Ipv4Addr) -> Result<(), ScanError> {
+        let packet = ArpPacketBuilder::new(self.src_mac, self.src_ip, target_ip).build();
+
+        #[expect(clippy::cast_possible_truncation, reason = "AF_PACKET fits in u16")]
+        let addr = libc::sockaddr_ll {
+            sll_family: libc::AF_PACKET as u16,
+            sll_protocol: Self::ETH_P_ARP.to_be(),
+            sll_ifindex: i32::try_from(self.if_index).unwrap_or(0),
+            sll_hatype: 1, // ARPHRD_ETHER
+            sll_pkttype: 0,
+            sll_halen: 6,
+            sll_addr: [0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0, 0],
+        };
+
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "sockaddr_ll size fits in socklen_t"
+        )]
+        // SAFETY: fd is valid and owned by us; packet is a valid byte slice
+        let send_result = unsafe {
+            libc::sendto(
+                self.fd,
+                packet.as_ptr().cast::<libc::c_void>(),
+                packet.len(),
+                0,
+                (&raw const addr).cast::<libc::sockaddr>(),
+                std::mem::size_of::<libc::sockaddr_ll>() as libc::socklen_t,
+            )
+        };
+
+        if send_result < 0 {
+            return Err(ScanError::Network(rustnmap_common::Error::Network(
+                rustnmap_common::error::NetworkError::SendError {
+                    source: io::Error::last_os_error(),
+                },
+            )));
+        }
+
+        Ok(())
+    }
+
+    /// Drains any pending ARP replies from the socket buffer and records
+    /// which target IPs responded.
+    ///
+    /// Uses non-blocking reads (`MSG_DONTWAIT`) to drain the kernel buffer
+    /// without blocking. This is called between send bursts to prevent
+    /// buffer overflow, matching nmap's `waitForResponses()` pattern.
+    fn drain_replies(&self, responded: &mut HashSet<Ipv4Addr>) {
+        let mut recv_buf = [0u8; 256]; // ARP reply is 42 bytes, 256 is plenty
+
+        loop {
+            // SAFETY: fd is valid and owned; recv_buf is a valid mutable slice
+            let recv_result = unsafe {
+                libc::recvfrom(
+                    self.fd,
+                    recv_buf.as_mut_ptr().cast::<libc::c_void>(),
+                    recv_buf.len(),
+                    libc::MSG_DONTWAIT,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                )
+            };
+
+            if recv_result <= 0 {
+                // No more data available (EAGAIN/EWOULDBLOCK) or error
+                break;
+            }
+
+            #[expect(clippy::cast_sign_loss, reason = "recv_result is positive")]
+            let len = recv_result as usize;
+            if let Some((_, sender_ip)) = parse_arp_reply(&recv_buf[..len]) {
+                responded.insert(sender_ip);
+            }
+        }
+    }
+
+    /// Performs batch ARP discovery on a list of target IPs.
+    ///
+    /// Following nmap's `UltraScan` ARP ping pattern:
+    /// 1. Send ARP requests in bursts of 50 (nmap's `recentsends >= 50` limit)
+    /// 2. After each burst, drain received replies to prevent buffer overflow
+    /// 3. After all requests sent, poll for remaining replies until timeout
+    ///
+    /// # Arguments
+    ///
+    /// * `target_ips` - List of IPv4 addresses to probe
+    /// * `timeout` - Total timeout for waiting for replies after sending
+    ///
+    /// # Returns
+    ///
+    /// A set of IP addresses that responded to ARP requests (hosts that are up).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if an ARP request fails to send or a socket operation fails.
+    pub fn discover_batch(
+        &self,
+        target_ips: &[Ipv4Addr],
+        _timeout: Duration,
+    ) -> Result<HashSet<Ipv4Addr>, ScanError> {
+        const BURST_SIZE: usize = 10;
+        const TOTAL_ROUNDS: usize = 3;
+        const ROUND_RECV_MS: u64 = 500;
+
+        let mut responded: HashSet<Ipv4Addr> = HashSet::with_capacity(target_ips.len());
+
+        for round in 0..TOTAL_ROUNDS {
+            let pending: Vec<Ipv4Addr> = target_ips
+                .iter()
+                .copied()
+                .filter(|ip| !responded.contains(ip))
+                .collect();
+
+            if pending.is_empty() {
+                break;
+            }
+
+            // Send in small bursts with receive between each
+            let mut send_count = 0usize;
+            for &target_ip in &pending {
+                let _ = self.send_arp_request(target_ip);
+
+                send_count += 1;
+                if send_count >= BURST_SIZE {
+                    send_count = 0;
+                    // Brief pause + receive to let replies accumulate
+                    if round == 0 {
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    self.drain_replies(&mut responded);
+                }
+            }
+
+            // Receive phase for this round
+            let recv_duration = if round == 0 {
+                Duration::from_millis(ROUND_RECV_MS)
+            } else {
+                Duration::from_millis(ROUND_RECV_MS / 2)
+            };
+            self.poll_replies(recv_duration, &mut responded)?;
+        }
+
+        // Final drain
+        self.drain_replies(&mut responded);
+
+        Ok(responded)
+    }
+
+    /// Receives ARP replies using `poll()` for the given duration.
+    fn poll_replies(
+        &self,
+        duration: Duration,
+        responded: &mut HashSet<Ipv4Addr>,
+    ) -> Result<(), ScanError> {
+        let deadline = Instant::now() + duration;
+        let mut recv_buf = [0u8; 256];
+
+        // Set non-blocking
+        // SAFETY: fcntl on valid fd, F_GETFL is safe
+        let flags = unsafe { libc::fcntl(self.fd, libc::F_GETFL, 0) };
+        if flags >= 0 {
+            // SAFETY: fcntl on valid fd, F_SETFL with O_NONBLOCK is safe
+            unsafe { libc::fcntl(self.fd, libc::F_SETFL, flags | libc::O_NONBLOCK) };
+        }
+
+        while Instant::now() < deadline {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+
+            let poll_ms = remaining.as_millis().min(100) as i32;
+            let mut pfd = libc::pollfd {
+                fd: self.fd,
+                events: libc::POLLIN,
+                revents: 0,
+            };
+
+            // SAFETY: poll on valid pollfd
+            let ready = unsafe { libc::poll(&raw mut pfd, 1, poll_ms) };
+
+            if ready > 0 && (pfd.revents & libc::POLLIN) != 0 {
+                loop {
+                    // SAFETY: fd is valid; recv_buf is valid; MSG_DONTWAIT
+                    let n = unsafe {
+                        libc::recvfrom(
+                            self.fd,
+                            recv_buf.as_mut_ptr().cast::<libc::c_void>(),
+                            recv_buf.len(),
+                            libc::MSG_DONTWAIT,
+                            std::ptr::null_mut(),
+                            std::ptr::null_mut(),
+                        )
+                    };
+                    if n <= 0 {
+                        break;
+                    }
+                    #[expect(clippy::cast_sign_loss, reason = "n is positive")]
+                    let len = n as usize;
+                    if let Some((_, sender_ip)) = parse_arp_reply(&recv_buf[..len]) {
+                        responded.insert(sender_ip);
+                    }
+                }
+            } else if ready < 0 {
+                let err = io::Error::last_os_error();
+                if err.kind() != io::ErrorKind::Interrupted {
+                    if flags >= 0 {
+                        // SAFETY: fcntl on valid fd, restoring flags
+                        unsafe { libc::fcntl(self.fd, libc::F_SETFL, flags) };
+                    }
+                    return Err(ScanError::Network(rustnmap_common::Error::Network(
+                        rustnmap_common::error::NetworkError::ReceiveError { source: err },
+                    )));
+                }
+            }
+        }
+
+        if flags >= 0 {
+            // SAFETY: fcntl on valid fd, restoring flags
+            unsafe { libc::fcntl(self.fd, libc::F_SETFL, flags) };
+        }
+        Ok(())
+    }
+}
+
+impl Drop for ArpPingBatch {
+    fn drop(&mut self) {
+        if self.fd >= 0 {
+            // SAFETY: fd is valid and owned by us; being closed in Drop
+            unsafe { libc::close(self.fd) };
+        }
     }
 }
 
@@ -2024,6 +2552,38 @@ impl HostDiscovery {
 
         let arp_ping = ArpPing::new(src_mac, src_ip, timeout, self.retries)?;
         arp_ping.discover(target)
+    }
+
+    /// Batch ARP discovery for multiple targets on a local network.
+    ///
+    /// Sends ARP requests for all targets in parallel, then collects replies.
+    /// This follows nmap's `UltraScan` ARP ping pattern: burst-send all requests,
+    /// then poll for replies. Dramatically faster than sequential per-host ping.
+    ///
+    /// # Arguments
+    ///
+    /// * `target_ips` - IPv4 addresses to probe
+    ///
+    /// # Returns
+    ///
+    /// A set of IP addresses that responded (hosts that are up).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the `AF_PACKET` socket cannot be created.
+    pub fn discover_arp_batch(
+        &self,
+        target_ips: &[Ipv4Addr],
+    ) -> Result<HashSet<Ipv4Addr>, ScanError> {
+        let src_ip = self.get_local_ipv4_address();
+        let src_mac = Self::get_interface_mac(src_ip).unwrap_or_else(MacAddr::broadcast);
+        // nmap's INITIAL_ARP_RTT_TIMEOUT is 200ms; overall timeout is
+        // box(min_rtt, initial_rtt, INITIAL_ARP_RTT_TIMEOUT) * 1000.
+        // For T5-style batch, we use a short initial timeout.
+        let timeout = self.config.initial_rtt;
+
+        let batch = ArpPingBatch::new(src_mac, src_ip)?;
+        batch.discover_batch(target_ips, timeout)
     }
 
     /// Discovers if a host is up using `ICMPv6` echo ping.

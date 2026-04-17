@@ -1,79 +1,54 @@
-# Task Plan: English-Only doc/ + Chinese zh_doc/
+# Task Plan: Rustnmap Performance & Accuracy Overhaul
 
 ## Goal
-1. All content in `doc/` must be in English only
-2. Create `zh_doc/` as a Chinese translation mirror of `doc/`
+Fix rustnmap to match nmap's speed and accuracy for network scanning.
 
-## Approach
-- Step 1: Copy `doc/` to `zh_doc/` (preserves Chinese originals)
-- Step 2: Translate all Chinese content in `doc/` files to English
-- Step 3: Verify no Chinese remains in `doc/`
+## Baseline Measurements (2026-04-14)
+- Command: `rustnmap -Pn -vv 192.168.15.0/24` vs `nmap -Pn -vv 192.168.15.0/24`
+- Nmap: 256 IPs, 32 hosts up, **20.5 seconds**
+- Rustnmap: 255 IPs, 255 hosts up, **397.4 seconds (19x slower)**
 
-## File Inventory (38 files with Chinese, 5 already English)
+## Issues Found
 
-### Already English (skip translation)
-- database-integration.md
-- modules/cli.md
-- modules/nse-libraries.md
-- manual/README.md (mostly, minor Chinese)
+### ISSUE 1: Output Formatting - Closed Ports Not Suppressed [HIGH]
+- Nmap shows `Not shown: N closed tcp ports (reset)` summary line
+- Rustnmap dumps ALL closed ports individually - noise, not useful
+- Location: `crates/rustnmap-output/` or `crates/rustnmap-cli/src/cli.rs`
 
-### Files to Translate (grouped by directory)
+### ISSUE 2: Accuracy - Ports Incorrectly Marked as Filtered [CRITICAL]
+- Nmap correctly identifies open/closed/filtered
+- Rustnmap marks most ports as "filtered" - response matching broken
+- Root cause: scan engine not receiving or matching TCP RST responses
 
-**Root level** (5 files):
-- README.md (83 lines CN)
-- CHANGELOG.md (107)
-- architecture.md (314)
-- database.md (63)
-- roadmap.md (226)
-- structure.md (105)
+### ISSUE 3: Speed - 19x Slower Than Nmap [CRITICAL]
+- 397s vs 20.5s for same scan
+- Possible causes:
+  a. Per-target packet engine creation overhead
+  b. Sequential host scanning instead of true parallel
+  c. Response receive loop timing issues
+  d. Congestion control too conservative
 
-**appendix/** (5 files):
-- deployment.md (78)
-- nmap-constants.md (109)
-- nmap-data-structures.md (278)
-- nmap-function-reference.md (107)
-- references.md (4)
+### ISSUE 4: Host Count Mismatch
+- Nmap reports 32 hosts up, Rustnmap reports 255
+- With -Pn both skip discovery, but nmap still filters non-responsive hosts
 
-**manual/** (8 files):
-- README.md (33)
-- configuration.md (84)
-- environment.md (167)
-- exit-codes.md (72)
-- nse-scripts.md (170)
-- options.md (165)
-- output-formats.md (132)
-- quick-reference.md (100)
-- scan-types.md (202)
+## Phase 1: Root Cause Investigation [in_progress]
+- [x] Run comparison scans
+- [x] Read ultrascan engine code
+- [ ] Read output formatting code
+- [ ] Profile single-host scan to isolate speed issues
+- [ ] Verify packet engine response capture
+- [ ] Check response matching logic
 
-**modules/** (19 files):
-- concurrency.md (83)
-- evasion.md (71)
-- host-discovery.md (15)
-- localhost-scanning.md (142)
-- nse-engine.md (236)
-- os-detection.md (152)
-- output.md (26)
-- packet-engineering.md (276)
-- port-scanning.md (229)
-- raw-packet.md (143)
-- rest-api.md (151)
-- scan-management.md (181)
-- sdk.md (135)
-- service-detection.md (4)
-- stateless-scan.md (141)
-- target-parsing.md (34)
-- traceroute.md (3)
-- vulnerability.md (135)
+## Phase 2: Fix Output Formatting [pending]
+- Suppress closed ports with summary line (nmap behavior)
+- Show only open, filtered, open|filtered ports
 
-## Phases
+## Phase 3: Fix Scanning Engine [pending]
+- Fix response matching (accuracy)
+- Optimize parallel scanning (speed)
+- Fix packet engine reuse
 
-### Phase 1: Create zh_doc/ mirror [pending]
-- Copy doc/ to zh_doc/ preserving structure
-
-### Phase 2: Translate doc/ to English [pending]
-- Translate all 38 files with Chinese content
-- Process in parallel batches for efficiency
-
-### Phase 3: Verification [pending]
-- Grep for any remaining Chinese in doc/
-- Spot-check translations for accuracy
+## Phase 4: Verify [pending]
+- Run full comparison test
+- Zero warnings/errors

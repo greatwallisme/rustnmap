@@ -81,11 +81,12 @@ use tokio::time::timeout as tokio_timeout;
 /// when packet loss is detected. See `timing.cc:209-218` in nmap source.
 #[derive(Debug)]
 struct InternalCongestionStats {
-    /// Initial RTT timeout from config.
+    /// Initial RTT timeout in microseconds (atomic for cross-thread updates).
     ///
     /// This is used for the first probe before any RTT measurement.
     /// See nmap timing.cc:82: `to->timeout = o.initialRttTimeout() * 1000;`
-    initial_rtt: Duration,
+    /// Updated via `set_initial_rtt()` before each target's scan.
+    initial_rtt_micros: std::sync::atomic::AtomicU64,
     /// Minimum RTT timeout from config.
     ///
     /// All probe timeouts are clamped to this floor, matching nmap's
@@ -142,7 +143,7 @@ impl InternalCongestionStats {
         // Before first measurement, use srtt/2 per RFC 6298 Section 2.3
         let rttvar_micros = (srtt_micros / 2).clamp(5_000, 2_000_000);
         Self {
-            initial_rtt,
+            initial_rtt_micros: std::sync::atomic::AtomicU64::new(srtt_micros),
             min_rtt,
             max_rtt,
             srtt_micros: std::sync::atomic::AtomicU64::new(srtt_micros),
@@ -229,18 +230,21 @@ impl InternalCongestionStats {
 
         if self.first_measurement.load(Ordering::Relaxed) {
             // First probe: use initial_rtt clamped by min/max (nmap timing.cc:153)
-            #[expect(
-                clippy::cast_possible_truncation,
-                reason = "initial_rtt is bounded to reasonable network latencies"
-            )]
-            let initial_micros = self.initial_rtt.as_micros() as u64;
+            let initial_micros = self.initial_rtt_micros.load(Ordering::Relaxed);
             Duration::from_micros(initial_micros.clamp(min_micros, max_micros))
         } else {
             // Subsequent probes: use SRTT + 4*RTTVAR
             let srtt = self.srtt_micros.load(Ordering::Relaxed);
             let rttvar = self.rttvar_micros.load(Ordering::Relaxed);
             let timeout_micros = srtt.saturating_add(4 * rttvar);
-            Duration::from_micros(timeout_micros.clamp(min_micros, max_micros))
+            // Only clamp the upper bound, not the lower. Nmap's min_rtt_timeout
+            // prevents overly aggressive timeouts, but for filtered ports (no
+            // response), the timeout determines how long we wait per batch.
+            // With cwnd=10-30 and 1000 ports, a 100ms minimum timeout makes
+            // scans 5-10x slower than nmap. Use the actual computed timeout
+            // when it's below min_rtt -- this is safe because the initial
+            // probe already confirmed network reachability.
+            Duration::from_micros(timeout_micros.min(max_micros))
         }
     }
 
@@ -370,6 +374,67 @@ impl InternalCongestionController {
             // Initialize to 0 (before any iterations) so first timeout always triggers drop
             last_drop_iteration: std::sync::atomic::AtomicUsize::new(0),
         }
+    }
+
+    /// Resets the congestion controller for a new target scan.
+    ///
+    /// Each target may have a vastly different RTT from the previous one.
+    /// Without resetting, the SRTT from a low-latency local target would
+    /// persist when scanning a high-latency remote target, causing probe
+    /// timeouts that are too short to capture responses.
+    /// Updates the initial RTT used for seeding the congestion controller.
+    ///
+    /// This allows the orchestrator to propagate per-target RTT measurements
+    /// into the scan engine before each target's scan begins. Nmap does this
+    /// via `target->to.srtt` propagation from host discovery probes
+    /// (`scan_engine.cc:508-516`).
+    ///
+    /// The stored value is used by `reset()` to initialize SRTT/RTTVAR for
+    /// each new target, and by `recommended_timeout()` for the first probe
+    /// before any actual measurement.
+    fn set_initial_rtt(&self, rtt: Duration) {
+        use std::sync::atomic::Ordering;
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "RTT values are bounded to reasonable network latencies (< 30s)"
+        )]
+        let micros = rtt.as_micros() as u64;
+        self.stats
+            .initial_rtt_micros
+            .store(micros, Ordering::Relaxed);
+        // Mark first_measurement as done: the RTT comes from a previous target's
+        // actual measurement. This allows maybe_boost_cwnd() to fire for
+        // all-filtered hosts, which otherwise never get a reply to trigger
+        // update_rtt(). Without this, cwnd stays at 10 for 100+ iterations.
+        self.stats.first_measurement.store(false, Ordering::Relaxed);
+    }
+
+    fn reset(&self) {
+        use std::sync::atomic::Ordering;
+        const GROUP_INITIAL_CWND: usize = 10;
+        const INITIAL_SSTHRESH: usize = 75;
+
+        // Reset cwnd and ssthresh
+        self.cwnd.store(GROUP_INITIAL_CWND, Ordering::Relaxed);
+        self.ssthresh.store(INITIAL_SSTHRESH, Ordering::Relaxed);
+        self.ca_ack_counter.store(0, Ordering::Relaxed);
+        self.last_drop_iteration.store(0, Ordering::Relaxed);
+
+        // Reset RTT state. Do NOT reset first_measurement here: it is managed
+        // by set_initial_rtt() (sets false when RTT is seeded from a previous
+        // target) and update_rtt() (sets false on first actual reply). Resetting
+        // it to true here would undo set_initial_rtt()'s work and block
+        // maybe_boost_cwnd() for all-filtered hosts.
+        let initial_srtt = self.stats.initial_rtt_micros.load(Ordering::Relaxed);
+        self.stats
+            .srtt_micros
+            .store(initial_srtt, Ordering::Relaxed);
+        let rttvar = (initial_srtt / 2).clamp(5_000, 2_000_000);
+        self.stats.rttvar_micros.store(rttvar, Ordering::Relaxed);
+
+        // Reset reply counters
+        self.stats.num_replies_expected.store(0, Ordering::Relaxed);
+        self.stats.num_replies_received.store(0, Ordering::Relaxed);
     }
 
     /// Returns current congestion window.
@@ -507,6 +572,45 @@ impl InternalCongestionController {
     /// Returns recommended timeout.
     fn recommended_timeout(&self) -> Duration {
         self.stats.recommended_timeout()
+    }
+
+    /// Proactively boosts cwnd when most probes are timing out without responses.
+    ///
+    /// Nmap's `cc_scale` mechanism accelerates cwnd growth when packet loss is detected,
+    /// but only applies when ACKs arrive. For heavily-filtered hosts (no ACKs after the
+    /// initial open ports), cwnd gets stuck at 12, causing ~83 iterations for 1000 ports.
+    ///
+    /// This method detects the "mostly filtered" scenario and boosts cwnd directly,
+    /// allowing more probes to be sent in parallel. The boost is safe because:
+    /// 1. Filtered ports don't generate network traffic (just timeout waits)
+    /// 2. We're just batching more probes before the timeout wait
+    fn maybe_boost_cwnd(&self) {
+        use std::sync::atomic::Ordering;
+        let current = self.cwnd.load(Ordering::Relaxed);
+        // Already at max, nothing to do
+        if current >= self.max_cwnd {
+            return;
+        }
+        let expected = self.stats.num_replies_expected.load(Ordering::Relaxed);
+        let received = self.stats.num_replies_received.load(Ordering::Relaxed);
+        // Boost when either:
+        // 1. cc_scale > 2 (significant loss with some replies), or
+        // 2. expected > current * 2 and received == 0 (all filtered, no replies yet)
+        let should_boost = if received > 0 {
+            #[expect(
+                clippy::cast_precision_loss,
+                reason = "packet counts fit in f64 for ratio"
+            )]
+            let scale = expected as f64 / received as f64;
+            scale > 2.0
+        } else {
+            // No replies at all: boost once we've sent enough probes to be confident
+            expected > u64::try_from(current).unwrap_or(u64::MAX)
+        };
+        if should_boost {
+            let target = (current * 2).min(self.max_cwnd);
+            self.cwnd.store(target, Ordering::Relaxed);
+        }
     }
 }
 /// Ethernet header size.
@@ -856,6 +960,19 @@ impl ParallelScanEngine {
         &self.congestion
     }
 
+    /// Updates the initial RTT used for seeding the next target's scan.
+    ///
+    /// This should be called before `scan_ports()` for each target to
+    /// propagate per-target RTT measurements into the congestion controller.
+    /// When RTT is not measured for a target, the engine falls back to the
+    /// timing template's default `initial_rtt`.
+    ///
+    /// Matches nmap's behavior of propagating host discovery RTT into port
+    /// scanning via `target->to.srtt` (`scan_engine.cc:508-516`).
+    pub fn set_initial_rtt(&self, rtt: Duration) {
+        self.congestion.set_initial_rtt(rtt);
+    }
+
     /// Enforces the `scan_delay` between probes.
     ///
     /// This implements nmap's `enforce_scan_delay()` from `timing.cc:172-206`.
@@ -930,6 +1047,11 @@ impl ParallelScanEngine {
     ) -> Result<HashMap<Port, PortState>, rustnmap_common::ScanError> {
         let start_time = Instant::now();
 
+        // Reset congestion controller for each target. RTT from a previous
+        // target can be wildly different (local 1ms vs remote 330ms), causing
+        // timeouts that are too short for the new target.
+        self.congestion.reset();
+
         // Resolve source address for this target.
         let src_addr = self.source_addr_for_target(target);
 
@@ -960,8 +1082,11 @@ impl ParallelScanEngine {
             create_stealth_engine_with_target(Some(src_addr), Some(target), self.config.clone())
         };
 
-        // Start the packet engine with background task for ring buffer draining.
-        // Apply BPF filter to prevent outgoing SYNs from flooding the ring buffer.
+        // Start the packet engine.
+        // BPF filter is intentionally NOT used here because it causes intermittent
+        // packet loss of legitimate SYN/ACK responses (race with PACKET_MMAP ring
+        // buffer). Background traffic is handled efficiently by the ack validation
+        // in parse_packet() which rejects non-matching responses.
         if let Some(ref engine) = packet_engine {
             let _ = engine.lock().await.start().await;
         }
@@ -1006,15 +1131,16 @@ impl ParallelScanEngine {
         let mut diag_total_retries: usize = 0;
         #[cfg(feature = "diagnostic")]
         let mut diag_total_timeouts: usize = 0;
+        #[cfg(feature = "diagnostic")]
+        let mut diag_sleep_total: Duration = Duration::ZERO;
+        #[cfg(feature = "diagnostic")]
+        let mut diag_drain_total: Duration = Duration::ZERO;
 
-        // nmap single-loop architecture: send → receive → match → timeout → retry
+        // nmap single-loop architecture: send -> receive -> match -> timeout -> retry
         // No separate receiver task. Direct packet engine reads eliminate channel latency
         // and the race condition between check_timeouts and asynchronous packet forwarding.
-        while ports_iter.peek().is_some() || !outstanding.is_empty() {
+        while ports_iter.peek().is_some() || !outstanding.is_empty() || !retry_probes.is_empty() {
             loop_iterations += 1;
-
-            #[cfg(feature = "diagnostic")]
-            let current_cwnd = self.congestion.cwnd();
 
             // Check for scan timeout
             if start_time.elapsed() > self.scan_timeout {
@@ -1030,7 +1156,10 @@ impl ParallelScanEngine {
             #[cfg(feature = "diagnostic")]
             let send_start = Instant::now();
 
-            // Send more probes up to cwnd/batch limit
+            // Send probes up to cwnd/batch limit.
+            // Prioritize NEW probes over retries. This prevents retry probes from
+            // filling the cwnd window and blocking progress on new ports.
+            // Nmap's doAnyNewProbes() similarly prioritizes tryno=0 probes.
             while outstanding.len() < current_cwnd
                 && outstanding.len() < self.max_parallelism
                 && probes_sent_this_batch < BATCH_SIZE
@@ -1046,6 +1175,7 @@ impl ParallelScanEngine {
                 }
 
                 if let Some(port) = ports_iter.next() {
+                    // New probe: highest priority
                     self.enforce_scan_delay().await;
                     self.send_probe(target, port, src_addr, &mut outstanding)?;
                     self.congestion.on_packet_sent();
@@ -1054,6 +1184,14 @@ impl ParallelScanEngine {
                     #[cfg(feature = "diagnostic")]
                     {
                         diag_total_sent += 1;
+                    }
+                } else if let Some(retry) = retry_probes.pop() {
+                    // No more new ports: fill remaining cwnd with retries
+                    self.resend_probe(retry, src_addr, &mut outstanding)?;
+                    self.rate_limiter.record_sent();
+                    #[cfg(feature = "diagnostic")]
+                    {
+                        diag_total_retries += 1;
                     }
                 } else {
                     break;
@@ -1102,10 +1240,12 @@ impl ParallelScanEngine {
                         .unwrap_or(Duration::from_millis(5))
                         .max(Duration::from_millis(2))
                 };
-                let drain_deadline =
-                    drain_start + earliest_remaining.min(Duration::from_millis(200));
+                // Drain until the earliest probe expires. No artificial cap:
+                // for high-RTT targets (e.g., 330ms), responses arrive after the
+                // actual RTT and we must wait long enough to capture them.
+                let mut drain_deadline = drain_start + earliest_remaining;
 
-                // First packet: wait up to 5ms for kernel → ring buffer → channel propagation.
+                // First packet: wait up to 5ms for kernel -> ring buffer -> channel propagation.
                 // Subsequent packets: near-zero wait (already queued).
                 let mut first_recv = true;
 
@@ -1113,7 +1253,7 @@ impl ParallelScanEngine {
                     if Instant::now() >= drain_deadline {
                         break;
                     }
-                    // Break when all probes responded — don't wait for deadline
+                    // Break when all probes responded -- don't wait for deadline
                     // if there are more ports to send. Nmap's waitForResponses()
                     // returns when probes_outstanding() == 0 regardless of
                     // remaining ports. This prevents 200ms dead-air per batch.
@@ -1166,6 +1306,48 @@ impl ParallelScanEngine {
                         }
                     } else {
                         if first_recv {
+                            // No response after initial 5ms wait. Outstanding probes
+                            // haven't expired yet. Sleep until the earliest probe
+                            // expiration instead of busy-looping with 5ms polls.
+                            // This matches nmap's pcap_select() which sleeps until
+                            // the next probe timeout or a packet arrives.
+                            if !outstanding.is_empty() {
+                                let remaining = outstanding
+                                    .values()
+                                    .map(|p| {
+                                        let elapsed = p.sent_time.elapsed();
+                                        if elapsed >= probe_timeout {
+                                            Duration::ZERO
+                                        } else {
+                                            probe_timeout - elapsed
+                                        }
+                                    })
+                                    .min()
+                                    .unwrap_or(Duration::from_millis(5));
+                                #[cfg(feature = "diagnostic")]
+                                if loop_iterations < 10 {
+                                    eprintln!("  ITER {loop_iterations}: first_recv sleep, remaining={:?}, outstanding={}",
+                                        remaining, outstanding.len());
+                                }
+                                if remaining > Duration::from_millis(2) {
+                                    drop(eng);
+                                    #[cfg(feature = "diagnostic")]
+                                    let sleep_start = Instant::now();
+                                    tokio::time::sleep(remaining).await;
+                                    #[cfg(feature = "diagnostic")]
+                                    {
+                                        diag_sleep_total += sleep_start.elapsed();
+                                    }
+                                    eng = engine.lock().await;
+                                    // After sleeping, responses may have arrived and been
+                                    // buffered by the background task. Extend the drain
+                                    // deadline to allow reading them before check_timeouts
+                                    // marks everything as filtered.
+                                    drain_deadline = Instant::now() + Duration::from_millis(50);
+                                    first_recv = false;
+                                    continue;
+                                }
+                            }
                             break;
                         }
                         if Instant::now() >= drain_deadline {
@@ -1173,16 +1355,17 @@ impl ParallelScanEngine {
                         }
                     }
                 }
+                #[cfg(feature = "diagnostic")]
+                {
+                    diag_drain_total += drain_start.elapsed();
+                }
             }
-
-            #[cfg(feature = "diagnostic")]
-            {
-                diag_wait_total += start_time.elapsed();
-            };
 
             // Check for probe timeouts and handle retries
             #[cfg(feature = "diagnostic")]
             let diag_timeout_start = Instant::now();
+            #[cfg(feature = "diagnostic")]
+            let diag_outstanding_before = outstanding.len();
             self.check_timeouts(
                 &mut outstanding,
                 &mut retry_probes,
@@ -1193,6 +1376,8 @@ impl ParallelScanEngine {
             #[cfg(feature = "diagnostic")]
             {
                 diag_timeout_total += diag_timeout_start.elapsed();
+                let timed_out_count = diag_outstanding_before - outstanding.len();
+                diag_total_timeouts += timed_out_count;
             };
 
             // Reset batch counter after full batch
@@ -1200,28 +1385,21 @@ impl ParallelScanEngine {
                 probes_sent_this_batch = 0;
             }
 
-            // Re-send retry probes (not limited by cwnd, only max_parallelism)
-            #[cfg(feature = "diagnostic")]
-            let diag_retry_start = Instant::now();
-            for probe in retry_probes.drain(..) {
-                if outstanding.len() < self.max_parallelism {
-                    if let Some(wait_time) = self.rate_limiter.check_rate() {
-                        tokio::time::sleep(wait_time).await;
-                    }
-                    self.resend_probe(probe, src_addr, &mut outstanding)?;
-                    self.rate_limiter.record_sent();
-                    #[cfg(feature = "diagnostic")]
-                    {
-                        diag_total_retries += 1;
-                    }
-                } else {
-                    results.entry(probe.port).or_insert(PortState::Filtered);
-                }
-            }
-            #[cfg(feature = "diagnostic")]
+            // Proactively boost cwnd when detecting mostly-filtered hosts.
+            // Only boost after RTT is measured: without an actual RTT measurement,
+            // we don't know the network latency and boosting cwnd causes all probes
+            // to be sent before high-RTT responses can arrive.
+            if !self
+                .congestion
+                .stats
+                .first_measurement
+                .load(std::sync::atomic::Ordering::Relaxed)
             {
-                diag_retry_total += diag_retry_start.elapsed();
+                self.congestion.maybe_boost_cwnd();
             }
+
+            // Retries are now sent in the send phase above (prioritized after new probes).
+            // Any retries that couldn't be sent remain in retry_probes for the next iteration.
         }
 
         // Print diagnostic summary
@@ -1231,7 +1409,8 @@ impl ParallelScanEngine {
             eprintln!("\n=== SCAN TIMING DIAGNOSTIC ===");
             eprintln!("Total: {total_time:?}");
             eprintln!("Send:    {diag_send_total:?} (sent {diag_total_sent} probes)");
-            eprintln!("Wait:    {diag_wait_total:?}");
+            eprintln!("Drain:   {diag_drain_total:?}");
+            eprintln!("Sleep:   {diag_sleep_total:?} (waiting for probe timeouts)");
             eprintln!("Timeout: {diag_timeout_total:?} ({diag_total_timeouts} timed out)");
             eprintln!("Retry:   {diag_retry_total:?} ({diag_total_retries} retries)");
             eprintln!("Iterations: {loop_iterations}");
@@ -1386,7 +1565,7 @@ impl ParallelScanEngine {
         outstanding: &mut HashMap<(Ipv4Addr, Port), OutstandingProbe>,
         retry_probes: &mut Vec<OutstandingProbe>,
         results: &mut HashMap<Port, PortState>,
-        current_iteration: usize,
+        _current_iteration: usize,
         max_successful_tryno: u32,
     ) {
         let now = Instant::now();
@@ -1415,14 +1594,17 @@ impl ParallelScanEngine {
                 // Retry the probe
                 outstanding.remove(&key);
                 retry_probes.push(probe);
-                // Record packet loss for congestion control
-                self.congestion.on_packet_lost(current_iteration);
+                // Do NOT count this as packet loss for congestion control.
+                // Nmap scan_engine.cc:1618-1627 only detects drops when a
+                // retransmitted probe RECEIVES a response (proving the first
+                // was lost). A probe that simply times out with no response
+                // indicates a filtered port, not network congestion.
+                // Treating filtered ports as congestion collapses cwnd.
             } else {
                 // Adaptive retry limit reached, mark as filtered
                 outstanding.remove(&key);
                 results.entry(probe.port).or_insert(PortState::Filtered);
-                // Record packet loss for congestion control
-                self.congestion.on_packet_lost(current_iteration);
+                // Same reasoning: do not count filtered ports as packet loss.
             }
         }
     }
