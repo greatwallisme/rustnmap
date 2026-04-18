@@ -347,43 +347,44 @@ impl NormalFormatter {
     pub const fn with_verbosity(verbosity: VerbosityLevel) -> Self {
         Self { verbosity }
     }
-}
 
-impl OutputFormatter for NormalFormatter {
-    fn format_scan_result(&self, result: &ScanResult) -> Result<String> {
-        let mut output = String::new();
-
-        // Header
-        let local_time = result.metadata.start_time.with_timezone(&chrono::Local);
-        let _ = writeln!(
-            output,
-            "# RustNmap {} scan initiated {} as:",
-            result.metadata.scanner_version,
-            local_time.format("%a %b %d %H:%M:%S %Y")
-        );
-        let _ = writeln!(output, "# {}\n\n", result.metadata.command_line);
-
-        // Hosts
-        for host in &result.hosts {
-            output.push_str(&self.format_host(host)?);
-            output.push('\n');
-        }
-
-        // Statistics
-        let up_count = result.statistics.hosts_up;
-        let total = result.statistics.total_hosts;
-        let _ = writeln!(
-            output,
-            "RustNmap done: {} IP address ({} host up) scanned in {:.2} seconds",
-            total,
-            up_count,
-            result.metadata.elapsed.as_secs_f64()
-        );
-
-        Ok(output)
+    /// Check whether closed/filtered ports should be suppressed for the given scan type.
+    ///
+    /// Per nmap behavior, scan types like ACK, Maimon, Window, UDP, SCTP, and IP Protocol
+    /// treat closed/filtered as the meaningful result, so all ports must be shown explicitly.
+    fn should_suppress_closed_ports(scan_type: ScanType) -> bool {
+        !matches!(
+            scan_type,
+            ScanType::TcpMaimon
+                | ScanType::TcpWindow
+                | ScanType::TcpAck
+                | ScanType::Udp
+                | ScanType::SctpInit
+                | ScanType::SctpCookie
+                | ScanType::IpProtocol
+        )
     }
 
-    fn format_host(&self, host: &HostResult) -> Result<String> {
+    /// Format protocol label for the "Not shown" suppression line.
+    fn protocol_label(protocol: Protocol) -> &'static str {
+        match protocol {
+            Protocol::Tcp => "tcp",
+            Protocol::Udp => "udp",
+            Protocol::Sctp => "sctp",
+        }
+    }
+
+    /// Format a host result with full scan context (scan type and protocol).
+    ///
+    /// This is the internal implementation that respects scan-type-specific port
+    /// suppression rules. The public trait method `format_host` delegates here with
+    /// default suppression enabled for backward compatibility.
+    fn format_host_with_context(
+        &self,
+        host: &HostResult,
+        scan_type: ScanType,
+        protocol: Protocol,
+    ) -> Result<String> {
         let mut output = String::new();
 
         // Host line
@@ -412,48 +413,84 @@ impl OutputFormatter for NormalFormatter {
             let _ = writeln!(output, "MAC Address: {} ({})", mac.address, vendor);
         }
 
-        // Ports - match nmap behavior: suppress closed/filtered ports, show "Not shown" summary
+        // Ports
         if !host.ports.is_empty() {
-            let (interesting, suppressed): (Vec<_>, Vec<_>) = host.ports.iter().partition(|p| {
-                matches!(
-                    p.state,
-                    PortState::Open
-                        | PortState::OpenOrFiltered
-                        | PortState::Unfiltered
-                        | PortState::OpenOrClosed
-                )
-            });
-
-            if !suppressed.is_empty() {
-                let mut closed_count = 0usize;
-                let mut filtered_count = 0usize;
-                for port in &suppressed {
-                    match port.state {
-                        PortState::Closed | PortState::OpenOrClosed => closed_count += 1,
+            if Self::should_suppress_closed_ports(scan_type) {
+                // Two-tier port suppression matching nmap:
+                // Always show: Open, OpenOrFiltered, Unfiltered
+                // Show conditionally: Filtered (only when few, < 20)
+                // Always suppress: Closed, Unknown
+                let (always, rest): (Vec<_>, Vec<_>) = host.ports.iter().partition(|p| {
+                    matches!(
+                        p.state,
+                        PortState::Open | PortState::OpenOrFiltered | PortState::Unfiltered
+                    )
+                });
+                let (conditional, boring): (Vec<_>, Vec<_>) = rest.into_iter().partition(|p| {
+                    matches!(
+                        p.state,
                         PortState::Filtered
-                        | PortState::ClosedOrFiltered
-                        | PortState::FilteredOrClosed => filtered_count += 1,
-                        _ => filtered_count += 1,
+                            | PortState::ClosedOrFiltered
+                            | PortState::FilteredOrClosed
+                            | PortState::OpenOrClosed
+                    )
+                });
+
+                let show_conditional = conditional.len() <= 20;
+                let mut interesting = always;
+                let mut suppressed = boring;
+                if show_conditional {
+                    interesting.extend(conditional);
+                } else {
+                    suppressed.extend(conditional);
+                }
+
+                // Suppress the trivial case (very few suppressed ports)
+                let suppressed = if suppressed.len() > 5 {
+                    suppressed
+                } else {
+                    interesting.extend(suppressed);
+                    Vec::new()
+                };
+
+                if !suppressed.is_empty() {
+                    let mut closed_count = 0_usize;
+                    let mut filtered_count = 0_usize;
+                    for port in &suppressed {
+                        match port.state {
+                            PortState::Closed | PortState::OpenOrClosed => closed_count += 1,
+                            PortState::Filtered
+                            | PortState::ClosedOrFiltered
+                            | PortState::FilteredOrClosed => filtered_count += 1,
+                            _ => filtered_count += 1,
+                        }
+                    }
+                    let (state_word, reason) = if closed_count >= filtered_count {
+                        ("closed", "reset")
+                    } else {
+                        ("filtered", "no-response")
+                    };
+                    let _ = writeln!(
+                        output,
+                        "Not shown: {} {} {} ports ({})",
+                        suppressed.len(),
+                        state_word,
+                        Self::protocol_label(protocol),
+                        reason
+                    );
+                }
+
+                if !interesting.is_empty() {
+                    output.push_str("PORT     STATE SERVICE\n");
+                    for port in &interesting {
+                        output.push_str(&self.format_port(port)?);
                     }
                 }
-                let (state_word, reason) = if closed_count >= filtered_count {
-                    ("closed", "reset")
-                } else {
-                    ("filtered", "no-response")
-                };
-                let _ = writeln!(
-                    output,
-                    "Not shown: {} {} tcp ports ({})",
-                    suppressed.len(),
-                    state_word,
-                    reason
-                );
-            }
-
-            if !interesting.is_empty() {
+            } else {
+                // Non-standard scan types (ACK, Maimon, Window, UDP, SCTP, IP Protocol):
+                // closed/filtered IS the meaningful result -- show ALL ports explicitly
                 output.push_str("PORT     STATE SERVICE\n");
-
-                for port in &interesting {
+                for port in &host.ports {
                     output.push_str(&self.format_port(port)?);
                 }
             }
@@ -476,22 +513,19 @@ impl OutputFormatter for NormalFormatter {
 
         // OS detection - match nmap format
         if !host.os_matches.is_empty() {
-            // Output "OS details:" line (nmap format for the best match)
             if let Some(best_match) = host.os_matches.first() {
                 let _ = writeln!(output, "OS details: {}", best_match.name);
             }
 
-            // Output OS CPE if available
             for os_match in &host.os_matches {
                 if !os_match.cpe.is_empty() {
                     for cpe in &os_match.cpe {
                         let _ = writeln!(output, "OS CPE: {}", cpe);
                     }
-                    break; // Only show CPE for first match
+                    break;
                 }
             }
 
-            // Output all OS matches under "OS detection:" section
             output.push_str("\n\nOS detection:\n");
             for os_match in &host.os_matches {
                 let _ = writeln!(output, "{} ({}%)", os_match.name, os_match.accuracy);
@@ -521,6 +555,50 @@ impl OutputFormatter for NormalFormatter {
         }
 
         Ok(output)
+    }
+}
+
+impl OutputFormatter for NormalFormatter {
+    fn format_scan_result(&self, result: &ScanResult) -> Result<String> {
+        let mut output = String::new();
+
+        // Header
+        let local_time = result.metadata.start_time.with_timezone(&chrono::Local);
+        let _ = writeln!(
+            output,
+            "# RustNmap {} scan initiated {} as:",
+            result.metadata.scanner_version,
+            local_time.format("%a %b %d %H:%M:%S %Y")
+        );
+        let _ = writeln!(output, "# {}\n\n", result.metadata.command_line);
+
+        // Hosts
+        let scan_type = result.metadata.scan_type;
+        let protocol = result.metadata.protocol;
+        for host in &result.hosts {
+            output.push_str(&self.format_host_with_context(host, scan_type, protocol)?);
+            output.push('\n');
+        }
+
+        // Statistics
+        let up_count = result.statistics.hosts_up;
+        let total = result.statistics.total_hosts;
+        let _ = writeln!(
+            output,
+            "RustNmap done: {} IP address ({} host up) scanned in {:.2} seconds",
+            total,
+            up_count,
+            result.metadata.elapsed.as_secs_f64()
+        );
+
+        Ok(output)
+    }
+
+    fn format_host(&self, host: &HostResult) -> Result<String> {
+        // Default to SYN scan behavior (suppress closed/filtered ports) when called
+        // without full scan context. The scan-wide format_scan_result method uses
+        // format_host_with_context which passes the actual scan type.
+        self.format_host_with_context(host, ScanType::TcpSyn, Protocol::Tcp)
     }
 
     fn format_port(&self, port: &PortResult) -> Result<String> {
@@ -1457,5 +1535,326 @@ mod tests {
         assert!(output.contains("## Scan Information"));
         assert!(output.contains("## Statistics"));
         assert!(output.contains("## Hosts"));
+    }
+
+    fn create_closed_ports_host() -> HostResult {
+        // Must have > 5 closed ports to trigger suppression (matches nmap threshold).
+        // Without enough ports, "Not shown" is not used and all ports are displayed.
+        let ports: Vec<PortResult> = [22, 80, 443, 8080, 8443, 3306, 5432, 6379]
+            .iter()
+            .map(|&port| PortResult {
+                number: port,
+                protocol: Protocol::Tcp,
+                state: PortState::Closed,
+                state_reason: "reset".to_string(),
+                state_ttl: Some(64),
+                service: Some(ServiceInfo {
+                    name: "unknown".to_string(),
+                    product: None,
+                    version: None,
+                    extrainfo: None,
+                    hostname: None,
+                    ostype: None,
+                    devicetype: None,
+                    method: "table".to_string(),
+                    confidence: 3,
+                    cpe: vec![],
+                }),
+                scripts: vec![],
+            })
+            .collect();
+
+        HostResult {
+            ip: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)),
+            mac: None,
+            hostname: None,
+            status: HostStatus::Up,
+            status_reason: "syn-ack".to_string(),
+            latency: Duration::from_millis(1),
+            ports,
+            os_matches: vec![],
+            scripts: vec![],
+            traceroute: None,
+            times: HostTimes {
+                srtt: Some(1000),
+                rttvar: Some(200),
+                timeout: Some(100_000),
+            },
+        }
+    }
+
+    /// SYN scan should suppress closed ports and show "Not shown" summary.
+    #[test]
+    fn test_normal_formatter_syn_suppresses_closed_ports() {
+        let formatter = NormalFormatter::new();
+        let host = create_closed_ports_host();
+        let result = formatter
+            .format_host_with_context(&host, ScanType::TcpSyn, Protocol::Tcp)
+            .unwrap();
+
+        assert!(
+            result.contains("Not shown: 8 closed tcp ports"),
+            "SYN scan should suppress closed ports. Got: {result}"
+        );
+        assert!(
+            !result.contains("22/tcp"),
+            "SYN scan should not show individual closed ports"
+        );
+        assert!(
+            !result.contains("80/tcp"),
+            "SYN scan should not show individual closed ports"
+        );
+    }
+
+    /// MAIMON scan should show ALL ports (closed is the meaningful result).
+    #[test]
+    fn test_normal_formatter_maimon_shows_all_ports() {
+        let formatter = NormalFormatter::new();
+        let host = create_closed_ports_host();
+        let result = formatter
+            .format_host_with_context(&host, ScanType::TcpMaimon, Protocol::Tcp)
+            .unwrap();
+
+        assert!(
+            !result.contains("Not shown:"),
+            "MAIMON scan should not suppress ports. Got: {result}"
+        );
+        assert!(
+            result.contains("22/tcp"),
+            "MAIMON scan should show port 22. Got: {result}"
+        );
+        assert!(
+            result.contains("80/tcp"),
+            "MAIMON scan should show port 80. Got: {result}"
+        );
+        assert!(
+            result.contains("closed"),
+            "MAIMON scan should show closed state"
+        );
+    }
+
+    /// ACK scan should show ALL ports.
+    #[test]
+    fn test_normal_formatter_ack_shows_all_ports() {
+        let formatter = NormalFormatter::new();
+        let host = create_closed_ports_host();
+        let result = formatter
+            .format_host_with_context(&host, ScanType::TcpAck, Protocol::Tcp)
+            .unwrap();
+
+        assert!(
+            !result.contains("Not shown:"),
+            "ACK scan should not suppress. Got: {result}"
+        );
+        assert!(
+            result.contains("22/tcp"),
+            "ACK scan should show port 22. Got: {result}"
+        );
+    }
+
+    /// Window scan should show ALL ports.
+    #[test]
+    fn test_normal_formatter_window_shows_all_ports() {
+        let formatter = NormalFormatter::new();
+        let host = create_closed_ports_host();
+        let result = formatter
+            .format_host_with_context(&host, ScanType::TcpWindow, Protocol::Tcp)
+            .unwrap();
+
+        assert!(
+            !result.contains("Not shown:"),
+            "Window scan should not suppress. Got: {result}"
+        );
+    }
+
+    /// UDP scan should show ALL ports and use "udp" protocol label.
+    #[test]
+    fn test_normal_formatter_udp_shows_all_ports_with_correct_label() {
+        let formatter = NormalFormatter::new();
+        let mut host = create_closed_ports_host();
+        // Change ports to UDP
+        for port in &mut host.ports {
+            port.protocol = Protocol::Udp;
+        }
+
+        let result = formatter
+            .format_host_with_context(&host, ScanType::Udp, Protocol::Udp)
+            .unwrap();
+
+        assert!(
+            !result.contains("Not shown:"),
+            "UDP scan should not suppress. Got: {result}"
+        );
+        assert!(
+            result.contains("22/udp"),
+            "UDP scan should show port 22 as udp. Got: {result}"
+        );
+    }
+
+    /// SCTP INIT scan should show ALL ports.
+    #[test]
+    fn test_normal_formatter_sctp_init_shows_all_ports() {
+        let formatter = NormalFormatter::new();
+        let mut host = create_closed_ports_host();
+        for port in &mut host.ports {
+            port.protocol = Protocol::Sctp;
+        }
+
+        let result = formatter
+            .format_host_with_context(&host, ScanType::SctpInit, Protocol::Sctp)
+            .unwrap();
+
+        assert!(
+            !result.contains("Not shown:"),
+            "SCTP INIT scan should not suppress. Got: {result}"
+        );
+    }
+
+    /// SCTP Cookie Echo scan should show ALL ports.
+    #[test]
+    fn test_normal_formatter_sctp_cookie_shows_all_ports() {
+        let formatter = NormalFormatter::new();
+        let mut host = create_closed_ports_host();
+        for port in &mut host.ports {
+            port.protocol = Protocol::Sctp;
+        }
+
+        let result = formatter
+            .format_host_with_context(&host, ScanType::SctpCookie, Protocol::Sctp)
+            .unwrap();
+
+        assert!(
+            !result.contains("Not shown:"),
+            "SCTP Cookie scan should not suppress. Got: {result}"
+        );
+    }
+
+    /// IP Protocol scan should show ALL ports.
+    #[test]
+    fn test_normal_formatter_ipproto_shows_all_ports() {
+        let formatter = NormalFormatter::new();
+        let host = create_closed_ports_host();
+
+        let result = formatter
+            .format_host_with_context(&host, ScanType::IpProtocol, Protocol::Tcp)
+            .unwrap();
+
+        assert!(
+            !result.contains("Not shown:"),
+            "IP Protocol scan should not suppress. Got: {result}"
+        );
+    }
+
+    /// Standard scans (FIN, NULL, XMAS) should suppress closed ports like SYN.
+    #[test]
+    fn test_normal_formatter_fin_suppresses_closed_ports() {
+        let formatter = NormalFormatter::new();
+        let host = create_closed_ports_host();
+
+        let result = formatter
+            .format_host_with_context(&host, ScanType::TcpFin, Protocol::Tcp)
+            .unwrap();
+
+        assert!(
+            result.contains("Not shown:"),
+            "FIN scan should suppress closed ports. Got: {result}"
+        );
+    }
+
+    #[test]
+    fn test_normal_formatter_null_suppresses_closed_ports() {
+        let formatter = NormalFormatter::new();
+        let host = create_closed_ports_host();
+
+        let result = formatter
+            .format_host_with_context(&host, ScanType::TcpNull, Protocol::Tcp)
+            .unwrap();
+
+        assert!(
+            result.contains("Not shown:"),
+            "NULL scan should suppress closed ports. Got: {result}"
+        );
+    }
+
+    #[test]
+    fn test_normal_formatter_xmas_suppresses_closed_ports() {
+        let formatter = NormalFormatter::new();
+        let host = create_closed_ports_host();
+
+        let result = formatter
+            .format_host_with_context(&host, ScanType::TcpXmas, Protocol::Tcp)
+            .unwrap();
+
+        assert!(
+            result.contains("Not shown:"),
+            "XMAS scan should suppress closed ports. Got: {result}"
+        );
+    }
+
+    /// Verify the "Not shown" line uses the correct protocol label for UDP.
+    #[test]
+    fn test_normal_formatter_udp_not_shown_uses_udp_label() {
+        let formatter = NormalFormatter::new();
+        let mut host = create_closed_ports_host();
+        for port in &mut host.ports {
+            port.protocol = Protocol::Udp;
+        }
+
+        let result = formatter
+            .format_host_with_context(&host, ScanType::TcpSyn, Protocol::Udp)
+            .unwrap();
+
+        assert!(
+            result.contains("closed udp ports"),
+            "Should say 'closed udp ports', got: {result}"
+        );
+        assert!(
+            !result.contains("closed tcp ports"),
+            "Should NOT say 'closed tcp ports' for UDP scan, got: {result}"
+        );
+    }
+
+    /// Verify the "Not shown" line uses the correct protocol label for SCTP.
+    #[test]
+    fn test_normal_formatter_sctp_not_shown_uses_sctp_label() {
+        let formatter = NormalFormatter::new();
+        let mut host = create_closed_ports_host();
+        for port in &mut host.ports {
+            port.protocol = Protocol::Sctp;
+        }
+
+        let result = formatter
+            .format_host_with_context(&host, ScanType::TcpSyn, Protocol::Sctp)
+            .unwrap();
+
+        assert!(
+            result.contains("closed sctp ports"),
+            "Should say 'closed sctp ports', got: {result}"
+        );
+    }
+
+    /// format_scan_result should pass scan_type context to format_host_with_context.
+    #[test]
+    fn test_format_scan_result_maimon_shows_closed_ports() {
+        let formatter = NormalFormatter::new();
+        let mut result = create_test_scan_result();
+        result.metadata.scan_type = ScanType::TcpMaimon;
+        result.metadata.protocol = Protocol::Tcp;
+        result.hosts.push(create_closed_ports_host());
+
+        let output = formatter.format_scan_result(&result).unwrap();
+
+        assert!(
+            !output.contains("Not shown:"),
+            "MAIMON via format_scan_result should not suppress. Got: {output}"
+        );
+        assert!(
+            output.contains("22/tcp"),
+            "MAIMON via format_scan_result should show port 22. Got: {output}"
+        );
+        assert!(
+            output.contains("80/tcp"),
+            "MAIMON via format_scan_result should show port 80. Got: {output}"
+        );
     }
 }

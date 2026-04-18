@@ -92,7 +92,8 @@ struct InternalCongestionStats {
     /// All probe timeouts are clamped to this floor, matching nmap's
     /// `box(minRttTimeout, maxRttTimeout, timeout)` in timing.cc:153.
     /// T0-T4: 100ms, T5: 50ms.
-    min_rtt: Duration,
+    /// Stored as microseconds for thread-safe atomic access.
+    min_rtt_micros: std::sync::atomic::AtomicU64,
     /// Maximum RTT timeout from config.
     ///
     /// This is the maximum allowed timeout for any probe.
@@ -144,7 +145,7 @@ impl InternalCongestionStats {
         let rttvar_micros = (srtt_micros / 2).clamp(5_000, 2_000_000);
         Self {
             initial_rtt_micros: std::sync::atomic::AtomicU64::new(srtt_micros),
-            min_rtt,
+            min_rtt_micros: std::sync::atomic::AtomicU64::new(min_rtt.as_micros() as u64),
             max_rtt,
             srtt_micros: std::sync::atomic::AtomicU64::new(srtt_micros),
             rttvar_micros: std::sync::atomic::AtomicU64::new(rttvar_micros),
@@ -201,6 +202,34 @@ impl InternalCongestionStats {
         self.rttvar_micros.store(clamped_rttvar, Ordering::Relaxed);
     }
 
+    /// Adjusts the minimum RTT timeout based on measured network characteristics.
+    ///
+    /// For local Ethernet networks (RTT < 1ms), the template default `min_rtt`
+    /// of 100ms (T3) is excessively conservative. Nmap adapts this based on
+    /// host discovery RTT measurements. This method implements the same:
+    /// set `min_rtt` to `max(measured_rtt * safety_factor, absolute_floor)` where
+    /// `safety_factor` provides margin for jitter and NIC load.
+    fn set_min_rtt(&self, measured_rtt: Duration) {
+        use std::sync::atomic::Ordering;
+        // Safety margin: 10x measured RTT, with absolute floor of 5ms.
+        // This accommodates network jitter and NIC queuing delay while
+        // still being much faster than the 100ms internet default.
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "RTT values are bounded to reasonable network latencies (< 30s)"
+        )]
+        let max_rtt_micros = self.max_rtt.as_micros() as u64;
+        let adaptive_min = measured_rtt * 10;
+        let floor = Duration::from_millis(5);
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "RTT values are bounded to reasonable network latencies (< 30s)"
+        )]
+        let new_min = adaptive_min.max(floor).as_micros() as u64;
+        self.min_rtt_micros
+            .store(new_min.min(max_rtt_micros), Ordering::Relaxed);
+    }
+
     /// Returns the recommended timeout: SRTT + 4*RTTVAR.
     ///
     /// The result is clamped to:
@@ -217,11 +246,7 @@ impl InternalCongestionStats {
     /// 50ms for T5), preventing premature timeout on non-responsive probes.
     fn recommended_timeout(&self) -> Duration {
         use std::sync::atomic::Ordering;
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "RTT values are bounded to reasonable network latencies (< 30s)"
-        )]
-        let min_micros = self.min_rtt.as_micros() as u64;
+        let min_micros = self.min_rtt_micros.load(Ordering::Relaxed);
         #[expect(
             clippy::cast_possible_truncation,
             reason = "max_rtt is in milliseconds, fits in u64"
@@ -324,7 +349,7 @@ pub struct InternalCongestionController {
     ssthresh: std::sync::atomic::AtomicUsize,
     /// ACK counter for congestion avoidance (increment once per cwnd ACKs).
     ca_ack_counter: std::sync::atomic::AtomicUsize,
-    max_cwnd: usize,
+    max_cwnd: std::sync::atomic::AtomicUsize,
     /// Congestion avoidance increment (`ca_incr`).
     /// From nmap `timing.cc:276-279`:
     /// - `timing_level` < 4 (T0-T3): `ca_incr` = 1
@@ -369,7 +394,7 @@ impl InternalCongestionController {
             cwnd: std::sync::atomic::AtomicUsize::new(GROUP_INITIAL_CWND),
             ssthresh: std::sync::atomic::AtomicUsize::new(INITIAL_SSTHRESH),
             ca_ack_counter: std::sync::atomic::AtomicUsize::new(0),
-            max_cwnd,
+            max_cwnd: std::sync::atomic::AtomicUsize::new(max_cwnd),
             ca_incr,
             // Initialize to 0 (before any iterations) so first timeout always triggers drop
             last_drop_iteration: std::sync::atomic::AtomicUsize::new(0),
@@ -407,6 +432,25 @@ impl InternalCongestionController {
         // all-filtered hosts, which otherwise never get a reply to trigger
         // update_rtt(). Without this, cwnd stays at 10 for 100+ iterations.
         self.stats.first_measurement.store(false, Ordering::Relaxed);
+    }
+
+    /// Adjusts `min_rtt` based on measured RTT from host discovery.
+    ///
+    /// For local networks where ARP measured < 1ms RTT, this allows
+    /// probe timeouts to be much faster than the 100ms internet default,
+    /// while maintaining a 10x safety margin for jitter and NIC load.
+    fn set_min_rtt(&self, measured_rtt: Duration) {
+        self.stats.set_min_rtt(measured_rtt);
+    }
+
+    /// Sets the maximum congestion window for multi-target scans.
+    ///
+    /// Nmap gives each target its own cwnd, so total parallelism scales
+    /// linearly with target count. This allows the shared cwnd to grow
+    /// proportionally for multi-target hostgroup scans.
+    fn set_max_cwnd(&self, max: usize) {
+        use std::sync::atomic::Ordering;
+        self.max_cwnd.store(max, Ordering::Relaxed);
     }
 
     fn reset(&self) {
@@ -480,7 +524,7 @@ impl InternalCongestionController {
             // slow_incr = 1, scale = 1 (single scans use scale=1)
             // Apply cc_scale to accelerate growth when packet loss is detected
             let increment = (1.0_f64 * cc_scale).ceil() as usize;
-            let new_cwnd = (current_cwnd + increment).min(self.max_cwnd);
+            let new_cwnd = (current_cwnd + increment).min(self.max_cwnd.load(Ordering::Relaxed));
             self.cwnd.store(new_cwnd, Ordering::Relaxed);
         } else {
             // Nmap timing.cc:237 - cwnd += perf->ca_incr / cwnd * cc_scale(perf) * scale
@@ -501,7 +545,8 @@ impl InternalCongestionController {
                 self.ca_ack_counter.store(0, Ordering::Relaxed);
                 // Apply cc_scale to the increment as well
                 let increment = (f64::from(self.ca_incr) * cc_scale).ceil() as usize;
-                let new_cwnd = (current_cwnd + increment).min(self.max_cwnd);
+                let new_cwnd =
+                    (current_cwnd + increment).min(self.max_cwnd.load(Ordering::Relaxed));
                 self.cwnd.store(new_cwnd, Ordering::Relaxed);
             }
         }
@@ -588,7 +633,7 @@ impl InternalCongestionController {
         use std::sync::atomic::Ordering;
         let current = self.cwnd.load(Ordering::Relaxed);
         // Already at max, nothing to do
-        if current >= self.max_cwnd {
+        if current >= self.max_cwnd.load(Ordering::Relaxed) {
             return;
         }
         let expected = self.stats.num_replies_expected.load(Ordering::Relaxed);
@@ -608,7 +653,7 @@ impl InternalCongestionController {
             expected > u64::try_from(current).unwrap_or(u64::MAX)
         };
         if should_boost {
-            let target = (current * 2).min(self.max_cwnd);
+            let target = (current * 2).min(self.max_cwnd.load(Ordering::Relaxed));
             self.cwnd.store(target, Ordering::Relaxed);
         }
     }
@@ -971,6 +1016,15 @@ impl ParallelScanEngine {
     /// scanning via `target->to.srtt` (`scan_engine.cc:508-516`).
     pub fn set_initial_rtt(&self, rtt: Duration) {
         self.congestion.set_initial_rtt(rtt);
+    }
+
+    /// Adjusts `min_rtt` based on measured RTT from host discovery.
+    ///
+    /// For local networks where ARP measured < 1ms RTT, this allows
+    /// probe timeouts to be much faster than the 100ms internet default,
+    /// while maintaining a 10x safety margin for jitter and NIC load.
+    pub fn set_adaptive_min_rtt(&self, measured_rtt: Duration) {
+        self.congestion.set_min_rtt(measured_rtt);
     }
 
     /// Enforces the `scan_delay` between probes.
@@ -1429,6 +1483,269 @@ impl ParallelScanEngine {
         Ok(results)
     }
 
+    /// Scans multiple targets in parallel using interleaved probing.
+    ///
+    /// This mirrors nmap's hostgroup architecture where all targets in a group
+    /// share the same send/receive loop. Probes are sent round-robin across
+    /// targets so that network round-trip time is overlapped between hosts.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if packet engine initialization fails or probe sending fails.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "Multi-target scanning requires handling send, receive, timeout, and result collection in one method"
+    )]
+    pub async fn scan_ports_multi(
+        &self,
+        targets: &[(Ipv4Addr, Ipv4Addr)],
+        ports: &[Port],
+    ) -> Result<HashMap<Ipv4Addr, HashMap<Port, PortState>>, rustnmap_common::ScanError> {
+        if targets.is_empty() {
+            return Ok(HashMap::new());
+        }
+        if targets.len() == 1 {
+            let (target, _src) = targets[0];
+            let single = self.scan_ports(target, ports).await?;
+            let mut map = HashMap::new();
+            map.insert(target, single);
+            return Ok(map);
+        }
+
+        let start_time = Instant::now();
+        self.congestion.reset();
+
+        // Scale parallelism for multi-target scans. Nmap gives each target
+        // its own cwnd, so total parallelism scales linearly with target count.
+        // For small port counts, scaling helps throughput. For large port counts,
+        // cap at a moderate level to avoid PACKET_MMAP ring buffer overflow.
+        let num_targets = targets.len();
+        let total_probes = num_targets * ports.len();
+        let parallel_cap = if total_probes < 10_000 {
+            // Small scans: aggressive scaling for speed
+            (self.max_parallelism * num_targets).min(2000)
+        } else {
+            // Large scans: conservative to avoid ring buffer overflow
+            self.max_parallelism
+        };
+        let effective_max_parallelism = parallel_cap;
+        self.congestion.set_max_cwnd(effective_max_parallelism);
+
+        // Use larger batch size for multi-target to amortize receive overhead.
+        // Single-target uses 50, multi-target scales proportionally but caps at 500.
+        let effective_batch_size = (BATCH_SIZE * num_targets).min(500);
+
+        // Build interleaved port list: (target_idx, port) round-robin
+        // e.g., for 2 targets and ports [80, 443]: [(0,80), (1,80), (0,443), (1,443)]
+        let mut work_items: Vec<(usize, Port)> = Vec::with_capacity(targets.len() * ports.len());
+        for port in ports {
+            for (idx, _) in targets.iter().enumerate() {
+                work_items.push((idx, *port));
+            }
+        }
+        let mut work_iter = work_items.into_iter().peekable();
+
+        // Source addresses per target
+        let src_addrs: Vec<Ipv4Addr> = targets.iter().map(|(_, src)| *src).collect();
+
+        let mut outstanding: HashMap<(Ipv4Addr, Port), OutstandingProbe> = HashMap::new();
+        let mut all_results: HashMap<Ipv4Addr, HashMap<Port, PortState>> = HashMap::new();
+        for (target, _) in targets {
+            all_results.entry(*target).or_default();
+        }
+        let mut retry_probes: Vec<OutstandingProbe> = Vec::new();
+        let mut probes_sent_this_batch: usize = 0;
+        let mut max_successful_tryno: u32 = 0;
+
+        // Determine the correct packet engine for these targets.
+        // If targets require a different source address than self.local_addr,
+        // the main packet engine is bound to the wrong interface and won't
+        // capture responses. Create a new engine bound to the correct interface.
+        let first_src = src_addrs[0];
+        let packet_engine = if first_src == self.local_addr {
+            self.packet_engine.clone()
+        } else {
+            create_stealth_engine_with_target(
+                Some(first_src),
+                Some(targets[0].0),
+                self.config.clone(),
+            )
+        };
+        if let Some(ref engine) = packet_engine {
+            let _ = engine.lock().await.start().await;
+        }
+
+        while work_iter.peek().is_some() || !outstanding.is_empty() || !retry_probes.is_empty() {
+            if start_time.elapsed() > self.scan_timeout {
+                for probe in outstanding.values() {
+                    all_results
+                        .entry(probe.target)
+                        .or_default()
+                        .entry(probe.port)
+                        .or_insert(PortState::Filtered);
+                }
+                break;
+            }
+
+            let current_cwnd = self.congestion.cwnd();
+
+            // Send probes round-robin across targets
+            while outstanding.len() < current_cwnd
+                && outstanding.len() < effective_max_parallelism
+                && probes_sent_this_batch < effective_batch_size
+            {
+                if let Some(wait_time) = self.rate_limiter.check_rate() {
+                    tokio::time::sleep(wait_time).await;
+                    if outstanding.len() >= current_cwnd
+                        || outstanding.len() >= effective_max_parallelism
+                        || probes_sent_this_batch >= effective_batch_size
+                    {
+                        break;
+                    }
+                }
+
+                if let Some((tidx, port)) = work_iter.next() {
+                    let target = targets[tidx].0;
+                    let src_addr = src_addrs[tidx];
+                    self.enforce_scan_delay().await;
+                    self.send_probe(target, port, src_addr, &mut outstanding)?;
+                    self.congestion.on_packet_sent();
+                    self.rate_limiter.record_sent();
+                    probes_sent_this_batch += 1;
+                } else if let Some(retry) = retry_probes.pop() {
+                    let tidx = targets
+                        .iter()
+                        .position(|(t, _)| *t == retry.target)
+                        .unwrap_or(0);
+                    let src_addr = src_addrs[tidx];
+                    self.resend_probe(retry, src_addr, &mut outstanding)?;
+                    self.rate_limiter.record_sent();
+                } else {
+                    break;
+                }
+            }
+
+            // Receive and process responses (same logic as scan_ports)
+            if let Some(ref engine) = packet_engine {
+                let mut eng = engine.lock().await;
+                let probe_timeout = self.congestion.recommended_timeout();
+
+                let earliest_remaining = if outstanding.is_empty() {
+                    Duration::from_millis(2)
+                } else {
+                    outstanding
+                        .values()
+                        .map(|p| {
+                            let elapsed = p.sent_time.elapsed();
+                            if elapsed >= probe_timeout {
+                                Duration::ZERO
+                            } else {
+                                probe_timeout - elapsed
+                            }
+                        })
+                        .min()
+                        .unwrap_or(Duration::from_millis(5))
+                        .max(Duration::from_millis(2))
+                };
+                let mut drain_deadline = Instant::now() + earliest_remaining;
+                let mut first_recv = true;
+
+                loop {
+                    if Instant::now() >= drain_deadline {
+                        break;
+                    }
+                    if outstanding.is_empty() {
+                        break;
+                    }
+
+                    let wait = if first_recv {
+                        Duration::from_millis(5)
+                    } else {
+                        Duration::from_micros(500)
+                    };
+
+                    if let Ok(Some(data)) = eng.recv_with_timeout(wait).await {
+                        first_recv = false;
+                        if let Some(packet) = Self::parse_packet(&data) {
+                            let probe_key = (packet.src_ip, packet.src_port);
+                            if let Some(probe) = outstanding.remove(&probe_key) {
+                                let expected_ack = probe.seq.wrapping_add(1);
+                                let rst_received = (packet.flags & 0x04) != 0;
+                                let valid_response = if rst_received {
+                                    packet.ack == expected_ack
+                                } else {
+                                    packet.ack == expected_ack && packet.seq() != 0
+                                };
+                                if valid_response {
+                                    let rtt = probe.sent_time.elapsed();
+                                    if probe.retry_count > max_successful_tryno {
+                                        max_successful_tryno = probe.retry_count;
+                                    }
+                                    self.congestion.record_expected();
+                                    self.congestion.on_packet_acked(Some(rtt));
+                                    all_results
+                                        .entry(packet.src_ip)
+                                        .or_default()
+                                        .insert(packet.src_port, packet.port_state());
+                                } else {
+                                    outstanding.insert(probe_key, probe);
+                                }
+                            }
+                        }
+                    } else {
+                        if first_recv && !outstanding.is_empty() {
+                            let remaining = outstanding
+                                .values()
+                                .map(|p| {
+                                    let elapsed = p.sent_time.elapsed();
+                                    if elapsed >= probe_timeout {
+                                        Duration::ZERO
+                                    } else {
+                                        probe_timeout - elapsed
+                                    }
+                                })
+                                .min()
+                                .unwrap_or(Duration::from_millis(5));
+                            if remaining > Duration::from_millis(2) {
+                                drop(eng);
+                                tokio::time::sleep(remaining).await;
+                                eng = engine.lock().await;
+                                drain_deadline = Instant::now() + Duration::from_millis(50);
+                                first_recv = false;
+                                continue;
+                            }
+                        }
+                        break;
+                    }
+                    if Instant::now() >= drain_deadline {
+                        break;
+                    }
+                }
+            }
+
+            // Check timeouts - route timed-out probes to correct target's results
+            let timed_out = self.check_timeouts_multi(&mut outstanding, &mut retry_probes);
+            for (target, port, state) in timed_out {
+                all_results.entry(target).or_default().insert(port, state);
+            }
+
+            if probes_sent_this_batch >= effective_batch_size {
+                probes_sent_this_batch = 0;
+            }
+
+            if !self
+                .congestion
+                .stats
+                .first_measurement
+                .load(std::sync::atomic::Ordering::Relaxed)
+            {
+                self.congestion.maybe_boost_cwnd();
+            }
+        }
+
+        Ok(all_results)
+    }
+
     /// Parses a received packet into a `ReceivedPacket`.
     ///
     /// Returns `None` if the packet cannot be parsed as a TCP packet.
@@ -1607,6 +1924,37 @@ impl ParallelScanEngine {
                 // Same reasoning: do not count filtered ports as packet loss.
             }
         }
+    }
+
+    /// Multi-target variant of `check_timeouts` that returns `(target, port, state)` tuples
+    /// so results can be routed to the correct per-target `HashMap`.
+    fn check_timeouts_multi(
+        &self,
+        outstanding: &mut HashMap<(Ipv4Addr, Port), OutstandingProbe>,
+        retry_probes: &mut Vec<OutstandingProbe>,
+    ) -> Vec<(Ipv4Addr, Port, PortState)> {
+        let now = Instant::now();
+        let probe_timeout = self.congestion.recommended_timeout();
+
+        let timed_out: Vec<_> = outstanding
+            .iter()
+            .filter(|(_, p)| now.duration_since(p.sent_time) >= probe_timeout)
+            .map(|(k, p)| (*k, p.clone()))
+            .collect();
+
+        let mut finalized = Vec::new();
+        for (key, probe) in timed_out {
+            self.congestion.record_expected();
+            let tryno_cap = u32::from(self.config.max_retries);
+            if probe.retry_count < tryno_cap {
+                outstanding.remove(&key);
+                retry_probes.push(probe);
+            } else {
+                outstanding.remove(&key);
+                finalized.push((probe.target, probe.port, PortState::Filtered));
+            }
+        }
+        finalized
     }
 
     /// Generates a unique source port for each probe.

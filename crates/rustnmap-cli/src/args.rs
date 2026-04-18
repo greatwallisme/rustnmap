@@ -1087,6 +1087,9 @@ impl Args {
                 "M" => ScanType::Maimon,
                 "A" => ScanType::Ack,
                 "W" => ScanType::Window,
+                "Y" => ScanType::SctpInit,
+                "Z" => ScanType::SctpCookieEcho,
+                "O" => ScanType::IpProtocol,
                 _ => ScanType::Syn,
             };
         }
@@ -1137,6 +1140,12 @@ pub enum ScanType {
     Window,
     /// FTP Bounce scan
     FtpBounce,
+    /// SCTP INIT scan
+    SctpInit,
+    /// SCTP Cookie Echo scan
+    SctpCookieEcho,
+    /// IP Protocol scan
+    IpProtocol,
 }
 
 /// Parses a time specification string to milliseconds, matching nmap's `tval2msecs`.

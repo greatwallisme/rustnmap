@@ -129,7 +129,10 @@ fn test_probe_definition_creation() {
         payload: b"GET / HTTP/1.0\r\n\r\n".to_vec(),
         rarity: 5,
         ssl_ports: vec![443],
+        totalwaitms: 6000,
+        tcpwrappedms: 0,
         matches: vec![],
+        fallback: vec![],
     };
 
     assert_eq!(probe.name, "TestProbe");
@@ -257,7 +260,10 @@ fn test_probe_protocols() {
         payload: vec![],
         rarity: 5,
         ssl_ports: vec![],
+        totalwaitms: 6000,
+        tcpwrappedms: 0,
         matches: vec![],
+        fallback: vec![],
     };
 
     let udp_probe = ProbeDefinition {
@@ -267,7 +273,10 @@ fn test_probe_protocols() {
         payload: vec![],
         rarity: 5,
         ssl_ports: vec![],
+        totalwaitms: 6000,
+        tcpwrappedms: 0,
         matches: vec![],
+        fallback: vec![],
     };
 
     assert_eq!(tcp_probe.protocol, Protocol::Tcp);
@@ -378,7 +387,10 @@ fn test_probe_definition_debug() {
         payload: vec![1, 2, 3],
         rarity: 5,
         ssl_ports: vec![],
+        totalwaitms: 6000,
+        tcpwrappedms: 0,
         matches: vec![],
+        fallback: vec![],
     };
 
     let debug_str = format!("{probe:?}");

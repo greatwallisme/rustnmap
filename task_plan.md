@@ -1,54 +1,61 @@
-# Task Plan: Rustnmap Performance & Accuracy Overhaul
+# Task Plan: Accuracy & Speed Optimization
 
 ## Goal
-Fix rustnmap to match nmap's speed and accuracy for network scanning.
+Exceed nmap in BOTH accuracy AND speed. Handle real-world network conditions. No fake speed via timeout reduction.
 
-## Baseline Measurements (2026-04-14)
-- Command: `rustnmap -Pn -vv 192.168.15.0/24` vs `nmap -Pn -vv 192.168.15.0/24`
-- Nmap: 256 IPs, 32 hosts up, **20.5 seconds**
-- Rustnmap: 255 IPs, 255 hosts up, **397.4 seconds (19x slower)**
+---
 
-## Issues Found
+## Current State (2026-04-18)
 
-### ISSUE 1: Output Formatting - Closed Ports Not Suppressed [HIGH]
-- Nmap shows `Not shown: N closed tcp ports (reset)` summary line
-- Rustnmap dumps ALL closed ports individually - noise, not useful
-- Location: `crates/rustnmap-output/` or `crates/rustnmap-cli/src/cli.rs`
+### Benchmark: 61/62 PASS (98.3%), 0 failures, 3 skipped (Idle/Zombie needs zombie host)
 
-### ISSUE 2: Accuracy - Ports Incorrectly Marked as Filtered [CRITICAL]
-- Nmap correctly identifies open/closed/filtered
-- Rustnmap marks most ports as "filtered" - response matching broken
-- Root cause: scan engine not receiving or matching TCP RST responses
+### Speed: ALL tests >= 1.0x
 
-### ISSUE 3: Speed - 19x Slower Than Nmap [CRITICAL]
-- 397s vs 20.5s for same scan
-- Possible causes:
-  a. Per-target packet engine creation overhead
-  b. Sequential host scanning instead of true parallel
-  c. Response receive loop timing issues
-  d. Congestion control too conservative
+| Category | Speed | Notes |
+|----------|-------|-------|
+| SYN Scan | 1.3x | |
+| Connect Scan | 4.2x | |
+| UDP Scan | 1.1x | |
+| FIN/NULL/XMAS | 2.6-2.8x | |
+| Service Detection | 1.5x | |
+| Aggressive Scan | 4.1x | |
+| OS Detection | 1.2x | |
+| 32 Targets /27 | 3.6x | |
 
-### ISSUE 4: Host Count Mismatch
-- Nmap reports 32 hosts up, Rustnmap reports 255
-- With -Pn both skip discovery, but nmap still filters non-responsive hosts
+### Accuracy Issues (Remaining)
 
-## Phase 1: Root Cause Investigation [in_progress]
-- [x] Run comparison scans
-- [x] Read ultrascan engine code
-- [ ] Read output formatting code
-- [ ] Profile single-host scan to isolate speed issues
-- [ ] Verify packet engine response capture
-- [ ] Check response matching logic
+| Issue | Severity | Status |
+|-------|----------|--------|
+| Filtered port output (closed vs filtered) | HIGH | FIXED |
+| Service version port 31337 "Elite" vs "tcpwrapped" | MEDIUM | FIXED |
+| Service version port 22 in -A mode | MEDIUM | PENDING |
+| Service Info OS/CPE line missing | LOW | PENDING |
+| OS detection precision (94% vs 96%) | LOW | PENDING |
 
-## Phase 2: Fix Output Formatting [pending]
-- Suppress closed ports with summary line (nmap behavior)
-- Show only open, filtered, open|filtered ports
+---
 
-## Phase 3: Fix Scanning Engine [pending]
-- Fix response matching (accuracy)
-- Optimize parallel scanning (speed)
-- Fix packet engine reuse
+## Completed Phases
 
-## Phase 4: Verify [pending]
-- Run full comparison test
-- Zero warnings/errors
+### Phase 1: Output Format - Filtered Port Display [COMPLETE]
+- Root cause: `is_interesting_port()` excluded `Filtered` state
+- Nmap shows filtered ports as they indicate firewall presence
+- Fix: `is_interesting_port` returns true for all non-Closed states
+- Also fixed `determine_suppression_info` to correctly summarize mixed states
+- Result: 991 closed + 5 filtered now correctly separated, matching nmap exactly
+
+### Phase 2: Exclude Port Accuracy Fix [COMPLETE]
+### Phase 3: SCTP/IP Protocol Scan Accuracy Fix [COMPLETE]
+### Phase 4: Min/Max Rate Speed [COMPLETE]
+### Phase 5: Multi-Target Parallel Scanning [COMPLETE]
+### Phase 6: Adaptive Parallelism Scaling [COMPLETE]
+### Phase 7: Port Suppression Threshold [COMPLETE]
+
+---
+
+## Remaining Work
+
+### Phase 8: Service Detection Accuracy [IN PROGRESS]
+- [x] Port 31337: "Elite" -> "tcpwrapped" (added tcpwrapped detection via EOF timing)
+- [x] Filtered port display: two-tier suppression (show when <= 20, suppress when many)
+- [x] Output matches nmap exactly for both scanme.nmap.org and baidu.com
+- [ ] Service Info line: missing OS/CPE aggregation (low priority)

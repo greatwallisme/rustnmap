@@ -1303,10 +1303,14 @@ impl ScanOrchestrator {
                     if self.session.config.host_discovery {
                         self.run_host_discovery().await?;
                     } else {
-                        // Even with -Pn (host_discovery disabled), run a quick ARP ping
-                        // on local network targets to filter dead hosts before port scanning.
-                        // Nmap does this on Ethernet networks regardless of -Pn.
-                        self.run_arp_prefilter().await?;
+                        // For single-host targets with auto-disabled host discovery,
+                        // skip ARP pre-filter entirely (like nmap). The scan itself
+                        // will determine if the host is up. ARP pre-filter only saves
+                        // time for subnet scans where many hosts may be down.
+                        let target_count = self.session.target_set.targets().len();
+                        if target_count > 1 {
+                            self.run_arp_prefilter().await?;
+                        }
                     }
                 }
                 ScanPhase::PortScanning => {
@@ -1424,6 +1428,101 @@ impl ScanOrchestrator {
         Ok(scan_result)
     }
 
+    /// Runs batch ARP discovery on directly-connected targets grouped by source IP.
+    ///
+    /// Targets on different L2 segments (e.g., Docker bridge vs physical NIC) must
+    /// use the correct source address for ARP to work. This function groups targets
+    /// by their routed source IP, then runs a separate ARP batch per group.
+    ///
+    /// # Arguments
+    ///
+    /// * `direct_targets` - `(target_ip, ipv4)` pairs for directly-connected hosts
+    /// * `dns_server` - DNS server address for `HostDiscovery` config
+    /// * `mark_host_complete` - Callback invoked per host after state is set
+    ///
+    /// # Returns
+    ///
+    /// `(up_count, down_count)` tallies from the ARP results.
+    async fn run_grouped_arp_batch<F>(
+        &self,
+        direct_targets: &[(IpAddr, Ipv4Addr)],
+        dns_server: &str,
+        mut mark_host_complete: F,
+    ) -> (usize, usize)
+    where
+        F: FnMut(),
+    {
+        let mut groups: HashMap<Ipv4Addr, Vec<(IpAddr, Ipv4Addr)>> = HashMap::new();
+        for (ip, ipv4) in direct_targets {
+            let src_ip = get_source_address_for_target(*ipv4);
+            groups.entry(src_ip).or_default().push((*ip, *ipv4));
+        }
+
+        let discovery_config = rustnmap_common::ScanConfig {
+            min_rtt: Duration::from_millis(50),
+            max_rtt: Duration::from_secs(1),
+            initial_rtt: Duration::from_millis(200),
+            max_retries: 1,
+            host_timeout: 500,
+            scan_delay: Duration::ZERO,
+            dns_server: dns_server.to_string(),
+            min_rate: None,
+            max_rate: None,
+            timing_level: 5,
+            badsum: false,
+        };
+        let discovery = HostDiscovery::new(discovery_config);
+
+        let own_ips: HashSet<Ipv4Addr> = Self::detect_local_ipv4_addresses();
+        let mut up_count = 0usize;
+        let mut down_count = 0usize;
+
+        for (src_ip, group_targets) in &groups {
+            let target_ips: Vec<Ipv4Addr> = group_targets.iter().map(|(_, ip)| *ip).collect();
+            info!(
+                "Running ARP batch on {} targets via source {}",
+                target_ips.len(),
+                src_ip
+            );
+
+            match discovery.discover_arp_batch(&target_ips, *src_ip) {
+                Ok(responded) => {
+                    let mut state_guard = self.state.write().await;
+                    for (ip, ipv4) in group_targets {
+                        let host_state = state_guard.host_state(*ip);
+                        if responded.contains(ipv4) {
+                            host_state.status = HostStatus::Up;
+                            host_state.discovery_method = Some("arp-response".to_string());
+                            up_count += 1;
+                        } else if own_ips.contains(ipv4) {
+                            host_state.status = HostStatus::Up;
+                            host_state.discovery_method = Some("local-address".to_string());
+                            up_count += 1;
+                        } else {
+                            host_state.status = HostStatus::Down;
+                            host_state.discovery_method = Some("no-arp-response".to_string());
+                            down_count += 1;
+                        }
+                        mark_host_complete();
+                    }
+                }
+                Err(e) => {
+                    debug!("Batch ARP ping failed for source {}: {e}", src_ip);
+                    let mut state_guard = self.state.write().await;
+                    for (ip, _) in group_targets {
+                        let host_state = state_guard.host_state(*ip);
+                        host_state.status = HostStatus::Up;
+                        host_state.discovery_method = Some("arp-error".to_string());
+                        up_count += 1;
+                        mark_host_complete();
+                    }
+                }
+            }
+        }
+
+        (up_count, down_count)
+    }
+
     /// Runs a quick ARP ping pre-filter on local network targets.
     ///
     /// This is called when `-Pn` is used (host discovery disabled). Nmap performs
@@ -1439,18 +1538,27 @@ impl ScanOrchestrator {
 
         // Split targets into directly-connected (same L2 segment) and remote.
         // nmap's implicitARPPing (targets.cc:504-516) only does ARP ping on
-        // directly-connected ethernet targets. Non-directly-connected targets
-        // are behind a router and cannot be reached via ARP; their MAC is
-        // not on our L2 segment. With -Pn, these are treated as Up without
-        // any host discovery.
+        // directly-connected ethernet targets.
         let mut direct_targets: Vec<(IpAddr, Ipv4Addr)> = Vec::new();
         let mut remote_targets: Vec<(IpAddr, Ipv4Addr)> = Vec::new();
 
         for target in &targets {
             if let IpAddr::V4(addr) = target.ip {
-                // Skip broadcast and network addresses
                 let octets = addr.octets();
                 if octets[3] == 255 || octets[3] == 0 {
+                    // Mark network/broadcast addresses as Down so port scanning
+                    // skips them too.
+                    let mut state_guard = self.state.write().await;
+                    let host_state = state_guard.host_state(target.ip);
+                    host_state.status = HostStatus::Down;
+                    host_state.discovery_method = Some(
+                        if octets[3] == 0 {
+                            "network-address"
+                        } else {
+                            "broadcast-address"
+                        }
+                        .to_string(),
+                    );
                     continue;
                 }
                 if is_directly_connected(std::net::Ipv4Addr::new(
@@ -1464,11 +1572,9 @@ impl ScanOrchestrator {
         }
 
         let mut up_count = 0usize;
-        let mut down_count = 0usize;
 
         // Mark remote (non-directly-connected) targets as Up immediately.
-        // With -Pn, nmap treats these as Up without any host discovery
-        // (targets.cc:536-547, pingtype == PINGTYPE_NONE && !arpping_done).
+        // With -Pn, nmap treats these as Up without any host discovery.
         {
             let mut state_guard = self.state.write().await;
             for (ip, _) in &remote_targets {
@@ -1491,72 +1597,16 @@ impl ScanOrchestrator {
             return Ok(());
         }
 
-        // Run batch ARP ping only on directly-connected targets.
-        let target_ips: Vec<Ipv4Addr> = direct_targets.iter().map(|(_, ip)| *ip).collect();
+        let dns_server = &self.session.config.dns_server;
+        let (arp_up, arp_down) = self
+            .run_grouped_arp_batch(&direct_targets, dns_server, || {})
+            .await;
+        up_count += arp_up;
 
         info!(
-            "Running ARP pre-filter on {} directly-connected targets (batch ARP ping)",
-            target_ips.len()
+            "ARP pre-filter: {} hosts up, {} hosts down",
+            up_count, arp_down
         );
-
-        // Create a HostDiscovery with fast timeout for batch ARP ping.
-        // nmap's INITIAL_ARP_RTT_TIMEOUT is 200ms; we use initial_rtt as the
-        // overall batch receive timeout (not per-host).
-        let discovery_config = rustnmap_common::ScanConfig {
-            min_rtt: Duration::from_millis(50),
-            max_rtt: Duration::from_secs(1),
-            initial_rtt: Duration::from_millis(200),
-            max_retries: 1,
-            host_timeout: 500,
-            scan_delay: Duration::ZERO,
-            dns_server: self.session.config.dns_server.clone(),
-            min_rate: None,
-            max_rate: None,
-            timing_level: 5,
-            badsum: false,
-        };
-        let discovery = HostDiscovery::new(discovery_config);
-
-        match discovery.discover_arp_batch(&target_ips) {
-            Ok(responded) => {
-                // Detect our own IP addresses (they won't respond to our own ARP requests).
-                // nmap handles this by marking local addresses as "user-set" for -Pn.
-                let own_ips: HashSet<Ipv4Addr> = Self::detect_local_ipv4_addresses();
-
-                let mut state_guard = self.state.write().await;
-
-                for (ip, ipv4) in &direct_targets {
-                    let host_state = state_guard.host_state(*ip);
-                    if responded.contains(ipv4) {
-                        host_state.status = HostStatus::Up;
-                        host_state.discovery_method = Some("arp-response".to_string());
-                        up_count += 1;
-                    } else if own_ips.contains(ipv4) {
-                        // Our own IP: won't respond to own ARP request, mark as Up
-                        host_state.status = HostStatus::Up;
-                        host_state.discovery_method = Some("local-address".to_string());
-                        up_count += 1;
-                    } else {
-                        host_state.status = HostStatus::Down;
-                        host_state.discovery_method = Some("no-arp-response".to_string());
-                        down_count += 1;
-                    }
-                }
-            }
-            Err(e) => {
-                // Batch ARP failed (e.g., permission denied) - treat all as Up
-                debug!("Batch ARP ping failed: {e}");
-                let mut state_guard = self.state.write().await;
-                for (ip, _) in &direct_targets {
-                    let host_state = state_guard.host_state(*ip);
-                    host_state.status = HostStatus::Up;
-                    host_state.discovery_method = Some("arp-error".to_string());
-                }
-                up_count += direct_targets.len();
-            }
-        }
-
-        info!("ARP pre-filter: {up_count} hosts up, {down_count} hosts down");
 
         Ok(())
     }
@@ -1587,13 +1637,29 @@ impl ScanOrchestrator {
         let mut direct_targets: Vec<(IpAddr, Ipv4Addr)> = Vec::new();
         let mut remote_targets: Vec<Target> = Vec::new();
         let mut ipv6_targets: Vec<Target> = Vec::new();
+        let mut up_count = 0usize;
+        let mut down_count = 0usize;
 
         for target in &targets_vec {
             match target.ip {
                 IpAddr::V4(addr) => {
-                    // Skip broadcast and network addresses - these are not real hosts
+                    // Skip broadcast and network addresses - these are not real hosts.
+                    // Mark them as Down so the port scanning phase also skips them.
                     let octets = addr.octets();
                     if octets[3] == 255 || octets[3] == 0 {
+                        let mut state_guard = self.state.write().await;
+                        let host_state = state_guard.host_state(target.ip);
+                        host_state.status = HostStatus::Down;
+                        host_state.discovery_method = Some(
+                            if octets[3] == 0 {
+                                "network-address"
+                            } else {
+                                "broadcast-address"
+                            }
+                            .to_string(),
+                        );
+                        drop(state_guard);
+                        down_count += 1;
                         continue;
                     }
                     if is_directly_connected(std::net::Ipv4Addr::new(
@@ -1610,67 +1676,17 @@ impl ScanOrchestrator {
             }
         }
 
-        let mut up_count = 0usize;
-        let mut down_count = 0usize;
-
         // Phase 1: ARP batch discovery for directly-connected targets
         if !direct_targets.is_empty() {
-            let target_ips: Vec<Ipv4Addr> = direct_targets.iter().map(|(_, ip)| *ip).collect();
-            info!(
-                "Running batch ARP discovery on {} directly-connected targets",
-                target_ips.len()
-            );
-
-            let discovery_config = rustnmap_common::ScanConfig {
-                min_rtt: Duration::from_millis(50),
-                max_rtt: Duration::from_secs(1),
-                initial_rtt: Duration::from_millis(200),
-                max_retries: 1,
-                host_timeout: 500,
-                scan_delay: Duration::ZERO,
-                dns_server: self.session.config.dns_server.clone(),
-                min_rate: None,
-                max_rate: None,
-                timing_level: 5,
-                badsum: false,
-            };
-            let discovery = HostDiscovery::new(discovery_config);
-
-            match discovery.discover_arp_batch(&target_ips) {
-                Ok(responded) => {
-                    let own_ips: HashSet<Ipv4Addr> = Self::detect_local_ipv4_addresses();
-                    let mut state_guard = self.state.write().await;
-
-                    for (ip, ipv4) in &direct_targets {
-                        let host_state = state_guard.host_state(*ip);
-                        if responded.contains(ipv4) {
-                            host_state.status = HostStatus::Up;
-                            host_state.discovery_method = Some("arp-response".to_string());
-                            up_count += 1;
-                        } else if own_ips.contains(ipv4) {
-                            host_state.status = HostStatus::Up;
-                            host_state.discovery_method = Some("local-address".to_string());
-                            up_count += 1;
-                        } else {
-                            host_state.status = HostStatus::Down;
-                            host_state.discovery_method = Some("no-arp-response".to_string());
-                            down_count += 1;
-                        }
-                        self.session.stats.mark_host_complete();
-                    }
-                }
-                Err(e) => {
-                    debug!("Batch ARP ping failed: {e}");
-                    let mut state_guard = self.state.write().await;
-                    for (ip, _) in &direct_targets {
-                        let host_state = state_guard.host_state(*ip);
-                        host_state.status = HostStatus::Up;
-                        host_state.discovery_method = Some("arp-error".to_string());
-                        up_count += 1;
-                        self.session.stats.mark_host_complete();
-                    }
-                }
-            }
+            let stats = Arc::clone(&self.session.stats);
+            let dns_server = &self.session.config.dns_server;
+            let (arp_up, arp_down) = self
+                .run_grouped_arp_batch(&direct_targets, dns_server, || {
+                    stats.mark_host_complete();
+                })
+                .await;
+            up_count += arp_up;
+            down_count += arp_down;
         }
 
         // Phase 2: ICMP/TCP ping for remote and IPv6 targets
@@ -1911,19 +1927,10 @@ impl ScanOrchestrator {
             // Get MAC addresses for IPv4 targets (only for local network targets)
             let mac_timeout = std::time::Duration::from_millis(500);
 
-            // Scan targets sequentially to avoid PACKET_MMAP ring buffer contention.
-            //
-            // nmap's architecture (scan_engine.cc, ultrascan.cc) uses a single
-            // centralized send/receive loop. All targets share one pcap handle,
-            // and the loop processes probes for all hosts in a hostgroup together.
-            // Concurrent scan_ports() calls fighting over the same ring buffer
-            // causes lock contention and packet loss, producing inaccurate results
-            // on multi-target scans (e.g., /23 with hosts across subnets).
-
-            // Track last measured RTT to propagate to subsequent targets when
-            // per-target measurement fails (e.g., all-filtered hosts). Nmap does
-            // this via target->to.srtt carry-over within a hostgroup.
-            let mut last_measured_rtt: Option<Duration> = None;
+            // Pre-compute RTT and source addresses for all targets, then scan
+            // them in a single interleaved loop (nmap hostgroup parallelism).
+            let mut scan_targets: Vec<(Ipv4Addr, Ipv4Addr)> = Vec::new();
+            let mut target_ips: Vec<Ipv4Addr> = Vec::new();
 
             for target in &targets {
                 let target_ip = match target.ip {
@@ -1933,65 +1940,112 @@ impl ScanOrchestrator {
                         continue;
                     }
                 };
+                target_ips.push(target_ip);
 
-                // Measure RTT to this specific target for adaptive timing.
-                // Nmap propagates host discovery RTT into port scanning via
-                // target->to.srtt (scan_engine.cc:508-516). Without this,
-                // the first-round probe timeout uses the template default
-                // (1000ms for T3) instead of measured RTT.
-                //
-                // When per-target measurement fails (all probe ports filtered),
-                // fall back to the last successful measurement from a previous
-                // target in the same subnet, or the timing template default.
-                let measured_rtt =
-                    measure_target_rtt(get_source_address_for_target(target_ip), target_ip);
-                let rtt_for_scan = measured_rtt
-                    .or(last_measured_rtt)
-                    .unwrap_or(timing_config.initial_rtt);
-                if measured_rtt.is_some() {
-                    last_measured_rtt = measured_rtt;
+                let src_addr = get_source_address_for_target(target_ip);
+                scan_targets.push((target_ip, src_addr));
+            }
+
+            // Measure RTT for all targets first
+            let mut last_measured_rtt: Option<Duration> = None;
+            let mut any_local_arp = false;
+            for target_ip in &target_ips {
+                let discovery_info = {
+                    let state_guard = self.state.read().await;
+                    state_guard
+                        .get_host_state(IpAddr::V4(*target_ip))
+                        .and_then(|hs| hs.discovery_method.clone())
+                };
+                let is_local_arp = discovery_info
+                    .as_ref()
+                    .is_some_and(|m| m == "arp-response" || m == "local-address");
+
+                if is_local_arp {
+                    any_local_arp = true;
+                    last_measured_rtt = Some(Duration::from_millis(1));
+                } else {
+                    let measured =
+                        measure_target_rtt(get_source_address_for_target(*target_ip), *target_ip);
+                    if measured.is_some() {
+                        last_measured_rtt = measured;
+                    }
                 }
-                engine.set_initial_rtt(rtt_for_scan);
-                debug!(
-                    ip = %target.ip,
-                    measured_rtt = ?measured_rtt,
-                    rtt_for_scan = ?rtt_for_scan,
-                    "Per-target RTT for scan"
-                );
+            }
 
-                // Run parallel scan for this target (TCP SYN or UDP)
-                let scan_results = if primary_scan_type == ScanType::Udp {
+            // Set adaptive min_rtt: use local ARP floor if any target was ARP-discovered
+            if any_local_arp {
+                engine.set_adaptive_min_rtt(Duration::from_millis(1));
+            } else {
+                engine.set_adaptive_min_rtt(timing_config.min_rtt);
+            }
+
+            let rtt_for_scan = last_measured_rtt.unwrap_or(timing_config.initial_rtt);
+            engine.set_initial_rtt(rtt_for_scan);
+
+            // Run parallel scan for all targets simultaneously (nmap hostgroup)
+            let all_scan_results = if primary_scan_type == ScanType::Udp {
+                // UDP multi-target not yet implemented, scan sequentially
+                let mut combined = HashMap::new();
+                for &(target_ip, _) in &scan_targets {
                     match engine.scan_udp_ports(target_ip, &ports).await {
-                        Ok(r) => r,
+                        Ok(r) => {
+                            combined.insert(target_ip, r);
+                        }
                         Err(e) => {
-                            warn!(ip = %target.ip, error = %e, "UDP parallel scan failed for target");
-                            continue;
+                            warn!(ip = %target_ip, error = %e, "UDP parallel scan failed");
                         }
                     }
-                } else {
-                    match engine.scan_ports(target_ip, &ports).await {
-                        Ok(r) => r,
-                        Err(e) => {
-                            warn!(ip = %target.ip, error = %e, "Parallel scan failed for target");
-                            continue;
-                        }
+                }
+                combined
+            } else if scan_targets.len() == 1 {
+                // Single target: use original single-target scan
+                let (target_ip, _) = scan_targets[0];
+                match engine.scan_ports(target_ip, &ports).await {
+                    Ok(r) => {
+                        let mut map = HashMap::new();
+                        map.insert(target_ip, r);
+                        map
                     }
+                    Err(e) => {
+                        warn!(ip = %target_ip, error = %e, "Parallel scan failed");
+                        HashMap::new()
+                    }
+                }
+            } else {
+                // Multi-target: interleaved hostgroup scan
+                match engine.scan_ports_multi(&scan_targets, &ports).await {
+                    Ok(r) => r,
+                    Err(e) => {
+                        warn!(error = %e, "Multi-target parallel scan failed");
+                        HashMap::new()
+                    }
+                }
+            };
+
+            // Determine protocol for results
+            let (protocol, service_protocol) = if primary_scan_type == ScanType::Udp {
+                (
+                    rustnmap_output::models::Protocol::Udp,
+                    rustnmap_common::ServiceProtocol::Udp,
+                )
+            } else {
+                (
+                    rustnmap_output::models::Protocol::Tcp,
+                    rustnmap_common::ServiceProtocol::Tcp,
+                )
+            };
+
+            // Convert per-target scan results to host results
+            for target in &targets {
+                let target_ip = match target.ip {
+                    IpAddr::V4(addr) => addr,
+                    IpAddr::V6(_) => continue,
                 };
 
-                // Determine protocol for results
-                let (protocol, service_protocol) = if primary_scan_type == ScanType::Udp {
-                    (
-                        rustnmap_output::models::Protocol::Udp,
-                        rustnmap_common::ServiceProtocol::Udp,
-                    )
-                } else {
-                    (
-                        rustnmap_output::models::Protocol::Tcp,
-                        rustnmap_common::ServiceProtocol::Tcp,
-                    )
+                let Some(scan_results) = all_scan_results.get(&target_ip) else {
+                    continue;
                 };
 
-                // Convert scan results to port results
                 let mut port_results = Vec::new();
                 for (port, common_state) in scan_results {
                     let output_state = match common_state {
@@ -2007,12 +2061,12 @@ impl ScanOrchestrator {
                     let is_open = output_state == PortState::Open;
 
                     let port_result = PortResult {
-                        number: port,
+                        number: *port,
                         protocol,
                         state: output_state,
                         state_reason: "scan".to_string(),
                         state_ttl: None,
-                        service: service_info_from_db(port, service_protocol),
+                        service: service_info_from_db(*port, service_protocol),
                         scripts: Vec::new(),
                     };
 
@@ -2023,7 +2077,7 @@ impl ScanOrchestrator {
                     self.session.stats.record_packet_sent();
                 }
 
-                // Get MAC address via ARP (only for IPv4 targets on local network)
+                // Get MAC address via ARP
                 let mac = resolve_mac_address(target_ip, local_addr, mac_timeout).map(|mac_addr| {
                     let mac_str = mac_addr.to_string();
                     let vendor = self
@@ -2038,7 +2092,6 @@ impl ScanOrchestrator {
                     }
                 });
 
-                // Determine status reason based on scan type
                 let status_reason = if primary_scan_type == ScanType::Udp {
                     "udp-response".to_string()
                 } else {
@@ -3131,11 +3184,10 @@ impl ScanOrchestrator {
 
     /// Gets the list of ports to scan based on configuration.
     fn get_ports_for_scan(&self) -> Vec<u16> {
-        match &self.session.config.port_spec {
+        let mut ports: Vec<u16> = match &self.session.config.port_spec {
             super::session::PortSpec::All => (1..=65535).collect(),
             super::session::PortSpec::Top(n) => {
                 let db = rustnmap_common::ServiceDatabase::global();
-                // Use frequency-sorted top ports from nmap-services database
                 let primary_scan_type = self
                     .session
                     .config
@@ -3151,7 +3203,15 @@ impl ScanOrchestrator {
             }
             super::session::PortSpec::List(ports) => ports.clone(),
             super::session::PortSpec::Range { start, end } => (*start..=*end).collect(),
+        };
+
+        // Filter excluded ports (--exclude-ports)
+        let excluded = &self.session.config.excluded_ports;
+        if !excluded.is_empty() {
+            ports.retain(|p| !excluded.contains(p));
         }
+
+        ports
     }
 
     /// Runs the service detection phase.
@@ -3926,7 +3986,6 @@ fn service_info_from_db(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rustnmap_common::Ipv4Addr;
     use rustnmap_target::TargetGroup;
 
     fn create_test_session() -> Arc<ScanSession> {

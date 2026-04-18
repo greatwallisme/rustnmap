@@ -48,13 +48,34 @@ pub struct ProbeDefinition {
     #[serde(default)]
     pub ssl_ports: Vec<u16>,
 
+    /// Total wait time in ms for NULL probe (banner grab).
+    /// Corresponds to `totalwaitms` directive in nmap-service-probes.
+    /// Default 6000 matches nmap's NULL probe.
+    #[serde(default = "default_totalwaitms")]
+    pub totalwaitms: u64,
+
+    /// Connection-close threshold in ms for tcpwrapped detection.
+    /// Corresponds to `tcpwrappedms` directive.
+    #[serde(default)]
+    pub tcpwrappedms: u64,
+
     /// Match rules for responses to this probe.
     #[serde(default)]
     pub matches: Vec<MatchRule>,
+
+    /// Names of other probes whose match rules should be tried if this
+    /// probe's own rules produce no match. Corresponds to the `fallback`
+    /// directive in nmap-service-probes (e.g. `fallback GetRequest`).
+    #[serde(default)]
+    pub fallback: Vec<String>,
 }
 
 fn default_rarity() -> u8 {
     5
+}
+
+fn default_totalwaitms() -> u64 {
+    6000
 }
 
 /// Network protocol for service probes.
@@ -191,7 +212,10 @@ impl ProbeDefinition {
             payload,
             rarity: 5,
             ssl_ports: Vec::new(),
+            totalwaitms: 6000,
+            tcpwrappedms: 0,
             matches: Vec::new(),
+            fallback: Vec::new(),
         }
     }
 
@@ -205,7 +229,10 @@ impl ProbeDefinition {
             payload,
             rarity: 5,
             ssl_ports: Vec::new(),
+            totalwaitms: 6000,
+            tcpwrappedms: 0,
             matches: Vec::new(),
+            fallback: Vec::new(),
         }
     }
 

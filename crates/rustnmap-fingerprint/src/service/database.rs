@@ -179,6 +179,27 @@ impl ProbeDatabase {
                 if let Some(ref mut probe) = current_probe {
                     probe.rarity = Self::parse_rarity(rest)?;
                 }
+            } else if let Some(rest) = Self::strip_prefix_case_insensitive(line, "totalwaitms ") {
+                if let Some(ref mut probe) = current_probe {
+                    if let Ok(ms) = rest.trim().parse::<u64>() {
+                        probe.totalwaitms = ms;
+                    }
+                }
+            } else if let Some(rest) = Self::strip_prefix_case_insensitive(line, "tcpwrappedms ") {
+                if let Some(ref mut probe) = current_probe {
+                    if let Ok(ms) = rest.trim().parse::<u64>() {
+                        probe.tcpwrappedms = ms;
+                    }
+                }
+            } else if let Some(rest) = Self::strip_prefix_case_insensitive(line, "fallback ") {
+                if let Some(ref mut probe) = current_probe {
+                    probe.fallback = rest
+                        .trim()
+                        .split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect();
+                }
             }
         }
 
@@ -284,7 +305,10 @@ impl ProbeDatabase {
             payload: payload_bytes,
             rarity: 5,
             ssl_ports: Vec::new(),
+            totalwaitms: 6000,
+            tcpwrappedms: 0,
             matches: Vec::new(),
+            fallback: Vec::new(),
         })
     }
 
@@ -696,6 +720,12 @@ impl ProbeDatabase {
         Ok(())
     }
 
+    /// Get all probes in the database.
+    #[must_use]
+    pub fn all_probes(&self) -> Vec<&ProbeDefinition> {
+        self.probes.values().collect()
+    }
+
     /// Get probes for a specific port.
     #[must_use]
     pub fn probes_for_port(&self, port: u16) -> Vec<&ProbeDefinition> {
@@ -869,6 +899,30 @@ Match http m|^Server: ([\w/]+)| p/$1/
     fn test_invalid_port_range() {
         let result = ProbeDatabase::parse_ports("abc-def");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_fallback() {
+        let content = r"
+Probe TCP FourOhFourRequest q|GET /nonexistent HTTP/1.0\r\n\r\n|
+rarity 6
+ports 80-85,88,2100,8000-8010,8080-8085,8880-8888,9999,49152
+fallback GetRequest
+match http m|^HTTP/1\.0 404| p/Test/
+
+Probe TCP SIPOptions q|OPTIONS sip:nm SIP/2.0\r\n\r\n|
+rarity 3
+fallback GetRequest,HTTPOptions
+match sip m|^SIP/2\.0| p/SIP/
+";
+        let db = ProbeDatabase::parse(content).unwrap();
+        assert_eq!(db.probe_count(), 2);
+
+        let fofr = db.get_probe("FourOhFourRequest").unwrap();
+        assert_eq!(fofr.fallback, vec!["GetRequest"]);
+
+        let sip = db.get_probe("SIPOptions").unwrap();
+        assert_eq!(sip.fallback, vec!["GetRequest", "HTTPOptions"]);
     }
 
     #[test]

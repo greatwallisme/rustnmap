@@ -197,6 +197,8 @@ pub struct ScanConfig {
     pub no_port_scan: bool,
     /// Send packets with bogus TCP/UDP/SCTP checksum (--badsum).
     pub badsum: bool,
+    /// Ports to exclude from scanning (--exclude-ports).
+    pub excluded_ports: Vec<u16>,
 }
 
 impl Default for ScanConfig {
@@ -233,6 +235,7 @@ impl Default for ScanConfig {
             dns_server: rustnmap_common::DEFAULT_DNS_SERVER.to_string(),
             no_port_scan: false,
             badsum: false,
+            excluded_ports: Vec::new(),
         }
     }
 }

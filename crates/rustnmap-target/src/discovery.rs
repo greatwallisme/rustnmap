@@ -1193,7 +1193,8 @@ impl ArpPingBatch {
         const TOTAL_ROUNDS: usize = 3;
         const ROUND_RECV_MS: u64 = 500;
 
-        let mut responded: HashSet<Ipv4Addr> = HashSet::with_capacity(target_ips.len());
+        let total_targets = target_ips.len();
+        let mut responded: HashSet<Ipv4Addr> = HashSet::with_capacity(total_targets);
 
         for round in 0..TOTAL_ROUNDS {
             let pending: Vec<Ipv4Addr> = target_ips
@@ -1222,13 +1223,23 @@ impl ArpPingBatch {
                 }
             }
 
-            // Receive phase for this round
+            // Immediate drain after sending all requests — for small batches,
+            // replies may already be buffered before we enter the long poll.
+            self.drain_replies(&mut responded);
+            if responded.len() >= total_targets {
+                break;
+            }
+
+            // Receive phase for this round with early termination when all
+            // expected targets have responded. The maximum wait is still
+            // ROUND_RECV_MS, but responsive hosts on local networks return
+            // in < 1ms so we exit almost immediately.
             let recv_duration = if round == 0 {
                 Duration::from_millis(ROUND_RECV_MS)
             } else {
                 Duration::from_millis(ROUND_RECV_MS / 2)
             };
-            self.poll_replies(recv_duration, &mut responded)?;
+            self.poll_replies_with_limit(recv_duration, &mut responded, total_targets)?;
         }
 
         // Final drain
@@ -1237,11 +1248,14 @@ impl ArpPingBatch {
         Ok(responded)
     }
 
-    /// Receives ARP replies using `poll()` for the given duration.
-    fn poll_replies(
+    /// Receives ARP replies using `poll()` with early termination when
+    /// `responded.len() >= expected_count`. Avoids wasting time polling
+    /// when all expected hosts have already replied.
+    fn poll_replies_with_limit(
         &self,
         duration: Duration,
         responded: &mut HashSet<Ipv4Addr>,
+        expected_count: usize,
     ) -> Result<(), ScanError> {
         let deadline = Instant::now() + duration;
         let mut recv_buf = [0u8; 256];
@@ -1255,6 +1269,11 @@ impl ArpPingBatch {
         }
 
         while Instant::now() < deadline {
+            // Early termination: all expected hosts responded
+            if responded.len() >= expected_count {
+                break;
+            }
+
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
                 break;
@@ -1291,6 +1310,10 @@ impl ArpPingBatch {
                     if let Some((_, sender_ip)) = parse_arp_reply(&recv_buf[..len]) {
                         responded.insert(sender_ip);
                     }
+                }
+                // Check early termination after processing received data
+                if responded.len() >= expected_count {
+                    break;
                 }
             } else if ready < 0 {
                 let err = io::Error::last_os_error();
@@ -2563,6 +2586,10 @@ impl HostDiscovery {
     /// # Arguments
     ///
     /// * `target_ips` - IPv4 addresses to probe
+    /// * `source_ip` - Source IPv4 address to use for ARP requests. Must belong to
+    ///   the interface on the same L2 segment as the targets. This is critical for
+    ///   multi-homed hosts where the default route interface differs from the target
+    ///   network (e.g., Docker bridge networks).
     ///
     /// # Returns
     ///
@@ -2574,8 +2601,9 @@ impl HostDiscovery {
     pub fn discover_arp_batch(
         &self,
         target_ips: &[Ipv4Addr],
+        source_ip: Ipv4Addr,
     ) -> Result<HashSet<Ipv4Addr>, ScanError> {
-        let src_ip = self.get_local_ipv4_address();
+        let src_ip = source_ip;
         let src_mac = Self::get_interface_mac(src_ip).unwrap_or_else(MacAddr::broadcast);
         // nmap's INITIAL_ARP_RTT_TIMEOUT is 200ms; overall timeout is
         // box(min_rtt, initial_rtt, INITIAL_ARP_RTT_TIMEOUT) * 1000.

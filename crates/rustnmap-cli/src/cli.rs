@@ -1214,6 +1214,11 @@ fn build_scan_config(args: &Args) -> Result<ScanConfig> {
         ..ScanConfig::default()
     };
 
+    // IP Protocol scan (-sO): override port spec to protocol range (0-255)
+    if matches!(args.scan_type(), crate::args::ScanType::IpProtocol) {
+        config.port_spec = PortSpec::Range { start: 0, end: 255 };
+    }
+
     // Timing template
     if let Some(timing) = args.timing {
         config.timing_template = match timing {
@@ -1309,6 +1314,11 @@ fn build_scan_config(args: &Args) -> Result<ScanConfig> {
 
     // Bad checksum (--badsum)
     config.badsum = args.badsum;
+
+    // Excluded ports (--exclude-ports)
+    if let Some(ref exclude) = args.exclude_port {
+        config.excluded_ports = parse_exclude_ports(exclude)?;
+    }
 
     Ok(config)
 }
@@ -1595,6 +1605,39 @@ fn parse_port_spec(args: &Args) -> Result<PortSpec> {
     }
 }
 
+/// Parses excluded ports string (e.g., "22", "22,80", "1-100").
+fn parse_exclude_ports(s: &str) -> Result<Vec<u16>> {
+    let mut excluded = Vec::new();
+    for segment in s.split(',') {
+        let segment = segment.trim();
+        if segment.contains('-') {
+            let parts: Vec<&str> = segment.split('-').collect();
+            if parts.len() != 2 {
+                return Err(rustnmap_common::Error::Other(format!(
+                    "Invalid exclude port range: {segment}"
+                )));
+            }
+            let start: u16 = parts[0].parse().map_err(|_e| {
+                rustnmap_common::Error::Other(format!("Invalid port number: {}", parts[0]))
+            })?;
+            let end: u16 = parts[1].parse().map_err(|_e| {
+                rustnmap_common::Error::Other(format!("Invalid port number: {}", parts[1]))
+            })?;
+            for p in start..=end {
+                excluded.push(p);
+            }
+        } else {
+            let port_num: u16 = segment.parse().map_err(|_e| {
+                rustnmap_common::Error::Other(format!("Invalid port number: {segment}"))
+            })?;
+            excluded.push(port_num);
+        }
+    }
+    excluded.sort_unstable();
+    excluded.dedup();
+    Ok(excluded)
+}
+
 /// Parses a port string (e.g., "22,80,443" or "1-1000").
 fn parse_port_string(s: &str) -> Result<PortSpec> {
     let mut ports = Vec::new();
@@ -1650,6 +1693,10 @@ const fn map_scan_type(scan_type: crate::args::ScanType) -> CoreScanType {
         crate::args::ScanType::Maimon => CoreScanType::TcpMaimon,
         crate::args::ScanType::Ack => CoreScanType::TcpAck,
         crate::args::ScanType::Window => CoreScanType::TcpWindow,
+        crate::args::ScanType::SctpInit | crate::args::ScanType::SctpCookieEcho => {
+            CoreScanType::SctpInit
+        }
+        crate::args::ScanType::IpProtocol => CoreScanType::IpProtocol,
     }
 }
 
@@ -1678,10 +1725,34 @@ fn build_command_line_string(args: &Args) -> String {
                     let _ = write!(cmd, " -b {b}");
                 }
             }
+            crate::args::ScanType::SctpInit => cmd.push_str(" -sY"),
+            crate::args::ScanType::SctpCookieEcho => cmd.push_str(" -sZ"),
+            crate::args::ScanType::IpProtocol => cmd.push_str(" -sO"),
         }
     }
 
-    // Add ports (skip for -sn)
+    // Service detection
+    if args.service_detection {
+        cmd.push_str(" -sV");
+    }
+    if let Some(intensity) = args.version_intensity {
+        let _ = write!(cmd, " --version-intensity {intensity}");
+    }
+
+    // OS detection
+    if args.os_detection {
+        cmd.push_str(" -O");
+    }
+    if args.aggressive_scan {
+        cmd.push_str(" -A");
+    }
+
+    // Timing
+    if let Some(timing) = args.timing {
+        let _ = write!(cmd, " -T{timing}");
+    }
+
+    // Port scan options
     if let Some(ports) = &args.ports {
         let _ = write!(cmd, " -p{ports}");
     } else if args.port_range_all {
@@ -1690,6 +1761,47 @@ fn build_command_line_string(args: &Args) -> String {
         cmd.push_str(" -F");
     } else if let Some(top) = args.top_ports {
         let _ = write!(cmd, " --top-ports {top}");
+    }
+
+    // Host discovery
+    if args.disable_ping {
+        cmd.push_str(" -Pn");
+    }
+    if args.no_dns {
+        cmd.push_str(" -n");
+    }
+    if args.always_dns {
+        cmd.push_str(" -R");
+    }
+
+    // Script scanning
+    if let Some(ref s) = args.script {
+        let _ = write!(cmd, " --script={s}");
+    }
+    if args.script_default {
+        cmd.push_str(" -sC");
+    }
+
+    // Traceroute
+    if args.traceroute {
+        cmd.push_str(" --traceroute");
+    }
+
+    // Output
+    if args.verbose > 0 {
+        let _ = write!(cmd, " -{}", "v".repeat(args.verbose as usize));
+    }
+    if args.debug > 0 {
+        let _ = write!(cmd, " -{}", "d".repeat(args.debug as usize));
+    }
+    if args.open {
+        cmd.push_str(" --open");
+    }
+    if args.reasons {
+        cmd.push_str(" --reason");
+    }
+    if args.packet_trace {
+        cmd.push_str(" --packet-trace");
     }
 
     // Add targets
@@ -1766,8 +1878,10 @@ fn print_normal_output(args: &Args, result: &ScanResult, command_line: &str) {
     let _ = writeln!(&mut handle);
 
     // Host results
+    let scan_type = result.metadata.scan_type;
+    let protocol = result.metadata.protocol;
     for host in &result.hosts {
-        print_host_normal(&mut handle, args, host);
+        print_host_normal(&mut handle, args, host, scan_type, protocol);
     }
 
     // Footer
@@ -1795,7 +1909,13 @@ fn print_normal_output(args: &Args, result: &ScanResult, command_line: &str) {
     clippy::too_many_lines,
     reason = "Host printing requires detailed per-state formatting"
 )]
-fn print_host_normal<W: Write>(handle: &mut W, _args: &Args, host: &HostResult) {
+fn print_host_normal<W: Write>(
+    handle: &mut W,
+    _args: &Args,
+    host: &HostResult,
+    scan_type: ScanType,
+    protocol: Protocol,
+) {
     let _ = writeln!(handle, "RustNmap scan report for {}", host.ip);
 
     if let Some(ref hostname) = host.hostname {
@@ -1822,21 +1942,56 @@ fn print_host_normal<W: Write>(handle: &mut W, _args: &Args, host: &HostResult) 
         let mut sorted_ports: Vec<&PortResult> = host.ports.iter().collect();
         sorted_ports.sort_by_key(|p| (p.number, p.protocol));
 
-        // Nmap behavior: always suppress closed/filtered ports and show
-        // "Not shown: N closed tcp ports (reset)" summary line.
-        // Verbose mode adds reason/timing info, NOT more port states.
-        let (interesting_ports, suppressed_ports): (Vec<_>, Vec<_>) = sorted_ports
-            .iter()
-            .partition::<Vec<_>, _>(|p| is_interesting_port(p.state));
+        // Scan-type-aware port suppression: SYN/Connect/FIN/NULL/XMAS suppress
+        // closed ports, but MAIMON/Window/ACK/UDP/SCTP/IP Protocol show all.
+        // Additionally, for small scans (few suppressed ports), nmap shows all
+        // ports regardless — "Not shown" is only useful when many ports are hidden.
+        let suppress = should_suppress_closed_ports(scan_type);
+        let (interesting_ports, suppressed_ports): (Vec<&PortResult>, Vec<&PortResult>) =
+            if suppress {
+                // Partition into always-shown, conditionally-shown, and always-suppressed.
+                let (always, rest): (Vec<&PortResult>, Vec<&PortResult>) =
+                    sorted_ports.iter().partition(|p| is_always_shown(p.state));
+                let (conditional, boring): (Vec<&PortResult>, Vec<&PortResult>) = rest
+                    .into_iter()
+                    .partition(|p| is_conditionally_shown(p.state));
+
+                // Nmap shows filtered ports when there are few (< 20 threshold).
+                // When hundreds of ports are filtered, they're suppressed into
+                // "Not shown" like closed ports. This matches nmap's behavior:
+                // scanme.nmap.org (5 filtered) → shown in table
+                // baidu.com (998 filtered) → suppressed in "Not shown"
+                let show_conditional = conditional.len() <= 20;
+
+                let mut interesting = always;
+                let mut suppressed = boring;
+                if show_conditional {
+                    interesting.extend(conditional);
+                } else {
+                    suppressed.extend(conditional);
+                }
+
+                // Also show all ports when very few are suppressed (avoids
+                // "Not shown: 3 closed" for trivial scans).
+                if suppressed.len() > 5 {
+                    (interesting, suppressed)
+                } else {
+                    (sorted_ports.clone(), Vec::new())
+                }
+            } else {
+                (sorted_ports.clone(), Vec::new())
+            };
 
         // Print "Not shown" summary line if any ports were suppressed
         if !suppressed_ports.is_empty() {
+            let proto_label = protocol_label(protocol);
             let (state_word, reason) = determine_suppression_info(&suppressed_ports);
             let _ = writeln!(
                 handle,
-                "Not shown: {} {} tcp ports ({})",
+                "Not shown: {} {} {} ports ({})",
                 suppressed_ports.len(),
                 state_word,
+                proto_label,
                 reason
             );
         }
@@ -1969,18 +2124,55 @@ fn format_state_col(port: &PortResult) -> &'static str {
     }
 }
 
-/// Returns true if a port state is "interesting" and should be shown by default.
+/// Returns true if a port state is always shown regardless of count.
 ///
-/// Matches nmap behavior: only open, open|filtered, and unfiltered ports
-/// are shown without -v. Closed and filtered ports are suppressed.
-fn is_interesting_port(state: PortState) -> bool {
+/// `Open`, `OpenOrFiltered`, and `Unfiltered` ports carry definitive information
+/// and are always displayed. Filtered ports are conditionally interesting
+/// (shown when few, suppressed when many) -- handled separately.
+fn is_always_shown(state: PortState) -> bool {
     matches!(
         state,
-        PortState::Open
-            | PortState::OpenOrFiltered
-            | PortState::Unfiltered
+        PortState::Open | PortState::OpenOrFiltered | PortState::Unfiltered
+    )
+}
+
+/// Returns true if a port state is conditionally interesting (shown when few).
+///
+/// Filtered ports indicate firewall behavior. Nmap shows them when there are
+/// few (e.g., 5 out of 1000) but suppresses them when they dominate (e.g., 998).
+fn is_conditionally_shown(state: PortState) -> bool {
+    matches!(
+        state,
+        PortState::Filtered
+            | PortState::ClosedOrFiltered
+            | PortState::FilteredOrClosed
             | PortState::OpenOrClosed
     )
+}
+
+/// Returns true if closed/filtered ports should be suppressed for this scan type.
+///
+/// SYN, Connect, FIN, NULL, XMAS scans suppress closed ports (like nmap).
+/// MAIMON, Window, ACK, UDP, SCTP, IP Protocol scans show ALL port states
+/// because closed/filtered IS the meaningful result for these scan types.
+fn should_suppress_closed_ports(scan_type: ScanType) -> bool {
+    matches!(
+        scan_type,
+        ScanType::TcpSyn
+            | ScanType::TcpConnect
+            | ScanType::TcpFin
+            | ScanType::TcpNull
+            | ScanType::TcpXmas
+    )
+}
+
+/// Returns the lowercase protocol label for display.
+fn protocol_label(protocol: Protocol) -> &'static str {
+    match protocol {
+        Protocol::Tcp => "tcp",
+        Protocol::Udp => "udp",
+        Protocol::Sctp => "sctp",
+    }
 }
 
 /// Determines the state word and reason for the "Not shown" summary line.
@@ -2431,6 +2623,25 @@ fn handle_ftp_bounce_scan(args: &Args) -> Result<()> {
     let end_time = chrono::Utc::now();
     let elapsed = end_time - start_time;
 
+    let total_hosts = hosts.len();
+    let hosts_up = hosts
+        .iter()
+        .filter(|h| h.status == rustnmap_output::models::HostStatus::Up)
+        .count();
+    let mut open_ports = 0u64;
+    let mut closed_ports = 0u64;
+    let mut filtered_ports = 0u64;
+    for host in &hosts {
+        for port in &host.ports {
+            match port.state {
+                rustnmap_output::models::PortState::Open => open_ports += 1,
+                rustnmap_output::models::PortState::Closed => closed_ports += 1,
+                rustnmap_output::models::PortState::Filtered => filtered_ports += 1,
+                _ => {}
+            }
+        }
+    }
+
     let scan_result = rustnmap_output::models::ScanResult {
         metadata: rustnmap_output::models::ScanMetadata {
             scanner_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -2442,7 +2653,19 @@ fn handle_ftp_bounce_scan(args: &Args) -> Result<()> {
             protocol: rustnmap_output::models::Protocol::Tcp,
         },
         hosts,
-        statistics: rustnmap_output::models::ScanStatistics::default(),
+        statistics: rustnmap_output::models::ScanStatistics {
+            total_hosts,
+            hosts_up,
+            hosts_down: total_hosts - hosts_up,
+            total_ports: open_ports + closed_ports + filtered_ports,
+            open_ports,
+            closed_ports,
+            filtered_ports,
+            bytes_sent: 0,
+            bytes_received: 0,
+            packets_sent: 0,
+            packets_received: 0,
+        },
         errors: vec![],
     };
 

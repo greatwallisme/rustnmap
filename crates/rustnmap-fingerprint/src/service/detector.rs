@@ -30,6 +30,7 @@ use pcre2::bytes::Regex;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, UdpSocket};
 use tokio::time::timeout;
+use tokio_rustls::{client::TlsStream, rustls, TlsConnector};
 use tracing::{debug, info, trace};
 
 use super::{
@@ -37,6 +38,26 @@ use super::{
     probe::{MatchResult, ProbeDefinition, Protocol},
 };
 use crate::{FingerprintError, Result};
+
+/// Maximum time to wait for banner data during NULL probe (banner grab).
+///
+/// For non-banner services (HTTP, etc.) the server never sends unsolicited data,
+/// so the read would block until timeout. Without this cap the banner grab
+/// consumes the entire 5-second probe budget, leaving zero time for actual
+/// probes like GetRequest -- which is the probe that detects HTTP versions.
+///
+/// Banner services (SSH, FTP, SMTP) send data within milliseconds of connect,
+/// so 2 seconds is more than sufficient even with high-latency links.
+const BANNER_READ_TIMEOUT_CAP: Duration = Duration::from_secs(2);
+
+/// Maximum time to wait for a single probe response.
+///
+/// Without this cap, a probe like X11Probe (which receives no response from HTTP
+/// servers) can consume the entire remaining budget, preventing later probes like
+/// FourOhFourRequest from ever running.  nmap uses per-probe timeouts (~5s each)
+/// rather than a shared budget; capping at 1.5s preserves budget fairness while
+/// still allowing ample time for typical service responses.
+const PROBE_READ_TIMEOUT_CAP: Duration = Duration::from_millis(1500);
 
 /// Service version information detected from a port.
 ///
@@ -178,16 +199,33 @@ impl ServiceDetector {
         port: u16,
         protocol: &str,
     ) -> Result<Vec<ServiceInfo>> {
+        self.detect_service_inner(target, port, protocol, false)
+            .await
+    }
+
+    /// Core service detection with optional SSL tunnel support.
+    ///
+    /// Implements nmap's two-pass detection model:
+    /// 1. Plain TCP pass: banner grab + probes (excludes sslports-only probes)
+    /// 2. If service detected as "ssl" and port matches sslports, establish TLS
+    ///    and re-run probes inside the encrypted tunnel
+    async fn detect_service_inner(
+        &self,
+        target: &SocketAddr,
+        port: u16,
+        protocol: &str,
+        in_ssl_tunnel: bool,
+    ) -> Result<Vec<ServiceInfo>> {
         info!(
-            "Starting service detection on {}:{} ({})",
+            "Starting service detection on {}:{} ({}) tunnel={}",
             target.ip(),
             port,
-            protocol
+            protocol,
+            if in_ssl_tunnel { "ssl" } else { "none" }
         );
         let is_udp = protocol.eq_ignore_ascii_case("udp");
 
         // nmap's DEFAULT_SERVICEWAITMS = 5000ms: total time budget for ALL probes.
-        // Each probe's timeout = budget - elapsed_so_far.
         let total_budget = self.default_timeout;
         let start = Instant::now();
         let mut results = Vec::new();
@@ -195,17 +233,24 @@ impl ServiceDetector {
         // Track TCP connection for reuse after banner grab (nmap optimization)
         let mut reusable_stream: Option<tokio::net::TcpStream> = None;
 
+        // --- Phase 1: Banner grab (NULL probe) ---
+
         // Banner grabbing only works for TCP (services that send banners on connect).
         // UDP services never send unsolicited data, so skip banner grab entirely.
-        // nmap calls this the "NULL probe" and it shares the same time budget.
-        if !is_udp {
+        // For known SSL ports (443, 993, 995, ...), skip banner grab completely.
+        // Opening a plain TCP connection on an SSL-only port wastes time AND the
+        // server may reject subsequent TLS connections after the plain connection
+        // closes (connection reset). nmap also skips the NULL probe on SSL ports.
+        let is_known_ssl = !is_udp && !in_ssl_tunnel && self.is_probable_ssl_port(port);
+
+        if !is_udp && !is_known_ssl {
             let remaining = total_budget.saturating_sub(start.elapsed());
             if !remaining.is_zero() {
                 match self
                     .grab_banner_and_keep_stream(target, port, remaining)
                     .await
                 {
-                    Ok((banner_opt, stream_opt)) => {
+                    Ok((banner_opt, stream_opt, closed_after_ms)) => {
                         reusable_stream = stream_opt;
 
                         if let Some(banner) = banner_opt {
@@ -214,7 +259,8 @@ impl ServiceDetector {
                             // Try to match banner against all probe rules
                             let probes = self.select_probes(port, protocol);
                             for probe in &probes {
-                                let matches = Self::match_response(probe, &banner)?;
+                                let matches =
+                                    Self::match_response_with_fallback(&self.db, probe, &banner)?;
                                 for match_result in matches {
                                     results.push(ServiceInfo::from_match(match_result));
                                 }
@@ -222,6 +268,20 @@ impl ServiceDetector {
 
                             // If we got confident results from banner, return early
                             if results.iter().any(|r| r.confidence >= 8) {
+                                return Ok(results);
+                            }
+                        } else {
+                            // No banner received — check for tcpwrapped.
+                            // Nmap: if the connection closes before tcpwrappedms (default 3000ms)
+                            // with no data, the service is classified as "tcpwrapped".
+                            let tcpwrappedms = self.get_tcpwrappedms();
+                            if closed_after_ms < tcpwrappedms {
+                                debug!(
+                                    "tcpwrapped detected: connection closed after {}ms (threshold {}ms)",
+                                    closed_after_ms, tcpwrappedms
+                                );
+                                let info = ServiceInfo::new("tcpwrapped").with_confidence(8);
+                                results.push(info);
                                 return Ok(results);
                             }
                         }
@@ -233,11 +293,36 @@ impl ServiceDetector {
             }
         }
 
-        // Get applicable probes for this port at configured intensity
-        let probes = self.select_probes(port, protocol);
-        debug!("Selected {} probes for port {}", probes.len(), port);
+        // --- Phase 2: Active probes ---
 
-        if probes.is_empty() {
+        // For known SSL ports, skip the plain-text probe phase entirely.
+        // Rationale: plain probes on SSL-only ports (443, 993, 995) never match
+        // HTTP/SMTP/etc. services -- they waste time and open TCP connections that
+        // can cause the subsequent TLS handshake to be rejected (connection reset).
+        // nmap's behavior is equivalent: on ssl-only ports it goes straight to TLS.
+        let skip_plain_probes = is_known_ssl && !in_ssl_tunnel;
+
+        // Select probes for this port, excluding NULL (already handled by banner grab).
+        // In SSL tunnel pass, prefer probes that list this port in sslports.
+        let probes = if skip_plain_probes {
+            debug!(
+                "Skipping plain probes for port {} (known SSL port, no banner), going straight to TLS",
+                port
+            );
+            Vec::new()
+        } else {
+            let mut probes = self.select_probes_for_pass(port, protocol, in_ssl_tunnel);
+            probes.retain(|p| p.name != "NULL");
+            probes
+        };
+        debug!(
+            "Selected {} probes for port {} (ssl={})",
+            probes.len(),
+            port,
+            in_ssl_tunnel
+        );
+
+        if probes.is_empty() && !skip_plain_probes {
             debug!("No probes available for port {}", port);
             if results.is_empty() {
                 return Ok(vec![ServiceInfo::new("unknown")]);
@@ -245,12 +330,46 @@ impl ServiceDetector {
             return Ok(results);
         }
 
+        // For probable SSL ports not yet in an SSL tunnel, reserve part of the budget
+        // for SSL tunnel detection. Without this reservation, the probe loop consumes
+        // the entire budget and the SSL tunnel phase is never reached (needs >500ms).
+        // This fixes detection on ports like 443 (https) and 995 (pop3s).
+        let needs_ssl_reserve = !is_udp
+            && !in_ssl_tunnel
+            && self.is_probable_ssl_port(port)
+            && !results.iter().any(|r| r.name == "ssl");
+        let probe_budget = if needs_ssl_reserve {
+            // Reserve 2500ms for SSL tunnel phase (handshake + banner + probes).
+            // The TLS handshake alone needs ~2 RTTs; with a 300ms RTT that's 600ms,
+            // plus time for banner read and probe responses inside the tunnel.
+            let reserve = Duration::from_millis(2500);
+            let remaining = total_budget.saturating_sub(start.elapsed());
+            let capped = remaining.saturating_sub(reserve);
+            debug!(
+                "Reserving {}ms for SSL tunnel on port {} (probe budget: {}ms)",
+                reserve.as_millis(),
+                port,
+                capped.as_millis()
+            );
+            Some(start + capped)
+        } else {
+            None
+        };
+
         // Execute probes in order, sharing the remaining time budget.
         // Reuse TCP connection from banner grab for first probe (nmap optimization).
         for probe in &probes {
-            let remaining = total_budget.saturating_sub(start.elapsed());
+            let probe_deadline = probe_budget.unwrap_or(start + total_budget);
+            let remaining = probe_deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
-                debug!("Time budget exhausted, stopping probes for port {}", port);
+                if probe_budget.is_some() {
+                    debug!(
+                        "Probe budget exhausted (SSL reserve), stopping probes for port {}",
+                        port
+                    );
+                } else {
+                    debug!("Time budget exhausted, stopping probes for port {}", port);
+                }
                 break;
             }
 
@@ -261,12 +380,15 @@ impl ServiceDetector {
                 remaining.as_millis()
             );
 
+            // Cap per-probe timeout so one slow probe doesn't starve the rest.
+            let probe_timeout = remaining.min(PROBE_READ_TIMEOUT_CAP);
+
             // Try to reuse existing connection for first probe, then open new ones
             let response = if let Some(stream) = reusable_stream.take() {
-                self.send_probe_on_existing_stream(stream, probe, remaining)
+                self.send_probe_on_existing_stream(stream, probe, probe_timeout)
                     .await
             } else {
-                self.send_probe_with_timeout(target, port, probe, remaining)
+                self.send_probe_with_timeout(target, port, probe, probe_timeout)
                     .await
             };
 
@@ -279,7 +401,7 @@ impl ServiceDetector {
                         port
                     );
 
-                    let matches = Self::match_response(probe, &response)?;
+                    let matches = Self::match_response_with_fallback(&self.db, probe, &response)?;
 
                     debug!(
                         "Got {} matches from probe '{}' on port {}",
@@ -305,7 +427,385 @@ impl ServiceDetector {
             }
         }
 
+        // --- Phase 3: SSL tunnel pass (nmap two-pass model) ---
+        //
+        // If the plain TCP pass detected "ssl" (or we got no confident match and
+        // this port is a known SSL port), establish TLS and re-run probes inside
+        // the encrypted tunnel. This matches nmap's scanThroughTunnel() logic.
+        if !is_udp && !in_ssl_tunnel {
+            let needs_ssl = results.iter().any(|r| r.name == "ssl")
+                || (results.iter().all(|r| r.confidence < 8) && self.is_probable_ssl_port(port));
+
+            if needs_ssl {
+                let remaining = total_budget.saturating_sub(start.elapsed());
+                if !remaining.is_zero() {
+                    debug!("Attempting SSL tunnel detection on port {}", port);
+                    match self
+                        .detect_through_ssl_tunnel(target, port, remaining)
+                        .await
+                    {
+                        Ok(ssl_results) if !ssl_results.is_empty() => {
+                            // Prefix service names with "ssl/" and return
+                            let prefixed: Vec<ServiceInfo> = ssl_results
+                                .into_iter()
+                                .map(|mut r| {
+                                    if !r.name.starts_with("ssl/")
+                                        && r.name != "ssl"
+                                        && r.name != "unknown"
+                                    {
+                                        r.name = format!("ssl/{}", r.name);
+                                    }
+                                    r
+                                })
+                                .collect();
+                            if prefixed
+                                .iter()
+                                .any(|r| r.name != "ssl" && r.name != "unknown")
+                            {
+                                return Ok(prefixed);
+                            }
+                        }
+                        Ok(_) => {
+                            debug!("SSL tunnel detection returned no results");
+                        }
+                        Err(e) => {
+                            debug!("SSL tunnel detection failed: {}", e);
+                        }
+                    }
+                }
+            }
+        }
+
         Ok(results)
+    }
+
+    /// Detect service through an SSL/TLS tunnel.
+    ///
+    /// Establishes a TLS connection, then sends probes and matches responses
+    /// inside the encrypted tunnel. Matches nmap's scanThroughTunnel() behavior.
+    async fn detect_through_ssl_tunnel(
+        &self,
+        target: &SocketAddr,
+        port: u16,
+        budget: Duration,
+    ) -> Result<Vec<ServiceInfo>> {
+        let start = Instant::now();
+
+        // Connect and perform TLS handshake
+        let tls_stream = self.establish_tls_connection(target, port, budget).await?;
+        let mut stream = match tls_stream {
+            Some(s) => s,
+            None => return Ok(Vec::new()),
+        };
+
+        debug!(
+            "TLS tunnel established to {}:{} ({}ms remaining)",
+            target.ip(),
+            port,
+            budget.saturating_sub(start.elapsed()).as_millis()
+        );
+
+        // Try reading a banner through the TLS tunnel (some services send
+        // banners immediately after TLS handshake, e.g., SMTPS, POP3S).
+        // Use a tight cap (500ms) -- unlike the plain TCP pass where 2s is
+        // reasonable, inside a TLS tunnel the budget is already reduced and
+        // HTTP servers never send unsolicited data, so every millisecond counts.
+        let mut results = Vec::new();
+        let remaining = budget.saturating_sub(start.elapsed());
+        let tls_banner_cap = Duration::from_millis(500);
+
+        let mut banner_buffer = vec![0u8; 4096];
+        let banner_opt = if !remaining.is_zero() {
+            match timeout(
+                remaining.min(tls_banner_cap),
+                stream.read(&mut banner_buffer),
+            )
+            .await
+            {
+                Ok(Ok(0)) => None,
+                Ok(Ok(n)) => {
+                    banner_buffer.truncate(n);
+                    debug!("Got {} bytes TLS banner on port {}", n, port);
+                    Some(banner_buffer)
+                }
+                _ => None,
+            }
+        } else {
+            None
+        };
+
+        if let Some(ref banner) = banner_opt {
+            // Match banner against all probe rules
+            let probes = self.select_probes(port, "tcp");
+            for probe in &probes {
+                let matches = Self::match_response_with_fallback(&self.db, probe, banner)?;
+                for match_result in matches {
+                    results.push(ServiceInfo::from_match(match_result));
+                }
+            }
+            if results.iter().any(|r| r.confidence >= 8) {
+                return Ok(results);
+            }
+        }
+
+        // Select probes that have this port in their sslports list
+        let mut probes = self.select_probes_for_pass(port, "tcp", true);
+        probes.retain(|p| p.name != "NULL");
+        debug!(
+            "TLS tunnel: {} probes selected for port {} (budget remaining: {}ms)",
+            probes.len(),
+            port,
+            budget.saturating_sub(start.elapsed()).as_millis()
+        );
+
+        // Execute probes inside the TLS tunnel
+        for probe in &probes {
+            let remaining = budget.saturating_sub(start.elapsed());
+            if remaining.is_zero() {
+                debug!(
+                    "TLS tunnel budget exhausted on port {} after probe '{}'",
+                    port, probe.name
+                );
+                break;
+            }
+
+            debug!(
+                "TLS tunnel: sending probe '{}' on port {} ({}ms remaining)",
+                probe.name,
+                port,
+                remaining.as_millis()
+            );
+
+            let response = self
+                .send_probe_on_tls_stream(&mut stream, probe, remaining)
+                .await;
+
+            match &response {
+                Ok(Some(data)) => {
+                    debug!(
+                        "TLS tunnel: got {} bytes from probe '{}' on port {}",
+                        data.len(),
+                        probe.name,
+                        port
+                    );
+                }
+                Ok(None) => {
+                    debug!(
+                        "TLS tunnel: no response from probe '{}' on port {}",
+                        probe.name, port
+                    );
+                }
+                Err(e) => {
+                    debug!(
+                        "TLS tunnel: probe '{}' failed on port {}: {}",
+                        probe.name, port, e
+                    );
+                }
+            }
+
+            if let Ok(Some(response)) = response {
+                let matches = Self::match_response_with_fallback(&self.db, probe, &response)?;
+                debug!(
+                    "TLS tunnel: {} matches from probe '{}' on port {}",
+                    matches.len(),
+                    probe.name,
+                    port
+                );
+                for match_result in matches {
+                    debug!(
+                        "TLS tunnel: match service='{}' confidence={}",
+                        match_result.service, match_result.confidence
+                    );
+                    results.push(ServiceInfo::from_match(match_result));
+                }
+                if results.iter().any(|r| r.confidence >= 8) {
+                    break;
+                }
+            }
+        }
+
+        Ok(results)
+    }
+
+    /// Establish a TLS connection to the target.
+    ///
+    /// Performs TCP connect + TLS handshake. Returns None if handshake fails
+    /// (not a TLS service). Retries once on connection reset, which can happen
+    /// when a previous banner-grab connection hasn't fully closed yet.
+    async fn establish_tls_connection(
+        &self,
+        target: &SocketAddr,
+        port: u16,
+        timeout_duration: Duration,
+    ) -> Result<Option<TlsStream<TcpStream>>> {
+        // Try up to 2 attempts. The first may fail with RST if a previous
+        // connection to the same port (banner grab) is still closing.
+        for attempt in 0..2 {
+            let attempt_budget = if attempt == 0 {
+                timeout_duration
+            } else {
+                // Brief pause before retry to let the server-side socket close.
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                timeout_duration.saturating_sub(Duration::from_millis(100))
+            };
+
+            if attempt_budget.is_zero() {
+                return Ok(None);
+            }
+
+            // TCP connect
+            let tcp_stream =
+                match timeout(attempt_budget, TcpStream::connect((target.ip(), port))).await {
+                    Ok(Ok(s)) => s,
+                    _ => {
+                        if attempt == 0 {
+                            continue;
+                        }
+                        return Ok(None);
+                    }
+                };
+
+            // Build TLS config (accept any certificate, like nmap's --version-intensity)
+            // Install ring crypto provider (idempotent if already installed)
+            let _ = rustls::crypto::ring::default_provider().install_default();
+            let config = rustls::ClientConfig::builder()
+                .dangerous()
+                .with_custom_certificate_verifier(Arc::new(NoCertVerifier))
+                .with_no_client_auth();
+
+            let connector = TlsConnector::from(Arc::new(config));
+
+            // Use IP as server name (we may not know the hostname)
+            let server_name_str = target.ip().to_string();
+            let server_name = rustls::pki_types::ServerName::try_from(server_name_str)
+                .unwrap_or_else(|_| {
+                    rustls::pki_types::ServerName::try_from("localhost".to_string())
+                        .expect("localhost is valid")
+                });
+
+            let tls_remaining = attempt_budget.saturating_sub(Duration::from_millis(100));
+            match timeout(tls_remaining, connector.connect(server_name, tcp_stream)).await {
+                Ok(Ok(tls_stream)) => return Ok(Some(tls_stream)),
+                Ok(Err(e)) => {
+                    debug!("TLS handshake to {}:{} failed: {}", target.ip(), port, e);
+                    if attempt == 0 {
+                        continue;
+                    }
+                    return Ok(None);
+                }
+                Err(_) => {
+                    debug!("TLS handshake to {}:{} timed out", target.ip(), port);
+                    return Ok(None);
+                }
+            }
+        }
+
+        Ok(None)
+    }
+
+    /// Send a probe on an existing TLS stream.
+    async fn send_probe_on_tls_stream(
+        &self,
+        stream: &mut TlsStream<TcpStream>,
+        probe: &ProbeDefinition,
+        timeout_duration: Duration,
+    ) -> Result<Option<Vec<u8>>> {
+        stream
+            .write_all(&probe.payload)
+            .await
+            .map_err(|e| FingerprintError::Network {
+                operation: "write probe on TLS stream".to_string(),
+                reason: e.to_string(),
+            })?;
+
+        let mut buffer = vec![0u8; 4096];
+        let n = match timeout(timeout_duration, stream.read(&mut buffer)).await {
+            Ok(Ok(n)) => n,
+            _ => return Ok(None),
+        };
+
+        if n > 0 {
+            buffer.truncate(n);
+            Ok(Some(buffer))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Check if a port is commonly known as an SSL/TLS port.
+    ///
+    /// Used as a fallback when the plain TCP pass returns no results and we
+    /// want to try SSL detection anyway.
+    fn is_probable_ssl_port(&self, port: u16) -> bool {
+        // Check ALL probes for sslports, not just port-matching ones.
+        // A probe can have an SSL variant on a port even if the port isn't
+        // in its `ports` list (e.g., GetRequest targets 80,443 but has
+        // sslports 443,993,995,...). If any probe lists this port as an
+        // SSL port, we should try SSL tunnel detection.
+        self.db
+            .all_probes()
+            .iter()
+            .any(|p| p.ssl_ports.contains(&port))
+    }
+
+    /// Select probes for a specific detection pass (plain or SSL tunnel).
+    ///
+    /// In plain pass: returns all probes matching the port.
+    /// In SSL tunnel pass: prioritizes probes where port is in ssl_ports.
+    fn select_probes_for_pass(
+        &self,
+        port: u16,
+        protocol: &str,
+        in_ssl_tunnel: bool,
+    ) -> Vec<&ProbeDefinition> {
+        let target_protocol = if protocol.eq_ignore_ascii_case("udp") {
+            Protocol::Udp
+        } else {
+            Protocol::Tcp
+        };
+
+        let max_rarity = self.intensity_to_max_rarity();
+
+        let mut probes: Vec<&ProbeDefinition> = if in_ssl_tunnel {
+            // In SSL tunnel pass, include ALL probes that either match the port
+            // directly OR have this port in their ssl_ports list.
+            // nmap's scanThroughTunnel() runs probes whose sslports include
+            // the target port -- e.g., GetRequest has sslports 443,993,995,..
+            // so it runs inside a TLS tunnel on port 443 even though its ports
+            // list doesn't include 443.
+            self.db
+                .all_probes()
+                .into_iter()
+                .filter(|p| {
+                    p.protocol == target_protocol
+                        && p.rarity <= max_rarity
+                        && (p.ports.contains(&port)
+                            || p.ports.is_empty()
+                            || p.ssl_ports.contains(&port))
+                })
+                .collect()
+        } else {
+            let mut probes = self.db.probes_for_port(port);
+            probes.retain(|p| p.protocol == target_protocol && p.rarity <= max_rarity);
+            probes
+        };
+
+        if in_ssl_tunnel {
+            // SSL-matching probes first, then by rarity, then by name
+            probes.sort_by(|a, b| {
+                let a_ssl = a.ssl_ports.contains(&port) as u8;
+                let b_ssl = b.ssl_ports.contains(&port) as u8;
+                b_ssl
+                    .cmp(&a_ssl)
+                    .then_with(|| a.rarity.cmp(&b.rarity))
+                    .then_with(|| a.name.cmp(&b.name))
+            });
+        } else {
+            // Plain pass: sort by rarity, then by name (standard ordering)
+            probes.sort_by(|a, b| a.rarity.cmp(&b.rarity).then_with(|| a.name.cmp(&b.name)));
+        }
+
+        probes
     }
 
     /// Grab banner from a TCP port without sending any data.
@@ -380,18 +880,26 @@ impl ServiceDetector {
     /// Returns (banner_option, stream_option). The stream can be reused
     /// for the next probe, avoiding an extra TCP handshake.
     /// Matches nmap's optimization in service_scan.cc lines 2095-2105.
+    /// Grab banner while keeping the TCP stream for connection reuse.
+    ///
+    /// Returns (banner_option, stream_option, closed_after_ms).
+    /// `closed_after_ms` tracks how long after connect the remote closed
+    /// the connection (EOF), used for tcpwrapped detection.
+    /// Matches nmap's optimization in service_scan.cc lines 2095-2105.
     async fn grab_banner_and_keep_stream(
         &self,
         target: &SocketAddr,
         port: u16,
         timeout_duration: Duration,
-    ) -> Result<(Option<Vec<u8>>, Option<tokio::net::TcpStream>)> {
+    ) -> Result<(Option<Vec<u8>>, Option<tokio::net::TcpStream>, u64)> {
         trace!(
             "Grabbing banner from {}:{} (timeout: {}ms)",
             target.ip(),
             port,
             timeout_duration.as_millis()
         );
+
+        let connect_start = Instant::now();
 
         let stream = timeout(timeout_duration, TcpStream::connect((target.ip(), port)))
             .await
@@ -402,27 +910,80 @@ impl ServiceDetector {
 
         let mut stream = stream?;
 
-        // Set read timeout to avoid blocking beyond budget
+        // Cap read timeout to avoid consuming entire probe budget.
+        // Non-banner services (HTTP) never send unsolicited data, so without
+        // this cap the read blocks until the full timeout, leaving no time for
+        // actual probes like GetRequest that detect HTTP server versions.
+        let elapsed_connect = connect_start.elapsed();
+        let remaining_after_connect = timeout_duration.saturating_sub(elapsed_connect);
+        let read_timeout = remaining_after_connect.min(BANNER_READ_TIMEOUT_CAP);
+
         let mut buffer = vec![0u8; 4096];
-        let n = match timeout(timeout_duration, stream.read(&mut buffer)).await {
-            Ok(Ok(n)) => n,
-            Ok(Err(_)) => {
-                // Read error but connection is open -- return stream for reuse
-                return Ok((None, Some(stream)));
+        let mut total_read = 0;
+        let read_deadline = Instant::now() + read_timeout;
+        let connect_time = connect_start;
+        let mut eof_received = false;
+
+        // Read in a loop to accumulate banner data that may arrive in
+        // multiple TCP segments. After the first successful read, continue
+        // reading with whatever time remains (at most BANNER_READ_TIMEOUT_CAP).
+        // This handles services like FTP that send multi-line banners in
+        // separate packets.
+        loop {
+            let now = Instant::now();
+            let remaining = read_deadline.saturating_duration_since(now);
+            if remaining.is_zero() {
+                break;
             }
-            Err(_) => {
-                // Timeout on read -- connection still usable for sending probes
-                return Ok((None, Some(stream)));
+
+            // After the first read, use a short follow-up timeout to avoid
+            // blocking too long while waiting for additional segments.
+            let followup_timeout = if total_read > 0 {
+                remaining.min(Duration::from_millis(200))
+            } else {
+                remaining
+            };
+
+            match timeout(followup_timeout, stream.read(&mut buffer[total_read..])).await {
+                Ok(Ok(0)) => {
+                    // EOF / connection closed — track time for tcpwrapped detection
+                    eof_received = true;
+                    break;
+                }
+                Ok(Ok(n)) => {
+                    total_read += n;
+                    if total_read >= buffer.len() {
+                        break; // Buffer full
+                    }
+                    // Continue reading to accumulate more data
+                }
+                Ok(Err(_)) => {
+                    // Read error but connection may still be open
+                    break;
+                }
+                Err(_) => {
+                    // Timeout -- no more data arriving
+                    break;
+                }
             }
+        }
+
+        // Calculate ms from connect to EOF for tcpwrapped detection.
+        // If the server closed the connection before tcpwrappedms and no banner
+        // was received, this is characteristic of TCP wrappers / xinetd reject.
+        let closed_after_ms = if eof_received {
+            connect_time.elapsed().as_millis() as u64
+        } else {
+            u64::MAX
         };
 
-        if n > 0 {
-            buffer.truncate(n);
-            trace!("Banner grabbed: {} bytes", n);
-            Ok((Some(buffer), Some(stream)))
+        if total_read > 0 {
+            buffer.truncate(total_read);
+            trace!("Banner grabbed: {} bytes", total_read);
+            Ok((Some(buffer), Some(stream), closed_after_ms))
         } else {
-            // No data but connection open
-            Ok((None, Some(stream)))
+            // No data but connection was established
+            Ok((None, Some(stream), closed_after_ms))
         }
     }
 
@@ -471,6 +1032,7 @@ impl ServiceDetector {
         payload: &[u8],
         timeout_duration: Duration,
     ) -> Result<Option<Vec<u8>>> {
+        let connect_start = Instant::now();
         let stream = timeout(timeout_duration, TcpStream::connect((target.ip(), port)))
             .await
             .map_err(|_| FingerprintError::Timeout {
@@ -487,8 +1049,11 @@ impl ServiceDetector {
                 reason: e.to_string(),
             })?;
 
+        // Subtract connect time from the read timeout so the total probe
+        // time stays within the allocated budget.
+        let read_timeout = timeout_duration.saturating_sub(connect_start.elapsed());
         let mut buffer = vec![0u8; 4096];
-        let n = match timeout(timeout_duration, stream.read(&mut buffer)).await {
+        let n = match timeout(read_timeout, stream.read(&mut buffer)).await {
             Ok(Ok(n)) => n,
             Ok(Err(_)) => 0,
             Err(_) => {
@@ -543,6 +1108,20 @@ impl ServiceDetector {
     }
 
     /// Select probes for a port based on intensity level.
+    /// Returns the tcpwrappedms threshold from the NULL probe definition.
+    /// Defaults to 3000ms (nmap's default) if not explicitly set.
+    /// Returns the tcpwrappedms threshold from the NULL probe definition.
+    /// Defaults to 3000ms (nmap's default) if not explicitly set.
+    fn get_tcpwrappedms(&self) -> u64 {
+        if let Some(null_probe) = self.db.get_probe("NULL") {
+            if null_probe.tcpwrappedms > 0 {
+                return null_probe.tcpwrappedms;
+            }
+        }
+        // nmap default: 3000ms
+        3000
+    }
+
     fn select_probes(&self, port: u16, protocol: &str) -> Vec<&ProbeDefinition> {
         let mut probes: Vec<&ProbeDefinition> = self.db.probes_for_port(port);
 
@@ -582,8 +1161,44 @@ impl ServiceDetector {
         }
     }
 
-    /// Match response against probe rules.
-    fn match_response(probe: &ProbeDefinition, response: &[u8]) -> Result<Vec<MatchResult>> {
+    /// Match response against probe rules, with fallback support.
+    ///
+    /// If the probe's own match rules produce no results and it has a `fallback`
+    /// list (e.g. `fallback GetRequest`), the fallback probes' match rules are
+    /// tried in order until a match is found.
+    fn match_response_with_fallback(
+        db: &ProbeDatabase,
+        probe: &ProbeDefinition,
+        response: &[u8],
+    ) -> Result<Vec<MatchResult>> {
+        let mut results = Self::match_probe_rules(probe, response)?;
+
+        if results.is_empty() && !probe.fallback.is_empty() {
+            for fallback_name in &probe.fallback {
+                if let Some(fallback_probe) = db.get_probe(fallback_name) {
+                    debug!(
+                        "Trying fallback probe '{}' for '{}'",
+                        fallback_name, probe.name
+                    );
+                    let fallback_results = Self::match_probe_rules(fallback_probe, response)?;
+                    if !fallback_results.is_empty() {
+                        debug!(
+                            "Fallback '{}' matched with {} results",
+                            fallback_name,
+                            fallback_results.len()
+                        );
+                        results = fallback_results;
+                        break;
+                    }
+                }
+            }
+        }
+
+        Ok(results)
+    }
+
+    /// Match response against a single probe's own match rules.
+    fn match_probe_rules(probe: &ProbeDefinition, response: &[u8]) -> Result<Vec<MatchResult>> {
         let response_str = String::from_utf8_lossy(response);
         debug!(
             "Matching probe '{}' against response ({} bytes): {}",
@@ -648,6 +1263,61 @@ impl ServiceDetector {
                 None
             }
         }
+    }
+}
+
+/// Certificate verifier that accepts any certificate (insecure).
+///
+/// Service detection does not need to verify certificates - we just need
+/// to complete the TLS handshake so we can send probes inside the tunnel.
+/// This matches nmap's behavior which also does not verify certificates.
+#[derive(Debug)]
+struct NoCertVerifier;
+
+impl rustls::client::danger::ServerCertVerifier for NoCertVerifier {
+    fn verify_server_cert(
+        &self,
+        _end_entity: &rustls::pki_types::CertificateDer<'_>,
+        _intermediates: &[rustls::pki_types::CertificateDer<'_>],
+        _server_name: &rustls::pki_types::ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: rustls::pki_types::UnixTime,
+    ) -> std::result::Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        Ok(rustls::client::danger::ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        _message: &[u8],
+        _cert: &rustls::pki_types::CertificateDer<'_>,
+        _dss: &rustls::DigitallySignedStruct,
+    ) -> std::result::Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        _message: &[u8],
+        _cert: &rustls::pki_types::CertificateDer<'_>,
+        _dss: &rustls::DigitallySignedStruct,
+    ) -> std::result::Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        vec![
+            rustls::SignatureScheme::RSA_PKCS1_SHA256,
+            rustls::SignatureScheme::RSA_PKCS1_SHA384,
+            rustls::SignatureScheme::RSA_PKCS1_SHA512,
+            rustls::SignatureScheme::ECDSA_NISTP256_SHA256,
+            rustls::SignatureScheme::ECDSA_NISTP384_SHA384,
+            rustls::SignatureScheme::ECDSA_NISTP521_SHA512,
+            rustls::SignatureScheme::RSA_PSS_SHA256,
+            rustls::SignatureScheme::RSA_PSS_SHA384,
+            rustls::SignatureScheme::RSA_PSS_SHA512,
+            rustls::SignatureScheme::ED25519,
+            rustls::SignatureScheme::ED448,
+        ]
     }
 }
 
@@ -855,7 +1525,7 @@ mod tests {
         });
 
         let response = b"SSH-2.0-OpenSSH_8.4p1";
-        let results = ServiceDetector::match_response(&probe, response).unwrap();
+        let results = ServiceDetector::match_probe_rules(&probe, response).unwrap();
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].service, "ssh");
@@ -882,7 +1552,7 @@ mod tests {
         });
 
         let response = b"SSH-2.0-OpenSSH_8.4";
-        let results = ServiceDetector::match_response(&probe, response).unwrap();
+        let results = ServiceDetector::match_probe_rules(&probe, response).unwrap();
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].service, "ssh");
@@ -906,7 +1576,7 @@ mod tests {
         });
 
         let response = b"HTTP/1.1 200 OK";
-        let results = ServiceDetector::match_response(&probe, response).unwrap();
+        let results = ServiceDetector::match_probe_rules(&probe, response).unwrap();
 
         assert!(results.is_empty());
     }
@@ -940,12 +1610,12 @@ mod tests {
         });
 
         // Test SSH match
-        let results = ServiceDetector::match_response(&probe, b"SSH-2.0-OpenSSH").unwrap();
+        let results = ServiceDetector::match_probe_rules(&probe, b"SSH-2.0-OpenSSH").unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].service, "ssh");
 
         // Test HTTP match
-        let results = ServiceDetector::match_response(&probe, b"HTTP/1.1 200 OK").unwrap();
+        let results = ServiceDetector::match_probe_rules(&probe, b"HTTP/1.1 200 OK").unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].service, "http");
     }
@@ -967,7 +1637,7 @@ mod tests {
         });
 
         let response = b"test";
-        let result = ServiceDetector::match_response(&probe, response);
+        let result = ServiceDetector::match_probe_rules(&probe, response);
 
         assert!(result.is_err());
         assert!(matches!(
@@ -993,10 +1663,66 @@ mod tests {
         });
 
         let response = vec![0x00, 0x01, 0x02, 0x03];
-        let results = ServiceDetector::match_response(&probe, &response).unwrap();
+        let results = ServiceDetector::match_probe_rules(&probe, &response).unwrap();
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].service, "binary");
+    }
+
+    #[test]
+    fn test_fallback_matching() {
+        // Create a database with GetRequest probe that has match rules
+        let content = r"
+Probe TCP GetRequest q|GET / HTTP/1.0\r\n\r\n|
+rarity 3
+ports 80,8080
+match http m|^HTTP/1\.0 200 OK\r\n.*Server: Apache|s p/Apache httpd/
+
+Probe TCP FourOhFourRequest q|GET /nonexistent HTTP/1.0\r\n\r\n|
+rarity 6
+ports 80-85
+fallback GetRequest
+match http m|^HTTP/1\.0 404 SpecialNotFound| p/SpecialServer/
+";
+        let db = ProbeDatabase::parse(content).unwrap();
+        let fofr = db.get_probe("FourOhFourRequest").unwrap();
+
+        // Response that matches GetRequest rules but NOT FourOhFourRequest rules
+        let response = b"HTTP/1.0 200 OK\r\nServer: Apache/2.4\r\n\r\n<html>...</html>";
+
+        // Direct match against FourOhFourRequest rules should fail
+        let direct = ServiceDetector::match_probe_rules(fofr, response).unwrap();
+        assert!(direct.is_empty());
+
+        // With fallback, should find match via GetRequest rules
+        let with_fallback =
+            ServiceDetector::match_response_with_fallback(&db, fofr, response).unwrap();
+        assert_eq!(with_fallback.len(), 1);
+        assert_eq!(with_fallback[0].service, "http");
+        assert_eq!(with_fallback[0].product, Some("Apache httpd".to_string()));
+    }
+
+    #[test]
+    fn test_fallback_not_used_when_direct_match() {
+        let content = r"
+Probe TCP GetRequest q|GET / HTTP/1.0\r\n\r\n|
+rarity 3
+match http m|^HTTP/1\.0 200| p/GetRequestProduct/
+
+Probe TCP FourOhFourRequest q|GET /nonexistent HTTP/1.0\r\n\r\n|
+rarity 6
+fallback GetRequest
+match http m|^HTTP/1\.0 404| p/FourOhFourProduct/
+";
+        let db = ProbeDatabase::parse(content).unwrap();
+        let fofr = db.get_probe("FourOhFourRequest").unwrap();
+
+        // Response that matches FourOhFourRequest's own rules
+        let response = b"HTTP/1.0 404 Not Found";
+        let results = ServiceDetector::match_response_with_fallback(&db, fofr, response).unwrap();
+        assert_eq!(results.len(), 1);
+        // Should use FourOhFour's own match, not the fallback
+        assert_eq!(results[0].product, Some("FourOhFourProduct".to_string()));
     }
 
     #[test]
