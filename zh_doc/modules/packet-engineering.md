@@ -989,49 +989,48 @@ mod tests {
 
 ---
 
-# Implementation Status (2026-03-07)
+# 实现状态 (2026-03-07)
 
-> **Status**: IMPLEMENTED - All PACKET_MMAP V2 infrastructure complete
-> **Verification**: 865+ tests passing, zero clippy warnings
+> **状态**：已实现 - 所有 PACKET_MMAP V2 基础设施已完成
+> **验证**：865+ 测试通过，零 clippy 警告
 
-## Implementation Summary
+## 实现概要
 
-| Component | Design | Implementation | File | Status |
-|-----------|--------|----------------|------|--------|
-| TPACKET_V2 Wrappers | Linux syscall bindings | `sys/tpacket.rs` | COMPLETE |
-| MmapPacketEngine | Ring buffer management | `mmap.rs` | COMPLETE |
-| Zero-Copy Buffer | Arc + Bytes pattern | `zero_copy.rs` | COMPLETE |
-| AsyncPacketEngine | Tokio AsyncFd wrapper | `async_engine.rs` | COMPLETE |
-| BPF Filter | Kernel-space filtering | `bpf.rs` | COMPLETE |
-| Two-Stage Bind | nmap libpcap pattern | `mmap.rs:214-228` | COMPLETE |
+| 组件 | 设计 | 实现 | 文件 | 状态 |
+|------|------|------|------|------|
+| TPACKET_V2 封装 | Linux 系统调用绑定 | `sys/tpacket.rs` | 已完成 |
+| MmapPacketEngine | 环形缓冲区管理 | `mmap.rs` | 已完成 |
+| 零拷贝缓冲区 | Arc + Bytes 模式 | `zero_copy.rs` | 已完成 |
+| AsyncPacketEngine | Tokio AsyncFd 包装 | `async_engine.rs` | 已完成 |
+| BPF 过滤器 | 内核空间过滤 | `bpf.rs` | 已完成 |
+| 两阶段绑定 | nmap libpcap 模式 | `mmap.rs:214-228` | 已完成 |
 
-## Key Implementation Details
+## 关键实现细节
 
-### 1. Two-Stage Bind Pattern (CRITICAL)
+### 1. 两阶段绑定模式（关键）
 
-Following nmap's `libpcap/pcap-linux.c:1297-1302`:
+遵循 nmap 的 `libpcap/pcap-linux.c:1297-1302`：
 
 ```rust
-// Stage 1: Bind with protocol=0 (allows ring buffer setup)
+// 阶段 1：使用 protocol=0 绑定（允许设置环形缓冲区）
 Self::bind_to_interface(&fd, if_index)?;
 
-// Stage 2: Setup ring buffer
+// 阶段 2：设置环形缓冲区
 let (ring_ptr, ring_size, frame_ptrs, frame_count) =
     Self::setup_ring_buffer(&fd, &config)?;
 
-// Stage 3: Re-bind with ETH_P_ALL (enables packet reception)
+// 阶段 3：重新绑定 ETH_P_ALL（启用数据包接收）
 Self::bind_to_interface_with_protocol(&fd, if_index, ETH_P_ALL.to_be())?;
 ```
 
-**Why this matters**: Single bind with `protocol=ETH_P_ALL` causes `errno=22 (EINVAL)`
-when setting `PACKET_RX_RING`. The two-stage pattern is required by the kernel.
+**重要性**：使用 `protocol=ETH_P_ALL` 单次绑定会在设置 `PACKET_RX_RING` 时导致 `errno=22 (EINVAL)`。两阶段绑定模式是内核要求的。
 
-### 2. Zero-Copy Implementation
+### 2. 零拷贝实现
 
 ```rust
 // crates/rustnmap-packet/src/mmap.rs:771-881
 pub fn try_recv_zero_copy(&mut self) -> Result<Option<ZeroCopyPacket>> {
-    // ... frame availability check ...
+    // ... 帧可用性检查 ...
     let zc_bytes = unsafe {
         crate::zero_copy::ZeroCopyBytes::borrowed(
             Arc::clone(&engine_arc),
@@ -1039,99 +1038,99 @@ pub fn try_recv_zero_copy(&mut self) -> Result<Option<ZeroCopyPacket>> {
             data_len,
         )
     };
-    // ... packet creation ...
+    // ... 数据包创建 ...
 }
 ```
 
-**Key features**:
-- `ZeroCopyBytes::borrowed()` creates view without memcpy
-- `Arc<MmapPacketEngine>` keeps engine alive during packet lifetime
-- `Drop` trait automatically releases frame back to kernel
+**关键特性**：
+- `ZeroCopyBytes::borrowed()` 创建视图而不进行 memcpy
+- `Arc<MmapPacketEngine>` 在数据包生命周期内保持引擎存活
+- `Drop` trait 自动将帧释放回内核
 
-### 3. Memory Ordering
+### 3. 内存序
 
 ```rust
-// Acquire when reading frame status (userspace consumer)
+// 读取帧状态时使用 Acquire（用户空间消费者）
 AtomicU32::from_ptr(addr_of!((*hdr).tp_status))
     .load(Ordering::Acquire) != TP_STATUS_KERNEL
 
-// Release when returning frame to kernel
+// 将帧归还内核时使用 Release
 AtomicU32::from_ptr(addr_of!((*hdr).tp_status))
     .store(TP_STATUS_KERNEL, Ordering::Release);
 ```
 
-**Performance**: Acquire/Release (2-3 cycles) vs SeqCst (5-10 cycles)
+**性能**：Acquire/Release（2-3 周期）vs SeqCst（5-10 周期）
 
-### 4. ENOMEM Recovery Strategy
+### 4. ENOMEM 恢复策略
 
 ```rust
-// 5% reduction per attempt, following nmap
+// 每次尝试减少 5%，遵循 nmap 策略
 for attempt in 0..MAX_RETRIES {
     match setsockopt(...) {
         Err(e) if e.raw_os_error() == Some(libc::ENOMEM) => {
             req.tp_frame_nr = req.tp_frame_nr * 95 / 100;
-            // ... recalculate ...
+            // ... 重新计算 ...
         }
         // ...
     }
 }
 ```
 
-## Scanner Migration Status
+## 扫描器迁移状态
 
-All scanners now use `ScannerPacketEngine` which wraps `AsyncPacketEngine`:
+所有扫描器现在使用 `ScannerPacketEngine`，它包装了 `AsyncPacketEngine`：
 
-| Scanner | File | Line | Status |
-|---------|------|------|--------|
-| SYN Scan | `syn_scan.rs` | 46 | COMPLETE |
-| Stealth Scans | `stealth_scans.rs` | 186 | COMPLETE |
-| Ultrascan | `ultrascan.rs` | 594 | COMPLETE |
-| UDP Scan | `udp_scan.rs` | 56 | COMPLETE |
+| 扫描器 | 文件 | 行号 | 状态 |
+|--------|------|------|------|
+| SYN 扫描 | `syn_scan.rs` | 46 | 已完成 |
+| 隐蔽扫描 | `stealth_scans.rs` | 186 | 已完成 |
+| Ultrascan | `ultrascan.rs` | 594 | 已完成 |
+| UDP 扫描 | `udp_scan.rs` | 56 | 已完成 |
 
-### Adapter Pattern
+### 适配器模式
 
 ```rust
 // crates/rustnmap-scan/src/packet_adapter.rs
 pub struct ScannerPacketEngine {
     engine: AsyncPacketEngine,
-    // ... adapter fields ...
+    // ... 适配器字段 ...
 }
 
 impl ScannerPacketEngine {
-    // Provides SimpleAfPacket-compatible API
-    // Internally uses AsyncPacketEngine with PACKET_MMAP V2
+    // 提供 SimpleAfPacket 兼容的 API
+    // 内部使用 AsyncPacketEngine 和 PACKET_MMAP V2
 }
 ```
 
-## Performance Targets
+## 性能目标
 
-| Metric | Target | Status |
-|--------|--------|--------|
-| PPS | 1,000,000 | PENDING BENCHMARK |
-| CPU (T5) | 30% | PENDING BENCHMARK |
-| Packet Loss (T5) | <1% | PENDING BENCHMARK |
-| Zero-copy | Verified | COMPLETE |
+| 指标 | 目标 | 状态 |
+|------|------|------|
+| PPS | 1,000,000 | 待基准测试 |
+| CPU (T5) | 30% | 待基准测试 |
+| 丢包率 (T5) | <1% | 待基准测试 |
+| 零拷贝 | 已验证 | 已完成 |
 
-## Test Coverage
+## 测试覆盖
 
-- `mmap.rs`: Unit tests for ring buffer management
-- `zero_copy.rs`: Unit tests for buffer lifecycle
-- `async_engine.rs`: Integration tests with AsyncFd
-- `packet_adapter.rs`: Scanner integration tests
+- `mmap.rs`：环形缓冲区管理的单元测试
+- `zero_copy.rs`：缓冲区生命周期的单元测试
+- `async_engine.rs`：AsyncFd 的集成测试
+- `packet_adapter.rs`：扫描器集成测试
 
-**Total**: 865+ workspace tests passing
+**总计**：865+ 工作区测试通过
 
-## Fallback: RecvfromPacketEngine
+## 后备方案：RecvfromPacketEngine
 
-`RecvfromPacketEngine` exists as a fallback when PACKET_MMAP is unavailable:
-- Used only in benchmarks for comparison
-- Used only in integration tests
-- **NOT used by production scanners**
+`RecvfromPacketEngine` 作为 PACKET_MMAP 不可用时的后备方案：
+- 仅在基准测试中用于对比
+- 仅在集成测试中使用
+- **生产扫描器不使用**
 
-## References
+## 参考资源
 
-- `crates/rustnmap-packet/src/mmap.rs` - Main implementation
-- `crates/rustnmap-packet/src/zero_copy.rs` - Zero-copy buffer
-- `crates/rustnmap-packet/src/async_engine.rs` - Tokio integration
-- `crates/rustnmap-scan/src/packet_adapter.rs` - Scanner adapter
-- `reference/nmap/libpcap/pcap-linux.c` - nmap reference
+- `crates/rustnmap-packet/src/mmap.rs` - 主要实现
+- `crates/rustnmap-packet/src/zero_copy.rs` - 零拷贝缓冲区
+- `crates/rustnmap-packet/src/async_engine.rs` - Tokio 集成
+- `crates/rustnmap-scan/src/packet_adapter.rs` - 扫描器适配器
+- `reference/nmap/libpcap/pcap-linux.c` - nmap 参考

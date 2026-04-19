@@ -1,41 +1,41 @@
-# Database Integration Design
+# 数据库集成设计
 
-> **Purpose**: Integrate ServiceDatabase, ProtocolDatabase, and RpcDatabase into output system
+> **目的**：将 ServiceDatabase、ProtocolDatabase 和 RpcDatabase 集成到输出系统中
 
 ---
 
-## Overview
+## 概述
 
-RustNmap currently loads three databases (ServiceDatabase, ProtocolDatabase, RpcDatabase) but immediately discards them. This document describes how to integrate these databases into the output system to display friendly names instead of numbers.
+RustNmap 当前加载了三个数据库（ServiceDatabase、ProtocolDatabase、RpcDatabase），但加载后立即丢弃。本文档描述如何将这些数据库集成到输出系统中，以显示友好的名称而非数字。
 
-## Current State
+## 当前状态
 
-### Existing Implementation
+### 现有实现
 
-All three databases are fully implemented in `crates/rustnmap-fingerprint/src/database/`:
+三个数据库均已在 `crates/rustnmap-fingerprint/src/database/` 中完整实现：
 
-1. **ServiceDatabase** (`services.rs`)
-   - Maps port+protocol → service name
-   - Example: `(80, "tcp")` → `"http"`
-   - API: `lookup(port: u16, protocol: &str) -> Option<&str>`
+1. **ServiceDatabase**（`services.rs`）
+   - 端口+协议 → 服务名称的映射
+   - 示例：`(80, "tcp")` → `"http"`
+   - API：`lookup(port: u16, protocol: &str) -> Option<&str>`
 
-2. **ProtocolDatabase** (`protocols.rs`)
-   - Maps protocol number → protocol name
-   - Example: `6` → `"tcp"`
-   - API: `lookup(number: u8) -> Option<&str>`
+2. **ProtocolDatabase**（`protocols.rs`）
+   - 协议号 → 协议名称的映射
+   - 示例：`6` → `"tcp"`
+   - API：`lookup(number: u8) -> Option<&str>`
 
-3. **RpcDatabase** (`rpc.rs`)
-   - Maps RPC program number → RPC service name
-   - Example: `100003` → `"nfs"`
-   - API: `lookup(number: u32) -> Option<&str>`
+3. **RpcDatabase**（`rpc.rs`）
+   - RPC 程序号 → RPC 服务名称的映射
+   - 示例：`100003` → `"nfs"`
+   - API：`lookup(number: u32) -> Option<&str>`
 
-### Problem
+### 问题
 
-In `crates/rustnmap-cli/src/cli.rs`, databases are loaded but discarded:
+在 `crates/rustnmap-cli/src/cli.rs` 中，数据库被加载后即被丢弃：
 
 ```rust
 match ServiceDatabase::load_from_file(&path).await {
-    Ok(_db) => {  // <- Database immediately discarded
+    Ok(_db) => {  // <- 数据库立即被丢弃
         info!("Services database loaded successfully");
         // Note: Service database is available but not yet used in output
     }
@@ -43,17 +43,17 @@ match ServiceDatabase::load_from_file(&path).await {
 }
 ```
 
-This occurs in two functions:
-- `handle_profile_scan()` (lines 501-553)
-- `run_normal_scan()` (lines 921-973)
+此问题出现在以下两个函数中：
+- `handle_profile_scan()`（第 501-553 行）
+- `run_normal_scan()`（第 921-973 行）
 
 ---
 
-## Nmap Reference Implementation
+## Nmap 参考实现
 
-### How Nmap Uses Databases
+### Nmap 如何使用数据库
 
-From `reference/nmap/services.cc` and `services.h`:
+参考 `reference/nmap/services.cc` 和 `services.h`：
 
 ```c
 // Global service map
@@ -65,7 +65,7 @@ const struct nservent *nmap_getservbyport(u16 port, u16 proto) {
 }
 ```
 
-**Usage in output:**
+**输出中的使用：**
 ```c
 // In output.cc (conceptual)
 if (service_name = nmap_getservbyport(port, proto)) {
@@ -75,44 +75,44 @@ if (service_name = nmap_getservbyport(port, proto)) {
 }
 ```
 
-**Result:**
+**结果：**
 ```
-80/tcp open http      <- With database
-80/tcp open           <- Without database
+80/tcp open http      <- 有数据库
+80/tcp open           <- 无数据库
 ```
 
 ---
 
-## Design Solution
+## 设计方案
 
-### Architecture
+### 架构
 
 ```
 +-----------------+
-|   CLI Layer     |
+|   CLI 层        |
 |  (cli.rs)       |
 +--------+--------+
-         | Load databases
+         | 加载数据库
          v
 +-----------------+
-| DatabaseContext | <- New structure
+| DatabaseContext | <- 新结构体
 |  - services     |
 |  - protocols    |
 |  - rpc          |
 +--------+--------+
-         | Pass to output
+         | 传递给输出层
          v
 +-----------------+
-| Output Layer    |
+| 输出层          |
 | (formatters)    |
 +-----------------+
 ```
 
-### Implementation Plan
+### 实现计划
 
-#### Phase 1: Create DatabaseContext
+#### 阶段 1：创建 DatabaseContext
 
-Create new structure in `crates/rustnmap-output/src/database_context.rs`:
+在 `crates/rustnmap-output/src/database_context.rs` 中创建新结构体：
 
 ```rust
 pub struct DatabaseContext {
@@ -144,9 +144,9 @@ impl DatabaseContext {
 }
 ```
 
-#### Phase 2: Store Databases in CLI
+#### 阶段 2：在 CLI 中存储数据库
 
-Modify `cli.rs` to store loaded databases:
+修改 `cli.rs` 以保存加载的数据库：
 
 ```rust
 // In handle_profile_scan() and run_normal_scan()
@@ -166,9 +166,9 @@ if services_db_path.exists() {
 // Similar for protocols and rpc...
 ```
 
-#### Phase 3: Pass to Output Functions
+#### 阶段 3：传递给输出函数
 
-Modify output function signatures:
+修改输出函数签名：
 
 ```rust
 // Before
@@ -179,13 +179,13 @@ fn write_normal_output(
     result: &ScanResult,
     path: &Path,
     append: bool,
-    db_context: &DatabaseContext  // <- Add parameter
+    db_context: &DatabaseContext  // <- 新增参数
 ) -> Result<()>
 ```
 
-#### Phase 4: Use in Output
+#### 阶段 4：在输出中使用
 
-Modify output functions to use databases:
+修改输出函数以使用数据库：
 
 ```rust
 // In write_normal_output()
@@ -216,9 +216,9 @@ for port in &host.ports {
 
 ---
 
-## Output Format Changes
+## 输出格式变化
 
-### Before (Current)
+### 修改前（当前）
 
 ```
 PORT     STATE SERVICE
@@ -227,7 +227,7 @@ PORT     STATE SERVICE
 22/tcp   open
 ```
 
-### After (With Databases)
+### 修改后（集成数据库）
 
 ```
 PORT     STATE SERVICE
@@ -238,47 +238,47 @@ PORT     STATE SERVICE
 
 ---
 
-## Implementation Checklist
+## 实现清单
 
-- [ ] Create `DatabaseContext` structure
-- [ ] Modify `cli.rs` to store loaded databases (remove `_db` discards)
-- [ ] Update output function signatures to accept `DatabaseContext`
-- [ ] Implement database lookups in `write_normal_output()`
-- [ ] Implement database lookups in `write_grepable_output()`
-- [ ] Implement database lookups in `write_xml_output()`
-- [ ] Add tests for database integration
-- [ ] Update documentation
-
----
-
-## Testing Strategy
-
-1. **Unit Tests**: Test `DatabaseContext` lookup methods
-2. **Integration Tests**: Compare output with/without databases
-3. **Compatibility Tests**: Verify output matches nmap format
+- [ ] 创建 `DatabaseContext` 结构体
+- [ ] 修改 `cli.rs` 以保存加载的数据库（移除 `_db` 丢弃）
+- [ ] 更新输出函数签名以接收 `DatabaseContext`
+- [ ] 在 `write_normal_output()` 中实现数据库查询
+- [ ] 在 `write_grepable_output()` 中实现数据库查询
+- [ ] 在 `write_xml_output()` 中实现数据库查询
+- [ ] 添加数据库集成测试
+- [ ] 更新文档
 
 ---
 
-## Performance Considerations
+## 测试策略
 
-- Databases loaded once at startup (no performance impact)
-- Lookups are O(1) HashMap operations
-- Optional `Arc` wrapping allows sharing without cloning
-
----
-
-## Backward Compatibility
-
-- If databases not found, output shows numbers only (current behavior)
-- No breaking changes to existing functionality
-- Graceful degradation when databases unavailable
+1. **单元测试**：测试 `DatabaseContext` 的查询方法
+2. **集成测试**：比较有/无数据库时的输出差异
+3. **兼容性测试**：验证输出格式与 nmap 一致
 
 ---
 
-## References
+## 性能考虑
 
-- Nmap source: `reference/nmap/services.cc`, `reference/nmap/protocols.cc`
-- RustNmap databases: `crates/rustnmap-fingerprint/src/database/`
-- Output layer: `crates/rustnmap-output/src/`
+- 数据库在启动时加载一次（无运行时性能影响）
+- 查询为 O(1) HashMap 操作
+- 可选的 `Arc` 包装允许共享而无需克隆
+
+---
+
+## 向后兼容性
+
+- 若未找到数据库，输出仅显示数字（当前行为）
+- 不对现有功能造成破坏性变更
+- 数据库不可用时优雅降级
+
+---
+
+## 参考资料
+
+- Nmap 源码：`reference/nmap/services.cc`、`reference/nmap/protocols.cc`
+- RustNmap 数据库：`crates/rustnmap-fingerprint/src/database/`
+- 输出层：`crates/rustnmap-output/src/`
 
 ---

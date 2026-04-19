@@ -1,93 +1,93 @@
-# CLI Module
+# CLI 模块
 
-> **Component**: `rustnmap-cli`
-> **Status**: ✅ Production Ready
-> **Last Updated**: 2026-03-10
-> **Migration**: Migrated from clap to lexopt (2026-03-10)
-
----
-
-## Overview
-
-The CLI module provides the command-line interface for RustNmap, implementing **100% nmap-compatible argument parsing** using **lexopt** for proper compound short option support.
-
-## Key Features
-
-- ✅ **Full nmap compatibility** - All nmap command-line options work
-- ✅ **Compound short options** - `-sS -sV -sC`, `-oN file`, `-T4`, `-Pn`
-- ✅ **Manual help system** - Custom help matching nmap style
-- ✅ **Error handling** - Clear error messages for invalid options
-- ✅ **Type-safe parsing** - Rust `Result` based error handling
+> **组件**: `rustnmap-cli`
+> **状态**: 生产就绪
+> **最后更新**: 2026-03-10
+> **迁移**: 从 clap 迁移到 lexopt（2026-03-10）
 
 ---
 
-## Architecture Migration
+## 概述
 
-### Before (clap derive API)
+CLI 模块提供 RustNmap 的命令行界面，使用 **lexopt** 实现 **100% nmap 兼容的参数解析**，正确支持复合短选项。
 
-**Dependencies:**
+## 主要特性
+
+- 100% nmap 兼容 - 所有 nmap 命令行选项均可使用
+- 复合短选项 - `-sS -sV -sC`、`-oN file`、`-T4`、`-Pn`
+- 手动帮助系统 - 自定义帮助输出，匹配 nmap 风格
+- 错误处理 - 无效选项的清晰错误信息
+- 类型安全解析 - 基于 Rust `Result` 的错误处理
+
+---
+
+## 架构迁移
+
+### 迁移前（clap derive API）
+
+**依赖：**
 ```toml
 clap = { version = "4.5", features = ["derive", "wrap_help", "cargo"] }
 ```
 
-**Limitations:**
-- ❌ Compound short options like `-sS` didn't work properly
-- ❌ Required `--scan-syn` long form instead of `-sS`
-- ❌ `-oN file` syntax not supported
-- ❌ Larger binary size (~4.2 MB)
+**局限性：**
+- 复合短选项如 `-sS` 无法正常工作
+- 需要使用 `--scan-syn` 长格式代替 `-sS`
+- 不支持 `-oN file` 语法
+- 二进制体积较大（约 4.2 MB）
 
-### After (lexopt)
+### 迁移后（lexopt）
 
-**Dependencies:**
+**依赖：**
 ```toml
 lexopt = "0.3"
 ```
 
-**Benefits:**
-- ✅ Full nmap compound option support
-- ✅ Proper `-sS -sV -sC` syntax
-- ✅ `-oN/-oX/-oG/-oA file` syntax
-- ✅ Smaller binary size (~3.7 MB, 12% reduction)
-- ✅ More control over parsing behavior
+**优势：**
+- 完整的 nmap 复合选项支持
+- 正确的 `-sS -sV -sC` 语法
+- `-oN/-oX/-oG/-oA file` 语法
+- 更小的二进制体积（约 3.7 MB，减少 12%）
+- 更灵活的解析行为控制
 
 ---
 
-## File Structure
+## 文件结构
 
 ```
 rustnmap-cli/
 ├── Cargo.toml
 ├── build.rs
 ├── src/
-│   ├── main.rs           # Binary entry point
-│   ├── lib.rs            # Library exports
-│   ├── args.rs           # Argument parsing (lexopt, ~1100 lines)
-│   ├── cli.rs            # Main CLI controller
-│   ├── help.rs           # Manual help system (170 lines)
-│   ├── config.rs         # Config loading
-│   └── output.rs         # Output formatting
+│   ├── main.rs           # 二进制入口
+│   ├── lib.rs            # 库导出
+│   ├── args.rs           # 参数解析（lexopt，约 1100 行）
+│   ├── cli.rs            # 主 CLI 控制器
+│   ├── help.rs           # 手动帮助系统（170 行）
+│   ├── config.rs         # 配置加载
+│   └── output.rs         # 输出格式化
 └── tests/
     └── output_formatter_test.rs
 ```
 
 ---
 
-## Core Components
+## 核心组件
 
-### 1. args.rs - Argument Parser
+### 1. args.rs - 参数解析器
 
-**Purpose**: Parse all command-line arguments using lexopt
+**用途**：使用 lexopt 解析所有命令行参数
 
-**Key Structures:**
+**关键结构体：**
 
 ```rust
-/// Main argument structure
+/// 主参数结构体
 #[derive(Debug, Clone, Default)]
 pub struct Args {
-    // Targets
+    // 目标
     pub targets: Vec<String>,
 
-    // Scan types (12 types supported)
+    // 扫描类型（支持 12 种）
     pub scan_syn: bool,
     pub scan_connect: bool,
     pub scan_udp: bool,
@@ -98,53 +98,53 @@ pub struct Args {
     pub scan_ack: bool,
     pub scan_window: bool,
 
-    // Service/OS detection
+    // 服务/OS 检测
     pub service_detection: bool,
     pub os_detection: bool,
     pub aggressive_scan: bool,
 
-    // Timing
+    // 计时
     pub timing: Option<u8>,        // T0-T5
     pub scan_delay: Option<u64>,
     pub min_rate: Option<u64>,
     pub max_rate: Option<u64>,
 
-    // Output formats
+    // 输出格式
     pub output: Option<OutputFormat>,
     pub output_json: Option<PathBuf>,
     pub verbose: u8,
     pub debug: u8,
 
-    // NSE scripts
+    // NSE 脚本
     pub script: Option<String>,
     pub script_default: bool,
     pub script_args: Option<String>,
 
-    // ... 60+ more options
+    // ... 60+ 更多选项
 }
 ```
 
-**Output Format Enum:**
+**输出格式枚举：**
 
 ```rust
-/// Output format specification for nmap-compatible `-o` options
+/// nmap 兼容 `-o` 选项的输出格式规格
 #[derive(Debug, Clone)]
 pub enum OutputFormat {
-    /// Normal output (-oN)
+    /// 普通输出 (-oN)
     Normal(PathBuf),
-    /// XML output (-oX)
+    /// XML 输出 (-oX)
     Xml(PathBuf),
-    /// Grepable output (-oG)
+    /// 可 grep 输出 (-oG)
     Grepable(PathBuf),
-    /// All formats (-oA)
+    /// 所有格式 (-oA)
     All(PathBuf),
 }
 ```
 
-**Error Handling:**
+**错误处理：**
 
 ```rust
-/// Error type for argument parsing
+/// 参数解析错误类型
 #[derive(Debug)]
 pub enum ParseError {
     UnknownOption(String),
@@ -160,11 +160,11 @@ impl From<lexopt::Error> for ParseError {
 }
 ```
 
-### 2. help.rs - Manual Help System
+### 2. help.rs - 手动帮助系统
 
-**Purpose**: Provide nmap-style help output
+**用途**：提供 nmap 风格的帮助输出
 
-Since lexopt doesn't include auto-generated help, a manual help system was implemented:
+由于 lexopt 不包含自动生成的帮助，因此实现了手动帮助系统：
 
 ```rust
 pub fn print_help() -> Result<(), std::io::Error> {
@@ -179,11 +179,11 @@ pub fn print_help() -> Result<(), std::io::Error> {
 }
 ```
 
-### 3. cli.rs - Main Controller
+### 3. cli.rs - 主控制器
 
-**Purpose**: Orchestrate the scanning process
+**用途**：编排扫描流程
 
-**Key Functions:**
+**关键函数：**
 
 ```rust
 pub struct Cli {
@@ -195,21 +195,21 @@ pub struct Cli {
 
 impl Cli {
     pub async fn run(&mut self) -> Result<(), CliError> {
-        // Load databases
-        // Create packet engine
-        // Run scan
-        // Output results
+        // 加载数据库
+        // 创建数据包引擎
+        // 运行扫描
+        // 输出结果
     }
 }
 ```
 
 ---
 
-## Compound Option Parsing
+## 复合选项解析
 
-### Scan Types (-sS, -sV, -sC, etc.)
+### 扫描类型（-sS、-sV、-sC 等）
 
-**Implementation:**
+**实现：**
 
 ```rust
 Arg::Short('s') => {
@@ -236,15 +236,15 @@ Arg::Short('s') => {
 }
 ```
 
-**Usage:**
+**用法：**
 ```bash
-rustnmap -sS -sV -sC 127.0.0.1     # Works!
-rustnmap -sS -sV -O -T4 192.168.1.1  # Works!
+rustnmap -sS -sV -sC 127.0.0.1     # 有效！
+rustnmap -sS -sV -O -T4 192.168.1.1  # 有效！
 ```
 
-### Output Formats (-oN, -oX, -oG, -oA)
+### 输出格式（-oN、-oX、-oG、-oA）
 
-**Implementation:**
+**实现：**
 
 ```rust
 Arg::Short('o') => {
@@ -263,16 +263,16 @@ Arg::Short('o') => {
 }
 ```
 
-**Usage:**
+**用法：**
 ```bash
-rustnmap -oN /tmp/scan.txt 127.0.0.1  # Normal output
-rustnmap -oX /tmp/scan.xml 127.0.0.1  # XML output
-rustnmap -oA /tmp/scan 127.0.0.1      # All formats
+rustnmap -oN /tmp/scan.txt 127.0.0.1  # 普通输出
+rustnmap -oX /tmp/scan.xml 127.0.0.1  # XML 输出
+rustnmap -oA /tmp/scan 127.0.0.1      # 所有格式
 ```
 
-### Timing Templates (-T0 through -T5)
+### 计时模板（-T0 到 -T5）
 
-**Implementation:**
+**实现：**
 
 ```rust
 Arg::Short('T') => {
@@ -290,15 +290,15 @@ Arg::Short('T') => {
 }
 ```
 
-**Usage:**
+**用法：**
 ```bash
-rustnmap -sS -T4 127.0.0.1   # Aggressive timing
-rustnmap -sS -T0 127.0.0.1   # Paranoid timing
+rustnmap -sS -T4 127.0.0.1   # 激进计时
+rustnmap -sS -T0 127.0.0.1   # 偏执计时
 ```
 
-### Host Discovery (-Pn)
+### 主机发现（-Pn）
 
-**Implementation:**
+**实现：**
 
 ```rust
 Arg::Short('P') => {
@@ -316,201 +316,201 @@ Arg::Short('P') => {
 }
 ```
 
-**Usage:**
+**用法：**
 ```bash
-rustnmap -Pn 127.0.0.1  # Skip host discovery
+rustnmap -Pn 127.0.0.1  # 跳过主机发现
 ```
 
 ---
 
-## Supported Options
+## 支持的选项
 
-### Scan Types
+### 扫描类型
 
-| Option | Description | Status |
-|--------|-------------|--------|
-| `-sS` | TCP SYN scan | ✅ |
-| `-sT` | TCP Connect scan | ✅ |
-| `-sU` | UDP scan | ✅ |
-| `-sF` | TCP FIN scan | ✅ |
-| `-sN` | TCP NULL scan | ✅ |
-| `-sX` | TCP Xmas scan | ✅ |
-| `-sM` | TCP Maimon scan | ✅ |
-| `-sA` | TCP ACK scan | ✅ |
-| `-sW` | TCP Window scan | ✅ |
-| `-sO` | IP Protocol scan | ✅ |
-| `-sI` | Idle scan | ✅ |
-| `-b` | FTP Bounce scan | ✅ |
+| 选项 | 描述 | 状态 |
+|------|------|------|
+| `-sS` | TCP SYN 扫描 | 已实现 |
+| `-sT` | TCP Connect 扫描 | 已实现 |
+| `-sU` | UDP 扫描 | 已实现 |
+| `-sF` | TCP FIN 扫描 | 已实现 |
+| `-sN` | TCP NULL 扫描 | 已实现 |
+| `-sX` | TCP Xmas 扫描 | 已实现 |
+| `-sM` | TCP Maimon 扫描 | 已实现 |
+| `-sA` | TCP ACK 扫描 | 已实现 |
+| `-sW` | TCP Window 扫描 | 已实现 |
+| `-sO` | IP 协议扫描 | 已实现 |
+| `-sI` | Idle 扫描 | 已实现 |
+| `-b` | FTP 反弹扫描 | 已实现 |
 
-### Service/OS Detection
+### 服务/OS 检测
 
-| Option | Description | Status |
-|--------|-------------|--------|
-| `-sV` | Service version detection | ✅ |
-| `-O` | OS detection | ✅ |
-| `-A` | Aggressive scan (equiv to -sV -O -sC) | ✅ |
-| `--version-intensity` | Version detection intensity (0-9) | ✅ |
-| `--version-all` | Enable all probes | ✅ |
-| `--version-trace` | Trace version scanning | ✅ |
+| 选项 | 描述 | 状态 |
+|------|------|------|
+| `-sV` | 服务版本检测 | 已实现 |
+| `-O` | 操作系统检测 | 已实现 |
+| `-A` | 激进扫描（等同于 -sV -O -sC） | 已实现 |
+| `--version-intensity` | 版本检测强度（0-9） | 已实现 |
+| `--version-all` | 启用所有探测 | 已实现 |
+| `--version-trace` | 跟踪版本扫描 | 已实现 |
 
-### Scripting
+### 脚本
 
-| Option | Description | Status |
-|--------|-------------|--------|
-| `-sC` | Run default scripts | ✅ |
-| `--script` | Script selection | ✅ |
-| `--script-args` | Script arguments | ✅ |
-| `--script-trace` | Show script execution | ✅ |
-| `--script-updatedb` | Update script database | ✅ |
+| 选项 | 描述 | 状态 |
+|------|------|------|
+| `-sC` | 运行默认脚本 | 已实现 |
+| `--script` | 脚本选择 | 已实现 |
+| `--script-args` | 脚本参数 | 已实现 |
+| `--script-trace` | 显示脚本执行 | 已实现 |
+| `--script-updatedb` | 更新脚本数据库 | 已实现 |
 
-### Timing
+### 计时
 
-| Option | Description | Status |
-|--------|-------------|--------|
-| `-T0` to `-T5` | Timing template | ✅ |
-| `--min-rate` | Minimum packets per second | ✅ |
-| `--max-rate` | Maximum packets per second | ✅ |
-| `--min-parallelism` | Minimum parallel probes | ✅ |
-| `--max-parallelism` | Maximum parallel probes | ✅ |
+| 选项 | 描述 | 状态 |
+|------|------|------|
+| `-T0` 到 `-T5` | 计时模板 | 已实现 |
+| `--min-rate` | 每秒最小发包数 | 已实现 |
+| `--max-rate` | 每秒最大发包数 | 已实现 |
+| `--min-parallelism` | 最小并行探测数 | 已实现 |
+| `--max-parallelism` | 最大并行探测数 | 已实现 |
 
-### Output
+### 输出
 
-| Option | Description | Status |
-|--------|-------------|--------|
-| `-oN file` | Normal output | ✅ |
-| `-oX file` | XML output | ✅ |
-| `-oG file` | Grepable output | ✅ |
-| `-oA basename` | All formats | ✅ |
-| `-v` | Increase verbosity | ✅ |
-| `-vv` | More verbosity | ✅ |
-| `--reason` | Show port state reasons | ✅ |
-| `--open` | Show only open ports | ✅ |
-| `--packet-trace` | Show all packets | ✅ |
+| 选项 | 描述 | 状态 |
+|------|------|------|
+| `-oN file` | 普通输出 | 已实现 |
+| `-oX file` | XML 输出 | 已实现 |
+| `-oG file` | 可 grep 输出 | 已实现 |
+| `-oA basename` | 所有格式 | 已实现 |
+| `-v` | 增加详细程度 | 已实现 |
+| `-vv` | 更多详细输出 | 已实现 |
+| `--reason` | 显示端口状态原因 | 已实现 |
+| `--open` | 仅显示开放端口 | 已实现 |
+| `--packet-trace` | 显示所有数据包 | 已实现 |
 
-### Firewall/IDS Evasion
+### 防火墙/IDS 规避
 
-| Option | Description | Status |
-|--------|-------------|--------|
-| `-f` | Fragment packets | ✅ |
-| `-D` | Decoy scan | ✅ |
-| `-S` | Spoof source address | ✅ |
-| `--ttl` | Set IP TTL | ✅ |
-| `--badsum` | Use bad checksums | ✅ |
+| 选项 | 描述 | 状态 |
+|------|------|------|
+| `-f` | 分片数据包 | 已实现 |
+| `-D` | 诱饵扫描 | 已实现 |
+| `-S` | 伪造源地址 | 已实现 |
+| `--ttl` | 设置 IP TTL | 已实现 |
+| `--badsum` | 使用错误校验和 | 已实现 |
 
-### Target Specification
+### 目标规格
 
-| Option | Description | Status |
-|--------|-------------|--------|
-| `-iL file` | Input from list | ⚠️ Uses `-i` (different) |
-| `-iR num` | Random targets | ⚠️ Not fully tested |
-| `--exclude` | Exclude hosts | ✅ |
-| `--excludefile` | Exclude from file | ⚠️ Not fully tested |
+| 选项 | 描述 | 状态 |
+|------|------|------|
+| `-iL file` | 从列表读取输入 | 注意：使用 `-i`（不同） |
+| `-iR num` | 随机目标 | 注意：未完全测试 |
+| `--exclude` | 排除主机 | 已实现 |
+| `--excludefile` | 从文件排除 | 注意：未完全测试 |
 
 ---
 
-## Testing
+## 测试
 
-### Unit Tests
+### 单元测试
 
 ```bash
 cargo test -p rustnmap-cli
 ```
 
-**Coverage:**
-- Output format tests: 20 tests
-- Error handling tests: 10 tests
-- Type validation tests: 15 tests
+**覆盖率：**
+- 输出格式测试：20 个
+- 错误处理测试：10 个
+- 类型验证测试：15 个
 
-### Integration Tests
+### 集成测试
 
 ```bash
-# Test compound options
+# 测试复合选项
 ./target/release/rustnmap -sS -sV -sC -T4 127.0.0.1
 
-# Test output formats
+# 测试输出格式
 ./target/release/rustnmap -oN /tmp/scan.txt -oX /tmp/scan.xml 127.0.0.1
 
-# Test help
+# 测试帮助
 ./target/release/rustnmap -h
 ```
 
 ---
 
-## Performance
+## 性能
 
-### Binary Size Comparison
+### 二进制体积对比
 
-| Version | Size | Change |
-|---------|------|--------|
-| clap (derive) | 4.2 MB | - |
+| 版本 | 大小 | 变化 |
+|------|------|------|
+| clap（derive） | 4.2 MB | 基线 |
 | lexopt | 3.7 MB | **-12%** |
 
-### Parse Performance
+### 解析性能
 
-| Operation | Time | Notes |
-|-----------|------|-------|
-| Simple options (`-sS 127.0.0.1`) | ~1ms | Negligible overhead |
-| Complex options (`-sS -sV -sC -T4 -oN file`) | ~2ms | Still negligible |
-| Help output | ~5ms | Manual help generation |
-
----
-
-## Migration Notes
-
-### Breaking Changes
-
-**For Users:** None!
-- All old syntax still works
-- New nmap-compatible syntax added
-
-**For Developers:**
-- `Args` struct changed: `output_normal: Option<PathBuf>` → `output: Option<OutputFormat>`
-- `main.rs` changed: Now returns `Result<(), ParseError>`
-
-### Compatibility
-
-| Feature | clap | lexopt |
-|---------|------|--------|
-| Auto-generated help | ✅ | ❌ (manual) |
-| Derive macros | ✅ | ❌ (manual) |
-| Subcommands | ✅ | ⚠️ (manual) |
-| Compound options | ❌ | ✅ |
-| Full control | ❌ | ✅ |
-| Binary size | Larger | Smaller |
+| 操作 | 耗时 | 备注 |
+|------|------|------|
+| 简单选项（`-sS 127.0.0.1`） | 约 1ms | 开销可忽略 |
+| 复合选项（`-sS -sV -sC -T4 -oN file`） | 约 2ms | 仍可忽略 |
+| 帮助输出 | 约 5ms | 手动帮助生成 |
 
 ---
 
-## Future Work
+## 迁移说明
 
-### Phase 2: More Compound Options
+### 破坏性变更
 
-- [ ] Ping options: `-PS`, `-PA`, `-PU`, `-PE`, `-PP`, `-PM`
-- [ ] Input files: `-iL file` (currently `-i file`)
-- [ ] Port ranges with attached value: `-p1-1000`
+**对用户：** 无！
+- 所有旧语法仍然有效
+- 新增了 nmap 兼容语法
 
-### Phase 3: Remaining Options
+**对开发者：**
+- `Args` 结构体变更：`output_normal: Option<PathBuf>` → `output: Option<OutputFormat>`
+- `main.rs` 变更：现在返回 `Result<(), ParseError>`
 
-- [ ] All firewall/IDS evasion options
-- [ ] All service/OS detection options
-- [ ] All script engine options
+### 兼容性
 
-### Phase 4: Enhanced Testing
-
-- [ ] Nmap compatibility test suite
-- [ ] Performance benchmarks
-- [ ] Fuzz testing for edge cases
-
----
-
-## References
-
-- **lexopt documentation:** https://docs.rs/lexopt
-- **nmap man page:** https://nmap.org/book/man.html
-- **Migration document:** `LEXOPT_MIGRATION_COMPLETE.md`
-- **Source code:** `crates/rustnmap-cli/src/`
+| 特性 | clap | lexopt |
+|------|------|--------|
+| 自动生成帮助 | 支持 | 不支持（手动） |
+| Derive 宏 | 支持 | 不支持（手动） |
+| 子命令 | 支持 | 部分支持（手动） |
+| 复合选项 | 不支持 | 支持 |
+| 完全控制 | 不支持 | 支持 |
+| 二进制体积 | 较大 | 较小 |
 
 ---
 
-**Last Updated:** 2026-03-10
-**Migration Date:** 2026-03-10
-**Status:** ✅ Production Ready
+## 后续工作
+
+### 阶段 2：更多复合选项
+
+- [ ] Ping 选项：`-PS`、`-PA`、`-PU`、`-PE`、`-PP`、`-PM`
+- [ ] 输入文件：`-iL file`（当前为 `-i file`）
+- [ ] 带附加值的端口范围：`-p1-1000`
+
+### 阶段 3：剩余选项
+
+- [ ] 所有防火墙/IDS 规避选项
+- [ ] 所有服务/OS 检测选项
+- [ ] 所有脚本引擎选项
+
+### 阶段 4：增强测试
+
+- [ ] Nmap 兼容性测试套件
+- [ ] 性能基准测试
+- [ ] 边界情况模糊测试
+
+---
+
+## 参考资料
+
+- **lexopt 文档：** https://docs.rs/lexopt
+- **nmap 手册页：** https://nmap.org/book/man.html
+- **迁移文档：** `LEXOPT_MIGRATION_COMPLETE.md`
+- **源代码：** `crates/rustnmap-cli/src/`
+
+---
+
+**最后更新：** 2026-03-10
+**迁移日期：** 2026-03-10
+**状态：** 生产就绪

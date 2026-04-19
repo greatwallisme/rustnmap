@@ -1,104 +1,104 @@
-# NSE Protocol Libraries - Technical Design
+# NSE 协议库 - 技术设计
 
-> **Version**: 1.1.0
-> **Target**: Nmap 7.95
-> **Status**: Phase 11 COMPLETE - All protocol libraries implemented
-> **Last Updated**: 2026-03-17
+> **版本**: 1.1.0
+> **目标**: Nmap 7.95
+> **状态**: 阶段 11 完成 - 所有协议库已实现
+> **最后更新**: 2026-03-17
 
-## Completion Status
+## 完成状态
 
-| Phase | Libraries | Status |
-|-------|-----------|--------|
-| **Phase 11.1** | http, ssh2, sslcert, dns | ✅ Complete |
-| **Phase 11.2** | smb, netbios, smbauth, unicode, unpwdb, ftp | ✅ Complete |
-| **Phase 11.3** | openssl, json, creds, url | ✅ Complete |
-| **Utilities** | brute | ✅ Complete |
-
----
-
-## Overview
-
-This document specifies the technical design for NSE protocol libraries. These libraries expose protocol-specific functionality to Lua scripts, enabling advanced network discovery and vulnerability detection.
-
-**The design is based on analysis of Nmap's actual NSE library implementations** in `reference/nmap/nselib/`.
-
-## Design Principles
-
-1. **Nmap Compatibility**: All APIs must match Nmap's NSE library behavior exactly
-2. **Error Handling**: Return `nil, error_message` on failure (Lua convention)
-3. **Response Format**: Match Nmap's response table structure exactly
-4. **Resource Management**: Proper cleanup of sockets, connections, and memory
-5. **Async-Await**: Use Tokio for all network operations
-6. **mlua Integration**: Use mlua 0.9+ for Lua 5.4 bindings
+| 阶段 | 库 | 状态 |
+|------|-----|------|
+| **阶段 11.1** | http, ssh2, sslcert, dns | 已完成 |
+| **阶段 11.2** | smb, netbios, smbauth, unicode, unpwdb, ftp | 已完成 |
+| **阶段 11.3** | openssl, json, creds, url | 已完成 |
+| **工具** | brute | 已完成 |
 
 ---
 
-## 1. HTTP Library (`http`)
+## 概述
 
-### Module File
+本文档规定 NSE 协议库的技术设计。这些库向 Lua 脚本暴露协议特定功能，实现高级网络发现和漏洞检测。
+
+**本设计基于对 Nmap 实际 NSE 库实现的分析**，源码位于 `reference/nmap/nselib/`。
+
+## 设计原则
+
+1. **Nmap 兼容性**：所有 API 必须完全匹配 Nmap 的 NSE 库行为
+2. **错误处理**：失败时返回 `nil, error_message`（Lua 惯例）
+3. **响应格式**：完全匹配 Nmap 的响应表结构
+4. **资源管理**：正确清理套接字、连接和内存
+5. **异步等待**：所有网络操作使用 Tokio
+6. **mlua 集成**：Lua 5.4 绑定使用 mlua 0.9+
+
+---
+
+## 1. HTTP 库 (`http`)
+
+### 模块文件
 
 ```rust
 // crates/rustnmap-nse/src/libs/http.rs
 ```
 
-### Response Table Structure
+### 响应表结构
 
-Nmap's HTTP library returns a table with these fields:
+Nmap 的 HTTP 库返回包含以下字段的表：
 
 ```lua
 {
-    -- Status information
+    -- 状态信息
     ["status-line"] = "HTTP/1.1 200 OK\r\n",
     status = 200,
     version = "1.1",
 
-    -- Headers (lowercase keys)
+    -- 头部（小写键名）
     header = {
         ["content-type"] = "text/html",
         ["content-length"] = "1234",
         ["server"] = "Apache",
     },
 
-    -- Raw headers (numbered array)
+    -- 原始头部（编号数组）
     rawheader = {
         "Content-Type: text/html",
         "Content-Length: 1234",
         "Server: Apache",
     },
 
-    -- Cookies
+    -- Cookie
     cookies = {
         {name = "sessionid", value = "abc123", path = "/", domain = "example.com"},
     },
 
-    -- Body
-    rawbody = "<html>...</html>",      -- Before Content-Encoding processing
-    body = "<html>...</html>",         -- After Content-Encoding processing
+    -- 正文
+    rawbody = "<html>...</html>",      -- Content-Encoding 处理前
+    body = "<html>...</html>",         -- Content-Encoding 处理后
 
-    -- Encoding tracking
-    decoded = {"gzip"},                 -- Successfully processed encodings
-    undecoded = {},                     -- Failed or unsupported encodings
+    -- 编码跟踪
+    decoded = {"gzip"},                 -- 成功处理的编码
+    undecoded = {},                     -- 失败或不支持的编码
 
-    -- Redirects
+    -- 重定向
     location = {"http://example.com/redirected"},
 
-    -- Error states
-    incomplete = nil,                    -- Partial response on error
-    truncated = false,                   -- Body was truncated due to size limit
+    -- 错误状态
+    incomplete = nil,                    -- 错误时的部分响应
+    truncated = false,                   -- 正文因大小限制被截断
 }
 ```
 
-### Main Functions
+### 主要函数
 
 #### `http.get(host, port, path, options)`
 
 ```lua
--- Basic GET request
+-- 基本 GET 请求
 local response = http.get(host, port, "/")
 
--- With options
+-- 带选项
 local response = http.get(host, port, "/path", {
-    timeout = 10000,                    -- milliseconds
+    timeout = 10000,                    -- 毫秒
     header = {
         ["User-Agent"] = "Custom",
         ["Authorization"] = "Bearer xyz",
@@ -107,13 +107,13 @@ local response = http.get(host, port, "/path", {
         {name = "session", value = "abc123"},
     },
     auth = {username = "user", password = "pass"},
-    redirect_ok = false,                 -- Don't follow redirects
+    redirect_ok = false,                 -- 不跟随重定向
     bypass_cache = true,
     no_cache = true,
-    scheme = "https",                    -- Force HTTPS
+    scheme = "https",                    -- 强制 HTTPS
 })
 
--- Access response
+-- 访问响应
 if response and response.status == 200 then
     print(response.body)
     print(response.header["content-type"])
@@ -123,18 +123,18 @@ end
 #### `http.post(host, port, path, options, ignored, postdata)`
 
 ```lua
--- Form POST (table content becomes form-encoded)
+-- 表单 POST（表内容变为 form-encoded）
 local response = http.post(host, port, "/login", nil, nil, {
     username = "admin",
     password = "secret",
 })
 
--- JSON POST (string content)
+-- JSON POST（字符串内容）
 local response = http.post(host, port, "/api", {
     header = {["Content-Type"] = "application/json"}
 }, nil, '{"json": "data"}')
 
--- Raw binary POST
+-- 原始二进制 POST
 local response = http.post(host, port, "/upload", {
     header = {["Content-Type"] = "application/octet-stream"}
 }, nil, binary_data)
@@ -144,13 +144,13 @@ local response = http.post(host, port, "/upload", {
 
 ```lua
 local response = http.head(host, port, "/path")
--- Same response structure, but body is empty/nil
+-- 相同的响应结构，但 body 为空/nil
 ```
 
 #### `http.generic_request(host, port, method, path, options)`
 
 ```lua
--- Generic method for any HTTP verb
+-- 任意 HTTP 方法的通用接口
 local response = http.generic_request(host, port, "PUT", "/resource", {
     header = {["Content-Type"] = "application/json"}
 }, nil, '{"data": "value"}')
@@ -162,63 +162,63 @@ local response = http.generic_request(host, port, "OPTIONS", "*")
 #### `http.get_url(url, options)`
 
 ```lua
--- Parse and fetch from URL
+-- 解析 URL 并获取
 local response = http.get_url("https://example.com:8080/api/v1?key=value", {
     timeout = 10000,
 })
 
--- URL is automatically parsed into host, port, path, query
+-- URL 自动解析为 host、port、path、query
 ```
 
 #### `http.pipeline_add(path, options, all_requests, method)`
 
 ```lua
--- Build pipeline
+-- 构建管道
 local all = nil
 all = http.pipeline_add("/path1", nil, all)
 all = http.pipeline_add("/path2", nil, all)
 all = http.pipeline_add("/path3", {header = {["X-Custom"] = "value"}}, all, "HEAD")
 
--- Execute pipeline
+-- 执行管道
 local results = http.pipeline_go(host, port, all)
--- results is array of response tables
+-- results 是响应表的数组
 ```
 
 #### `http.pipeline_go(host, port, all_requests)`
 
 ```lua
--- Execute queued requests
+-- 执行排队的请求
 local results = http.pipeline_go(host, port, all_requests)
 for i, response in ipairs(results) do
     print(response.status)
 end
 ```
 
-### Options Table Reference
+### 选项表参考
 
 ```lua
 local options = {
-    -- Socket timeout
+    -- 套接字超时
     timeout = 30000,
 
-    -- Additional headers
+    -- 附加头部
     header = {["X-Custom"] = "value"},
 
-    -- Request body (string or table for form-encoding)
+    -- 请求正文（字符串或表，表会 form-encoded）
     content = "raw data",
-    -- OR
+    -- 或
     content = {key1 = "value1", key2 = "value2"},
 
-    -- Cookies
+    -- Cookie
     cookies = {
         {name = "session", value = "abc123", path = "/"},
-        -- OR just a string
+        -- 或仅字符串
         "session=abc123; Path=/",
     },
 
-    -- Authentication
+    -- 认证
     auth = {username = "user", password = "pass", digest = true},
-    -- OR
+    -- 或
     digestauth = {
         username = "user",
         password = "pass",
@@ -228,40 +228,40 @@ local options = {
         response = "calculated_hash",
     },
 
-    -- Cache control
+    -- 缓存控制
     bypass_cache = true,
     no_cache = true,
     no_cache_body = true,
 
-    -- Redirect control
+    -- 重定向控制
     redirect_ok = function(url) return true end,
-    -- OR
-    redirect_ok = 3,  -- Max 3 redirects
+    -- 或
+    redirect_ok = 3,  -- 最多 3 次重定向
 
-    -- Body size limit
+    -- 正文大小限制
     max_body_size = 1024 * 1024,  -- 1MB
     truncated_ok = true,
 
-    -- Protocol scheme
+    -- 协议方案
     scheme = "https",
 
-    -- Address family
+    -- 地址族
     any_af = true,
 }
 ```
 
-### Implementation Notes
+### 实现说明
 
-1. **SSL/TLS Detection**: Use `comm.tryssl()` to determine if SSL is needed
-2. **Redirect Handling**: Follow 301, 302, 303, 307, 308 with validation
-3. **Chunked Encoding**: Handle `Transfer-Encoding: chunked`
-4. **Compression**: Support gzip, deflate decoding
-5. **Connection Reuse**: Pool connections for pipelining
-6. **Cookie Handling**: Parse Set-Cookie headers, support Cookie headers
-7. **Authentication**: Support Basic and Digest auth
-8. **Caching**: Implement in-memory response cache
+1. **SSL/TLS 检测**：使用 `comm.tryssl()` 判断是否需要 SSL
+2. **重定向处理**：跟随 301、302、303、307、308 并验证
+3. **分块传输编码**：处理 `Transfer-Encoding: chunked`
+4. **压缩**：支持 gzip、deflate 解码
+5. **连接复用**：为管道化池化连接
+6. **Cookie 处理**：解析 Set-Cookie 头，支持 Cookie 头
+7. **认证**：支持 Basic 和 Digest 认证
+8. **缓存**：实现内存响应缓存
 
-### Dependencies
+### 依赖
 
 ```toml
 [dependencies]
@@ -273,68 +273,66 @@ url = "2.5"
 
 ---
 
-## 2. SSH2 Library (`ssh2`)
+## 2. SSH2 库 (`ssh2`)
 
-### Module File
+### 模块文件
 
 ```rust
 // crates/rustnmap-nse/src/libs/ssh2.rs
 ```
 
-### Key Functions
+### 主要函数
 
 #### `ssh2.fetch_host_key(host, port, key_type)`
 
 ```lua
--- Get SSH host key fingerprint
--- key_type (optional): "ssh-rsa", "ssh-dss", "ecdsa-sha2-nistp256",
---                      "ecdsa-sha2-nistp384", "ecdsa-sha2-nistp521", "ssh-ed25519"
+-- 获取 SSH 主机密钥指纹
+-- key_type（可选）："ssh-rsa"、"ssh-dss"、"ecdsa-sha2-nistp256"、
+--                   "ecdsa-sha2-nistp384"、"ecdsa-sha2-nistp521"、"ssh-ed25519"
 local key = ssh2.fetch_host_key(host, port, "ssh-rsa")
 
--- Returns table with these exact fields (Nmap compatibility required):
--- key.key: Base64-encoded public host key
--- key.key_type: "ssh-rsa", "ssh-ed25519", "ecdsa-sha2-nistp256", etc.
--- key.fp_input: Raw public key bytes (for fingerprint calculation)
--- key.bits: 2048, 256, 384, 521, etc. (key size in bits)
--- key.full_key: "ssh-rsa AAAAB3NzaC1yc2E..." (key_type + space + base64 key)
--- key.algorithm: "RSA", "DSA", "ECDSA", "ED25519"
--- key.fingerprint: "aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99" (MD5 hex)
--- key.fp_sha256: Base64-encoded SHA256 fingerprint
+-- 返回包含以下字段的表（需要 Nmap 兼容性）：
+-- key.key: Base64 编码的公钥
+-- key.key_type: "ssh-rsa"、"ssh-ed25519"、"ecdsa-sha2-nistp256" 等
+-- key.fp_input: 原始公钥字节（用于指纹计算）
+-- key.bits: 2048、256、384、521 等（密钥位数）
+-- key.full_key: "ssh-rsa AAAAB3NzaC1yc2E..."（key_type + 空格 + base64 密钥）
+-- key.algorithm: "RSA"、"DSA"、"ECDSA"、"ED25519"
+-- key.fingerprint: "aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99"（MD5 hex）
+-- key.fp_sha256: Base64 编码的 SHA256 指纹
 ```
 
 #### `ssh2.banner(host, port)`
 
 ```lua
--- Get SSH banner string
+-- 获取 SSH 横幅字符串
 local banner = ssh2.banner(host, port)
--- Returns: "SSH-2.0-OpenSSH_8.2p1 Ubuntu-4ubuntu0.5"
+-- 返回: "SSH-2.0-OpenSSH_8.2p1 Ubuntu-4ubuntu0.5"
 ```
 
-### Implementation Notes
+### 实现说明
 
-1. **Protocol**: SSH-2 only (SSH-1.x is deprecated and insecure)
-2. **Key Types**: Support RSA, DSA, ECDSA (nistp256, nistp384, nistp521), ED25519
-3. **Fingerprinting**: Both MD5 (legacy) and SHA256 formats
-4. **Timeout**: Default 10 seconds
-5. **No encryption needed**: Key exchange is done in clear before encryption starts
-6. **Diffie-Hellman groups**: Support group1 (1024-bit), group14 (2048-bit),
-   group16 (4096-bit), and group-exchange (variable)
+1. **协议**：仅支持 SSH-2（SSH-1.x 已弃用且不安全）
+2. **密钥类型**：支持 RSA、DSA、ECDSA（nistp256、nistp384、nistp521）、ED25519
+3. **指纹**：同时支持 MD5（旧版）和 SHA256 格式
+4. **超时**：默认 10 秒
+5. **无需加密**：密钥交换在加密开始前以明文进行
+6. **Diffie-Hellman 组**：支持 group1（1024 位）、group14（2048 位）、group16（4096 位）和 group-exchange（可变长度）
 
-### SSH Key Exchange Protocol
+### SSH 密钥交换协议
 
-This section describes the complete SSH-2 key exchange implementation required
-for `libssh2_utility.rs` to support authentication method enumeration.
+本节描述 `libssh2_utility.rs` 支持认证方法枚举所需的完整 SSH-2 密钥交换实现。
 
-#### Protocol Overview
+#### 协议概述
 
-SSH-2 key exchange follows RFC 4253 Section 8:
+SSH-2 密钥交换遵循 RFC 4253 第 8 节：
 
 ```
-Client                                    Server
+客户端                                    服务器
 ------                                    ------
   |                                         |
-  |-------- SSH-2.0 Client Banner --------->|
-  |<-------- SSH-2.0 Server Banner ---------|
+  |-------- SSH-2.0 客户端横幅 ---------->|
+  |<-------- SSH-2.0 服务器横幅 -----------|
   |                                         |
   |-------- KEXINIT ---------------------->|
   |<-------- KEXINIT -----------------------|
@@ -350,13 +348,13 @@ Client                                    Server
   |                                         |
   |-------- USERAUTH_REQUEST (none) ------>|
   |<-------- USERAUTH_FAILURE -------------|
-  | (returns available auth methods)        |
+  | (返回可用的认证方法)                    |
 ```
 
-#### Message Types
+#### 消息类型
 
 ```rust
-// SSH Transport Layer Protocol message types
+// SSH 传输层协议消息类型
 const SSH_MSG_KEXINIT: u8 = 20;
 const SSH_MSG_NEWKEYS: u8 = 21;
 const SSH_MSG_KEXDH_INIT: u8 = 30;
@@ -368,72 +366,72 @@ const SSH_MSG_USERAUTH_FAILURE: u8 = 51;
 const SSH_MSG_USERAUTH_SUCCESS: u8 = 52;
 ```
 
-#### KEXINIT Message Format
+#### KEXINIT 消息格式
 
 ```rust
 struct KexInit {
-    // Message type (SSH_MSG_KEXINIT = 20)
+    // 消息类型 (SSH_MSG_KEXINIT = 20)
     message_type: u8,
-    // Cookie (16 random bytes)
+    // Cookie（16 字节随机数）
     cookie: [u8; 16],
-    // Key exchange algorithms (comma-separated)
+    // 密钥交换算法（逗号分隔）
     kex_algorithms: String,  // "diffie-hellman-group14-sha256,..."
-    // Server host key algorithms
+    // 服务器主机密钥算法
     server_host_key_algorithms: String,  // "ssh-rsa,ssh-ed25519,..."
-    // Encryption algorithms (client->server, server->client)
+    // 加密算法（客户端→服务器，服务器→客户端）
     encryption_algorithms_client_to_server: String,
     encryption_algorithms_server_to_client: String,
-    // MAC algorithms
+    // MAC 算法
     mac_algorithms_client_to_server: String,
     mac_algorithms_server_to_client: String,
-    // Compression algorithms
+    // 压缩算法
     compression_algorithms_client_to_server: String,
     compression_algorithms_server_to_client: String,
-    // Languages
+    // 语言
     languages_client_to_server: String,
     languages_server_to_client: String,
-    // First kex packet follows
+    // 第一个密钥交换包是否跟随
     first_kex_packet_follows: bool,
-    // Reserved (4 bytes)
+    // 保留（4 字节）
     reserved: u32,
 }
 ```
 
-#### KEXDH_INIT Message (RFC 4253 Section 8)
+#### KEXDH_INIT 消息（RFC 4253 第 8 节）
 
 ```rust
-// Client sends DH public key (e)
+// 客户端发送 DH 公钥 (e)
 struct KexDhInit {
     message_type: u8,  // SSH_MSG_KEXDH_INIT = 30
-    e: Mpint,          // Client's DH public key (g^x mod p)
+    e: Mpint,          // 客户端的 DH 公钥 (g^x mod p)
 }
 ```
 
-#### KEXDH_REPLY Message (RFC 4253 Section 8)
+#### KEXDH_REPLY 消息（RFC 4253 第 8 节）
 
 ```rust
-// Server responds with host key, DH public key, and signature
+// 服务器响应主机密钥、DH 公钥和签名
 struct KexDhReply {
     message_type: u8,          // SSH_MSG_KEXDH_REPLY = 31
-    host_key: Bytes,           // Server's public host key (K_S)
-    f: Mpint,                  // Server's DH public key (g^y mod p)
+    host_key: Bytes,           // 服务器公钥 (K_S)
+    f: Mpint,                  // 服务器的 DH 公钥 (g^y mod p)
     signature_hash: Bytes,     // H = hash(V_C || V_S || I_C || I_S || K_S || e || f || K)
 }
 ```
 
-#### NEWKEYS Message
+#### NEWKEYS 消息
 
 ```rust
-// Both sides send to activate new keys
+// 双方发送以激活新密钥
 struct NewKeys {
     message_type: u8,  // SSH_MSG_NEWKEYS = 21
 }
 ```
 
-#### Diffie-Hellman Group14 Parameters (RFC 3526)
+#### Diffie-Hellman Group14 参数（RFC 3526）
 
 ```rust
-// 2048-bit MODP Group
+// 2048 位 MODP 群
 const DH_GROUP14_PRIME: &str = "
     FFFFFFFF FFFFFFFF C90FDAA2 2168C234 C4C6628B 80DC1CD1
     29024E08 8A67CC74 020BBEA6 3B139B22 514A0879 8E3404DD
@@ -446,12 +444,12 @@ const DH_GROUP14_PRIME: &str = "
 const DH_GROUP14_GENERATOR: u32 = 2;
 ```
 
-#### Key Exchange Computation
+#### 密钥交换计算
 
 ```rust
-// Client generates x (random) and computes e = g^x mod p
-// Server generates y (random) and computes f = g^y mod p
-// Shared secret: K = f^x mod p = e^y mod p = g^(xy) mod p
+// 客户端生成 x（随机数）并计算 e = g^x mod p
+// 服务器生成 y（随机数）并计算 f = g^y mod p
+// 共享密钥：K = f^x mod p = e^y mod p = g^(xy) mod p
 
 use num_bigint::BigUint;
 use num_traits::One;
@@ -461,15 +459,15 @@ fn generate_dh_key_pair() -> (BigUint, BigUint) {
     let p = BigUint::parse_bytes(DH_GROUP14_PRIME.as_bytes(), 16).unwrap();
     let g = BigUint::from(DH_GROUP14_GENERATOR);
 
-    // Generate private key x (1 < x < p-1)
+    // 生成私钥 x (1 < x < p-1)
     let mut rng = rand::thread_rng();
     let p_minus_1 = &p - BigUint::one();
     let x = rng.gen_biguint_range(&BigUint::one(), &p_minus_1);
 
-    // Compute public key e = g^x mod p
+    // 计算公钥 e = g^x mod p
     let e = g.modpow(&x, &p);
 
-    (e, x)  // Return (public, private)
+    (e, x)  // 返回 (公钥, 私钥)
 }
 
 fn compute_shared_secret(f: &BigUint, x: &BigUint) -> BigUint {
@@ -478,23 +476,23 @@ fn compute_shared_secret(f: &BigUint, x: &BigUint) -> BigUint {
 }
 ```
 
-#### Exchange Hash Calculation
+#### 交换哈希计算
 
-The exchange hash H is computed as:
+交换哈希 H 的计算方式为：
 
 ```
 H = hash(V_C || V_S || I_C || I_S || K_S || e || f || K)
 ```
 
-Where:
-- `V_C`: Client's SSH version string (e.g., "SSH-2.0-rustnmap_1.0")
-- `V_S`: Server's SSH version string
-- `I_C`: Client's KEXINIT payload
-- `I_S`: Server's KEXINIT payload
-- `K_S`: Server's public host key
-- `e`: Client's DH public key
-- `f`: Server's DH public key
-- `K`: Shared secret
+其中：
+- `V_C`：客户端 SSH 版本字符串（如 "SSH-2.0-rustnmap_1.0"）
+- `V_S`：服务器 SSH 版本字符串
+- `I_C`：客户端 KEXINIT 载荷
+- `I_S`：服务器 KEXINIT 载荷
+- `K_S`：服务器公钥
+- `e`：客户端 DH 公钥
+- `f`：服务器 DH 公钥
+- `K`：共享密钥
 
 ```rust
 use sha2::{Sha256, Digest};
@@ -512,7 +510,7 @@ fn compute_exchange_hash(
 ) -> Vec<u8> {
     let mut hasher = Sha256::new();
 
-    // Concatenate all components in order
+    // 按顺序拼接所有组件
     hasher.update(u32::to_be_bytes(v_c.len() as u32));
     hasher.update(v_c);
 
@@ -544,25 +542,25 @@ fn compute_exchange_hash(
 }
 ```
 
-#### Key Derivation
+#### 密钥派生
 
-From the exchange hash H and shared secret K, derive:
+从交换哈希 H 和共享密钥 K 派生：
 
 ```rust
-// Initial IV (client->server, server->client)
-// Encryption key (client->server, server->client)
-// MAC key (client->server, server->client)
+// 初始 IV（客户端→服务器，服务器→客户端）
+// 加密密钥（客户端→服务器，服务器→客户端）
+// MAC 密钥（客户端→服务器，服务器→客户端）
 
 fn derive_keys(k: &[u8], h: &[u8], key_length: usize, iv_length: usize) -> Vec<[u8; 32]> {
-    // K = hash(K || H || X || session_id) for different X values
-    // This is simplified - full implementation uses multiple rounds
-    todo!("Full key derivation implementation")
+    // K = hash(K || H || X || session_id) 用于不同的 X 值
+    // 此为简化版 - 完整实现使用多轮
+    todo!("完整密钥派生实现")
 }
 ```
 
-#### Implementation Location
+#### 实现位置
 
-The SSH key exchange implementation is in:
+SSH 密钥交换实现在：
 ```rust
 // crates/rustnmap-nse/src/libs/libssh2_utility.rs
 
@@ -572,189 +570,186 @@ pub struct SSHConnection {
 }
 
 impl SSHConnection {
-    // Phase 1: KEXINIT exchange (already implemented)
+    // 阶段 1：KEXINIT 交换（已实现）
     fn connect(&mut self, host: &str, port: u16) -> mlua::Result<String>;
 
-    // Phase 2: DH key exchange (TO BE IMPLEMENTED)
+    // 阶段 2：DH 密钥交换（待实现）
     fn perform_key_exchange(&mut self) -> mlua::Result<()>;
 
-    // Phase 3: Service request (already implemented)
+    // 阶段 3：服务请求（已实现）
     fn send_service_request(&mut self) -> mlua::Result<()>;
 }
 ```
 
-#### Required Functions
+#### 所需函数
 
 ```rust
-// Build KEXDH_INIT packet
+// 构建 KEXDH_INIT 包
 fn build_kexdh_init(e: &BigUint) -> Vec<u8>;
 
-// Parse KEXDH_REPLY response
+// 解析 KEXDH_REPLY 响应
 fn parse_kexdh_reply(data: &[u8]) -> mlua::Result<(Vec<u8>, BigUint, Vec<u8>)>;
 
-// Build NEWKEYS packet
+// 构建 NEWKEYS 包
 fn build_newkeys() -> Vec<u8>;
 
-// Complete key exchange sequence
+// 完整密钥交换序列
 fn perform_key_exchange(stream: &mut TcpStream) -> mlua::Result<KeyExchangeResult>;
 ```
 
-#### Security Considerations
+#### 安全注意事项
 
-1. **Constant-time operations**: DH computations should use constant-time crypto
-2. **Random number generation**: Use `rand::thread_rng()` for x
-3. **Key validation**: Verify server's host key signature
-4. **No rollback attacks**: Verify received parameters match KEXINIT offer
-5. **Group14 minimum**: Require at least 2048-bit MODP group (RFC 8270)
+1. **恒定时间操作**：DH 计算应使用恒定时间密码学
+2. **随机数生成**：使用 `rand::thread_rng()` 生成 x
+3. **密钥验证**：验证服务器主机密钥签名
+4. **防止降级攻击**：验证接收的参数与 KEXINIT 提议匹配
+5. **Group14 最低要求**：要求至少 2048 位 MODP 群（RFC 8270）
 
-#### Dependencies
+#### 依赖
 
 ```toml
 [dependencies]
-# Cryptographic primitives
+# 密码学原语
 sha1 = "0.10"
 sha2 = "0.10"
 md-5 = "0.10"
 
-# Encoding
+# 编码
 base64 = "0.22"
 hex = "0.4"
 
-# Big integer arithmetic for Diffie-Hellman
+# Diffie-Hellman 大整数运算
 num-bigint = "0.4"
 num-traits = "0.2"
 
-# Random number generation
+# 随机数生成
 rand = "0.8"
 
-# Alternative: Full SSH library (NOT RECOMMENDED for compatibility)
-# russh = "0.44" implements full SSH protocol but may cause compatibility
-# issues with NSE scripts expecting specific Nmap behavior
+# 替代方案：完整 SSH 库（不推荐，可能存在兼容性问题）
+# russh = "0.44" 实现完整 SSH 协议，但可能与期望特定 Nmap 行为的 NSE 脚本不兼容
 ```
 
-#### SSH Key Exchange Dependencies
-
-Specifically for SSH key exchange implementation:
+#### SSH 密钥交换专用依赖
 
 ```toml
-# For DH computation with large integers
+# 用于大整数 DH 计算
 num-bigint = { version = "0.4", features = ["rand"] }
 
-# For SHA256/SHA512 hash functions
+# 用于 SHA256/SHA512 哈希
 sha2 = "0.10"
 
-# For MPINT serialization
+# 用于 MPINT 序列化
 [dev-dependencies]
 hex-literal = "0.4"
 ```
 
 ---
 
-## 3. SSL Certificate Library (`sslcert`)
+## 3. SSL 证书库 (`sslcert`)
 
-### Module File
+### 模块文件
 
 ```rust
 // crates/rustnmap-nse/src/libs/sslcert.rs
 ```
 
-### Key Functions
+### 主要函数
 
 #### `sslcert.getCertificate(host, port)`
 
 ```lua
--- Retrieve SSL/TLS certificate
+-- 获取 SSL/TLS 证书
 local cert = sslcert.getCertificate(host, port)
--- Returns table with:
--- cert.pem: PEM-encoded certificate
+-- 返回包含以下字段的表：
+-- cert.pem: PEM 编码的证书
 -- cert.subject: "CN=example.com, O=Example Inc"
 -- cert.issuer: "CN=Let's Encrypt Authority X3"
--- cert.serial: Hex serial number string
--- cert.fingerprint: SHA256 fingerprint
+-- cert.serial: 十六进制序列号字符串
+-- cert.fingerprint: SHA256 指纹
 -- cert.pubkey: {
 --   type: "rsa",
 --   bits: 2048,
 -- }
--- cert.modulus: RSA modulus (hex string)
--- cert.exponent: RSA exponent (hex string)
--- cert.notbefore: Certificate validity start
--- cert.notafter: Certificate validity end
+-- cert.modulus: RSA 模数（十六进制字符串）
+-- cert.exponent: RSA 指数（十六进制字符串）
+-- cert.notbefore: 证书有效期开始
+-- cert.notafter: 证书有效期结束
 -- cert.version: 3
 ```
 
 #### `sslcert.parse_ssl_certificate(der_data)`
 
 ```lua
--- Parse DER-encoded certificate
+-- 解析 DER 编码的证书
 local cert = sslcert.parse_ssl_certificate(der_string)
--- Returns same table structure as getCertificate
+-- 返回与 getCertificate 相同的表结构
 ```
 
-### STARTTLS Support
+### STARTTLS 支持
 
-    library supports STARTTLS for multiple protocols:
+该库支持多种协议的 STARTTLS：
 
 ```lua
--- FTP (port 21)
+-- FTP（端口 21）
 local cert = sslcert.getCertificate(host, port, {protocol = "ftp"})
 
--- SMTP (ports 25, 587)
+-- SMTP（端口 25、587）
 local cert = sslcert.getCertificate(host, port, {protocol = "smtp"})
 
--- IMAP (port 143)
+-- IMAP（端口 143）
 local cert = sslcert.getCertificate(host, port, {protocol = "imap"})
 
--- POP3 (port 110)
+-- POP3（端口 110）
 local cert = sslcert.getCertificate(host, port, {protocol = "pop3"})
 
--- LDAP (port 389)
+-- LDAP（端口 389）
 local cert = sslcert.getCertificate(host, port, {protocol = "ldap"})
 
--- MySQL (port 3306)
+-- MySQL（端口 3306）
 local cert = sslcert.getCertificate(host, port, {protocol = "mysql"})
 
--- PostgreSQL (port 5432)
+-- PostgreSQL（端口 5432）
 local cert = sslcert.getCertificate(host, port, {protocol = "postgresql"})
 
--- NNTP (port 119)
+-- NNTP（端口 119）
 local cert = sslcert.getCertificate(host, port, {protocol = "nntp"})
 
--- TDS/MS SQL Server (port 1433)
--- Note: TDS uses wrapped handshake, may not support full SSL reconnect
+-- TDS/MS SQL Server（端口 1433）
+-- 注意：TDS 使用包装握手，可能不支持完整 SSL 重连
 local cert = sslcert.getCertificate(host, port, {protocol = "tds"})
 
--- VNC/VeNCrypt (port 5900)
+-- VNC/VeNCrypt（端口 5900）
 local cert = sslcert.getCertificate(host, port, {protocol = "vnc"})
 
--- XMPP (ports 5222, 5269)
+-- XMPP（端口 5222、5269）
 local cert = sslcert.getCertificate(host, port, {protocol = "xmpp"})
 ```
 
-### Supported STARTTLS Protocols
+### 支持的 STARTTLS 协议
 
-| Protocol | Default Port | Notes |
-|----------|---------------|-------|
-| ftp | 21 | AUTH TLS command |
-| smtp | 25, 587 | STARTTLS command |
-| imap | 143 | STARTTLS after CAPABILITY |
-| pop3 | 110 | STLS command |
-| ldap | 389 | Extended Request OID 1.3.6.1.4.1.1466.20037 |
-| mysql | 3306 | SSL switch during handshake |
-| postgresql | 5432 | SSLRequest message 80877103 |
-| nntp | 119 | STARTTLS command |
-| tds | 1433 | PreLogin packet encryption (wrapped) |
-| vnc | 5900 | VeNCrypt auth subtypes |
+| 协议 | 默认端口 | 备注 |
+|------|----------|------|
+| ftp | 21 | AUTH TLS 命令 |
+| smtp | 25, 587 | STARTTLS 命令 |
+| imap | 143 | CAPABILITY 后 STARTTLS |
+| pop3 | 110 | STLS 命令 |
+| ldap | 389 | 扩展请求 OID 1.3.6.1.4.1.1466.20037 |
+| mysql | 3306 | 握手期间 SSL 切换 |
+| postgresql | 5432 | SSLRequest 消息 80877103 |
+| nntp | 119 | STARTTLS 命令 |
+| tds | 1433 | PreLogin 包加密（包装） |
+| vnc | 5900 | VeNCrypt 认证子类型 |
 | xmpp | 5222, 5269 | XMPP TLS proceed |
 
-### Implementation Notes
+### 实现说明
 
-1. **TLS Versions**: Support TLS 1.2 and 1.3, disable SSL 3.0, TLS 1.0, 1.1
-2. **SNI**: Always send Server Name Indication for HTTPS
-3. **Certificate Parsing**: Use `x509-parser` crate
-4. **Cipher Enumeration**: Support `sslcert.cipher_preference()` and `sslcert.explore_cipher_suites()`
-5. **Timeout**: Default 10 seconds
+1. **TLS 版本**：支持 TLS 1.2 和 1.3，禁用 SSL 3.0、TLS 1.0、1.1
+2. **SNI**：HTTPS 时始终发送 Server Name Indication
+3. **证书解析**：使用 `x509-parser` crate
+4. **密码枚举**：支持 `sslcert.cipher_preference()` 和 `sslcert.explore_cipher_suites()`
+5. **超时**：默认 10 秒
 
-### Dependencies
+### 依赖
 
 ```toml
 [dependencies]
@@ -766,18 +761,18 @@ webpki-roots = "0.26"
 
 ---
 
-## 4. DNS Library (`dns`)
+## 4. DNS 库 (`dns`)
 
-### Module File
+### 模块文件
 
 ```rust
 // crates/rustnmap-nse/src/libs/dns.rs
 ```
 
-### Constants
+### 常量
 
 ```lua
--- Record type constants
+-- 记录类型常量
 dns.TYPE_A = 1
 dns.TYPE_NS = 2
 dns.TYPE_CNAME = 5
@@ -790,50 +785,50 @@ dns.TYPE_SRV = 33
 dns.TYPE_ANY = 255
 ```
 
-### Key Functions
+### 主要函数
 
 #### `dns.query(domain, options)`
 
 ```lua
--- Basic A record query
+-- 基本 A 记录查询
 local records = dns.query("example.com", {dtype = dns.TYPE_A})
 
--- Query with options
+-- 带选项查询
 local records = dns.query("example.com", {
     dtype = dns.TYPE_MX,
-    host = "8.8.8.8",      -- Use specific DNS server
+    host = "8.8.8.8",      -- 使用指定 DNS 服务器
     port = 53,
     timeout = 5000,
-    retAll = true,           -- Return all records
-    sendCount = 3,           -- Number of retries
+    retAll = true,           -- 返回所有记录
+    sendCount = 3,           -- 重试次数
 })
 
--- Response structure
+-- 响应结构
 for i, record in ipairs(records) do
-    -- record.name: Domain name
-    -- record.type: Record type number
-    -- record.data: Record data (IP, text, etc.)
-    -- record.ttl: Time to live
+    -- record.name: 域名
+    -- record.type: 记录类型编号
+    -- record.data: 记录数据（IP、文本等）
+    -- record.ttl: 生存时间
 end
 ```
 
 #### `dns.reverse(ip)`
 
 ```lua
--- Reverse DNS lookup
+-- 反向 DNS 查询
 local hostname = dns.reverse("8.8.8.8")
--- Returns: "dns.google" or nil if not found
+-- 返回: "dns.google" 或未找到时返回 nil
 ```
 
-### Implementation Notes
+### 实现说明
 
-1. **Protocol**: DNS-over-UDP with TCP fallback for large responses
-2. **EDNS0**: Support OPT pseudo-records for larger responses
-3. **Timeout**: Default 5 seconds
-4. **Retries**: Default 3 attempts
-5. **DNSSEC**: Validate RRSIG when available
+1. **协议**：DNS-over-UDP，大响应时回退到 TCP
+2. **EDNS0**：支持 OPT 伪记录以获取更大响应
+3. **超时**：默认 5 秒
+4. **重试**：默认 3 次尝试
+5. **DNSSEC**：可用时验证 RRSIG
 
-### Dependencies
+### 依赖
 
 ```toml
 [dependencies]
@@ -843,31 +838,31 @@ trust-dns-proto = "0.23"
 
 ---
 
-## 5. SMB Library (`smb`)
+## 5. SMB 库 (`smb`)
 
-### Module File
+### 模块文件
 
 ```rust
 // crates/rustnmap-nse/src/libs/smb.rs
 ```
 
-### Key Functions
+### 主要函数
 
 #### `smb.list_shares(host, port)`
 
 ```lua
--- Enumerate SMB shares
+-- 枚举 SMB 共享
 local shares, err = smb.list_shares(host, port)
--- Returns array of share tables with:
--- share.name: Share name (e.g., "C$", "IPC$")
--- share.comment: Share description
--- share.type: Share type (DISK, IPC, PRINTER)
+-- 返回共享表数组，包含：
+-- share.name: 共享名（如 "C$"、"IPC$"）
+-- share.comment: 共享描述
+-- share.type: 共享类型（DISK、IPC、PRINTER）
 ```
 
 #### `smb.connect(host, port, options)`
 
 ```lua
--- Establish SMB connection
+-- 建立 SMB 连接
 local conn, err = smb.connect(host, port, {
     username = "user",
     password = "pass",
@@ -875,139 +870,139 @@ local conn, err = smb.connect(host, port, {
 })
 ```
 
-### Implementation Notes
+### 实现说明
 
-1. **Protocol**: SMB 1.0/2.0/3.0 support
-2. **Timeout**: Default 10 seconds
-3. **Dependencies**: Uses custom SMB protocol implementation
+1. **协议**：支持 SMB 1.0/2.0/3.0
+2. **超时**：默认 10 秒
+3. **依赖**：使用自定义 SMB 协议实现
 
-### Dependencies
+### 依赖
 
 ```toml
 [dependencies]
-# Custom SMB protocol implementation
+# 自定义 SMB 协议实现
 md-5 = "0.10"
 sha2 = "0.10"
 ```
 
 ---
 
-## 6. NetBIOS Library (`netbios`)
+## 6. NetBIOS 库 (`netbios`)
 
-### Module File
+### 模块文件
 
 ```rust
 // crates/rustnmap-nse/src/libs/netbios.rs
 ```
 
-### Key Functions
+### 主要函数
 
 #### `netbios.get_name(host, port)`
 
 ```lua
--- Get NetBIOS name
+-- 获取 NetBIOS 名称
 local name, err = netbios.get_name(host, port)
--- Returns NetBIOS name and workstation group
+-- 返回 NetBIOS 名称和工作站组
 ```
 
-### Implementation Notes
+### 实现说明
 
-1. **Protocol**: NetBIOS over TCP/IP
-2. **Timeout**: Default 5 seconds
+1. **协议**：NetBIOS over TCP/IP
+2. **超时**：默认 5 秒
 
 ---
 
-## 7. SMBAuth Library (`smbauth`)
+## 7. SMBAuth 库 (`smbauth`)
 
-### Module File
+### 模块文件
 
 ```rust
 // crates/rustnmap-nse/src/libs/smbauth.rs
 ```
 
-### Key Functions
+### 主要函数
 
 #### `smbauth.password_hash(password)`
 
 ```lua
--- Compute NTLM hash of password
+-- 计算密码的 NTLM 哈希
 local hash = smbauth.password_hash("password")
--- Returns NTLM hash for authentication
+-- 返回用于认证的 NTLM 哈希
 ```
 
 ---
 
-## 8. Unicode Library (`unicode`)
+## 8. Unicode 库 (`unicode`)
 
-### Module File
+### 模块文件
 
 ```rust
 // crates/rustnmap-nse/src/libs/unicode.rs
 ```
 
-### Key Functions
+### 主要函数
 
 #### `unicode.utf8_to_utf16(str)`
 
 ```lua
--- Convert UTF-8 string to UTF-16LE (for SMB)
+-- 将 UTF-8 字符串转换为 UTF-16LE（用于 SMB）
 local utf16 = unicode.utf8_to_utf16("test")
--- Returns UTF-16LE encoded bytes
+-- 返回 UTF-16LE 编码的字节
 ```
 
 ---
 
-## 9. UNPWDB Library (`unpwdb`)
+## 9. UNPWDB 库 (`unpwdb`)
 
-### Module File
+### 模块文件
 
 ```rust
 // crates/rustnmap-nse/src/libs/unpwdb.rs
 ```
 
-### Key Functions
+### 主要函数
 
 #### `unpwdb.usernames()`
 
 ```lua
--- Get username iterator
+-- 获取用户名迭代器
 local usernames = unpwdb.usernames()
 for username in usernames do
-    -- Iterate through common usernames
+    -- 遍历常见用户名
 end
 ```
 
 #### `unpwdb.passwords()`
 
 ```lua
--- Get password iterator
+-- 获取密码迭代器
 local passwords = unpwdb.passwords()
 for password in passwords do
-    -- Iterate through common passwords
+    -- 遍历常见密码
 end
 ```
 
-### Implementation Notes
+### 实现说明
 
-1. **Built-in Databases**: Common usernames and passwords from Nmap
-2. **Custom Files**: Support for external wordlist files
+1. **内置数据库**：来自 Nmap 的常见用户名和密码
+2. **自定义文件**：支持外部字典文件
 
 ---
 
-## 10. FTP Library (`ftp`)
+## 10. FTP 库 (`ftp`)
 
-### Module File
+### 模块文件
 
 ```rust
 // crates/rustnmap-nse/src/libs/ftp.rs
 ```
 
-### Key Functions
+### 主要函数
 
 #### `ftp.connect(host, port, options)`
 
 ```lua
--- Connect to FTP server
+-- 连接 FTP 服务器
 local conn, err = ftp.connect(host, port, {
     timeout = 10000,
     username = "anonymous",
@@ -1018,87 +1013,87 @@ local conn, err = ftp.connect(host, port, {
 #### `ftp.list(conn, path)`
 
 ```lua
--- List directory contents
+-- 列出目录内容
 local files, err = ftp.list(conn, "/")
--- Returns array of file tables
+-- 返回文件表数组
 ```
 
 ---
 
-## 11. OpenSSL Library (`openssl`)
+## 11. OpenSSL 库 (`openssl`)
 
-### Module File
+### 模块文件
 
 ```rust
 // crates/rustnmap-nse/src/libs/openssl.rs
 ```
 
-### Key Functions
+### 主要函数
 
 #### `openssl.bignum_hex_to_dec(hex)`
 
 ```lua
--- Convert hex BIGNUM to decimal
+-- 将十六进制 BIGNUM 转换为十进制
 local dec = openssl.bignum_hex_to_dec("A1B2C3")
--- Returns decimal string representation
+-- 返回十进制字符串表示
 ```
 
 #### `openssl.md5(data)`
 
 ```lua
--- Compute MD5 hash
+-- 计算 MD5 哈希
 local hash = openssl.md5("data")
--- Returns MD5 digest as hex string
+-- 返回 MD5 摘要的十六进制字符串
 ```
 
 #### `openssl.sha1(data)`
 
 ```lua
--- Compute SHA1 hash
+-- 计算 SHA1 哈希
 local hash = openssl.sha1("data")
--- Returns SHA1 digest as hex string
+-- 返回 SHA1 摘要的十六进制字符串
 ```
 
-### Implementation Notes
+### 实现说明
 
-1. **Purpose**: Low-level cryptographic operations for NSE scripts
-2. **Dependencies**: Uses Rust cryptographic primitives
+1. **用途**：NSE 脚本的底层密码学操作
+2. **依赖**：使用 Rust 密码学原语
 
 ---
 
-## 12. JSON Library (`json`)
+## 12. JSON 库 (`json`)
 
-### Module File
+### 模块文件
 
 ```rust
 // crates/rustnmap-nse/src/libs/json.rs
 ```
 
-### Key Functions
+### 主要函数
 
 #### `json.encode(table)`
 
 ```lua
--- Encode Lua table to JSON string
+-- 将 Lua 表编码为 JSON 字符串
 local json_str = json.encode({name = "John", age = 30})
--- Returns '{"name":"John","age":30}'
+-- 返回 '{"name":"John","age":30}'
 ```
 
 #### `json.decode(json_string)`
 
 ```lua
--- Decode JSON string to Lua table
+-- 将 JSON 字符串解码为 Lua 表
 local table = json.decode('{"name":"John","age":30}')
--- Returns {name = "John", age = 30}
+-- 返回 {name = "John", age = 30}
 ```
 
-### Implementation Notes
+### 实现说明
 
-1. **Format**: Compatible with JSON specification (RFC 8259)
-2. **Types**: Supports null, boolean, number, string, array, object
-3. **Dependencies**: Uses `serde_json` for parsing
+1. **格式**：兼容 JSON 规范（RFC 8259）
+2. **类型**：支持 null、boolean、number、string、array、object
+3. **依赖**：使用 `serde_json` 进行解析
 
-### Dependencies
+### 依赖
 
 ```toml
 [dependencies]
@@ -1108,20 +1103,20 @@ serde_json = "1"
 
 ---
 
-## 13. Credentials Library (`creds`)
+## 13. 凭据库 (`creds`)
 
-### Module File
+### 模块文件
 
 ```rust
 // crates/rustnmap-nse/src/libs/creds.rs
 ```
 
-### Key Functions
+### 主要函数
 
 #### `creds.Credentials:new()`
 
 ```lua
--- Create new credentials object
+-- 创建新的凭据对象
 local c = creds.Credentials:new()
 c.username = "admin"
 c.password = "secret"
@@ -1131,50 +1126,50 @@ c.state = creds.STATE.VALID
 #### `creds.Credentials:to_table()`
 
 ```lua
--- Convert credentials to table
+-- 将凭据转换为表
 local t = c:to_table()
--- Returns {username = "...", password = "...", state = "VALID"}
+-- 返回 {username = "...", password = "...", state = "VALID"}
 ```
 
-### Implementation Notes
+### 实现说明
 
-1. **Purpose**: Standardized credential representation for NSE scripts
-2. **States**: NEW, VALID, INVALID
+1. **用途**：NSE 脚本的标准化凭据表示
+2. **状态**：NEW、VALID、INVALID
 
 ---
 
-## 14. URL Library (`url`)
+## 14. URL 库 (`url`)
 
-### Module File
+### 模块文件
 
 ```rust
 // crates/rustnmap-nse/src/libs/url.rs
 ```
 
-### Key Functions
+### 主要函数
 
 #### `url.escape(str)`
 
 ```lua
--- URL encode a string
+-- URL 编码字符串
 local encoded = url.escape("hello world")
--- Returns "hello%20world"
+-- 返回 "hello%20world"
 ```
 
 #### `url.unescape(str)`
 
 ```lua
--- URL decode a string
+-- URL 解码字符串
 local decoded = url.unescape("hello%20world")
--- Returns "hello world"
+-- 返回 "hello world"
 ```
 
 #### `url.parse(url, default)`
 
 ```lua
--- Parse URL into components
+-- 将 URL 解析为各组件
 local parsed = url.parse("https://example.com:8080/path?q=value#frag")
--- Returns table with:
+-- 返回包含以下字段的表：
 -- parsed.scheme: "https"
 -- parsed.host: "example.com"
 -- parsed.port: 8080
@@ -1182,13 +1177,13 @@ local parsed = url.parse("https://example.com:8080/path?q=value#frag")
 -- parsed.query: "q=value"
 -- parsed.fragment: "frag"
 -- parsed.userinfo: nil
--- parsed.ascii_host: "example.com" (Punycode for IDNs)
+-- parsed.ascii_host: "example.com"（IDN 的 Punycode）
 ```
 
 #### `url.build(parsed)`
 
 ```lua
--- Build URL from components table
+-- 从组件表构建 URL
 local url_str = url.build({
     scheme = "https",
     host = "example.com",
@@ -1196,211 +1191,211 @@ local url_str = url.build({
     path = "/api/v1",
     query = "key=value"
 })
--- Returns "https://example.com:8080/api/v1?key=value"
+-- 返回 "https://example.com:8080/api/v1?key=value"
 ```
 
 #### `url.absolute(base, relative)`
 
 ```lua
--- Build absolute URL from base and relative
+-- 从基 URL 和相对路径构建绝对 URL
 local abs = url.absolute("https://example.com/api/", "../v2/resource")
--- Returns "https://example.com/v2/resource"
+-- 返回 "https://example.com/v2/resource"
 ```
 
 #### `url.parse_path(path)`
 
 ```lua
--- Parse path into segments
+-- 将路径解析为段
 local segments = url.parse_path("/api/v1/resource")
--- Returns {1 = "api", 2 = "v1", 3 = "resource", is_absolute = 1, is_directory = nil}
+-- 返回 {1 = "api", 2 = "v1", 3 = "resource", is_absolute = 1, is_directory = nil}
 ```
 
 #### `url.build_path(segments, unsafe)`
 
 ```lua
--- Build path from segments
+-- 从段构建路径
 local path = url.build_path({1 = "api", 2 = "v1", is_absolute = 1}, false)
--- Returns "/api/v1"
+-- 返回 "/api/v1"
 ```
 
 #### `url.parse_query(query)`
 
 ```lua
--- Parse query string into table
+-- 将查询字符串解析为表
 local params = url.parse_query("name=John&age=30")
--- Returns {name = "John", age = "30"}
--- Handles HTML entities: &amp;, &lt;, &gt;
+-- 返回 {name = "John", age = "30"}
+-- 处理 HTML 实体：&amp;、&lt;、&gt;
 ```
 
 #### `url.build_query(table)`
 
 ```lua
--- Build query string from table
+-- 从表构建查询字符串
 local query = url.build_query({name = "John", age = "30"})
--- Returns "name=John&age=30"
+-- 返回 "name=John&age=30"
 ```
 
 #### `url.get_default_port(scheme)`
 
 ```lua
--- Get default port for scheme
+-- 获取方案的默认端口
 local port = url.get_default_port("https")
--- Returns 443
+-- 返回 443
 ```
 
 #### `url.get_default_scheme(port)`
 
 ```lua
--- Get default scheme for port
+-- 获取端口的默认方案
 local scheme = url.get_default_scheme(443)
--- Returns "https"
+-- 返回 "https"
 ```
 
 #### `url.ascii_hostname(host)`
 
 ```lua
--- Convert hostname to ASCII (Punycode for IDNs)
+-- 将主机名转换为 ASCII（IDN 使用 Punycode）
 local ascii = url.ascii_hostname("müller.example.com")
--- Returns "xn--mller-kva.example.com"
+-- 返回 "xn--mller-kva.example.com"
 ```
 
-### Implementation Notes
+### 实现说明
 
-1. **RFC 3986 Compliance**: Full URL parsing and composition per RFC 3986
-2. **IDNA Support**: Punycode encoding for international domain names
-3. **HTML Entities**: Special handling in `parse_query` for `&amp;`, `&lt;`, `&gt;`
-4. **Path Resolution**: RFC 3986 Section 5.2 relative URL resolution
-5. **Default Ports**: http (80), https (443)
+1. **RFC 3986 合规**：完整的 URL 解析和组合，符合 RFC 3986
+2. **IDNA 支持**：国际化域名的 Punycode 编码
+3. **HTML 实体**：`parse_query` 中特殊处理 `&amp;`、`&lt;`、`&gt;`
+4. **路径解析**：RFC 3986 第 5.2 节相对 URL 解析
+5. **默认端口**：http (80)、https (443)
 
-### Dependencies
+### 依赖
 
 ```toml
 [dependencies]
-punycode = "0.1"  # IDNA/Punycode support
+punycode = "0.1"  # IDNA/Punycode 支持
 ```
 
-### Test Coverage
+### 测试覆盖
 
-All URL library functions have comprehensive unit tests including:
-- Percent encoding/decoding
-- URL parsing and building
-- Relative path resolution
-- Query string parsing
-- Nmap compatibility tests
+所有 URL 库函数都有全面的单元测试，包括：
+- 百分号编码/解码
+- URL 解析和构建
+- 相对路径解析
+- 查询字符串解析
+- Nmap 兼容性测试
 
 ---
 
-## 15. Brute Library (`brute`)
+## 15. 暴力破解库 (`brute`)
 
-### Module File
+### 模块文件
 
 ```rust
 // crates/rustnmap-nse/src/libs/brute.rs
 ```
 
-### Key Functions
+### 主要函数
 
 #### `brute.new_emulator(options)`
 
 ```lua
--- Create brute force iterator
+-- 创建暴力破解迭代器
 local engine = brute.new_emulator({
     username = "admin",
     passwords = unpwdb.passwords(),
     max_retries = 3,
-    delay = 2  -- seconds between attempts
+    delay = 2  -- 尝试间隔秒数
 })
 ```
 
-### Implementation Notes
+### 实现说明
 
-1. **Purpose**: Standardized brute-force attack framework
-2. **Rate Limiting**: Built-in delay to prevent lockouts
+1. **用途**：标准化暴力破解攻击框架
+2. **速率限制**：内置延迟以防止锁定
 
 ---
 
-## 16. Common Patterns
+## 16. 通用模式
 
-### Error Handling Pattern
+### 错误处理模式
 
 ```lua
--- NSE style: return nil, error_message on failure
+-- NSE 风格：失败时返回 nil, error_message
 local result, err = some_lib.function(host, port)
 if not result then
     return nil, "Function failed: " .. err
 end
--- Use result
+-- 使用 result
 ```
 
-### Response Table Validation
+### 响应表验证
 
 ```lua
--- Always check status field
+-- 始终检查 status 字段
 local response = http.get(host, port, "/")
 if response and response.status then
-    -- Success
+    -- 成功
     if response.status >= 200 and response.status < 300 then
         print("Success: " .. response.body)
     else
         print("HTTP " .. response.status)
     end
 else
-    -- Error
+    -- 错误
     local err = response and response["status-line"] or "Unknown error"
     print("Failed: " .. err)
 end
 ```
 
-### Host/Port Convention
+### 主机/端口约定
 
 ```lua
--- All protocol libraries follow this pattern:
--- host: string (IP address or hostname)
--- port: number OR table {number = 80, protocol = "tcp"}
+-- 所有协议库遵循此模式：
+-- host: 字符串（IP 地址或主机名）
+-- port: 数字 或 表 {number = 80, protocol = "tcp"}
 
--- Number port
+-- 数字端口
 local result = lib.function(host, 80)
 
--- Table port (from Nmap service detection)
+-- 表端口（来自 Nmap 服务检测）
 local result = lib.function(host, {number = 443, protocol = "tcp"})
 ```
 
 ---
 
-## Implementation Order
+## 实现顺序
 
-### Phase 11.1: High Priority Protocol Libraries ✅ COMPLETE
+### 阶段 11.1：高优先级协议库 - 已完成
 
-1. **Phase 11.1.1**: http library ✅ (highest priority, 500+ scripts depend on it)
-2. **Phase 11.1.2**: sslcert library ✅ (required for HTTPS support)
-3. **Phase 11.1.3**: ssh2 library ✅ (security scanning scripts)
-4. **Phase 11.1.4**: dns library ✅ (reconnaissance scripts)
+1. **阶段 11.1.1**：http 库 - 最高优先级，500+ 脚本依赖
+2. **阶段 11.1.2**：sslcert 库 - HTTPS 支持所需
+3. **阶段 11.1.3**：ssh2 库 - 安全扫描脚本
+4. **阶段 11.1.4**：dns 库 - 侦察脚本
 
-### Phase 11.2: Medium Priority Network Libraries ✅ COMPLETE
+### 阶段 11.2：中优先级网络库 - 已完成
 
-5. **Phase 11.2.1**: smb library ✅ (SMB/CIFS protocol for Windows network scanning)
-6. **Phase 11.2.2**: netbios library ✅ (NetBIOS name service)
-7. **Phase 11.2.3**: smbauth library ✅ (SMB authentication)
-8. **Phase 11.2.4**: unicode library ✅ (Unicode string handling for SMB)
-9. **Phase 11.2.5**: unpwdb library ✅ (username/password database)
-10. **Phase 11.2.6**: ftp library ✅ (FTP protocol)
+5. **阶段 11.2.1**：smb 库 - SMB/CIFS 协议，用于 Windows 网络扫描
+6. **阶段 11.2.2**：netbios 库 - NetBIOS 名称服务
+7. **阶段 11.2.3**：smbauth 库 - SMB 认证
+8. **阶段 11.2.4**：unicode 库 - SMB 的 Unicode 字符串处理
+9. **阶段 11.2.5**：unpwdb 库 - 用户名/密码数据库
+10. **阶段 11.2.6**：ftp 库 - FTP 协议
 
-### Phase 11.3: Utility and Cryptographic Libraries ✅ COMPLETE
+### 阶段 11.3：工具和密码学库 - 已完成
 
-11. **Phase 11.3.1**: openssl library ✅ (OpenSSL cryptographic operations)
-12. **Phase 11.3.2**: json library ✅ (JSON encoding/decoding)
-13. **Phase 11.3.3**: creds library ✅ (credential management)
-14. **Phase 11.3.4**: url library ✅ (URL parsing and composition per RFC 3986)
+11. **阶段 11.3.1**：openssl 库 - OpenSSL 密码学操作
+12. **阶段 11.3.2**：json 库 - JSON 编解码
+13. **阶段 11.3.3**：creds 库 - 凭据管理
+14. **阶段 11.3.4**：url 库 - RFC 3986 URL 解析和组合
 
-### Additional Libraries
+### 附加库
 
-15. **brute library** ✅ (brute-force password cracking framework)
+15. **brute 库** - 暴力破解密码框架
 
 ---
 
-## Testing Strategy
+## 测试策略
 
-### Unit Tests
+### 单元测试
 
 ```rust
 #[cfg(test)]
@@ -1416,12 +1411,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_http_get() {
-        // Integration test with mock server
+        // 使用模拟服务器的集成测试
     }
 }
 ```
 
-### NSE Script Tests
+### NSE 脚本测试
 
 ```lua
 -- tests/nse_libraries_test.lua
@@ -1432,13 +1427,13 @@ description = [[Test NSE protocol libraries]]
 categories = {"test"}
 
 action = function(host, port)
-    -- Test HTTP
+    -- 测试 HTTP
     local response = http.get(host, port, "/")
     if response and response.status == 200 then
         return "HTTP library working"
     end
 
-    -- Test SSL
+    -- 测试 SSL
     local cert = sslcert.getCertificate(host, port)
     if cert and cert.pem then
         return "SSL library working"
@@ -1450,36 +1445,36 @@ end
 
 ---
 
-## References
+## 参考资料
 
-### Nmap NSE Library Source: `reference/nmap/nselib/`
+### Nmap NSE 库源码：`reference/nmap/nselib/`
 
-- `http.lua` - HTTP protocol implementation
-- `ssh2.lua` - SSH-2 protocol implementation
-- `sslcert.lua` - SSL certificate functions
-- `dns.lua` - DNS protocol implementation
-- `smb.lua` - SMB/CIFS protocol
-- `netbios.lua` - NetBIOS protocol
-- `smbauth.lua` - SMB authentication
-- `unicode.lua` - Unicode string handling
-- `unpwdb.lua` - Username/password database
-- `ftp.lua` - FTP protocol
-- `openssl.lua` - OpenSSL bindings
-- `json.lua` - JSON encoding/decoding
-- `creds.lua` - Credential management
-- `url.lua` - URL parsing and composition
-- `brute.lua` - Brute-force framework
+- `http.lua` - HTTP 协议实现
+- `ssh2.lua` - SSH-2 协议实现
+- `sslcert.lua` - SSL 证书函数
+- `dns.lua` - DNS 协议实现
+- `smb.lua` - SMB/CIFS 协议
+- `netbios.lua` - NetBIOS 协议
+- `smbauth.lua` - SMB 认证
+- `unicode.lua` - Unicode 字符串处理
+- `unpwdb.lua` - 用户名/密码数据库
+- `ftp.lua` - FTP 协议
+- `openssl.lua` - OpenSSL 绑定
+- `json.lua` - JSON 编解码
+- `creds.lua` - 凭据管理
+- `url.lua` - URL 解析和组合
+- `brute.lua` - 暴力破解框架
 
-### RFC Standards
+### RFC 标准
 
-- **HTTP**: RFC 2616 (HTTP/1.1), RFC 7230-7235 (HTTP/1.1 update)
-- **SSH**: RFC 4253 (SSH Protocol), RFC 4252 (SSH Authentication)
-- **TLS**: RFC 5246 (TLS 1.2), RFC 8446 (TLS 1.3)
-- **DNS**: RFC 1035 (DNS Protocol), RFC 3596 (DNS AAAA)
-- **SMB**: [MS-SMB2] Specification
-- **JSON**: RFC 8259 (JSON specification)
-- **URL**: RFC 3986 (URI Generic Syntax), RFC 5891 (IDNA)
-- **FTP**: RFC 959 (FTP Protocol)
-- **NetBIOS**: RFC 1001/1002 (NetBIOS over TCP/IP)
-- RFC 8446: TLS 1.3
-- RFC 1035: DNS Protocol
+- **HTTP**：RFC 2616（HTTP/1.1）、RFC 7230-7235（HTTP/1.1 更新）
+- **SSH**：RFC 4253（SSH 协议）、RFC 4252（SSH 认证）
+- **TLS**：RFC 5246（TLS 1.2）、RFC 8446（TLS 1.3）
+- **DNS**：RFC 1035（DNS 协议）、RFC 3596（DNS AAAA）
+- **SMB**：[MS-SMB2] 规范
+- **JSON**：RFC 8259（JSON 规范）
+- **URL**：RFC 3986（URI 通用语法）、RFC 5891（IDNA）
+- **FTP**：RFC 959（FTP 协议）
+- **NetBIOS**：RFC 1001/1002（NetBIOS over TCP/IP）
+- RFC 8446：TLS 1.3
+- RFC 1035：DNS 协议

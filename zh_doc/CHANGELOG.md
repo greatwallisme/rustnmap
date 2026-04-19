@@ -1,4 +1,4 @@
-# RustNmap 2.0 Changelog / 变更日志
+# RustNmap 2.0 变更日志
 
 > **RustNmap 2.0 文档变更记录**
 
@@ -6,21 +6,21 @@
 
 ---
 
-## Version 2.0.0 (In Development / 开发中)
+## 版本 2.0.0（开发中）
 
-**目标发布日期**: TBD
+**目标发布日期**: 待定
 
-### 新增功能 / New Features
+### 新增功能
 
-#### 2026-03-10: CLI Migration to lexopt ✅
+#### 2026-03-10: CLI 迁移到 lexopt
 
 | 变更 | 状态 | 文档影响 |
 |------|------|---------|
-| 从 clap 迁移到 lexopt | ✅ 完成 | 已更新 `architecture.md`, `structure.md` |
-| 新增 CLI 模块文档 | ✅ 完成 | 新增 `modules/cli.md` |
-| 复合短选项支持 (-sS -sV -sC) | ✅ 完成 | 更新相关选项文档 |
-| 输出格式复合选项 (-oN/-oX/-oG/-oA) | ✅ 完成 | 更新输出格式文档 |
-| 二进制文件大小减少 12% | ✅ 完成 | 更新性能指标 |
+| 从 clap 迁移到 lexopt | 已完成 | 已更新 `architecture.md`, `structure.md` |
+| 新增 CLI 模块文档 | 已完成 | 新增 `modules/cli.md` |
+| 复合短选项支持 (-sS -sV -sC) | 已完成 | 更新相关选项文档 |
+| 输出格式复合选项 (-oN/-oX/-oG/-oA) | 已完成 | 更新输出格式文档 |
+| 二进制文件大小减少 12% | 已完成 | 更新性能指标 |
 
 **重要变更:**
 - 移除依赖: `clap = { version = "4.5", features = ["derive", "wrap_help", "cargo"] }`
@@ -29,14 +29,14 @@
 - 重构文件: `crates/rustnmap-cli/src/args.rs` (~1100 行重写)
 
 **Nmap 兼容性提升:**
-- ✅ `-sS -sV -sC -T4` 完全兼容
-- ✅ `-oN file`, `-oX file`, `-oG file`, `-oA basename` 完全兼容
-- ✅ `-Pn` 主机发现选项完全兼容
-- ✅ 所有 T0-T5 时序模板完全兼容
+- `-sS -sV -sC -T4` 完全兼容
+- `-oN file`, `-oX file`, `-oG file`, `-oA basename` 完全兼容
+- `-Pn` 主机发现选项完全兼容
+- 所有 T0-T5 时序模板完全兼容
 
 **详细文档:** 见 `LEXOPT_MIGRATION_COMPLETE.md` 和 `doc/modules/cli.md`
 
-#### Phase 0: 基线修复 (Week 1-2)
+#### 阶段 0: 基线修复 (第 1-2 周)
 
 | 功能 | 状态 | 文档影响 |
 |------|------|---------|
@@ -45,7 +45,7 @@
 | OutputSink 接入输出系统 | 待开始 | 更新 `modules/output.md`, `manual/output-formats.md` |
 | ResumeStore 最小可用版 | 待开始 | 新增 `--resume` 选项文档 |
 
-#### Phase 1: 用户体验与流水线友好 (Week 3-4)
+#### 阶段 1: 用户体验与流水线友好 (第 3-4 周)
 
 | 功能 | 状态 | 文档影响 |
 |------|------|---------|
@@ -54,7 +54,7 @@
 | Shell 补全脚本 | 待开始 | 更新 `manual/options.md` |
 | Markdown 报告 | 待开始 | 新增 `-oM` 选项文档 |
 
-#### Phase 2: 漏洞情报主链路 (Week 5-7)
+#### 阶段 2: 漏洞情报主链路 (第 5-7 周)
 
 | 功能 | 状态 | 文档影响 |
 |------|------|---------|
@@ -63,7 +63,7 @@
 | HTML 报告 | 待开始 | 新增 `manual/html-report.md` |
 | SARIF 格式 | 待开始 | 更新 `manual/output-formats.md` |
 
-#### Phase 3: 扫描管理能力 (Week 8-9)
+#### 阶段 3: 扫描管理能力 (第 8-9 周)
 
 | 功能 | 状态 | 文档影响 |
 |------|------|---------|
@@ -72,7 +72,7 @@
 | 配置即代码（YAML Profile） | 待开始 | 新增 `manual/profiles.md` |
 | `--history` 查询能力 | 待开始 | 更新 `manual/options.md` |
 
-#### Phase 4: 性能主干优化 (Week 10-11)
+#### 阶段 4: 性能主干优化 (第 10-11 周)
 
 | 功能 | 状态 | 文档影响 |
 |------|------|---------|
@@ -80,7 +80,7 @@
 | 自适应批量大小 | 待开始 | 更新 `modules/concurrency.md` |
 | 无状态快速扫描（实验特性） | 待开始 | 新增 `modules/stateless-scan.md` |
 
-#### Phase 5: 平台化最小闭环 (Week 12)
+#### 阶段 5: 平台化最小闭环 (第 12 周)
 
 | 功能 | 状态 | 文档影响 |
 |------|------|---------|
@@ -89,9 +89,9 @@
 
 ---
 
-## 文档状态追踪 / Documentation Status
+## 文档状态追踪
 
-### 核心文档 / Core Documentation
+### 核心文档
 
 | 文档 | 1.0 状态 | 2.0 更新 | 负责人 |
 |------|---------|---------|--------|
@@ -100,7 +100,7 @@
 | `structure.md` | 当前 | 待更新 | - |
 | `user-guide.md` | 已标记 | 待更新 | - |
 
-### 用户手册 / User Manual
+### 用户手册
 
 | 文档 | 1.0 状态 | 2.0 更新 | 负责人 |
 |------|---------|---------|--------|
@@ -114,7 +114,7 @@
 | `manual/environment.md` | 已标记 | 待更新 | - |
 | `manual/configuration.md` | 已标记 | 待更新 | - |
 
-### 模块文档 / Module Documentation
+### 模块文档
 
 | 文档 | 1.0 状态 | 2.0 更新 | 负责人 |
 |------|---------|---------|--------|
@@ -130,7 +130,7 @@
 | `modules/raw-packet.md` | 当前 | 待更新 | - |
 | `modules/concurrency.md` | 当前 | 待更新 | - |
 
-### 新增文档（2.0）/ New Documentation (2.0)
+### 新增文档（2.0）
 
 | 文档 | 主题 | 状态 | 负责人 |
 |------|------|------|--------|
@@ -144,7 +144,7 @@
 
 ---
 
-## 版本标记说明 / Version Marking
+## 版本标记说明
 
 在 RustNmap 2.0 开发期间，所有 1.0 文档已添加版本标记横幅：
 
@@ -162,12 +162,12 @@
 
 ---
 
-## 相关链接 / Related Links
+## 相关链接
 
 - [RETHINK.md](../RETHINK.md) - RustNmap 2.0 进化路线图
-- [Project README](../README.md) - 项目概览
-- [GitHub Repository](https://github.com/greatwallisme/rust-nmap) - 代码仓库
+- [项目 README](../README.md) - 项目概览
+- [GitHub 仓库](https://github.com/greatwallisme/rust-nmap) - 代码仓库
 
 ---
 
-**Last Updated**: 2026-02-17
+**最后更新**: 2026-02-17

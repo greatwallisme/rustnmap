@@ -10,13 +10,13 @@
 [![Coverage](https://img.shields.io/badge/coverage-63.77%25-yellow)](https://github.com/greatwallisme/rust-nmap)
 [![License](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](LICENSE)
 
-**[English Documentation](README.md)** | [用户手册](doc/manual/) | [用户指南](doc/user-guide.md)
+**[English Documentation](README.md)** | [中文用户手册](zh_doc/manual/) 
 
 ---
 
 ## 概述
 
-RustNmap 是一个使用 Rust 编写的现代高性能网络扫描工具，在利用 Rust 的内存安全和异步能力的同时，提供与 Nmap 100% 的功能对等。
+RustNmap 是一个使用 Rust 编写的现代高性能网络扫描工具，在利用 Rust 的内存安全和异步能力的同时，争取提供与 Nmap 100% 的功能对等。
 
 **主要特性:**
 - **12 种扫描类型**: SYN、Connect、UDP、FIN、NULL、XMAS、ACK、Maimon、Window、IP 协议、Idle、FTP Bounce

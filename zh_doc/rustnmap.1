@@ -1,400 +1,397 @@
-.TH RUSTNMAP 1 "February 2026" "RustNmap 1.0.0" "User Commands"
-.SH NAME
-rustnmap \- Rust Network Mapper - A high-performance network scanning tool
+.TH RUSTNMAP 1 "2026年2月" "RustNmap 1.0.0" "用户命令"
+.SH 名称
+rustnmap \- Rust 网络映射器 - 高性能网络扫描工具
 .\"
-.\" RustNmap 1.0.0 - 2.0 development in progress, see CHANGELOG.md
-.SH RUSTNMAP 2.0 STATUS
-This man page describes RustNmap 1.0.0. Version 2.0 is under development
-with new features including:
+.\" RustNmap 1.0.0 - 2.0 开发中，详见 CHANGELOG.md
+.SH RUSTNMAP 2.0 状态
+本手册页描述 RustNmap 1.0.0。2.0 版本正在开发中，
+新增功能包括：
 .IP \(bu 2
-Vulnerability correlation (CVE/CPE, EPSS, KEV)
+漏洞关联（CVE/CPE、EPSS、KEV）
 .IP \(bu 2
-Streaming output (NDJSON)
+流式输出（NDJSON）
 .IP \(bu 2
-REST API and daemon mode
+REST API 和守护进程模式
 .IP \(bu 2
-Scan management (history, diff, profiles)
+扫描管理（历史、对比、配置文件）
 .IP \(bu 2
-Two-phase scanning (discovery + intensive)
+两阶段扫描（发现 + 深度探测）
 .PP
-See CHANGELOG.md for details.
-.SH SYNOPSIS
+详见 CHANGELOG.md。
+.SH 概要
 .B rustnmap
-[\fIscan type(s)\fR] [\fIoptions\fR] {\fItarget specification\fR}
-.SH DESCRIPTION
+[\fI扫描类型\fR] [\fI选项\fR] {\fI目标规格\fR}
+.SH 描述
 .B RustNmap
-is a modern, high-performance network scanning tool written in Rust,
-designed to provide 100% functional parity with Nmap while leveraging
-Rust's safety guarantees and asynchronous capabilities for improved
-performance.
+是一个用 Rust 编写的现代化高性能网络扫描工具，
+旨在提供与 Nmap 100% 的功能对等，同时利用 Rust 的安全保证和异步能力来提升性能。
 .PP
-It can be used to:
+可用于：
 .RS
-- Discover hosts on a network
-- Identify open ports on target systems
-- Detect services and their versions
-- Determine operating systems
-- Execute Lua scripts for advanced detection
-- Map networks and audit security
+- 发现网络上的主机
+- 识别目标系统的开放端口
+- 检测服务及其版本
+- 判断操作系统
+- 执行 Lua 脚本进行高级检测
+- 网络映射和安全审计
 .RE
-.SH SCAN TYPES
+.SH 扫描类型
 .TP
 .B \-sS
-TCP SYN scan (default, requires root). Half-open scanning that does not
-complete the TCP handshake.
+TCP SYN 扫描（默认，需要 root）。半开扫描，不完成 TCP 握手。
 .TP
 .B \-sT
-TCP Connect scan. Uses full TCP connection, does not require root.
+TCP Connect 扫描。使用完整的 TCP 连接，不需要 root 权限。
 .TP
 .B \-sU
-UDP scan. Scans for UDP services, often slower than TCP scans.
+UDP 扫描。扫描 UDP 服务，通常比 TCP 扫描慢。
 .TP
 .B \-sF
-FIN scan. Sends FIN packets to bypass simple firewalls.
+FIN 扫描。发送 FIN 包以绕过简单防火墙。
 .TP
 .B \-sN
-NULL scan. No flags set in TCP header.
+NULL 扫描。TCP 头部不设置任何标志。
 .TP
 .B \-sX
-XMAS scan. Sets FIN, PSH, and URG flags.
+XMAS 扫描。设置 FIN、PSH 和 URG 标志。
 .TP
 .B \-sA
-ACK scan. Used for firewall rule mapping.
+ACK 扫描。用于防火墙规则映射。
 .TP
 .B \-sW
-Window scan. Similar to ACK but uses window size to determine port state.
+Window 扫描。类似 ACK 扫描，但使用窗口大小判断端口状态。
 .TP
 .B \-sM
-Maimon scan. Sends FIN/ACK probes.
+Maimon 扫描。发送 FIN/ACK 探测。
 .TP
 .B \-sI <zombie>
-Idle scan. Uses a zombie host to perform stealthy scanning.
+Idle 扫描。使用僵尸主机进行隐蔽扫描。
 .TP
 .B \-b <ftp_relay>
-FTP bounce scan. Uses FTP server as a proxy.
+FTP 反弹扫描。使用 FTP 服务器作为代理。
 .TP
 .B \-sY
-SCTP INIT scan. Scans SCTP services.
+SCTP INIT 扫描。扫描 SCTP 服务。
 .TP
 .B \-sO
-IP protocol scan. Scans for supported IP protocols.
-.SH HOST DISCOVERY
+IP 协议扫描。扫描支持的 IP 协议。
+.SH 主机发现
 .TP
 .B \-sL
-List scan. Lists targets without scanning.
+列表扫描。列出目标但不扫描。
 .TP
 .B \-sn
-Ping scan. Disables port scanning, only host discovery.
+Ping 扫描。禁用端口扫描，仅进行主机发现。
 .TP
 .B \-Pn
-Treat all hosts as online. Skip host discovery.
+将所有主机视为在线。跳过主机发现。
 .TP
-.B \-PS<portlist>
-TCP SYN discovery. Sends SYN to specified ports.
+.B \-PS<端口列表>
+TCP SYN 发现。向指定端口发送 SYN 包。
 .TP
-.B \-PA<portlist>
-TCP ACK discovery. Sends ACK to specified ports.
+.B \-PA<端口列表>
+TCP ACK 发现。向指定端口发送 ACK 包。
 .TP
-.B \-PU<portlist>
-UDP discovery. Sends UDP packets to specified ports.
+.B \-PU<端口列表>
+UDP 发现。向指定端口发送 UDP 包。
 .TP
 .B \-PE
-ICMP echo request discovery (standard ping).
+ICMP 回显请求发现（标准 ping）。
 .TP
 .B \-PP
-ICMP timestamp request discovery.
+ICMP 时间戳请求发现。
 .TP
 .B \-PM
-ICMP netmask request discovery.
+ICMP 子网掩码请求发现。
 .TP
 .B \-PR
-ARP ping discovery. Uses ARP for local network.
+ARP ping 发现。使用 ARP 进行局域网发现。
 .TP
-.B \-PY<portlist>
-SCTP INIT discovery.
-.SH PORT SPECIFICATION
+.B \-PY<端口列表>
+SCTP INIT 发现。
+.SH 端口规格
 .TP
-.B \-p <port ranges>
-Scan specified ports. Examples: 22, 1-65535, U:53, T:80.
+.B \-p <端口范围>
+扫描指定端口。示例：22, 1-65535, U:53, T:80。
 .TP
 .B \-F
-Fast scan. Scan top 100 common ports.
+快速扫描。扫描最常用的 100 个端口。
 .TP
 .B \-r
-Scan ports consecutively. Don't randomize.
+顺序扫描端口。不随机化。
 .TP
 .B \-\-top\-ports <n>
-Scan n most common ports.
+扫描最常用的 n 个端口。
 .TP
-.B \-\-port\-ratio <ratio>
-Scan ports more common than ratio (0.0-1.0).
-.SH SERVICE/VERSION DETECTION
+.B \-\-port\-ratio <比率>
+扫描使用频率高于指定比率（0.0-1.0）的端口。
+.SH 服务/版本检测
 .TP
 .B \-sV
-Probe open ports to determine service/version info.
+探测开放端口以确定服务/版本信息。
 .TP
 .B \-\-version\-intensity <0-9>
-Set version scan intensity. 0 is light, 9 is all probes.
+设置版本扫描强度。0 为轻度，9 为全部探测。
 .TP
 .B \-\-version\-light
-Limit to most likely probes (intensity 2).
+限制为最可能的探测（强度 2）。
 .TP
 .B \-\-version\-all
-Try every single probe (intensity 9).
+尝试每一个探测（强度 9）。
 .TP
 .B \-\-version\-trace
-Show detailed version scan activity.
-.SH OS DETECTION
+显示详细的版本扫描活动。
+.SH 操作系统检测
 .TP
 .B \-O
-Enable OS detection.
+启用操作系统检测。
 .TP
 .B \-\-osscan\-limit
-Limit OS detection to promising targets.
+限制操作系统检测为有希望的目标。
 .TP
 .B \-\-osscan\-guess
-Guess OS more aggressively.
+更积极地进行操作系统猜测。
 .TP
 .B \-\-max\-os\-tries <n>
-Set maximum number of OS detection tries.
-.SH TIMING AND PERFORMANCE
+设置操作系统检测的最大尝试次数。
+.SH 计时和性能
 .TP
 .B \-T<0-5>
-Set timing template. Higher is faster.
+设置计时模板。数值越大越快。
 .RS
-- T0: Paranoid (very slow, evasive)
-- T1: Sneaky (slow, evasive)
-- T2: Polite (slow)
-- T3: Normal (default)
-- T4: Aggressive (fast)
-- T5: Insane (very fast)
+- T0：偏执模式（极慢，隐蔽）
+- T1：鬼祟模式（慢，隐蔽）
+- T2：礼貌模式（慢）
+- T3：正常模式（默认）
+- T4：激进模式（快）
+- T5：疯狂模式（极快）
 .RE
 .TP
 .B \-\-min\-hostgroup <n>
-Parallel host scan group sizes.
+并行主机扫描组大小下限。
 .TP
 .B \-\-max\-hostgroup <n>
-Maximum parallel host scan group sizes.
+并行主机扫描组大小上限。
 .TP
 .B \-\-min\-parallelism <n>
-Probe parallelization minimum.
+探测并行度下限。
 .TP
 .B \-\-max\-parallelism <n>
-Probe parallelization maximum.
+探测并行度上限。
 .TP
-.B \-\-min\-rtt\-timeout <time>
-Specifies probe round trip time minimum.
+.B \-\-min\-rtt\-timeout <时间>
+指定探测往返时间下限。
 .TP
-.B \-\-max\-rtt\-timeout <time>
-Specifies probe round trip time maximum.
+.B \-\-max\-rtt\-timeout <时间>
+指定探测往返时间上限。
 .TP
-.B \-\-initial\-rtt\-timeout <time>
-Specifies initial probe round trip time.
+.B \-\-initial\-rtt\-timeout <时间>
+指定初始探测往返时间。
 .TP
-.B \-\-max\-retries <tries>
-Caps number of port scan probe retransmissions.
+.B \-\-max\-retries <次数>
+限制端口扫描探测重传次数。
 .TP
-.B \-\-host\-timeout <time>
-Give up on target after this long.
+.B \-\-host\-timeout <时间>
+超过此时间后放弃目标。
 .TP
-.B \-\-scan\-delay <time>
-Adjust delay between probes.
+.B \-\-scan\-delay <时间>
+调整探测间延迟。
 .TP
-.B \-\-max\-scan\-delay <time>
-Adjust maximum delay between probes.
+.B \-\-max\-scan\-delay <时间>
+调整探测间最大延迟。
 .TP
-.B \-\-min\-rate <number>
-Send packets no slower than <number> per second.
+.B \-\-min\-rate <数值>
+发包速率不低于每秒 <数值> 个。
 .TP
-.B \-\-max\-rate <number>
-Send packets no faster than <number> per second.
-.SH FIREWALL/IDS EVASION
+.B \-\-max\-rate <数值>
+发包速率不超过每秒 <数值> 个。
+.SH 防火墙/IDS 规避
 .TP
 .B \-f
-Fragment packets. Use 8-byte fragments.
+分片数据包。使用 8 字节分片。
 .TP
-.B \-\-mtu <value>
-Fragment packets with specified MTU.
+.B \-\-mtu <数值>
+使用指定 MTU 分片数据包。
 .TP
-.B \-D <decoy1,decoy2,...>
-Cloak scan with decoys. Use ME for real IP.
+.B \-D <诱饵1,诱饵2,...>
+使用诱饵掩护扫描。使用 ME 表示真实 IP。
 .TP
-.B \-S <IP_Address>
-Spoof source address.
+.B \-S <IP地址>
+伪造源地址。
 .TP
-.B \-g <portnum>
-Use given source port number.
+.B \-g <端口号>
+使用指定的源端口号。
 .TP
-.B \-\-data\-length <num>
-Append random data to sent packets.
+.B \-\-data\-length <数值>
+在发送的数据包中追加随机数据。
 .TP
-.B \-\-data\-string <string>
-Append custom string to sent packets.
+.B \-\-data\-string <字符串>
+在发送的数据包中追加自定义字符串。
 .TP
-.B \-\-data\-hex <hex>
-Append hex string to sent packets.
+.B \-\-data\-hex <十六进制>
+在发送的数据包中追加十六进制字符串。
 .TP
 .B \-\-spoof\-mac <mac>
-Spoof MAC address. 0 for random.
-.SH OUTPUT OPTIONS
+伪造 MAC 地址。0 表示随机。
+.SH 输出选项
 .TP
-.B \-oN <file>
-Output scan in normal format.
+.B \-oN <文件>
+以普通格式输出扫描结果。
 .TP
-.B \-oX <file>
-Output scan in XML format.
+.B \-oX <文件>
+以 XML 格式输出扫描结果。
 .TP
-.B \-oJ <file>
-Output scan in JSON format.
+.B \-oJ <文件>
+以 JSON 格式输出扫描结果。
 .TP
-.B \-oG <file>
-Output scan in grepable format.
+.B \-oG <文件>
+以可 grep 格式输出扫描结果。
 .TP
-.B \-oS <file>
-Output scan in script kiddie format.
+.B \-oS <文件>
+以脚本小子格式输出扫描结果。
 .TP
-.B \-oA <basename>
-Output in all formats (normal, XML, JSON, grepable).
+.B \-oA <基本名>
+以所有格式输出（普通、XML、JSON、可 grep）。
 .TP
 .B \-v
-Increase verbosity level.
+增加详细程度。
 .TP
 .B \-vv
-More verbose.
+更详细。
 .TP
 .B \-d
-Increase debugging level.
+增加调试级别。
 .TP
 .B \-dd
-More debugging.
+更详细的调试。
 .TP
 .B \-\-reason
-Display reason for port state.
+显示端口状态的原因。
 .TP
 .B \-\-open
-Only show open (or possibly open) ports.
+仅显示开放（或可能开放）的端口。
 .TP
 .B \-\-packet\-trace
-Show all packets sent and received.
+显示所有发送和接收的数据包。
 .TP
 .B \-\-append\-output
-Append to rather than clobber output files.
+追加而非覆盖输出文件。
 .TP
-.B \-\-resume <file>
-Resume aborted scan from file.
-.SH NSE SCRIPTING
+.B \-\-resume <文件>
+从文件恢复中断的扫描。
+.SH NSE 脚本
 .TP
 .B \-sC
-Perform script scan using default safe set.
+使用默认安全脚本集执行脚本扫描。
 .TP
-.B \-\-script <script>
-Run specified scripts. Comma-separated list.
+.B \-\-script <脚本>
+运行指定脚本。逗号分隔列表。
 .TP
-.B \-\-script\-args <args>
-Provide arguments to scripts.
+.B \-\-script\-args <参数>
+向脚本提供参数。
 .TP
-.B \-\-script\-args\-file <file>
-Provide arguments from file.
+.B \-\-script\-args\-file <文件>
+从文件提供参数。
 .TP
 .B \-\-script\-trace
-Show all data sent and received.
+显示所有发送和接收的数据。
 .TP
-.B \-\-script\-help <script>
-Show help about scripts.
-.SH TARGET SPECIFICATION
-Can be passed as arguments or from file:
+.B \-\-script\-help <脚本>
+显示脚本帮助信息。
+.SH 目标规格
+可以作为参数传递或从文件读取：
 .TP
-.B \-iL <inputfile>
-Input from list of hosts/networks.
+.B \-iL <输入文件>
+从主机/网络列表读取输入。
 .TP
-.B \-iR <num hosts>
-Choose random targets.
+.B \-iR <主机数量>
+选择随机目标。
 .TP
-.B \-\-exclude <host1,...>
-Exclude hosts/networks.
+.B \-\-exclude <主机1,...>
+排除主机/网络。
 .TP
-.B \-\-excludefile <exclude_file>
-Exclude list from file.
+.B \-\-excludefile <排除文件>
+从文件读取排除列表。
 .PP
-Target formats:
+目标格式：
 .RS
-- Single IP: 192.168.1.1
-- Multiple: 192.168.1.1 192.168.1.2
-- CIDR: 192.168.1.0/24
-- Range: 192.168.1.1-100
-- Hostname: example.com
-- IPv6: 2001:db8::1
+- 单个 IP：192.168.1.1
+- 多个：192.168.1.1 192.168.1.2
+- CIDR：192.168.1.0/24
+- 范围：192.168.1.1-100
+- 主机名：example.com
+- IPv6：2001:db8::1
 .RE
-.SH EXAMPLES
+.SH 示例
 .TP
 .B rustnmap 192.168.1.1
-Default scan of single target.
+默认扫描单个目标。
 .TP
 .B rustnmap -sS 192.168.1.0/24
-SYN scan of network.
+SYN 扫描整个网络。
 .TP
 .B rustnmap -sV -p 22,80,443 192.168.1.1
-Service detection on specific ports.
+对指定端口进行服务检测。
 .TP
 .B rustnmap -A 192.168.1.1
-Aggressive scan (OS, version, scripts, traceroute).
+激进扫描（OS、版本、脚本、路由追踪）。
 .TP
 .B rustnmap -sS -T4 -oA scan-results 192.168.1.0/24
-Fast SYN scan with all output formats.
-.SH EXIT STATUS
+快速 SYN 扫描并输出所有格式。
+.SH 退出状态
 .TP
 .B 0
-Scan completed successfully.
+扫描成功完成。
 .TP
 .B 1
-Error during scan.
+扫描过程中出错。
 .TP
 .B 2
-At least one port was found open.
+至少发现一个开放端口。
 .TP
 .B 3
-No ports found open.
-.SH FILES
+未发现开放端口。
+.SH 文件
 .TP
 .I /usr/share/rustnmap/nmap-service-probes
-Service probe database.
+服务探测数据库。
 .TP
 .I /usr/share/rustnmap/nmap-os-db
-OS fingerprint database.
+操作系统指纹数据库。
 .TP
 .I /usr/share/rustnmap/nmap-mac-prefixes
-MAC vendor database.
+MAC 厂商数据库。
 .TP
 .I /usr/share/rustnmap/scripts/
-NSE script directory.
-.SH ENVIRONMENT
+NSE 脚本目录。
+.SH 环境变量
 .TP
 .B RUSTNMAP_DEBUG
-Set to enable debug output.
+设置以启用调试输出。
 .TP
 .B TEST_TARGET_IP
-Target IP for integration tests.
-.SH NOTES
-RustNmap requires root privileges for raw socket operations including:
+集成测试的目标 IP。
+.SH 注意事项
+RustNmap 执行原始套接字操作需要 root 权限，包括：
 .RS
-- SYN, FIN, NULL, XMAS, ACK scans
-- UDP scans
-- OS detection
-- Most host discovery methods
+- SYN、FIN、NULL、XMAS、ACK 扫描
+- UDP 扫描
+- 操作系统检测
+- 大多数主机发现方法
 .RE
 .PP
-TCP Connect scans (-sT) and some other operations can run without root.
-.SH BUGS
-Report bugs at https://github.com/greatwallisme/rust-nmap/issues
-.SH AUTHOR
-Written by the RustNmap project contributors.
-.SH COPYRIGHT
-Copyright 2026 RustNmap Project.
-Licensed under the MIT License.
-.SH SEE ALSO
+TCP Connect 扫描（-sT）和部分其他操作无需 root 权限即可运行。
+.SH 缺陷
+请在 https://github.com/greatwallisme/rust-nmap/issues 报告缺陷
+.SH 作者
+由 RustNmap 项目贡献者编写。
+.SH 版权
+版权所有 2026 RustNmap 项目。
+基于 MIT 许可证授权。
+.SH 另见
 .BR nmap (1),
 .BR tcpdump (8),
 .BR wireshark (1)
 .PP
-Full documentation available at:
+完整文档见：
 https://github.com/greatwallisme/rust-nmap/blob/main/doc/manual/README.md

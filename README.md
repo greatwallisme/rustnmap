@@ -10,13 +10,13 @@
 [![Coverage](https://img.shields.io/badge/coverage-63.77%25-yellow)](https://github.com/greatwallisme/rust-nmap)
 [![License](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](LICENSE)
 
-**[中文文档](README.zh.md)** | [User Manual](doc/manual/) | [User Guide](doc/user-guide.md)
+**[中文文档](README.zh.md)** | [User Manual](doc/manual/) 
 
 ---
 
 ## Overview
 
-RustNmap is a modern, high-performance network scanning tool written in Rust, providing 100% functional parity with Nmap while leveraging Rust's memory safety and async capabilities.
+RustNmap is a modern, high-performance network scanning tool written in Rust, trying to provide 100% functional parity with Nmap while leveraging Rust's memory safety and async capabilities.
 
 **Key Features:**
 - **12 Scan Types**: SYN, Connect, UDP, FIN, NULL, XMAS, ACK, Maimon, Window, IP Protocol, Idle, FTP Bounce

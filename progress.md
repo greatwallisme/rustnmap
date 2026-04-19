@@ -1,31 +1,15 @@
-# Progress Log
+# Progress Log: zh_doc Cleanup
 
-> Updated: 2026-04-19
+> **Started**: 2026-04-18
 
----
+## Session 1 (2026-04-18)
 
-## Session: 2026-04-19 (Multi-Target Performance)
-
-### Diagnosis
-- [x] Measured baseline: 236s vs nmap 117s (2x slower, 65x more CPU)
-- [x] Identified root cause: conservative parallelism cap + MIN() drain window
-- [x] Attempted per-target RTT tracking - degraded performance, reverted
-
-### Fix Applied
-- [x] Scale parallelism with target count (cap 1500 for PACKET_MMAP V2)
-- [x] Scale batch size with target count (cap 1500)
-- [x] Fixed drain window: use timeout-based window instead of MIN() for >10 targets
-
-### Results
-- [x] **rustnmap: 63s vs nmap: 117s -- 1.86x faster**
-- [x] **CPU: 7.6s vs baseline 91s -- 12x improvement**
-- [x] Accuracy: 444/445 open ports match (53/tcp diff likely network jitter)
-- [x] clippy: 0 warnings
-- [x] test: all pass
-- [x] fmt: clean
-
-### Previous Session (2026-04-18)
-- [x] Two-tier port suppression
-- [x] Tcpwrapped detection via EOF timing
-- [x] 61/62 benchmark PASS, NSE 46/46 PASS
-- [x] Committed as 4627b82
+- [x] Analyzed all 41 zh_doc/ files for language mixing
+- [x] Identified 5 en-only files needing translation
+- [x] Identified 9 bilingual files needing consolidation
+- [x] Identified 1 anomaly in doc/ (nse-engine.md in Chinese)
+- [x] Created task_plan.md, findings.md
+- [ ] Phase 1: Translate 5 en-only files
+- [ ] Phase 2: Convert manual/ bilingual to Chinese-only
+- [ ] Phase 3: Fix doc/modules/nse-engine.md
+- [ ] Phase 4: Verify consistency

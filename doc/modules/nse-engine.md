@@ -1,10 +1,10 @@
-## 3.5 Nmap 脚本引擎 (NSE) - 核心设计
+## 3.5 Nmap Scripting Engine (NSE) - Core Design
 
-对应 Nmap 命令: `--script`, `--script-args`, `--script-trace`
+Corresponding Nmap commands: `--script`, `--script-args`, `--script-trace`
 
-这是本设计文档的**核心重点**，需要实现与 Nmap NSE 的完全兼容。
+This is the **core focus** of this design document, requiring full compatibility with Nmap NSE.
 
-### 3.5.1 NSE 架构概览
+### 3.5.1 NSE Architecture Overview
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -59,7 +59,7 @@
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
-### 3.5.2 Lua 与 Rust 的互操作设计
+### 3.5.2 Lua and Rust Interop Design
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -106,7 +106,7 @@
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
-### 3.5.3 NSE 脚本格式解析器
+### 3.5.3 NSE Script Format Parser
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -177,40 +177,40 @@
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
-### 3.5.4 NSE 标准库实现清单
-完整 NSE 库实现清单 
+### 3.5.4 NSE Standard Library Implementation Checklist
+Complete NSE library implementation checklist
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                      NSE Standard Libraries                             │
 ├─────────────────────────────────────────────────────────────────────────┤
 │                                                                         │
-│  Core Libraries (必须实现)                                              │
+│  Core Libraries (Must Implement)                                       │
 │  ───────────────────────────                                            │
 │                                                                         │
-│  1. nmap (核心库)                                                       │
-│     ├── nmap.new_socket()           - 创建套接字                       │
-│     ├── nmap.clock()                - 获取时间戳                       │
-│     ├── nmap.log_write(level, msg)  - 日志输出                         │
-│     ├── nmap.address_family()       - 地址族                           │
-│     └── nmap.registry               - 全局注册表                       │
+│  1. nmap (Core Library)                                                │
+│     ├── nmap.new_socket()           - Create socket                    │
+│     ├── nmap.clock()                - Get timestamp                    │
+│     ├── nmap.log_write(level, msg)  - Log output                       │
+│     ├── nmap.address_family()       - Address family                   │
+│     └── nmap.registry               - Global registry                 │
 │                                                                         │
-│  2. stdnse (标准扩展库)                                                 │
-│     ├── stdnse.format_output(status, data) - 格式化输出                │
-│     ├── stdnse.debug(level, fmt, ...) - 调试输出                       │
-│     ├── stdnse.verbose(level, fmt, ...) - 详细输出                     │
-│     ├── stdnse.sleep(seconds)           - 睡眠                         │
-│     ├── stdnse.mutex(name)              - 互斥锁                       │
-│     ├── stdnse.condition_variable(name) - 条件变量                     │
-│     ├── stdnse.new_thread(fn, ...)      - 创建线程                     │
-│     └── stdnse.get_script_args(...)    - 获取脚本参数                  │
+│  2. stdnse (Standard Extension Library)                                │
+│     ├── stdnse.format_output(status, data) - Format output             │
+│     ├── stdnse.debug(level, fmt, ...) - Debug output                   │
+│     ├── stdnse.verbose(level, fmt, ...) - Verbose output               │
+│     ├── stdnse.sleep(seconds)           - Sleep                        │
+│     ├── stdnse.mutex(name)              - Mutex                        │
+│     ├── stdnse.condition_variable(name) - Condition variable           │
+│     ├── stdnse.new_thread(fn, ...)      - Create thread                │
+│     └── stdnse.get_script_args(...)    - Get script arguments          │
 │                                                                         │
-│  3. comm (通信库)                                                       │
-│     ├── comm.tryssl(host, port, data, opts) - SSL探测                  │
-│     ├── comm.get_banner(host, port)         - 获取banner              │
-│     └── comm.openconn(host, port, opts)     - 建立连接                 │
+│  3. comm (Communication Library)                                       │
+│     ├── comm.tryssl(host, port, data, opts) - SSL probe               │
+│     ├── comm.get_banner(host, port)         - Get banner              │
+│     └── comm.openconn(host, port, opts)     - Open connection          │
 │                                                                         │
-│  4. shortport (端口规则助手)                                           │
+│  4. shortport (Port Rule Helpers)                                      │
 │     ├── shortport.portnumber(ports, proto, state)                       │
 │     ├── shortport.service(services, state)                              │
 │     ├── shortport.http()                                                │
@@ -219,10 +219,10 @@
 │                                                                         │
 │  ───────────────────────────────────────────────────────────────────   │
 │                                                                         │
-│  Protocol Libraries (协议库)                                            │
+│  Protocol Libraries                                                     │
 │  ─────────────────────────                                              │
 │                                                                         │
-│  5. http (HTTP协议) - 续                                               │
+│  5. http (HTTP Protocol) - Continued                                   │
 │     ├── http.pipeline_go(host, port, pipeline)                          │
 │     ├── http.get_url(url, options)                                      │
 │     ├── http.parse_url(url)                                             │
@@ -230,14 +230,14 @@
 │     ├── http.get_ssl_certificate(host, port)                            │
 │     └── http.identify_404(host, port)                                   │
 │                                                                         │
-│  6. ssh (SSH协议)                                                       │
+│  6. ssh (SSH Protocol)                                                  │
 │     ├── ssh.connect(host, port)                                         │
 │     ├── ssh.auth_none(socket)                                           │
 │     ├── ssh.fetch_host_key(host, port)                                  │
 │     ├── ssh.auth_password(socket, user, pass)                           │
 │     └── ssh.auth_publickey(socket, user, key)                           │
 │                                                                         │
-│  7. ssl (SSL/TLS协议)                                                   │
+│  7. ssl (SSL/TLS Protocol)                                              │
 │     ├── ssl.connect(host, port, options)                                │
 │     ├── ssl.cert_to_pem(cert)                                           │
 │     ├── ssl.parse_certificate(cert)                                     │
@@ -245,14 +245,14 @@
 │     ├── ssl.explore_cipher_suites(host, port)                           │
 │     └── ssl.get_certificate(host, port)                                 │
 │                                                                         │
-│  8. snmp (SNMP协议)                                                     │
+│  8. snmp (SNMP Protocol)                                                │
 │     ├── snmp.encode(pkt)                                                │
 │     ├── snmp.decode(pkt)                                                │
 │     ├── snmp.build_get_request(oid, options)                            │
 │     ├── snmp.build_getnext_request(oid, options)                        │
 │     └── snmp.walk(host, port, oid)                                      │
 │                                                                         │
-│  9. smb (SMB/CIFS协议)                                                  │
+│  9. smb (SMB/CIFS Protocol)                                             │
 │     ├── smb.start(host)                                                 │
 │     ├── smb.negotiate_session(socket)                                   │
 │     ├── smb.start_session(socket)                                       │
@@ -261,14 +261,14 @@
 │     ├── smb.list_shares(host)                                           │
 │     └── smb.get_security_mode(host)                                     │
 │                                                                         │
-│  10. ftp (FTP协议)                                                      │
+│  10. ftp (FTP Protocol)                                                 │
 │      ├── ftp.connect(host, port)                                        │
 │      ├── ftp.login(socket, user, pass)                                  │
 │      ├── ftp.list(socket, path)                                         │
 │      ├── ftp.retrieve(socket, path)                                     │
 │      └── ftp.anonymous_login(host, port)                                │
 │                                                                         │
-│  11. smtp (SMTP协议)                                                    │
+│  11. smtp (SMTP Protocol)                                               │
 │      ├── smtp.connect(host, port)                                       │
 │      ├── smtp.ehlo(socket, domain)                                      │
 │      ├── smtp.starttls(socket)                                          │
@@ -277,61 +277,61 @@
 │      ├── smtp.rcpt_to(socket, to)                                       │
 │      └── smtp.quit(socket)                                              │
 │                                                                         │
-│  12. ldap (LDAP协议)                                                    │
+│  12. ldap (LDAP Protocol)                                               │
 │      ├── ldap.connect(host, port)                                       │
 │      ├── ldap.bind(socket, dn, password)                                │
 │      ├── ldap.search(socket, base, scope, filter, attrs)                │
 │      └── ldap.close(socket)                                             │
 │                                                                         │
-│  13. mysql (MySQL协议)                                                  │
+│  13. mysql (MySQL Protocol)                                             │
 │      ├── mysql.connect(host, port, options)                             │
 │      ├── mysql.login(socket, user, pass)                                │
 │      ├── mysql.query(socket, sql)                                       │
 │      ├── mysql.close(socket)                                            │
 │      └── mysql.get_variable(socket, var)                                │
 │                                                                         │
-│  14. pgsql (PostgreSQL协议)                                             │
+│  14. pgsql (PostgreSQL Protocol)                                        │
 │      ├── pgsql.connect(host, port, options)                             │
 │      ├── pgsql.login(socket, params)                                    │
 │      ├── pgsql.query(socket, sql)                                       │
 │      └── pgsql.close(socket)                                            │
 │                                                                         │
-│  15. msrpc (MS-RPC协议)                                                 │
+│  15. msrpc (MS-RPC Protocol)                                            │
 │      ├── msrpc.bind(socket, uuid, version)                              │
 │      ├── msrpc.call(socket, opnum, data)                                │
 │      └── msrpc.unbind(socket)                                           │
 │                                                                         │
-│  16. dns (DNS协议)                                                      │
+│  16. dns (DNS Protocol)                                                 │
 │      ├── dns.query(name, dtype, options)                                │
 │      ├── dns.reverse(addr)                                              │
 │      ├── dns.get_default_servers()                                      │
 │      └── dns.update_table(host, name, addr)                             │
 │                                                                         │
-│  17. dhcp (DHCP协议)                                                    │
+│  17. dhcp (DHCP Protocol)                                               │
 │      ├── dhcp.make_request(options)                                     │
 │      └── dhcp.parse_response(response)                                  │
 │                                                                         │
-│  18. vnc (VNC协议)                                                      │
+│  18. vnc (VNC Protocol)                                                 │
 │      ├── vnc.connect(host, port)                                        │
 │      ├── vnc.handshake(socket)                                          │
 │      └── vnc.authenticate(socket, password)                             │
 │                                                                         │
-│  19. rdp (RDP协议)                                                      │
+│  19. rdp (RDP Protocol)                                                 │
 │      ├── rdp.connect(host, port)                                        │
 │      ├── rdp.connect_req(socket)                                        │
 │      └── rdp.parse_connect_response(data)                               │
 │                                                                         │
-│  20. mongodb (MongoDB协议)                                              │
+│  20. mongodb (MongoDB Protocol)                                         │
 │      ├── mongodb.connect(host, port)                                    │
 │      ├── mongodb.query(socket, db, collection, query)                   │
 │      └── mongodb.getServerStatus(socket)                                │
-
+│                                                                         │
 │  ───────────────────────────────────────────────────────────────────   │
 │                                                                         │
-│  Utility Libraries (工具库)                                             │
+│  Utility Libraries                                                      │
 │  ─────────────────────────                                              │
 │                                                                         │
-│  21. brute (暴力破解框架)                                               │
+│  21. brute (Brute Force Framework)                                      │
 │      ├── brute.Engine:new(driver, opts)                                 │
 │      ├── brute:connect(host, port)                                      │
 │      ├── brute:disconnect(socket)                                       │
@@ -339,53 +339,53 @@
 │      ├── brute:login(socket, user, pass)                                │
 │      └── brute:start(host, port)                                        │
 │                                                                         │
-│  22. creds (凭据管理)                                                   │
+│  22. creds (Credential Management)                                      │
 │      ├── creds.Credentials:new()                                        │
 │      ├── creds:add(state, user, pass, realm)                            │
 │      ├── creds:get_all(state)                                           │
 │      └── creds:get_table(state)                                         │
 │                                                                         │
-│  23. datafiles (数据文件)                                               │
+│  23. datafiles (Data Files)                                             │
 │      ├── datafiles.read_file(filename)                                  │
 │      └── datafiles.parse_file(filename, parser)                         │
 │                                                                         │
-│  24. target (目标管理)                                                  │
+│  24. target (Target Management)                                         │
 │      ├── target.add(host)                                               │
 │      ├── target.addrs()                                                 │
 │      └── target.is_local(host)                                          │
 │                                                                         │
-│  25. unpwdb (用户名密码数据库)                                          │
+│  25. unpwdb (Username/Password Database)                                │
 │      ├── unpwdb.usernames()                                             │
 │      ├── unpwdb.passwords()                                             │
 │      └── unpwdb.select_usernames(users)                                 │
 │                                                                         │
-│  26. stringaux (字符串辅助)                                             │
+│  26. stringaux (String Utilities)                                       │
 │      ├── stringaux.strsplit(sep, str)                                   │
 │      ├── stringaux.filename_escape(str)                                 │
 │      └── stringaux.to_xml(str)                                          │
 │                                                                         │
-│  27. tab (表格格式化)                                                   │
+│  27. tab (Table Formatting)                                             │
 │      ├── tab.new(columns)                                               │
 │      ├── tab.addrow(table, ...)                                         │
 │      ├── tab.dump(table)                                                │
 │      └── tab.sort(table, column)                                        │
 │                                                                         │
-│  28. json (JSON处理)                                                    │
+│  28. json (JSON Processing)                                             │
 │      ├── json.encode(data)                                              │
 │      ├── json.decode(str)                                               │
 │      └── json.generate(data)                                            │
 │                                                                         │
-│  29. base64 (Base64编码)                                                │
+│  29. base64 (Base64 Encoding)                                           │
 │      ├── base64.enc(data)                                               │
 │      └── base64.dec(str)                                                │
 │                                                                         │
-│  30. bit (位操作)                                                       │
+│  30. bit (Bit Operations)                                               │
 │      ├── bit.bxor(a, b)                                                 │
 │      ├── bit.bor(a, b)                                                  │
 │      ├── bit.band(a, b)                                                 │
 │      └── bit.bnot(a)                                                    │
 │                                                                         │
-│  31. openssl (OpenSSL绑定)                                              │
+│  31. openssl (OpenSSL Bindings)                                         │
 │      ├── openssl.md5(data)                                              │
 │      ├── openssl.sha1(data)                                             │
 │      ├── openssl.sha256(data)                                           │
@@ -393,7 +393,7 @@
 │      ├── openssl.encrypt(algo, key, data)                               │
 │      └── openssl.decrypt(algo, key, data)                               │
 │                                                                         │
-│  32. packet (数据包构造)                                                │
+│  32. packet (Packet Construction)                                       │
 │      ├── packet.Packet:new(data, force)                                 │
 │      ├── packet.IP:new()                                                │
 │      ├── packet.TCP:new()                                               │
@@ -405,7 +405,7 @@
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
-### 3.5.5 NSE 脚本执行流程
+### 3.5.5 NSE Script Execution Flow
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -511,7 +511,7 @@
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
-### 3.5.6 脚本调度器设计
+### 3.5.6 Script Scheduler Design
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -593,14 +593,14 @@
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
-### 3.5.7 NSE Rust 实现类型定义
+### 3.5.7 NSE Rust Implementation Type Definitions
 
 ```
 // ============================================
 // NSE Core Types (Rust Definition)
 // ============================================
 
-/// NSE 脚本元数据
+/// NSE script metadata
 pub struct NseScript {
     pub id: String,
     pub description: String,
@@ -615,26 +615,26 @@ pub struct NseScript {
     pub file_path: PathBuf,
 }
 
-/// 脚本分类
+/// Script categories
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ScriptCategory {
-    Auth,       // 认证破解
-    Broadcast,  // 广播发现
-    Brute,      // 暴力破解
-    Default,    // 默认脚本
-    Discovery,  // 服务发现
-    Dos,        // 拒绝服务
-    Exploit,    // 漏洞利用
-    External,   // 外部服务查询
-    Fuzzer,     // 模糊测试
-    Intrusive,  // 侵入性检查
-    Malware,    // 恶意软件检测
-    Safe,       // 安全检查
-    Version,    // 版本检测
-    Vuln,       // 漏洞检测
+    Auth,       // Authentication cracking
+    Broadcast,  // Broadcast discovery
+    Brute,      // Brute force
+    Default,    // Default scripts
+    Discovery,  // Service discovery
+    Dos,        // Denial of Service
+    Exploit,    // Exploitation
+    External,   // External service queries
+    Fuzzer,     // Fuzzing
+    Intrusive,  // Intrusive checks
+    Malware,    // Malware detection
+    Safe,       // Safe checks
+    Version,    // Version detection
+    Vuln,       // Vulnerability detection
 }
 
-/// 脚本执行上下文
+/// Script execution context
 pub struct ScriptContext {
     pub host: Arc<HostInfo>,
     pub port: Option<Arc<PortInfo>>,
@@ -643,7 +643,7 @@ pub struct ScriptContext {
     pub timeout: Duration,
 }
 
-/// 脚本执行结果
+/// Script execution result
 pub struct ScriptResult {
     pub script_id: String,
     pub host_ip: IpAddr,
@@ -655,7 +655,7 @@ pub struct ScriptResult {
     pub debug_log: Vec<String>,
 }
 
-/// 执行状态
+/// Execution status
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExecutionStatus {
     Success,
@@ -664,7 +664,7 @@ pub enum ExecutionStatus {
     Error,
 }
 
-/// 脚本输出（支持结构化数据）
+/// Script output (supports structured data)
 pub enum ScriptOutput {
     Plain(String),
     Structured(LuaTable),
@@ -676,7 +676,7 @@ pub enum ScriptOutput {
     Json(serde_json::Value),
 }
 
-/// 脚本执行器
+/// Script executor
 pub struct NseExecutor {
     lua: Lua,
     script: Arc<NseScript>,
@@ -684,12 +684,12 @@ pub struct NseExecutor {
 }
 
 impl NseExecutor {
-    /// 执行脚本
+    /// Execute script
     pub async fn execute(&self) -> Result<ScriptResult, NseError> {
-        // 1. 准备 Lua 环境
+        // 1. Prepare Lua environment
         self.prepare_lua_environment()?;
         
-        // 2. 执行 action 函数
+        // 2. Execute action function
         let result = tokio::time::timeout(
             self.context.timeout,
             self.call_action()
@@ -712,14 +712,14 @@ impl NseExecutor {
     }
 }
 
-/// 脚本调度器
+/// Script scheduler
 pub struct ScriptScheduler {
     script_db: ScriptDatabase,
     thread_pool: ThreadPool,
     config: SchedulerConfig,
 }
 
-/// 脚本数据库
+/// Script database
 pub struct ScriptDatabase {
     scripts: HashMap<String, Arc<NseScript>>,
     by_category: HashMap<ScriptCategory, Vec<String>>,
@@ -727,14 +727,14 @@ pub struct ScriptDatabase {
     by_service: HashMap<String, Vec<String>>,
 }
 
-/// 调度器配置
+/// Scheduler configuration
 pub struct SchedulerConfig {
     pub max_concurrent: usize,
     pub default_timeout: Duration,
     pub script_timings: ScriptTimings,
 }
 
-/// 脚本时序配置
+/// Script timing configuration
 pub struct ScriptTimings {
     pub pre_scan_timeout: Duration,
     pub host_script_timeout: Duration,
@@ -743,46 +743,46 @@ pub struct ScriptTimings {
 }
 ```
 
-### 3.5.5 NSE 实现细节
+### 3.5.5 NSE Implementation Details
 
-基于 Nmap `nse_main.cc/h`, `nse_nmaplib.cc` 的实现。
+Based on Nmap `nse_main.cc/h`, `nse_nmaplib.cc` implementation.
 
-#### 3.5.5.1 核心数据结构 (Nmap 源码映射)
+#### 3.5.5.1 Core Data Structures (Nmap Source Mapping)
 
 ```rust
-// 对应 Nmap nse_main.h 中的 ScriptResult
+// Corresponds to ScriptResult in Nmap nse_main.h
 pub struct NseScriptResult {
-    // 脚本标识符
+    // Script identifier
     pub id: Cow<'static, str>,
 
-    // 结构化输出表 (在 LUA_REGISTRYINDEX 中的引用)
+    // Structured output table (reference in LUA_REGISTRYINDEX)
     pub output_ref: i32,
 
-    // 原始输出字符串
+    // Raw output string
     pub output_str: String,
 }
 
 impl NseScriptResult {
-    // 对应 get_output_str()
+    // Corresponds to get_output_str()
     pub fn get_output_string(&self) -> Cow<'static, str> {
         if self.output_ref != LUA_NOREF {
-            // 从注册表获取输出
+            // Get output from registry
             get_registry_output(self.output_ref)
         } else {
             Cow::Borrowed(&self.output_str)
         }
     }
 
-    // 对应 write_xml()
+    // Corresponds to write_xml()
     pub fn write_xml(&self) {
-        // 将脚本结果输出为 XML
+        // Output script result as XML
         xml::start_element("script");
         xml::attribute("id", self.id);
         xml::attribute("output", self.get_output_string());
         xml::end_element();
     }
 
-    // 对应 operator<
+    // Corresponds to operator<
     impl Ord for NseScriptResult {
         fn cmp(&self, other: &Self) -> Ordering {
             strcmp(self.id, other.id) < 0
@@ -790,14 +790,14 @@ impl NseScriptResult {
     }
 }
 
-// 对应 ScriptResults = std::multiset<ScriptResult*>
+// Corresponds to ScriptResults = std::multiset<ScriptResult*>
 pub struct NseScriptResults {
     results: BTreeSet<NseScriptResult>,
 }
 
-// 对应 nse_main.h 中的函数
+// Corresponds to functions in nse_main.h
 impl NseScriptResults {
-    // 对应 get_script_scan_results_obj()
+    // Corresponds to get_script_scan_results_obj()
     pub fn new() -> Self {
         Self {
             results: BTreeSet::new(),
@@ -814,10 +814,10 @@ impl NseScriptResults {
 }
 ```
 
-#### 3.5.5.2 Lua 状态管理
+#### 3.5.5.2 Lua State Management
 
 ```rust
-// 对应 nse_yield(), nse_restore() - 协程支持
+// Corresponds to nse_yield(), nse_restore() - Coroutine support
 pub struct NseCoroutine {
     lua_state: *mut lua_State,
     continuation_index: i32,
@@ -825,37 +825,37 @@ pub struct NseCoroutine {
 }
 
 impl NseCoroutine {
-    // 对应 nse_yield()
+    // Corresponds to nse_yield()
     pub fn yield(&mut self, nresults: i32) -> Result<()> {
         unsafe {
-            // 保存当前状态
+            // Save current state
             self.saved_stack_top = lua_gettop(self.lua_state);
 
-            // 创建续体
+            // Create continuation
             self.continuation_index = lua_getctx(
                 self.lua_state,
                 nresults,
             )?;
 
-            // 返回给调用者
+            // Return to caller
             lua_yield(self.lua_state, nresults);
         }
 
         Ok(())
     }
 
-    // 对应 nse_restore()
+    // Corresponds to nse_restore()
     pub fn restore(&mut self, args: &[LuaValue]) -> Result<()> {
         unsafe {
-            // 恢复栈
+            // Restore stack
             lua_settop(self.lua_state, self.saved_stack_top);
 
-            // 传递参数给续体
+            // Pass arguments to continuation
             for arg in args {
                 lua_pushvalue(self.lua_state, arg);
             }
 
-            // 恢复执行
+            // Resume execution
             lua_resume(self.lua_state, args.len());
         }
 
@@ -864,10 +864,10 @@ impl NseCoroutine {
 }
 ```
 
-#### 3.5.5.3 Nmap 库绑定 (nse_nmaplib.cc)
+#### 3.5.5.3 Nmap Library Bindings (nse_nmaplib.cc)
 
 ```rust
-// 对应 set_version() - 暴露服务版本信息到 Lua
+// Corresponds to set_version() - Expose service version info to Lua
 fn expose_service_version(lua: &mut LuaState,
                            sd: &ServiceDeductions) {
     let version_table = lua.create_table(0, NSE_NUM_VERSION_FIELDS);
@@ -910,26 +910,26 @@ fn expose_service_version(lua: &mut LuaState,
         lua.set_field("devicetype", devicetype);
     }
 
-    // service_tunnel ("none" 或 "ssl")
+    // service_tunnel ("none" or "ssl")
     let tunnel = match sd.service_tunnel {
         SERVICE_TUNNEL_NONE => "none",
         SERVICE_TUNNEL_SSL => "ssl",
     };
     lua.set_field("service_tunnel", tunnel);
 
-    // service_fp (用于提交的指纹)
+    // service_fp (fingerprint for submission)
     if let Some(fp) = sd.service_fp {
         lua.set_field("service_fp", fp);
     }
 
-    // service_dtype ("table" 或 "probed")
+    // service_dtype ("table" or "probed")
     let dtype = match sd.dtype {
         SERVICE_DETECTION_TABLE => "table",
         SERVICE_DETECTION_PROBED => "probed",
     };
     lua.set_field("service_dtype", dtype);
 
-    // cpe (数组)
+    // cpe (array)
     let cpe_table = lua.create_table(sd.cpe.len(), 0);
     for (i, cpe) in sd.cpe.iter().enumerate() {
         lua.push_string(cpe);
@@ -938,7 +938,7 @@ fn expose_service_version(lua: &mut LuaState,
     lua.set_field("cpe", cpe_table);
 }
 
-// 对应 set_portinfo() - 暴露端口信息到 Lua
+// Corresponds to set_portinfo() - Expose port info to Lua
 fn expose_port_info(lua: &mut LuaState,
                      target: &Target,
                      port: &Port) {
@@ -970,17 +970,17 @@ fn expose_port_info(lua: &mut LuaState,
     // reason_ttl
     lua.set_field("reason_ttl", port.reason.ttl);
 
-    // version 子表
+    // version sub-table
     let version_table = lua.create_table(0, NSE_NUM_VERSION_FIELDS);
     expose_service_version_to_table(lua, &sd, version_table);
     lua.set_field("version", version_table);
 }
 ```
 
-#### 3.5.5.4 套接字绑定 (nse_nsock.cc)
+#### 3.5.5.4 Socket Bindings (nse_nsock.cc)
 
 ```rust
-// 对应 nsock 库的 Rust 封装
+// Rust wrapper for nsock library
 pub struct NseSocket {
     inner: Socket,
     protocol: Protocol,
@@ -988,9 +988,9 @@ pub struct NseSocket {
     address_family: AddressFamily,
 }
 
-// 套接字操作 (对应 NSE socket API)
+// Socket operations (corresponding to NSE socket API)
 impl NseSocket {
-    // 对应 nsock_connect()
+    // Corresponds to nsock_connect()
     pub async fn connect(addr: &SocketAddr) -> Result<Self> {
         Ok(Self {
             inner: Socket::connect(addr).await?,
@@ -1000,30 +1000,30 @@ impl NseSocket {
         })
     }
 
-    // 对应 nsock_send()
+    // Corresponds to nsock_send()
     pub async fn send(&mut self, data: &[u8]) -> Result<usize> {
         let n = self.inner.write(data).await?;
         Ok(n)
     }
 
-    // 对应 nsock_receive()
+    // Corresponds to nsock_receive()
     pub async fn receive(&mut self, buf: &mut [u8]) -> Result<usize> {
         let n = self.inner.read(buf).await?;
         Ok(n)
     }
 
-    // 对应 nsock_close()
+    // Corresponds to nsock_close()
     pub fn close(mut self) -> Result<()> {
         self.inner.shutdown()?;
         Ok(())
     }
 }
 
-// 将套接字暴露给 Lua
+// Expose socket to Lua
 fn register_socket_type(lua: &mut LuaState) {
     lua.register_type::<NseSocket>("nsock.Socket");
 
-    // 方法: connect
+    // Method: connect
     lua.register_method("connect", |lua, this| {
         let addr = lua.check_string(1)?;
         let socket = NseSocket::connect(&addr).await?;
@@ -1031,7 +1031,7 @@ fn register_socket_type(lua: &mut LuaState) {
         Ok(1)
     });
 
-    // 方法: send
+    // Method: send
     lua.register_method("send", |lua, this| {
         let socket = lua.check_userdata::<NseSocket>(0)?;
         let data = lua.check_string(1)?;
@@ -1040,7 +1040,7 @@ fn register_socket_type(lua: &mut LuaState) {
         Ok(1)
     });
 
-    // 方法: receive
+    // Method: receive
     lua.register_method("receive", |lua, this| {
         let socket = lua.check_userdata::<NseSocket>(0)?;
         let mut buf = vec![0u8; 4096];
@@ -1049,7 +1049,7 @@ fn register_socket_type(lua: &mut LuaState) {
         Ok(1)
     });
 
-    // 方法: close
+    // Method: close
     lua.register_method("close", |lua, this| {
         let mut socket = lua.check_userdata::<NseSocket>(0)?;
         socket.close()?;
@@ -1058,45 +1058,45 @@ fn register_socket_type(lua: &mut LuaState) {
 }
 ```
 
-#### 3.5.5.5 脚本加载和选择
+#### 3.5.5.5 Script Loading and Selection
 
-> **实现状态**: ⚠️ **部分实现** - 当前只支持类别选择，不支持脚本名/glob模式
+> **Implementation Status**: **Partial** - Currently only supports category selection, not script name/glob patterns
 >
-> **当前限制**:
-> - ✅ 支持: `--script discovery`, `--script vuln` (类别)
-> - ❌ 不支持: `--script banner` (脚本名)
-> - ❌ 不支持: `--script http*` (glob模式)
-> - ❌ 不支持: `--script "/path/to/script.nse"` (文件路径)
+> **Current Limitations**:
+> - Supported: `--script discovery`, `--script vuln` (categories)
+> - Not supported: `--script banner` (script name)
+> - Not supported: `--script http*` (glob pattern)
+> - Not supported: `--script "/path/to/script.nse"` (file path)
 >
-> **实现位置**:
+> **Implementation Location**:
 > - CLI: `crates/rustnmap-cli/src/cli.rs:1195-1197`
 > - Orchestrator: `crates/rustnmap-core/src/orchestrator.rs:2393-2423`
 >
-> **设计规范** (参考 Nmap `nse_main.lua:724-812`):
+> **Design Specification** (refer to Nmap `nse_main.lua:724-812`):
 
 ```rust
-// 对应 nse_selectedbyname() - 脚本选择
+// Corresponds to nse_selectedbyname() - Script selection
 pub struct ScriptSelector {
     database: ScriptDatabase,
     selected: Vec<Arc<NseScript>>,
 }
 
 impl ScriptSelector {
-    // 对应 Nmap 的 --script 参数处理
+    // Corresponds to Nmap's --script parameter handling
     pub fn select_scripts(&mut self,
                            patterns: Vec<String>,
                            categories: Vec<ScriptCategory>)
         -> Result<Vec<Arc<NseScript>>> {
         let mut result = Vec::new();
 
-        // 处理文件名模式 (e.g., "vuln")
+        // Handle filename patterns (e.g., "vuln")
         for pattern in &patterns {
             if pattern.contains('/') || pattern.contains('.') {
-                // 直接文件路径
+                // Direct file path
                 let script = self.database.load_script(pattern)?;
                 result.push(script);
             } else {
-                // 通配符匹配
+                // Wildcard matching
                 for script in self.database.find_by_name(pattern)? {
                     result.push(script.clone());
                 }
@@ -1104,7 +1104,7 @@ impl ScriptSelector {
         }
         }
 
-        // 处理类别选择 (e.g., "default", "vuln")
+        // Handle category selection (e.g., "default", "vuln")
         if !categories.is_empty() {
             for script in self.database.all_scripts() {
                 if script.categories.iter()
@@ -1117,13 +1117,13 @@ impl ScriptSelector {
         }
         }
 
-        // 解析依赖关系
+        // Resolve dependencies
         self.resolve_dependencies(&mut result)?;
 
         Ok(result)
     }
 
-    // 递归解析依赖
+    // Recursively resolve dependencies
     fn resolve_dependencies(&self, scripts: &mut Vec<Arc<NseScript>>)
         -> Result<()> {
         let mut resolved = std::collections::HashSet::new();
@@ -1135,41 +1135,41 @@ impl ScriptSelector {
 }
 ```
 
-#### 3.5.5.6a NSE 库注册机制
+#### 3.5.5.6a NSE Library Registration Mechanism
 
-NSE 标准库由 Rust 实现，通过 mlua FFI 暴露给 Lua 脚本。在执行任何脚本之前，必须先注册这些库。
+NSE standard libraries are implemented in Rust and exposed to Lua scripts via mlua FFI. These libraries must be registered before executing any scripts.
 
 ```rust
-// NSE 标准库注册
+// NSE standard library registration
 //
 // rustnmap-nse/src/libs/mod.rs
 pub fn register_all(lua: &mut NseLua) -> Result<()> {
-    // 注册核心 NSE 库，使脚本可以通过 require() 访问
-    nmap::register(lua)?;      // nmap 库 - 核心扫描功能
-    stdnse::register(lua)?;    // stdnse 库 - 标准扩展函数
-    comm::register(lua)?;      // comm 库 - 网络通信
-    shortport::register(lua)?; // shortport 库 - 端口规则匹配
+    // Register core NSE libraries, making them accessible via require()
+    nmap::register(lua)?;      // nmap library - core scan functionality
+    stdnse::register(lua)?;    // stdnse library - standard extension functions
+    comm::register(lua)?;      // comm library - network communication
+    shortport::register(lua)?; // shortport library - port rule matching
     Ok(())
 }
 ```
 
-**注册时机：**
+**Registration Timing:**
 
-库注册必须在 Lua 状态创建后、脚本加载前执行：
+Library registration must occur after Lua state creation but before script loading:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  1. Lua::new()          - 创建 Lua 状态                      │
-│  2. register_all()      - 注册 NSE 库                        │
-│  3. load(script)        - 加载脚本 (脚本中使用 require())    │
-│  4. set_global(host)    - 设置 host 表                       │
-│  5. call(action)        - 执行脚本                           │
+│  1. Lua::new()          - Create Lua state                  │
+│  2. register_all()      - Register NSE libraries            │
+│  3. load(script)        - Load script (scripts use require())│
+│  4. set_global(host)    - Set host table                    │
+│  5. call(action)        - Execute script                    │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-**库依赖示例：**
+**Library Dependency Example:**
 
-脚本中使用这些库：
+Scripts use these libraries:
 ```lua
 local comm = require "comm"
 local nmap = require "nmap"
@@ -1183,14 +1183,14 @@ action = function(host, port)
 end
 ```
 
-**实现位置：**
-- runner 二进制: `crates/rustnmap-nse/src/bin/runner.rs::execute_script()`
-- 主执行引擎: `crates/rustnmap-nse/src/engine.rs::execute_script()`
+**Implementation Location:**
+- Runner binary: `crates/rustnmap-nse/src/bin/runner.rs::execute_script()`
+- Main execution engine: `crates/rustnmap-nse/src/engine.rs::execute_script()`
 
-#### 3.5.5.6 脚本执行引擎
+#### 3.5.5.6 Script Execution Engine
 
 ```rust
-// 对应 script_scan() - 主扫描函数
+// Corresponds to script_scan() - Main scan function
 pub struct ScriptEngine {
     lua: Lua,
     scripts: Vec<Arc<NseScript>>,
@@ -1199,13 +1199,13 @@ pub struct ScriptEngine {
 }
 
 impl ScriptEngine {
-    // 对应 nse_main.cc::script_scan()
+    // Corresponds to nse_main.cc::script_scan()
     pub async fn scan_targets(&mut self, targets: Vec<Target>)
         -> Result<Vec<NseScriptResults>> {
         let mut all_results = Vec::new();
 
         for target in targets {
-            // 获取目标的所有端口
+            // Get all ports for the target
             let ports = target.get_ports();
 
             // Pre-scan scripts (hostrule)
@@ -1241,17 +1241,17 @@ impl ScriptEngine {
         Ok(all_results)
     }
 
-    // 执行单个脚本
+    // Execute a single script
     async fn execute_script(&self,
                                script: &Arc<NseScript>,
                                context: ScriptContext)
         -> Result<NseScriptResult> {
-        // 设置超时
+        // Set timeout
         let timeout = context.timeout
             .max(script.specific_timeout)
             .unwrap_or(self.config.default_timeout);
 
-        // 在协程中执行
+        // Execute in coroutine
         match tokio::time::timeout(timeout, self.run_lua(script)).await {
             Ok(Ok(output)) => Ok(NseScriptResult {
                 id: script.id.clone(),
@@ -1269,24 +1269,24 @@ impl ScriptEngine {
         }
     }
 
-    // 准备 Lua 环境
+    // Prepare Lua environment
     fn prepare_lua_environment(&self, context: &ScriptContext)
         -> Result<()> {
-        // Step 1: 注册 NSE 标准库 (必须在加载脚本之前)
-        // 这些库由 Rust 实现并通过 mlua FFI 暴露给 Lua
+        // Step 1: Register NSE standard libraries (must be before loading scripts)
+        // These libraries are implemented in Rust and exposed to Lua via mlua FFI
         rustnmap_nse::libs::register_all(&mut self.lua)?;
 
-        // Step 2: 创建 host 表
+        // Step 2: Create host table
         let host_table = create_host_table(&context.host)?;
         self.lua.set_global("host", host_table)?;
 
-        // Step 3: 创建 port 表 (如果存在)
+        // Step 3: Create port table (if present)
         if let Some(port) = &context.port {
             let port_table = create_port_table(port)?;
             self.lua.set_global("port", port_table)?;
         }
 
-        // Step 4: 设置注册表
+        // Step 4: Set registry
         self.lua.set_global("registry", context.registry.clone())?;
 
         Ok(())
@@ -1294,24 +1294,24 @@ impl ScriptEngine {
 }
 ```
 
-#### 3.5.5.7 常量定义 (Nmap 源码映射)
+#### 3.5.5.7 Constant Definitions (Nmap Source Mapping)
 
 ```rust
-// 对应 nse_main.h
+// Corresponds to nse_main.h
 pub const SCRIPT_ENGINE: &str = "NSE";
 pub const SCRIPT_ENGINE_LUA_DIR: &str = "scripts/";
 pub const SCRIPT_ENGINE_LIB_DIR: &str = "nselib/";
 pub const SCRIPT_ENGINE_DATABASE: &str = "scripts/script.db";
 pub const SCRIPT_ENGINE_EXTENSION: &str = ".nse";
 
-// 对应 nse_nmaplib.cc
+// Corresponds to nse_nmaplib.cc
 pub const NSE_NUM_VERSION_FIELDS: i32 = 12;
 
-// 对应 nse_main.h 中的协议定义
+// Protocol definitions from nse_main.h
 pub const NSE_PROTOCOL_OP: [&str] = ["tcp", "udp", "sctp"];
 pub const NSE_PROTOCOL: [i32] = [IPPROTO_TCP, IPPROTO_UDP, IPPROTO_SCTP];
 
-// 对应 nse_lua.h
+// Corresponds to nse_lua.h
 pub const LUA_REGISTRYINDEX: i32 = -10000;
 pub const LUA_NOREF: i32 = -10001;
 pub const LUA_OK: i32 = 0;
@@ -1322,20 +1322,20 @@ pub const LUA_ERRMEM: i32 = 4;
 pub const LUA_ERRERR: i32 = 5;
 ```
 
-#### 3.5.5.8 资源限制与沙箱 (Deepseek 增强)
+#### 3.5.5.8 Resource Limits and Sandbox
 
-##### Lua 内存限制
+##### Lua Memory Limits
 
 ```rust
 use mlua::{Lua, Error as LuaError};
 
-/// NSE 执行器配置
+/// NSE executor configuration
 pub struct NseExecutorConfig {
-    /// 最大内存使用量 (字节)
+    /// Maximum memory usage (bytes)
     pub memory_limit: usize,
-    /// CPU 时间限制 (秒)
+    /// CPU time limit (seconds)
     pub cpu_timeout: Duration,
-    /// 指令计数间隔 (每 N 条指令检查时间)
+    /// Instruction count interval (check time every N instructions)
     pub instruction_check_interval: u32,
 }
 
@@ -1350,21 +1350,21 @@ impl Default for NseExecutorConfig {
 }
 
 impl NseExecutor {
-    /// 创建受限的 Lua 环境
+    /// Create a restricted Lua environment
     pub fn new_with_limits(config: NseExecutorConfig) -> Result<Self, NseError> {
-        // 创建 Lua 实例并启用沙箱
+        // Create Lua instance with sandbox enabled
         let lua = Lua::new_with(
             mlua::LuaOptions {
-                sandbox: true,  // 启用沙箱模式
+                sandbox: true,  // Enable sandbox mode
                 ..Default::default()
             }
         )?;
 
-        // 设置内存限制
+        // Set memory limit
         #[cfg(feature = "lua_memory_limit")]
         lua.set_memory_limit(config.memory_limit)?;
 
-        // 设置指令钩子 (CPU 时间限制)
+        // Set instruction hook (CPU time limit)
         lua.set_hook(
             mlua::HookMask::COUNT,
             config.instruction_check_interval,
@@ -1373,7 +1373,7 @@ impl NseExecutor {
         Ok(Self { lua, config })
     }
 
-    /// 指令钩子 (检查 CPU 时间)
+    /// Instruction hook (check CPU time)
     fn hook_callback(&self, lua: &Lua) -> Result<(), mlua::Error> {
         static START_TIME: std::sync::Mutex<HashMap<usize, Instant>> =
             std::sync::Mutex::new(HashMap::new());
@@ -1393,44 +1393,44 @@ impl NseExecutor {
 }
 ```
 
-##### SELinux 策略集成
+##### SELinux Policy Integration
 
 ```bash
 # /usr/share/selinux/packages/rustnmap.pp
-# RustNmap SELinux 策略模块
+# RustNmap SELinux policy module
 
 policy_module(rustnmap, 1.0.0)
 
-# 允许 rustnmap 使用网络套接字
+# Allow rustnmap to use network sockets
 allow rustnmap_t self:capabil2 { net_raw net_admin };
 
-# 允许写入指纹库目录
+# Allow writing to fingerprint database directory
 allow rustnmap_t rustnmap_var_lib_t:file { create write setattr unlink };
 
-# 允许读取系统指纹库
+# Allow reading system fingerprint database
 allow rustnmap_t fingerprint_file_t:file { read open getattr };
 
-# 允许 systemd timer 管理
+# Allow systemd timer management
 allow rustnmap_t systemd_unit_file_t:file { read open };
 ```
 
-##### 脚本版本检查
+##### Script Version Checking
 
 ```lua
--- NSE 脚本版本声明示例
+-- NSE script version declaration example
 -- @nse_version 1.0.0
 
 description = [[Example script with version requirement]]
 
--- 脚本逻辑
+-- Script logic
 action = function(host, port)
-    -- 如果引擎版本 < 1.0.0，此脚本将拒绝加载
+    -- If engine version < 1.0.0, this script will refuse to load
     return "Script executed successfully"
 end
 ```
 
 ```rust
-/// 脚本版本检查
+/// Script version check
 pub fn check_script_compatibility(
     script: &NseScript,
     engine_version: &Version,
@@ -1448,11 +1448,11 @@ pub fn check_script_compatibility(
 }
 ```
 
-#### 3.5.6 脚本自动更新机制
+#### 3.5.6 Script Auto-Update Mechanism
 
-基于 Deepseek 设计文档的指纹库自动更新。
+Fingerprint database auto-update based on Deepseek design document.
 
-##### systemd Timer 配置
+##### systemd Timer Configuration
 
 ```ini
 # /usr/lib/systemd/system/rustnmap-update-fingerprint.service
@@ -1480,20 +1480,20 @@ Description=Weekly RustNmap Fingerprint Update
 Requires=rustnmap-update-fingerprint.service
 
 [Timer]
-OnCalendar=Tue 03:00  # 每周二凌晨3点
+OnCalendar=Tue 03:00  # Every Tuesday at 3 AM
 Persistent=true
 
 [Install]
 WantedBy=timers.target
 ```
 
-##### MVCC 存储模式
+##### MVCC Storage Pattern
 
 ```rust
 use std::path::{Path, PathBuf};
 use std::fs;
 
-/// MVCC 指纹库管理器
+/// MVCC fingerprint database manager
 pub struct FingerprintStore {
     base_dir: PathBuf,
     current_symlink: PathBuf,
@@ -1508,9 +1508,9 @@ impl FingerprintStore {
         }
     }
 
-    /// 安装新版本 (原子切换)
+    /// Install new version (atomic switch)
     pub fn install_version(&self, data: &[u8]) -> Result<(), StoreError> {
-        // 1. 生成唯一版本标识 (时间戳 + 序列号)
+        // 1. Generate unique version identifier (timestamp + sequence number)
         let version_id = format!(
             "r{}_{:02}",
             chrono::Utc::now().format("%Y%m%d"),
@@ -1518,28 +1518,28 @@ impl FingerprintStore {
         );
         let version_dir = self.base_dir.join(&version_id);
 
-        // 2. 创建临时目录
+        // 2. Create temporary directory
         let tmp_dir = self.base_dir.join(format!("tmp_{}", version_id));
         fs::create_dir_all(&tmp_dir)?;
 
-        // 3. 写入新数据
+        // 3. Write new data
         let data_path = tmp_dir.join("nmap-os-db");
         fs::write(&data_path, data)?;
 
-        // 4. 原子性重命名
+        // 4. Atomic rename
         fs::rename(&tmp_dir, &version_dir)?;
 
-        // 5. 创建备份 (硬链接)
+        // 5. Create backup (hard link)
         let backup = self.create_backup()?;
 
-        // 6. 原子性切换符号链接
+        // 6. Atomic symlink switch
         let tmp_link = self.base_dir.join("current.tmp");
         self.create_symlink(&version_dir, &tmp_link)?;
         fs::rename(&tmp_link, &self.current_symlink)?;
 
-        // 7. 验证新版本
+        // 7. Verify new version
         if let Err(e) = self.verify_version(&version_dir) {
-            // 回滚到备份
+            // Rollback to backup
             self.rollback_to_backup(&backup)?;
             return Err(e);
         }
@@ -1547,31 +1547,31 @@ impl FingerprintStore {
         Ok(())
     }
 
-    /// 创建版本符号链接
+    /// Create version symlink
     fn create_symlink(&self, target: &Path, link: &Path) -> Result<(), StoreError> {
         use std::os::unix::fs::symlink;
 
-        // 删除旧链接
+        // Remove old link
         let _ = fs::remove_file(link);
 
-        // 创建新链接
+        // Create new link
         symlink(target, link)?;
         Ok(())
     }
 
-    /// 验证版本完整性
+    /// Verify version integrity
     fn verify_version(&self, version_dir: &Path) -> Result<(), StoreError> {
         let db_path = version_dir.join("nmap-os-db");
 
-        // 检查文件存在
+        // Check file exists
         if !db_path.exists() {
             return Err(StoreError::Corrupted);
         }
 
-        // 计算 SHA256 校验和
+        // Compute SHA256 checksum
         let hash = self.compute_sha256(&db_path)?;
 
-        // 对比预期校验和 (从签名文件)
+        // Compare against expected checksum (from signature file)
         let expected = self.load_expected_hash()?;
 
         if hash != expected {
@@ -1581,7 +1581,7 @@ impl FingerprintStore {
         Ok(())
     }
 
-    /// 回滚到备份版本
+    /// Rollback to backup version
     fn rollback_to_backup(&self, backup: &Path) -> Result<(), StoreError> {
         let tmp_link = self.base_dir.join("current.tmp");
         self.create_symlink(backup, &tmp_link)?;

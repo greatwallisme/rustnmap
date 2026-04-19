@@ -1,50 +1,59 @@
-# Task Plan: Multi-Target Public Network Scanning Performance
+# Task Plan: zh_doc Chinese Documentation Cleanup
 
-## Goal
-Fix rustnmap public network /24 scanning to match or exceed nmap speed while maintaining accuracy.
+> **Created**: 2026-04-18
+> **Goal**: Organize zh_doc/ so it contains proper Chinese translations (not mixed English/Chinese)
 
-## Status: COMPLETE
+## Current State
 
----
+- 41 files in zh_doc/
+- 26 (63%) properly translated to Chinese
+- 9 (22%) structured bilingual (manual/ + CHANGELOG.md)
+- 5 (12%) entirely English (untranslated copies from doc/)
+- 1 anomaly: doc/modules/nse-engine.md is in Chinese (should be English)
 
-## Results
+## Phase 1: Translate 5 en-only files in zh_doc/ [pending]
 
-| Metric | Baseline | Optimized | Nmap | vs Nmap |
-|--------|----------|-----------|------|---------|
-| Wall time (153.3.238.0/24) | 236s | **63s** | 117s | **1.86x faster** |
-| User CPU | 91s | **7.6s** | 1.4s | 5.4x (acceptable) |
-| Open ports found | - | 444 | 445 | 99.8% match |
+These files are exact English copies from doc/ with zero Chinese content:
 
-## Changes Made
+| File | Size Estimate | Priority |
+|------|--------------|----------|
+| `zh_doc/database-integration.md` | Medium | High |
+| `zh_doc/rustnmap.1` | Small | High |
+| `zh_doc/modules/cli.md` | Large | High |
+| `zh_doc/modules/nse-libraries.md` | Medium | High |
+| `zh_doc/modules/packet-engineering.md` | Large | High |
 
-### Phase 1: Parallelism Scaling [COMPLETE]
-- Removed `total_probes < 10_000` threshold check
-- Always scale cwnd with target count: `(max_parallelism * num_targets).min(1500)`
-- Scale batch size to match: `(BATCH_SIZE * num_targets).min(1500)`
-- PACKET_MMAP V2 ring buffer has 2048 frames; 1500 cap leaves headroom
+Approach: Read the corresponding doc/ English file, translate all prose/headers/comments to Chinese, keep code blocks and technical identifiers as-is.
 
-### Phase 2: Fixed Drain Window [COMPLETE]
-- For >10 targets: use `(probe_timeout / 2).clamp(20ms, 500ms)` instead of MIN()
-- MIN() across 1500+ probes returned near-zero, causing empty loop spins
-- `check_timeouts_multi()` handles probe expiry after drain completes
+## Phase 2: Convert manual/ bilingual files to Chinese-only [pending]
 
-### Phase 3: Accuracy Verification [COMPLETE]
-- Open ports match nmap exactly (444/445, 1 port diff on 53/tcp likely network jitter)
-- All scan types still pass benchmark tests
+9 files use structured bilingual format ("English / Chinese" headings):
+- `zh_doc/manual/README.md`
+- `zh_doc/manual/configuration.md`
+- `zh_doc/manual/environment.md`
+- `zh_doc/manual/quick-reference.md`
+- `zh_doc/manual/options.md`
+- `zh_doc/manual/output-formats.md`
+- `zh_doc/manual/exit-codes.md`
+- `zh_doc/manual/scan-types.md`
+- `zh_doc/manual/nse-scripts.md`
+- `zh_doc/CHANGELOG.md`
 
-### Phase 4: Lint/Test [COMPLETE]
-- clippy: 0 warnings
-- test: all pass
-- fmt: clean
+Approach: Remove English portions, keep Chinese-only. Convert "Overview / 概述" to "概述", remove English description columns from tables, etc.
 
----
+## Phase 3: Fix doc/modules/nse-engine.md (English doc has Chinese content) [pending]
 
-## Approaches Tried and Rejected
+The file `doc/modules/nse-engine.md` is in Chinese but belongs in the English doc tree.
+Need to translate it to English, matching the style of other doc/ files.
 
-### Per-Target RTT Tracking
-- **Tried**: Added `PerTargetTiming` struct with per-target `InternalCongestionStats`
-- **Problem**: Filtered targets (98% on public networks) never get RTT measurements,
-  falling back to shared timeout (same as baseline). Added HashMap overhead per probe
-  with no accuracy benefit.
-- **Verdict**: Not needed when parallelism scaling + fixed drain window already
-  achieves 1.86x nmap speed.
+## Phase 4: Verify consistency [pending]
+
+- Check all zh_doc/ files have consistent Chinese formatting
+- Check all doc/ files are in English
+- Spot-check translations for accuracy
+
+## Errors Encountered
+
+| Error | Attempt | Resolution |
+|-------|---------|------------|
+| (none yet) | | |

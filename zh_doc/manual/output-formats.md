@@ -1,43 +1,39 @@
-# RustNmap Output Formats / 输出格式
+# RustNmap 输出格式
 
 > **版本**: 1.0.0
 > **状态**: 此文档描述 RustNmap 1.0.0 的输出格式。2.0 版本开发中，详见 [CHANGELOG.md](../CHANGELOG.md)。
 
-> **Complete documentation for all output formats** / 所有输出格式的完整文档
+> 所有输出格式的完整文档
 
 ---
 
-## Overview / 概述
-
-RustNmap supports 5 output formats, each designed for different use cases:
+## 概述
 
 RustNmap 支持 5 种输出格式，每种都为不同的用例设计：
 
-| Format | Extension | Flag | Use Case |
-|--------|-----------|------|----------|
-| Normal | `.nmap` | `-oN` | Human-readable output / 人类可读输出 |
-| XML | `.xml` | `-oX` | Machine parsing / 机器解析 |
-| JSON | `.json` | `-oJ` | Structured data / 结构化数据 |
-| NDJSON | `.ndjson` | `--output-ndjson` | Streaming JSON / 流式 JSON |
-| Markdown | `.md` | `--output-markdown` | Documentation / 文档 |
-| Grepable | `.gnmap` | `-oG` | Grep/AWK processing / Grep/AWK 处理 |
-| Script Kiddie | (console) | `--output-script-kiddie` | Fun format / 趣味格式 |
+| 格式 | 扩展名 | 标志 | 用途 |
+|------|--------|------|------|
+| Normal | `.nmap` | `-oN` | 人类可读输出 |
+| XML | `.xml` | `-oX` | 机器解析 |
+| JSON | `.json` | `-oJ` | 结构化数据 |
+| NDJSON | `.ndjson` | `--output-ndjson` | 流式 JSON |
+| Markdown | `.md` | `--output-markdown` | 文档 |
+| Grepable | `.gnmap` | `-oG` | Grep/AWK 处理 |
+| Script Kiddie | （控制台） | `--output-script-kiddie` | 趣味格式 |
 
 ---
 
-## Normal Output / 普通输出
+## 普通输出
 
-### Flag / 标志
+### 标志
 
-`-oN <FILE>`, `--output-normal <FILE>`
+`-oN <FILE>`，`--output-normal <FILE>`
 
-### Description / 描述
-
-Normal output is the default console output format. It provides human-readable scan results with formatting that is easy to read and interpret.
+### 描述
 
 普通输出是默认的控制台输出格式。它提供人类可读的扫描结果，格式易于阅读和解释。
 
-### Example Output / 示例输出
+### 示例输出
 
 ```
 # RustNmap 1.0.0 scan initiated Mon Feb 16 10:30:00 2026
@@ -54,7 +50,7 @@ PORT    STATE SERVICE
 RustNmap done: 1 IP address (1 host up) scanned in 2.34 seconds
 ```
 
-### With Service Detection / 带服务检测
+### 带服务检测
 
 ```
 # RustNmap 1.0.0 scan initiated Mon Feb 16 10:30:00 2026
@@ -71,7 +67,7 @@ PORT    STATE SERVICE VERSION
 RustNmap done: 1 IP address (1 host up) scanned in 8.76 seconds
 ```
 
-### With OS Detection / 带操作系统检测
+### 带操作系统检测
 
 ```
 # RustNmap 1.0.0 scan initiated Mon Feb 16 10:30:00 2026
@@ -92,44 +88,42 @@ Network Distance: 1 hop
 RustNmap done: 1 IP address (1 host up) scanned in 12.45 seconds
 ```
 
-### Usage Examples / 用法示例
+### 用法示例
 
 ```bash
-# Save normal output / 保存普通输出
+# 保存普通输出
 sudo rustnmap -sS -oN scan_results.nmap 192.168.1.1
 
-# Append to existing file / 追加到现有文件
+# 追加到现有文件
 sudo rustnmap -sS -oN scan_results.nmap --append-output 192.168.1.2
 
-# Multiple hosts / 多个主机
+# 多个主机
 sudo rustnmap -sS -oN network_scan.nmap 192.168.1.0/24
 ```
 
-### Format Characteristics / 格式特性
+### 格式特性
 
-| Feature | Description |
-|---------|-------------|
-| Human readable | Yes |
-| Machine parsable | Difficult |
-| File size | Medium |
-| Verbosity levels | Supported |
-| Color output | Console only |
+| 特性 | 描述 |
+|------|------|
+| 人类可读 | 是 |
+| 机器可解析 | 困难 |
+| 文件大小 | 中等 |
+| 详细级别 | 支持 |
+| 彩色输出 | 仅控制台 |
 
 ---
 
-## XML Output / XML 输出
+## XML 输出
 
-### Flag / 标志
+### 标志
 
-`-oX <FILE>`, `--output-xml <FILE>`
+`-oX <FILE>`，`--output-xml <FILE>`
 
-### Description / 描述
-
-XML output provides structured, machine-parseable results. It follows the Nmap XML output format specification and is ideal for importing into other tools or automated processing.
+### 描述
 
 XML 输出提供结构化、机器可解析的结果。它遵循 Nmap XML 输出格式规范，非常适合导入到其他工具或自动化处理。
 
-### XML Schema / XML 模式
+### XML 模式
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -177,13 +171,13 @@ XML 输出提供结构化、机器可解析的结果。它遵循 Nmap XML 输出
 </nmaprun>
 ```
 
-### Usage Examples / 用法示例
+### 用法示例
 
 ```bash
-# Save XML output / 保存 XML 输出
+# 保存 XML 输出
 sudo rustnmap -sS -sV -oX results.xml 192.168.1.1
 
-# Process with Python / 使用 Python 处理
+# 使用 Python 处理
 python3 -c "
 import xml.etree.ElementTree as ET
 tree = ET.parse('results.xml')
@@ -198,48 +192,46 @@ for host in root.findall('host'):
 "
 ```
 
-### XML Elements Reference / XML 元素参考
+### XML 元素参考
 
-| Element | Description | 描述 |
-|---------|-------------|------|
-| `nmaprun` | Root element with scan metadata | 根元素，包含扫描元数据 |
-| `scaninfo` | Scan type and protocol information | 扫描类型和协议信息 |
-| `host` | Individual host results | 单个主机结果 |
-| `status` | Host state (up/down) | 主机状态 |
-| `address` | IP/MAC address | IP/MAC 地址 |
-| `hostnames` | Discovered hostnames | 发现的主机名 |
-| `ports` | Port scan results container | 端口扫描结果容器 |
-| `port` | Individual port information | 单个端口信息 |
-| `state` | Port state (open/closed/filtered) | 端口状态 |
-| `service` | Service detection results | 服务检测结果 |
-| `os` | OS detection results | 操作系统检测结果 |
-| `runstats` | Scan statistics | 扫描统计 |
+| 元素 | 描述 |
+|------|------|
+| `nmaprun` | 根元素，包含扫描元数据 |
+| `scaninfo` | 扫描类型和协议信息 |
+| `host` | 单个主机结果 |
+| `status` | 主机状态 |
+| `address` | IP/MAC 地址 |
+| `hostnames` | 发现的主机名 |
+| `ports` | 端口扫描结果容器 |
+| `port` | 单个端口信息 |
+| `state` | 端口状态（open/closed/filtered） |
+| `service` | 服务检测结果 |
+| `os` | 操作系统检测结果 |
+| `runstats` | 扫描统计 |
 
-### Format Characteristics / 格式特性
+### 格式特性
 
-| Feature | Description |
-|---------|-------------|
-| Human readable | Moderate |
-| Machine parsable | Excellent |
-| File size | Large |
-| Schema defined | Yes |
-| XPath support | Yes |
+| 特性 | 描述 |
+|------|------|
+| 人类可读 | 中等 |
+| 机器可解析 | 优秀 |
+| 文件大小 | 大 |
+| 模式定义 | 是 |
+| XPath 支持 | 是 |
 
 ---
 
-## JSON Output / JSON 输出
+## JSON 输出
 
-### Flag / 标志
+### 标志
 
-`-oJ <FILE>`, `--output-json <FILE>`
+`-oJ <FILE>`，`--output-json <FILE>`
 
-### Description / 描述
-
-JSON output provides structured data that is easy to parse with modern programming languages. It's more compact than XML while maintaining full scan information.
+### 描述
 
 JSON 输出提供结构化数据，易于使用现代编程语言解析。它比 XML 更紧凑，同时保持完整的扫描信息。
 
-### JSON Schema / JSON 模式
+### JSON 模式
 
 ```json
 {
@@ -303,17 +295,17 @@ JSON 输出提供结构化数据，易于使用现代编程语言解析。它比
 }
 ```
 
-### Usage Examples / 用法示例
+### 用法示例
 
 ```bash
-# Save JSON output / 保存 JSON 输出
+# 保存 JSON 输出
 sudo rustnmap -sS -sV -oJ results.json 192.168.1.1
 
-# Pretty print JSON / 美化打印 JSON
+# 美化打印 JSON
 sudo rustnmap -sS -sV -oJ results.json 192.168.1.1
 jq '.' results.json
 
-# Process with Python / 使用 Python 处理
+# 使用 Python 处理
 python3 -c "
 import json
 with open('results.json') as f:
@@ -324,58 +316,56 @@ with open('results.json') as f:
             print(f\"  {port['number']}/{port['protocol']}: {port['state']}\")
 "
 
-# Process with jq / 使用 jq 处理
+# 使用 jq 处理
 jq '.hosts[].ports[] | select(.state == "open") | .number' results.json
 jq '.hosts[] | {ip: .ip, open_ports: [.ports[] | select(.state == "open") | .number]}' results.json
 ```
 
-### JSON Schema Reference / JSON 模式参考
+### JSON 模式参考
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `scanner` | string | Scanner name |
-| `version` | string | Scanner version |
-| `start_time` | string | ISO 8601 timestamp |
-| `scan_info` | object | Scan configuration |
-| `hosts` | array | Host results array |
-| `hosts[].ip` | string | IP address |
-| `hosts[].status` | string | Host status |
-| `hosts[].ports` | array | Port results |
-| `hosts[].os_matches` | array | OS detection results |
-| `statistics` | object | Scan statistics |
+| 字段 | 类型 | 描述 |
+|------|------|------|
+| `scanner` | string | 扫描器名称 |
+| `version` | string | 扫描器版本 |
+| `start_time` | string | ISO 8601 时间戳 |
+| `scan_info` | object | 扫描配置 |
+| `hosts` | array | 主机结果数组 |
+| `hosts[].ip` | string | IP 地址 |
+| `hosts[].status` | string | 主机状态 |
+| `hosts[].ports` | array | 端口结果 |
+| `hosts[].os_matches` | array | 操作系统检测结果 |
+| `statistics` | object | 扫描统计 |
 
-### Format Characteristics / 格式特性
+### 格式特性
 
-| Feature | Description |
-|---------|-------------|
-| Human readable | Moderate |
-| Machine parsable | Excellent |
-| File size | Medium |
-| Native support | All modern languages |
-| Query support | jq, JSONPath |
+| 特性 | 描述 |
+|------|------|
+| 人类可读 | 中等 |
+| 机器可解析 | 优秀 |
+| 文件大小 | 中等 |
+| 原生支持 | 所有现代语言 |
+| 查询支持 | jq、JSONPath |
 
 ---
 
-## Grepable Output / Grepable 输出
+## Grepable 输出
 
-### Flag / 标志
+### 标志
 
-`-oG <FILE>`, `--output-grepable <FILE>`
+`-oG <FILE>`，`--output-grepable <FILE>`
 
-### Description / 描述
-
-Grepable format provides a single-line format for each host that is easy to parse with grep, awk, sed, and other Unix command-line tools. It's designed for quick filtering and extraction.
+### 描述
 
 Grepable 格式为每个主机提供单行格式，易于使用 grep、awk、sed 和其他 Unix 命令行工具解析。它专为快速过滤和提取而设计。
 
-### Format Specification / 格式规范
+### 格式规范
 
 ```
 Host: <IP> (<hostname>)	Status: <status>
 Host: <IP> (<hostname>)	Ports: <port_list>
 ```
 
-### Example Output / 示例输出
+### 示例输出
 
 ```
 # RustNmap 1.0.0 Grepable Output
@@ -390,46 +380,46 @@ Host: 192.168.1.2 (server.example.com)	Ports: 443/open/tcp//https///
 Host: 192.168.1.3 ()	Status: Down
 ```
 
-### Port Format / 端口格式
+### 端口格式
 
 ```
 <port>/<state>/<protocol>//<service>//<version>/
 ```
 
-Examples / 示例:
+示例：
 - `22/open/tcp//ssh//OpenSSH 8.2p1/`
 - `80/open/tcp//http//Apache httpd 2.4.41/`
 - `443/filtered/tcp//https///`
 
-### Usage Examples / 用法示例
+### 用法示例
 
 ```bash
-# Save grepable output / 保存 Grepable 输出
+# 保存 Grepable 输出
 sudo rustnmap -sS -sV -oG results.gnmap 192.168.1.0/24
 
-# Find all open SSH ports / 查找所有开放的 SSH 端口
+# 查找所有开放的 SSH 端口
 grep -i "ssh" results.gnmap
 
-# Extract IPs with open port 80 / 提取开放 80 端口的 IP
+# 提取开放 80 端口的 IP
 grep "80/open" results.gnmap | awk '{print $2}'
 
-# Find all open ports on specific host / 查找特定主机的所有开放端口
+# 查找特定主机的所有开放端口
 grep "192.168.1.1" results.gnmap | grep "Ports:" | cut -f3
 
-# Count hosts that are up / 统计在线主机数
+# 统计在线主机数
 grep "Status: Up" results.gnmap | wc -l
 
-# Find all web servers (port 80 or 443) / 查找所有 Web 服务器
+# 查找所有 Web 服务器
 awk '/Ports:.*(80|443)\/open/' results.gnmap
 
-# Extract IP list / 提取 IP 列表
+# 提取 IP 列表
 awk '/Status: Up/{print $2}' results.gnmap | sed 's/()//'
 ```
 
-### awk Scripting / awk 脚本
+### awk 脚本
 
 ```bash
-# Comprehensive parsing with awk / 使用 awk 综合解析
+# 使用 awk 综合解析
 awk -F'\t' '
 /Host:/ {
     host = $2
@@ -448,31 +438,29 @@ awk -F'\t' '
 ' results.gnmap
 ```
 
-### Format Characteristics / 格式特性
+### 格式特性
 
-| Feature | Description |
-|---------|-------------|
-| Human readable | Low |
-| Machine parsable | Good (text tools) |
-| File size | Small |
-| Line-oriented | Yes |
-| Unix-friendly | Excellent |
+| 特性 | 描述 |
+|------|------|
+| 人类可读 | 低 |
+| 机器可解析 | 好（文本工具） |
+| 文件大小 | 小 |
+| 面向行 | 是 |
+| Unix 友好 | 优秀 |
 
 ---
 
-## Script Kiddie Output / Script Kiddie 输出
+## Script Kiddie 输出
 
-### Flag / 标志
+### 标志
 
 `--output-script-kiddie`
 
-### Description / 描述
-
-Script Kiddie format is a fun, "l33t speak" style output format. It replaces letters with numbers and uses irregular capitalization for entertainment value.
+### 描述
 
 Script Kiddie 格式是一种有趣的"l33t speak"风格输出格式。它将字母替换为数字并使用不规则的大小写，具有娱乐价值。
 
-### Example Output / 示例输出
+### 示例输出
 
 ```
 RuStNmAp 1.0.0 ScAn InItIaTeD
@@ -488,105 +476,103 @@ RuStNmAp 1.0.0 ScAn InItIaTeD
 ScAn CoMpLeTe! 2 HoStS fOuNd
 ```
 
-### Usage Examples / 用法示例
+### 用法示例
 
 ```bash
-# Console output / 控制台输出
+# 控制台输出
 sudo rustnmap -sS --output-script-kiddie 192.168.1.1
 ```
 
-### Format Characteristics / 格式特性
+### 格式特性
 
-| Feature | Description |
-|---------|-------------|
-| Human readable | Moderate |
-| Machine parsable | Poor |
-| File size | Small |
-| Purpose | Entertainment |
-| Professional use | Not recommended |
+| 特性 | 描述 |
+|------|------|
+| 人类可读 | 中等 |
+| 机器可解析 | 差 |
+| 文件大小 | 小 |
+| 用途 | 娱乐 |
+| 专业使用 | 不推荐 |
 
 ---
 
-## All Formats / 所有格式
+## 所有格式
 
-### Flag / 标志
+### 标志
 
-`-oA <BASENAME>`, `--output-all <BASENAME>`
+`-oA <BASENAME>`，`--output-all <BASENAME>`
 
-### Description / 描述
-
-Outputs to all four major formats at once using the specified basename.
+### 描述
 
 使用指定的基本名称同时输出到所有四种主要格式。
 
-### Generated Files / 生成文件
+### 生成文件
 
 ```bash
 sudo rustnmap -sS -sV -oA scan_results 192.168.1.1
 
-# Creates: / 创建：
-# - scan_results.nmap  (Normal / 普通)
-# - scan_results.xml   (XML / XML)
-# - scan_results.json  (JSON / JSON)
-# - scan_results.gnmap (Grepable / Grepable)
+# 创建：
+# - scan_results.nmap  （普通）
+# - scan_results.xml   （XML）
+# - scan_results.json  （JSON）
+# - scan_results.gnmap （Grepable）
 ```
 
-### Usage Examples / 用法示例
+### 用法示例
 
 ```bash
-# Comprehensive scan with all outputs / 全面扫描带所有输出
+# 全面扫描带所有输出
 sudo rustnmap -A -T4 -oA comprehensive-scan 192.168.1.0/24
 
-# Daily scan automation / 每日扫描自动化
+# 每日扫描自动化
 date_str=$(date +%Y-%m-%d)
 sudo rustnmap -sS -oA "daily-scan-${date_str}" 192.168.1.0/24
 ```
 
 ---
 
-## Output Options / 输出选项
+## 输出选项
 
-### Append Output / 追加输出
+### 追加输出
 
 ```bash
-# Append to existing files / 追加到现有文件
+# 追加到现有文件
 sudo rustnmap -sS -oN results.nmap --append-output 192.168.1.2
 ```
 
-### Suppress Output / 禁止输出
+### 禁止输出
 
 ```bash
-# Quiet mode / 安静模式
+# 安静模式
 sudo rustnmap -sS -q 192.168.1.1
 
-# No output / 无输出
+# 无输出
 sudo rustnmap -sS --no-output 192.168.1.1
 ```
 
-### Verbosity Levels / 详细级别
+### 详细级别
 
 ```bash
-# Verbose / 详细
+# 详细
 sudo rustnmap -sS -v 192.168.1.1
 
-# More verbose / 更详细
+# 更详细
 sudo rustnmap -sS -vv 192.168.1.1
 
-# Debug / 调试
+# 调试
 sudo rustnmap -sS -d 192.168.1.1
 
-# Packet trace / 数据包跟踪
+# 数据包跟踪
 sudo rustnmap -sS --packet-trace 192.168.1.1
 ```
 
-### Show Reasons / 显示原因
+### 显示原因
 
 ```bash
-# Show reason for port state / 显示端口状态原因
+# 显示端口状态原因
 sudo rustnmap -sS --reason 192.168.1.1
 ```
 
-Output / 输出:
+输出：
 ```
 PORT    STATE SERVICE REASON
 22/tcp  open  ssh     syn-ack
@@ -596,82 +582,82 @@ PORT    STATE SERVICE REASON
 
 ---
 
-## Format Comparison / 格式对比
+## 格式对比
 
-| Feature | Normal | XML | JSON | NDJSON | Markdown | Grepable | Kiddie |
-|---------|--------|-----|------|--------|----------|----------|--------|
-| Human readable | Excellent | Poor | Good | Good | Excellent | Poor | Moderate |
-| Machine parsing | Difficult | Excellent | Excellent | Excellent | Moderate | Good | Poor |
-| File size | Medium | Large | Medium | Medium | Medium | Small | Small |
-| Schema defined | No | Yes | Yes | Yes | No | Yes | No |
-| Use case | Review | Import | API | Stream | Docs | Filter | Fun |
+| 特性 | Normal | XML | JSON | NDJSON | Markdown | Grepable | Kiddie |
+|------|--------|-----|------|--------|----------|----------|--------|
+| 人类可读 | 优秀 | 差 | 好 | 好 | 优秀 | 差 | 中等 |
+| 机器解析 | 困难 | 优秀 | 优秀 | 优秀 | 中等 | 好 | 差 |
+| 文件大小 | 中等 | 大 | 中等 | 中等 | 中等 | 小 | 小 |
+| 模式定义 | 否 | 是 | 是 | 是 | 否 | 是 | 否 |
+| 用途 | 审查 | 导入 | API | 流式 | 文档 | 过滤 | 娱乐 |
 
 ---
 
-## Best Practices / 最佳实践
+## 最佳实践
 
-### Recommended Format Selection / 推荐格式选择
+### 推荐格式选择
 
 ```bash
-# For manual review / 手动审查
+# 手动审查
 sudo rustnmap -sS -oN results.nmap 192.168.1.1
 
-# For automation / 自动化
+# 自动化
 sudo rustnmap -sS -oJ results.json 192.168.1.1
 
-# For integration with other tools / 与其他工具集成
+# 与其他工具集成
 sudo rustnmap -sS -oX results.xml 192.168.1.1
 
-# For command-line processing / 命令行处理
+# 命令行处理
 sudo rustnmap -sS -oG results.gnmap 192.168.1.1
 
-# For comprehensive documentation / 全面文档
+# 全面文档
 sudo rustnmap -A -oA full-report 192.168.1.1
 ```
 
-### Automation Examples / 自动化示例
+### 自动化示例
 
 ```bash
-# Daily security scan / 每日安全扫描
+# 每日安全扫描
 #!/bin/bash
 DATE=$(date +%Y%m%d)
 sudo rustnmap -sS -sV -T4 -oX "scan-${DATE}.xml" 192.168.1.0/24
 
-# Parse and alert on new open ports / 解析并告警新开放端口
+# 解析并告警新开放端口
 python3 parse_and_alert.py "scan-${DATE}.xml"
 
-# Weekly comprehensive report / 每周综合报告
+# 每周综合报告
 sudo rustnmap -A -T4 -oA "weekly-${DATE}" 10.0.0.0/24
 ```
 
 ---
 
-## Troubleshooting Output / 输出故障排除
+## 输出故障排除
 
-### No Output / 无输出
+### 无输出
 
 ```bash
-# Check if quiet mode is enabled / 检查是否启用了安静模式
-rustnmap 192.168.1.1  # Should show output
-rustnmap -q 192.168.1.1  # Suppresses most output
+# 检查是否启用了安静模式
+rustnmap 192.168.1.1  # 应该显示输出
+rustnmap -q 192.168.1.1  # 禁止大部分输出
 ```
 
-### File Not Created / 文件未创建
+### 文件未创建
 
 ```bash
-# Check directory permissions / 检查目录权限
+# 检查目录权限
 ls -ld $(dirname output.nmap)
 
-# Use absolute path / 使用绝对路径
+# 使用绝对路径
 sudo rustnmap -sS -oN /tmp/results.nmap 192.168.1.1
 ```
 
-### Corrupted Output / 输出损坏
+### 输出损坏
 
 ```bash
-# Validate XML / 验证 XML
+# 验证 XML
 xmllint --noout results.xml
 
-# Validate JSON / 验证 JSON
+# 验证 JSON
 jq '.' results.json > /dev/null
 ```
