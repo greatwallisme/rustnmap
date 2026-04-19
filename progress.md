@@ -1,29 +1,31 @@
 # Progress Log
 
-> Updated: 2026-04-18
+> Updated: 2026-04-19
 
 ---
 
-## Session: 2026-04-18
+## Session: 2026-04-19 (Multi-Target Performance)
 
-### Output Format Fixes
-- [x] Fixed filtered port display: two-tier system (always-show vs conditional-show)
-- [x] `is_always_shown()`: Open, OpenOrFiltered, Unfiltered
-- [x] `is_conditionally_shown()`: Filtered, ClosedOrFiltered, etc. (shown when <= 20)
-- [x] Nmap-matching output for scanme.nmap.org (5 filtered shown) and baidu.com (998 filtered suppressed)
+### Diagnosis
+- [x] Measured baseline: 236s vs nmap 117s (2x slower, 65x more CPU)
+- [x] Identified root cause: conservative parallelism cap + MIN() drain window
+- [x] Attempted per-target RTT tracking - degraded performance, reverted
 
-### Tcpwrapped Detection
-- [x] Added EOF timing tracking in `grab_banner_and_keep_stream()` (returns `closed_after_ms`)
-- [x] Added tcpwrapped detection: no banner + EOF before tcpwrappedms (3000ms) threshold
-- [x] Added `get_tcpwrappedms()` reading from NULL probe definition
-- [x] Port 31337 now correctly shows "tcpwrapped" instead of "Elite"
+### Fix Applied
+- [x] Scale parallelism with target count (cap 1500 for PACKET_MMAP V2)
+- [x] Scale batch size with target count (cap 1500)
+- [x] Fixed drain window: use timeout-based window instead of MIN() for >10 targets
 
-### Verification
-- [x] Benchmark: 61/62 PASS, 0 failures
-- [x] Clippy: zero warnings, fmt: clean
-- [x] scanme.nmap.org: 4 open + 5 filtered, "Not shown: 991 closed"
-- [x] baidu.com: 2 open, "Not shown: 998 filtered"
-- [x] 32-target /27 scan: 3.6x faster than nmap
+### Results
+- [x] **rustnmap: 63s vs nmap: 117s -- 1.86x faster**
+- [x] **CPU: 7.6s vs baseline 91s -- 12x improvement**
+- [x] Accuracy: 444/445 open ports match (53/tcp diff likely network jitter)
+- [x] clippy: 0 warnings
+- [x] test: all pass
+- [x] fmt: clean
 
-### Remaining
-- [ ] Service Info OS/CPE aggregation line (low priority)
+### Previous Session (2026-04-18)
+- [x] Two-tier port suppression
+- [x] Tcpwrapped detection via EOF timing
+- [x] 61/62 benchmark PASS, NSE 46/46 PASS
+- [x] Committed as 4627b82

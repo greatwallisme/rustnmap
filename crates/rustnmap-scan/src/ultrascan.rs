@@ -1517,23 +1517,17 @@ impl ParallelScanEngine {
 
         // Scale parallelism for multi-target scans. Nmap gives each target
         // its own cwnd, so total parallelism scales linearly with target count.
-        // For small port counts, scaling helps throughput. For large port counts,
-        // cap at a moderate level to avoid PACKET_MMAP ring buffer overflow.
+        // PACKET_MMAP V2 ring buffer has 2048 frames; cap at 1500 to leave
+        // headroom for kernel-queued packets.
         let num_targets = targets.len();
-        let total_probes = num_targets * ports.len();
-        let parallel_cap = if total_probes < 10_000 {
-            // Small scans: aggressive scaling for speed
-            (self.max_parallelism * num_targets).min(2000)
-        } else {
-            // Large scans: conservative to avoid ring buffer overflow
-            self.max_parallelism
-        };
+        let parallel_cap = (self.max_parallelism * num_targets).min(1500);
         let effective_max_parallelism = parallel_cap;
         self.congestion.set_max_cwnd(effective_max_parallelism);
 
-        // Use larger batch size for multi-target to amortize receive overhead.
-        // Single-target uses 50, multi-target scales proportionally but caps at 500.
-        let effective_batch_size = (BATCH_SIZE * num_targets).min(500);
+        // Scale batch size proportionally with targets. More targets means
+        // more outstanding probes before a drain is needed, amortizing the
+        // per-drain overhead. Cap at 1500 to match parallelism cap.
+        let effective_batch_size = (BATCH_SIZE * num_targets).min(1500);
 
         // Build interleaved port list: (target_idx, port) round-robin
         // e.g., for 2 targets and ports [80, 443]: [(0,80), (1,80), (0,443), (1,443)]
@@ -1630,8 +1624,15 @@ impl ParallelScanEngine {
                 let mut eng = engine.lock().await;
                 let probe_timeout = self.congestion.recommended_timeout();
 
-                let earliest_remaining = if outstanding.is_empty() {
+                // Drain window: for large multi-target scans, MIN() across
+                // 1500+ probes returns near-zero because some probes were sent
+                // earlier in the batch. This causes the drain loop to exit
+                // immediately, wasting CPU. Use a fixed window instead and
+                // let check_timeouts_multi() handle expiry after the drain.
+                let drain_window = if outstanding.is_empty() {
                     Duration::from_millis(2)
+                } else if num_targets > 10 {
+                    (probe_timeout / 2).clamp(Duration::from_millis(20), Duration::from_millis(500))
                 } else {
                     outstanding
                         .values()
@@ -1647,7 +1648,7 @@ impl ParallelScanEngine {
                         .unwrap_or(Duration::from_millis(5))
                         .max(Duration::from_millis(2))
                 };
-                let mut drain_deadline = Instant::now() + earliest_remaining;
+                let mut drain_deadline = Instant::now() + drain_window;
                 let mut first_recv = true;
 
                 loop {
@@ -1694,18 +1695,24 @@ impl ParallelScanEngine {
                         }
                     } else {
                         if first_recv && !outstanding.is_empty() {
-                            let remaining = outstanding
-                                .values()
-                                .map(|p| {
-                                    let elapsed = p.sent_time.elapsed();
-                                    if elapsed >= probe_timeout {
-                                        Duration::ZERO
-                                    } else {
-                                        probe_timeout - elapsed
-                                    }
-                                })
-                                .min()
-                                .unwrap_or(Duration::from_millis(5));
+                            // Use same drain_window logic: for large scans,
+                            // don't MIN() across all probes.
+                            let remaining = if num_targets > 10 {
+                                drain_window
+                            } else {
+                                outstanding
+                                    .values()
+                                    .map(|p| {
+                                        let elapsed = p.sent_time.elapsed();
+                                        if elapsed >= probe_timeout {
+                                            Duration::ZERO
+                                        } else {
+                                            probe_timeout - elapsed
+                                        }
+                                    })
+                                    .min()
+                                    .unwrap_or(Duration::from_millis(5))
+                            };
                             if remaining > Duration::from_millis(2) {
                                 drop(eng);
                                 tokio::time::sleep(remaining).await;
