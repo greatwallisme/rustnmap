@@ -1,10 +1,5 @@
 # CLI Module
 
-> **Component**: `rustnmap-cli`
-> **Status**: ✅ Production Ready
-> **Last Updated**: 2026-03-10
-> **Migration**: Migrated from clap to lexopt (2026-03-10)
-
 ---
 
 ## Overview
@@ -18,37 +13,6 @@ The CLI module provides the command-line interface for RustNmap, implementing **
 - ✅ **Manual help system** - Custom help matching nmap style
 - ✅ **Error handling** - Clear error messages for invalid options
 - ✅ **Type-safe parsing** - Rust `Result` based error handling
-
----
-
-## Architecture Migration
-
-### Before (clap derive API)
-
-**Dependencies:**
-```toml
-clap = { version = "4.5", features = ["derive", "wrap_help", "cargo"] }
-```
-
-**Limitations:**
-- ❌ Compound short options like `-sS` didn't work properly
-- ❌ Required `--scan-syn` long form instead of `-sS`
-- ❌ `-oN file` syntax not supported
-- ❌ Larger binary size (~4.2 MB)
-
-### After (lexopt)
-
-**Dependencies:**
-```toml
-lexopt = "0.3"
-```
-
-**Benefits:**
-- ✅ Full nmap compound option support
-- ✅ Proper `-sS -sV -sC` syntax
-- ✅ `-oN/-oX/-oG/-oA file` syntax
-- ✅ Smaller binary size (~3.7 MB, 12% reduction)
-- ✅ More control over parsing behavior
 
 ---
 

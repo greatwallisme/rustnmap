@@ -16,7 +16,9 @@
 
 ## Overview
 
-RustNmap is a modern, high-performance network scanning tool written in Rust, trying to provide 100% functional parity with Nmap while leveraging Rust's memory safety and async capabilities.
+> **Tribute**: RustNmap pays tribute to [Nmap](https://nmap.org/) -- the gold standard of network scanning for over two decades. Nmap's design philosophy and implementation deeply inspired this project.
+
+RustNmap is a modern, high-performance network scanning tool written in Rust, trying to provide 100% functional parity with Nmap while leveraging Rust's memory safety and async capabilities. During development, we extensively referenced Nmap's design (timing engine, congestion control, fingerprint matching, NSE architecture, etc.) and continuously validated results against Nmap on real-world targets.
 
 **Key Features:**
 - **12 Scan Types**: SYN, Connect, UDP, FIN, NULL, XMAS, ACK, Maimon, Window, IP Protocol, Idle, FTP Bounce
@@ -195,6 +197,28 @@ cargo doc --workspace --no-deps --all-features
 | Output Formats | 5 | 5 |
 | Memory Safety | Guaranteed | No |
 | Concurrency | Async/await | Event-driven |
+
+---
+
+## Benchmarks & Testing
+
+RustNmap is continuously validated against Nmap on real-world targets to ensure scanning accuracy and functional parity.
+
+### Test Targets
+
+| Target | Type | Usage |
+|--------|------|-------|
+| `scanme.nmap.org` (45.33.32.156) | Internet host (Nmap project) | Default comparison target, 41 scan-type parity tests |
+| `153.3.238.0/24` | Public /24 network segment | Multi-target parallelism, cwnd scaling, T0-T5 timing |
+| Local network /24 segments | Private LAN | ARP host discovery, batch accuracy, ICMP ping |
+
+### Test Infrastructure
+
+- **41 comparison tests** (rustnmap vs nmap): all 12 scan types, timing templates T0-T5, output formats, evasion, service/OS detection
+- **104 CLI validation tests**: all 85 CLI options across 12 categories
+- **Criterion benchmarks**: packet engine, scan engine, fingerprint matching, NSE hot paths
+
+See [benchmarks/README.md](benchmarks/README.md) for full test suite details, configuration, and how to run them.
 
 ---
 
