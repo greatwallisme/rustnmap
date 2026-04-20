@@ -13,7 +13,7 @@ keywords = ["packet", "zero-copy", "mmap", "linux"]
 categories = ["network-programming", "os::linux-apis"]
 
 [dependencies]
-rustnmap-common = { path = "../rustnmap-common" }
+rustnmap-common = { workspace = true }
 bytes = { workspace = true }
 tokio = { workspace = true }
 libc = "0.2"

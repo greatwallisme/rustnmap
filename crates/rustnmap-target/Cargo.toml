@@ -13,8 +13,8 @@ keywords = ["network", "target", "scanning", "cidr"]
 categories = ["network-programming", "parser-implementations"]
 
 [dependencies]
-rustnmap-common = { path = "../rustnmap-common" }
-rustnmap-net = { path = "../rustnmap-net" }
+rustnmap-common = { workspace = true }
+rustnmap-net = { workspace = true }
 tokio = { workspace = true }
 trust-dns-resolver = { workspace = true }
 libc = "0.2"

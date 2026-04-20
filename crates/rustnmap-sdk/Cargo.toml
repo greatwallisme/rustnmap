@@ -31,11 +31,11 @@ dirs = "5.0"
 libc = "0.2"
 
 # Internal dependencies
-rustnmap-core = { path = "../rustnmap-core" }
-rustnmap-output = { path = "../rustnmap-output" }
-rustnmap-target = { path = "../rustnmap-target" }
-rustnmap-evasion = { path = "../rustnmap-evasion" }
-rustnmap-common = { path = "../rustnmap-common" }
+rustnmap-core = { workspace = true }
+rustnmap-output = { workspace = true }
+rustnmap-target = { workspace = true }
+rustnmap-evasion = { workspace = true }
+rustnmap-common = { workspace = true }
 
 # HTTP client for remote scanning
 reqwest = { workspace = true }

@@ -13,16 +13,16 @@ keywords = ["network", "scanning", "security", "nmap", "orchestrator"]
 categories = ["network-programming"]
 
 [dependencies]
-rustnmap-common = { path = "../rustnmap-common" }
-rustnmap-net = { path = "../rustnmap-net" }
-rustnmap-packet = { path = "../rustnmap-packet" }
-rustnmap-target = { path = "../rustnmap-target" }
-rustnmap-scan = { path = "../rustnmap-scan" }
-rustnmap-fingerprint = { path = "../rustnmap-fingerprint" }
-rustnmap-nse = { path = "../rustnmap-nse" }
-rustnmap-output = { path = "../rustnmap-output" }
-rustnmap-traceroute = { path = "../rustnmap-traceroute" }
-rustnmap-evasion = { path = "../rustnmap-evasion" }
+rustnmap-common = { workspace = true }
+rustnmap-net = { workspace = true }
+rustnmap-packet = { workspace = true }
+rustnmap-target = { workspace = true }
+rustnmap-scan = { workspace = true }
+rustnmap-fingerprint = { workspace = true }
+rustnmap-nse = { workspace = true }
+rustnmap-output = { workspace = true }
+rustnmap-traceroute = { workspace = true }
+rustnmap-evasion = { workspace = true }
 
 async-trait = "0.1"
 tokio = { workspace = true }

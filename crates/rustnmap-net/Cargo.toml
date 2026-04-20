@@ -13,7 +13,7 @@ keywords = ["network", "socket", "raw", "packet"]
 categories = ["network-programming"]
 
 [dependencies]
-rustnmap-common = { path = "../rustnmap-common" }
+rustnmap-common = { workspace = true }
 libc = "0.2"
 pnet = { workspace = true }
 rand = "0.9"

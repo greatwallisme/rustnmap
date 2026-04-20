@@ -32,11 +32,11 @@ tracing = { workspace = true }
 libc = { workspace = true }
 
 # Network primitives
-rustnmap-net = { path = "../rustnmap-net" }
-rustnmap-packet = { path = "../rustnmap-packet" }
+rustnmap-net = { workspace = true }
+rustnmap-packet = { workspace = true }
 
 # Common types
-rustnmap-common = { path = "../rustnmap-common" }
+rustnmap-common = { workspace = true }
 
 # TLS/SSL detection
 tokio-rustls = { workspace = true }

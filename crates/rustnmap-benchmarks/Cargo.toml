@@ -11,13 +11,13 @@ readme.workspace = true
 publish = false
 
 [dependencies]
-rustnmap-common = { path = "../rustnmap-common" }
-rustnmap-net = { path = "../rustnmap-net" }
-rustnmap-packet = { path = "../rustnmap-packet" }
-rustnmap-scan = { path = "../rustnmap-scan" }
-rustnmap-target = { path = "../rustnmap-target" }
-rustnmap-fingerprint = { path = "../rustnmap-fingerprint" }
-rustnmap-nse = { path = "../rustnmap-nse" }
+rustnmap-common = { workspace = true }
+rustnmap-net = { workspace = true }
+rustnmap-packet = { workspace = true }
+rustnmap-scan = { workspace = true }
+rustnmap-target = { workspace = true }
+rustnmap-fingerprint = { workspace = true }
+rustnmap-nse = { workspace = true }
 criterion = { workspace = true }
 tokio = { workspace = true }
 

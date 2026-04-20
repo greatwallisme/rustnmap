@@ -40,10 +40,10 @@ http = "1.0"
 subtle = "2.5"
 
 # Internal dependencies
-rustnmap-core = { path = "../rustnmap-core" }
-rustnmap-output = { path = "../rustnmap-output" }
-rustnmap-scan-management = { path = "../rustnmap-scan-management" }
-rustnmap-target = { path = "../rustnmap-target" }
+rustnmap-core = { workspace = true }
+rustnmap-output = { workspace = true }
+rustnmap-scan-management = { workspace = true }
+rustnmap-target = { workspace = true }
 
 # Axum extras
 axum-extra = { version = "0.9", features = ["typed-header"] }

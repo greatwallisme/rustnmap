@@ -25,16 +25,16 @@ hex = "0.4"
 rand = "0.10.0"
 
 # Workspace dependencies
-rustnmap-common = { path = "../rustnmap-common" }
-rustnmap-core = { path = "../rustnmap-core" }
-rustnmap-target = { path = "../rustnmap-target" }
-rustnmap-scan = { path = "../rustnmap-scan" }
-rustnmap-fingerprint = { path = "../rustnmap-fingerprint" }
-rustnmap-nse = { path = "../rustnmap-nse" }
-rustnmap-output = { path = "../rustnmap-output" }
-rustnmap-evasion = { path = "../rustnmap-evasion" }
-rustnmap-vuln = { path = "../rustnmap-vuln" }
-rustnmap-scan-management = { path = "../rustnmap-scan-management" }
+rustnmap-common = { workspace = true }
+rustnmap-core = { workspace = true }
+rustnmap-target = { workspace = true }
+rustnmap-scan = { workspace = true }
+rustnmap-fingerprint = { workspace = true }
+rustnmap-nse = { workspace = true }
+rustnmap-output = { workspace = true }
+rustnmap-evasion = { workspace = true }
+rustnmap-vuln = { workspace = true }
+rustnmap-scan-management = { workspace = true }
 
 # Additional dependencies
 tokio = { workspace = true }

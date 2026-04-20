@@ -32,6 +32,26 @@ homepage = "https://github.com/greatwallisme/rustnmap"
 readme = "README.md"
 
 [workspace.dependencies]
+# Internal workspace crates
+rustnmap-common = { version = "1.0.0", path = "crates/rustnmap-common" }
+rustnmap-net = { version = "1.0.0", path = "crates/rustnmap-net" }
+rustnmap-packet = { version = "1.0.0", path = "crates/rustnmap-packet" }
+rustnmap-target = { version = "1.0.0", path = "crates/rustnmap-target" }
+rustnmap-scan = { version = "1.0.0", path = "crates/rustnmap-scan" }
+rustnmap-fingerprint = { version = "1.0.0", path = "crates/rustnmap-fingerprint" }
+rustnmap-traceroute = { version = "1.0.0", path = "crates/rustnmap-traceroute" }
+rustnmap-evasion = { version = "1.0.0", path = "crates/rustnmap-evasion" }
+rustnmap-nse = { version = "1.0.0", path = "crates/rustnmap-nse" }
+rustnmap-nse-runner = { version = "1.0.0", path = "crates/rustnmap-nse-runner" }
+rustnmap-output = { version = "1.0.0", path = "crates/rustnmap-output" }
+rustnmap-core = { version = "1.0.0", path = "crates/rustnmap-core" }
+rustnmap-vuln = { version = "1.0.0", path = "crates/rustnmap-vuln" }
+rustnmap-scan-management = { version = "1.0.0", path = "crates/rustnmap-scan-management" }
+rustnmap-stateless-scan = { version = "1.0.0", path = "crates/rustnmap-stateless-scan" }
+rustnmap-api = { version = "1.0.0", path = "crates/rustnmap-api" }
+rustnmap-sdk = { version = "1.0.0", path = "crates/rustnmap-sdk" }
+rustnmap-cli = { version = "1.0.0", path = "crates/rustnmap-cli" }
+
 # Async runtime
 tokio = { version = "1.42", features = ["full"] }
 
