@@ -8,7 +8,7 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "Service and OS fingerprinting for RustNmap"
-readme = "README.md"
+readme.workspace = true
 keywords = ["nmap", "fingerprinting", "os-detection", "service-detection"]
 categories = ["network-programming"]
 
