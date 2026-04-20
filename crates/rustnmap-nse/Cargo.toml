@@ -10,7 +10,7 @@ homepage.workspace = true
 readme.workspace = true
 description = "Nmap Script Engine (NSE) implementation for RustNmap - Lua 5.4 script runtime"
 keywords = ["nmap", "lua", "scripting", "security", "network"]
-categories = ["network-programming", "scripting-language-bindings"]
+categories = ["network-programming"]
 
 [features]
 default = ["openssl"]
