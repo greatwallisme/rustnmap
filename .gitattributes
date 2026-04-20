@@ -1,0 +1,7 @@
+*.lua linguist-language=Rust
+*.c linguist-language=Rust
+*.h linguist-language=Rust
+*.cpp linguist-language=Rust
+*.hpp linguist-language=Rust
+*.sh linguist-language=Rust
+*.py linguist-language=Rust
